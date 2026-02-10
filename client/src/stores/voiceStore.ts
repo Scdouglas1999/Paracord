@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { VoiceState } from '../types';
 import { voiceApi } from '../api/voice';
-import { Room, RoomEvent, type Participant } from 'livekit-client';
+import { Room, RoomEvent, DisconnectReason, type Participant } from 'livekit-client';
 import { useAuthStore } from './authStore';
 
 const INTERNAL_LIVEKIT_HOSTS = new Set([
@@ -106,6 +106,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   joinChannel: async (channelId, guildId) => {
     const existingRoom = get().room;
     if (existingRoom) {
+      existingRoom.removeAllListeners();
       existingRoom.disconnect();
     }
     let room: Room | null = null;
@@ -146,6 +147,52 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       room.on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
         const speakingIds = speakers.map((s) => s.identity);
         get().setSpeakingUsers(speakingIds);
+      });
+
+      // Clean up store state when LiveKit disconnects unexpectedly (e.g.
+      // signaling timeout, server-side room deletion). Without this the
+      // store stays in connected=true while the room is dead.
+      // Capture `room` in closure so we can check it's still the active room.
+      const thisRoom = room;
+      room.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+        // Ignore disconnect events from stale rooms (e.g. when joinChannel
+        // was called again, the old room fires Disconnected asynchronously).
+        if (get().room !== thisRoom) return;
+        console.warn('[voice] LiveKit room disconnected, reason:', reason);
+        const cId = get().channelId;
+        if (cId) {
+          voiceApi.leaveChannel(cId).catch(() => { });
+        }
+        const auth = useAuthStore.getState().user;
+        set((prev) => {
+          const channelParticipants = new Map(prev.channelParticipants);
+          if (cId && auth) {
+            const members = channelParticipants.get(cId);
+            if (members) {
+              const filtered = members.filter((p) => p.user_id !== auth.id);
+              if (filtered.length === 0) channelParticipants.delete(cId);
+              else channelParticipants.set(cId, filtered);
+            }
+          }
+          return {
+            connected: false,
+            channelId: null,
+            guildId: null,
+            selfMute: false,
+            selfDeaf: false,
+            selfStream: false,
+            selfVideo: false,
+            participants: new Map(),
+            channelParticipants,
+            speakingUsers: new Set<string>(),
+            livekitToken: null,
+            livekitUrl: null,
+            roomName: null,
+            room: null,
+            joining: false,
+            joiningChannelId: null,
+          };
+        });
       });
 
       // Add local user to channelParticipants immediately so the sidebar
@@ -221,8 +268,12 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       });
     }
     const authUser = useAuthStore.getState().user;
+    const currentRoom = get().room;
+    if (currentRoom) {
+      currentRoom.removeAllListeners();
+      currentRoom.disconnect();
+    }
     set((state) => {
-      state.room?.disconnect();
       // Remove local user from channelParticipants
       const channelParticipants = new Map(state.channelParticipants);
       if (channelId && authUser) {
@@ -287,7 +338,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
 
       // 2. Reconnect to the LiveKit room with the upgraded stream token so
       //    LiveKit grants us permission to publish screen-share tracks.
+      //    Remove listeners before disconnect so the Disconnected event
+      //    from this intentional disconnect doesn't reset the store.
       const normalizedUrl = normalizeLivekitUrl(data.url);
+      room.removeAllListeners();
       await room.disconnect();
       await room.connect(normalizedUrl, data.token);
 
@@ -301,6 +355,39 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
 
       // Re-enable microphone after reconnect with saved input device
       await room.localParticipant.setMicrophoneEnabled(!get().selfMute, streamInputId ? { deviceId: streamInputId } : undefined).catch(() => { });
+
+      // Re-attach event listeners after reconnect
+      room.on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
+        const speakingIds = speakers.map((s) => s.identity);
+        get().setSpeakingUsers(speakingIds);
+      });
+      const streamRoom = room;
+      room.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+        if (get().room !== streamRoom) return;
+        console.warn('[voice] LiveKit room disconnected (stream), reason:', reason);
+        const cId = get().channelId;
+        if (cId) voiceApi.leaveChannel(cId).catch(() => { });
+        const auth = useAuthStore.getState().user;
+        set((prev) => {
+          const channelParticipants = new Map(prev.channelParticipants);
+          if (cId && auth) {
+            const members = channelParticipants.get(cId);
+            if (members) {
+              const filtered = members.filter((p) => p.user_id !== auth.id);
+              if (filtered.length === 0) channelParticipants.delete(cId);
+              else channelParticipants.set(cId, filtered);
+            }
+          }
+          return {
+            connected: false, channelId: null, guildId: null,
+            selfMute: false, selfDeaf: false, selfStream: false, selfVideo: false,
+            participants: new Map(), channelParticipants,
+            speakingUsers: new Set<string>(),
+            livekitToken: null, livekitUrl: null, roomName: null,
+            room: null, joining: false, joiningChannelId: null,
+          };
+        });
+      });
 
       // 3. Now that we have the right permissions, start screen share
       //    with resolution/framerate constraints matching the preset.

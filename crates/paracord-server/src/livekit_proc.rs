@@ -93,10 +93,8 @@ fn write_livekit_config(
     livekit_port: u16,
     server_port: u16,
     external_ip: Option<&str>,
-    local_ip: Option<&str>,
+    _local_ip: Option<&str>,
 ) -> std::io::Result<PathBuf> {
-    let ice_tcp_port = livekit_port + 1; // 7881 — local ICE/TCP fallback
-
     let mut lines = vec![
         format!("port: {livekit_port}"),
         "rtc:".to_string(),
@@ -109,28 +107,37 @@ fn write_livekit_config(
     // on this port, so LiveKit can use the UDP side for all WebRTC media.
     // This means only one port needs to be forwarded by the host.
     lines.push(format!("    udp_port: {server_port}"));
-    lines.push(format!("    tcp_port: {ice_tcp_port}"));
-    // Filter ICE candidates to only the real LAN IP so LiveKit doesn't
-    // advertise Docker/WSL/loopback addresses that remote users can't reach.
-    if let Some(lip) = local_ip {
-        lines.push("    ips:".to_string());
-        lines.push("        includes:".to_string());
-        lines.push(format!("            - {lip}/32"));
-    }
+    // Disable ICE/TCP — it would need its own forwarded port and clients
+    // behind restrictive NAT will use TURN (UDP) as the fallback instead.
+    lines.push("    tcp_port: 0".to_string());
+    // Exclude Docker, WSL, and loopback subnets from ICE candidates.
+    // Using excludes (instead of includes) avoids interfering with
+    // LiveKit's ICE connectivity checks from remote clients.
+    lines.push("    ips:".to_string());
+    lines.push("        excludes:".to_string());
+    lines.push("            - 172.16.0.0/12".to_string());
+    lines.push("            - 10.0.0.0/8".to_string());
+    lines.push("            - 127.0.0.0/8".to_string());
+    lines.push("    enable_loopback_candidate: false".to_string());
     lines.push("keys:".to_string());
     lines.push(format!("    {api_key}: {api_secret}"));
     if let Some(ip) = external_ip {
+        // TURN provides relay fallback for clients behind symmetric NAT.
+        // The TURN listener shares the server UDP port (already forwarded),
+        // and relay allocations use a small port range above the server port.
+        // NOTE: these relay ports (server_port+1 through +10) do NOT need
+        // to be separately forwarded — TURN relay traffic flows through the
+        // TURN server's listener port (server_port) and gets relayed internally.
         lines.push("turn:".to_string());
         lines.push("    enabled: true".to_string());
         lines.push(format!("    domain: {ip}"));
         lines.push("    tls_port: 0".to_string());
-        // TURN relay also on the server port so it's reachable externally.
         lines.push(format!("    udp_port: {server_port}"));
         lines.push("    external_tls: false".to_string());
-        // Constrain TURN relay allocation to the same server port so
-        // relayed media also flows through the single forwarded port.
-        lines.push(format!("    relay_range_start: {server_port}"));
-        lines.push(format!("    relay_range_end: {server_port}"));
+        let relay_start = server_port + 1;
+        let relay_end = server_port + 10;
+        lines.push(format!("    relay_range_start: {relay_start}"));
+        lines.push(format!("    relay_range_end: {relay_end}"));
     }
     lines.push("logging:".to_string());
     lines.push("    level: info".to_string());
