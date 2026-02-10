@@ -282,17 +282,25 @@ export function Sidebar() {
             >
               Invite People
             </button>
-            <div className="my-1.5 mx-2 h-px bg-border-subtle" />
-            <button
-              className="w-full rounded-md px-3 py-2 text-left text-sm text-accent-danger transition-colors hover:bg-accent-danger hover:text-white"
-              onClick={async () => {
-                await useGuildStore.getState().leaveGuild(contextMenu.guildId);
-                setContextMenu(null);
-                navigate('/app/friends');
-              }}
-            >
-              Leave Server
-            </button>
+            {user && guilds.find(g => g.id === contextMenu.guildId)?.owner_id !== user.id && (
+              <>
+                <div className="my-1.5 mx-2 h-px bg-border-subtle" />
+                <button
+                  className="w-full rounded-md px-3 py-2 text-left text-sm text-accent-danger transition-colors hover:bg-accent-danger hover:text-white"
+                  onClick={async () => {
+                    try {
+                      await useGuildStore.getState().leaveGuild(contextMenu.guildId);
+                      setContextMenu(null);
+                      navigate('/app/friends');
+                    } catch {
+                      setContextMenu(null);
+                    }
+                  }}
+                >
+                  Leave Server
+                </button>
+              </>
+            )}
           </div>
         </>
       )}

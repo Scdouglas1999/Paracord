@@ -316,17 +316,25 @@ export function ChannelSidebar() {
               Invite People
               <Plus size={14} />
             </button>
-            <div className="my-1 mx-2 h-px bg-border-subtle" />
-            <button
-              className="w-full rounded-md px-3 py-2 text-left text-sm text-accent-danger transition-colors hover:bg-accent-danger hover:text-white"
-              onClick={async () => {
-                setShowGuildMenu(false);
-                await useGuildStore.getState().leaveGuild(currentGuild.id);
-                navigate('/app/friends');
-              }}
-            >
-              Leave Server
-            </button>
+            {user && currentGuild.owner_id !== user.id && (
+              <>
+                <div className="my-1 mx-2 h-px bg-border-subtle" />
+                <button
+                  className="w-full rounded-md px-3 py-2 text-left text-sm text-accent-danger transition-colors hover:bg-accent-danger hover:text-white"
+                  onClick={async () => {
+                    setShowGuildMenu(false);
+                    try {
+                      await useGuildStore.getState().leaveGuild(currentGuild.id);
+                      navigate('/app/friends');
+                    } catch {
+                      // Server returned an error (e.g. owner can't leave)
+                    }
+                  }}
+                >
+                  Leave Server
+                </button>
+              </>
+            )}
           </div>
         </>
       )}

@@ -6,6 +6,7 @@ import { guildApi } from '../../api/guilds';
 import { inviteApi } from '../../api/invites';
 import { channelApi } from '../../api/channels';
 import { useGuildStore } from '../../stores/guildStore';
+import { useAuthStore } from '../../stores/authStore';
 import type { AuditLogEntry, Ban, Channel, Guild, Invite, Member, Role } from '../../types';
 import { isAllowedImageMimeType, isSafeImageDataUrl } from '../../lib/security';
 
@@ -31,6 +32,7 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
   const location = useLocation();
   const navigate = useNavigate();
   const leaveGuild = useGuildStore((s) => s.leaveGuild);
+  const authUser = useAuthStore((s) => s.user);
   const [activeSection, setActiveSection] = useState<SettingsSection>('overview');
   const [guild, setGuild] = useState<Guild | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -341,9 +343,11 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
             </div>
             <div className="mt-6 flex items-center gap-2.5">
               <button className="btn-primary" onClick={() => void saveOverview()}>Save Changes</button>
-              <button className="btn-ghost" onClick={() => void handleLeaveGuild()}>
-                Leave Server
-              </button>
+              {guild && authUser && guild.owner_id !== authUser.id && (
+                <button className="btn-ghost" onClick={() => void handleLeaveGuild()}>
+                  Leave Server
+                </button>
+              )}
             </div>
             <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div className="min-h-[5.5rem] rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-3.5 py-3.5">

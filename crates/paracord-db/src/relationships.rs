@@ -77,7 +77,7 @@ pub async fn get_relationships(
          FROM relationships r
          INNER JOIN users u ON u.id = r.user_id
          WHERE r.target_id = ?1 AND r.rel_type = 4
-         ORDER BY created_at"
+         ORDER BY 4"
     )
     .bind(user_id)
     .fetch_all(pool)

@@ -112,7 +112,13 @@ async fn main() -> Result<()> {
     // Start managed LiveKit if no external one is configured
     let mut managed_livekit = None;
     let mut livekit_status = "External".to_string();
+    let mut livekit_reachable = false;
     if config.livekit.url.contains("localhost") || config.livekit.url.contains("127.0.0.1") {
+        // Check if LiveKit is already running on the port (e.g. from a previous server run)
+        let already_running = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", livekit_port))
+            .await
+            .is_ok();
+
         match livekit_proc::start_livekit(
             &config.livekit.api_key,
             &config.livekit.api_secret,
@@ -120,12 +126,20 @@ async fn main() -> Result<()> {
         ).await {
             Some(proc) => {
                 livekit_status = format!("Managed (port {})", livekit_port);
+                livekit_reachable = true;
                 managed_livekit = Some(proc);
+            }
+            None if already_running => {
+                livekit_status = format!("External (port {})", livekit_port);
+                livekit_reachable = true;
             }
             None => {
                 livekit_status = "Not available (binary not found)".to_string();
             }
         }
+    } else {
+        // External LiveKit URL configured — assume reachable
+        livekit_reachable = true;
     }
 
     let db = paracord_db::create_pool(&config.database.url, config.database.max_connections).await?;
@@ -179,7 +193,7 @@ async fn main() -> Result<()> {
             livekit_url: config.livekit.url.clone(),
             livekit_http_url: config.livekit.http_url.clone(),
             livekit_public_url,
-            livekit_available: managed_livekit.is_some() || livekit_status == "External",
+            livekit_available: livekit_reachable,
             public_url: config.server.public_url.clone(),
             media_storage_path: config.media.storage_path.clone(),
             media_max_file_size: config.media.max_file_size,

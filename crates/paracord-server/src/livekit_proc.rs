@@ -151,8 +151,8 @@ pub async fn start_livekit(
         }
     };
 
-    // Give LiveKit a moment to start
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Give LiveKit a moment to start — needs time to bind ports and init
+    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
 
     tracing::info!("Managed LiveKit server started (PID: {})",
         child.id().map(|id| id.to_string()).unwrap_or_else(|| "unknown".into()));
