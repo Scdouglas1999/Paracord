@@ -76,6 +76,7 @@ async fn main() -> Result<()> {
     let mut upnp_livekit_port = livekit_port;
     let mut upnp_status = "Disabled".to_string();
     let mut needs_manual_forwarding = false;
+    let mut detected_external_ip: Option<String> = None;
     if config.network.upnp {
         match upnp::setup_upnp(bind_port, livekit_port, config.network.upnp_lease_seconds).await {
             Ok(result) => {
@@ -95,6 +96,8 @@ async fn main() -> Result<()> {
                     config.livekit.public_url = Some(url);
                 }
 
+                detected_external_ip = Some(ip.to_string());
+
                 if result.method.contains("manual") {
                     needs_manual_forwarding = true;
                     upnp_status = format!("Manual (external IP: {})", ip);
@@ -105,6 +108,23 @@ async fn main() -> Result<()> {
             Err(e) => {
                 tracing::warn!("{}", e);
                 upnp_status = "Failed (could not detect external IP)".to_string();
+            }
+        }
+    }
+
+    // If we still don't have an external IP (UPnP failed or disabled) but
+    // LiveKit is local, detect the public IP via HTTP so we can configure
+    // LiveKit's ICE candidates correctly for remote users.
+    if detected_external_ip.is_none()
+        && (config.livekit.url.contains("localhost") || config.livekit.url.contains("127.0.0.1"))
+    {
+        if let Ok(resp) = reqwest::get("https://api.ipify.org").await {
+            if let Ok(text) = resp.text().await {
+                let ip = text.trim().to_string();
+                if !ip.is_empty() {
+                    tracing::info!("Detected external IP via HTTP: {}", ip);
+                    detected_external_ip = Some(ip);
+                }
             }
         }
     }
@@ -123,6 +143,7 @@ async fn main() -> Result<()> {
             &config.livekit.api_key,
             &config.livekit.api_secret,
             livekit_port,
+            detected_external_ip.as_deref(),
         ).await {
             Some(proc) => {
                 livekit_status = format!("Managed (port {})", livekit_port);
@@ -315,9 +336,9 @@ async fn load_runtime_settings(db: &paracord_db::DbPool) -> paracord_core::Runti
     settings
 }
 
-/// On Windows, ensure a firewall rule exists so inbound connections are not blocked.
-/// Uses `netsh advfirewall` to add an allow-rule for the current executable.
-/// Silently ignored if the rule already exists or if the user lacks admin rights.
+/// On Windows, ensure firewall rules exist so inbound connections are not blocked.
+/// Uses `netsh advfirewall` to add allow-rules for the server and LiveKit binaries.
+/// Silently ignored if the rules already exist or if the user lacks admin rights.
 #[cfg(target_os = "windows")]
 fn ensure_firewall_rule() {
     let exe = match std::env::current_exe() {
@@ -325,8 +346,24 @@ fn ensure_firewall_rule() {
         Err(_) => return,
     };
     let exe_str = exe.display().to_string();
-    let rule_name = "Paracord Server";
 
+    // Rule for the main Paracord server (TCP)
+    add_windows_firewall_rule("Paracord Server", &exe_str, "TCP");
+
+    // Rules for LiveKit (TCP + UDP for WebRTC media)
+    if let Some(exe_dir) = exe.parent() {
+        let livekit_name = if cfg!(windows) { "livekit-server.exe" } else { "livekit-server" };
+        let livekit_path = exe_dir.join(livekit_name);
+        if livekit_path.is_file() {
+            let lk_str = livekit_path.display().to_string();
+            add_windows_firewall_rule("Paracord LiveKit TCP", &lk_str, "TCP");
+            add_windows_firewall_rule("Paracord LiveKit UDP", &lk_str, "UDP");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_firewall_rule(rule_name: &str, program: &str, protocol: &str) {
     // Check if rule already exists
     let check = std::process::Command::new("netsh")
         .args(["advfirewall", "firewall", "show", "rule", &format!("name={}", rule_name)])
@@ -340,15 +377,14 @@ fn ensure_firewall_rule() {
         }
     }
 
-    // Add inbound rule allowing TCP connections to this executable
     let result = std::process::Command::new("netsh")
         .args([
             "advfirewall", "firewall", "add", "rule",
             &format!("name={}", rule_name),
             "dir=in",
             "action=allow",
-            &format!("program={}", exe_str),
-            "protocol=TCP",
+            &format!("program={}", program),
+            &format!("protocol={}", protocol),
             "enable=yes",
         ])
         .stdout(std::process::Stdio::null())
@@ -356,8 +392,8 @@ fn ensure_firewall_rule() {
         .status();
 
     match result {
-        Ok(s) if s.success() => tracing::info!("Windows Firewall rule added for Paracord"),
-        _ => tracing::debug!("Could not add firewall rule (may need admin rights)"),
+        Ok(s) if s.success() => tracing::info!("Windows Firewall rule '{}' added", rule_name),
+        _ => tracing::debug!("Could not add firewall rule '{}' (may need admin rights)", rule_name),
     }
 }
 

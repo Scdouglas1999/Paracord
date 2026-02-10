@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { VoiceState } from '../types';
 import { voiceApi } from '../api/voice';
 import { Room, RoomEvent, type Participant } from 'livekit-client';
+import { useAuthStore } from './authStore';
 
 const INTERNAL_LIVEKIT_HOSTS = new Set([
   'host.docker.internal',
@@ -135,17 +136,46 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         get().setSpeakingUsers(speakingIds);
       });
 
-      set({
-        connected: true,
-        joining: false,
-        joiningChannelId: null,
-        channelId,
-        guildId: guildId || null,
-        livekitToken: data.token,
-        livekitUrl: normalizedUrl,
-        roomName: data.room_name,
-        room,
-        participants: new Map(),
+      // Add local user to channelParticipants immediately so the sidebar
+      // shows them without waiting for the gateway VOICE_STATE_UPDATE event.
+      const authUser = useAuthStore.getState().user;
+      set((prev) => {
+        const channelParticipants = new Map(prev.channelParticipants);
+        if (authUser) {
+          const localVoiceState: VoiceState = {
+            user_id: authUser.id,
+            channel_id: channelId,
+            guild_id: guildId,
+            session_id: '',
+            deaf: false,
+            mute: false,
+            self_deaf: false,
+            self_mute: false,
+            self_stream: false,
+            self_video: false,
+            suppress: false,
+            username: authUser.username,
+            avatar_hash: authUser.avatar_hash,
+          };
+          const existing = (channelParticipants.get(channelId) || []).filter(
+            (p) => p.user_id !== authUser.id
+          );
+          existing.push(localVoiceState);
+          channelParticipants.set(channelId, existing);
+        }
+        return {
+          connected: true,
+          joining: false,
+          joiningChannelId: null,
+          channelId,
+          guildId: guildId || null,
+          livekitToken: data.token,
+          livekitUrl: normalizedUrl,
+          roomName: data.room_name,
+          room,
+          participants: new Map(),
+          channelParticipants,
+        };
       });
     } catch (error) {
       room?.disconnect();
@@ -178,8 +208,22 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         console.warn('[voice] leave channel API error (continuing disconnect):', err);
       });
     }
+    const authUser = useAuthStore.getState().user;
     set((state) => {
       state.room?.disconnect();
+      // Remove local user from channelParticipants
+      const channelParticipants = new Map(state.channelParticipants);
+      if (channelId && authUser) {
+        const members = channelParticipants.get(channelId);
+        if (members) {
+          const filtered = members.filter((p) => p.user_id !== authUser.id);
+          if (filtered.length === 0) {
+            channelParticipants.delete(channelId);
+          } else {
+            channelParticipants.set(channelId, filtered);
+          }
+        }
+      }
       return {
         connected: false,
         channelId: null,
@@ -189,6 +233,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         selfStream: false,
         selfVideo: false,
         participants: new Map(),
+        channelParticipants,
         speakingUsers: new Set<string>(),
         livekitToken: null,
         livekitUrl: null,
@@ -276,7 +321,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   toggleVideo: () => set((state) => ({ selfVideo: !state.selfVideo })),
   clearConnectionError: () => set({ connectionError: null, connectionErrorChannelId: null }),
 
-  handleVoiceStateUpdate: (voiceState) =>
+  handleVoiceStateUpdate: (voiceState) => {
     set((state) => {
       const participants = new Map(state.participants);
       if (voiceState.channel_id) {
@@ -305,7 +350,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       }
 
       return { participants, channelParticipants };
-    }),
+    });
+  },
 
   loadVoiceStates: (states) =>
     set((prev) => {

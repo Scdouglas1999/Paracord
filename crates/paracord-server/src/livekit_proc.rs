@@ -62,26 +62,40 @@ fn write_livekit_config(
     api_key: &str,
     api_secret: &str,
     port: u16,
+    external_ip: Option<&str>,
 ) -> std::io::Result<PathBuf> {
-    let config = format!(
-        r#"port: {port}
-rtc:
-    use_external_ip: true
-    port_range_start: {udp_start}
-    port_range_end: {udp_end}
-    tcp_port: {turn_port}
-keys:
-    {api_key}: {api_secret}
-logging:
-    level: info
-"#,
-        port = port,
-        udp_start = port + 2,
-        udp_end = port + 12,
-        turn_port = port + 1,
-        api_key = api_key,
-        api_secret = api_secret,
-    );
+    // If we know the external IP, pin it in the RTC config so LiveKit
+    // doesn't rely on STUN (which can fail on Windows).  Also enable
+    // the built-in TURN server so clients behind strict NATs can relay
+    // media through TCP.
+    let turn_port = port + 1;
+    let udp_start = port + 2;
+    let udp_end = port + 12;
+
+    let mut lines = vec![
+        format!("port: {port}"),
+        "rtc:".to_string(),
+        "    use_external_ip: true".to_string(),
+    ];
+    if let Some(ip) = external_ip {
+        lines.push(format!("    node_ip: {ip}"));
+    }
+    lines.push(format!("    port_range_start: {udp_start}"));
+    lines.push(format!("    port_range_end: {udp_end}"));
+    lines.push(format!("    tcp_port: {turn_port}"));
+    lines.push("keys:".to_string());
+    lines.push(format!("    {api_key}: {api_secret}"));
+    if let Some(ip) = external_ip {
+        lines.push("turn:".to_string());
+        lines.push("    enabled: true".to_string());
+        lines.push(format!("    domain: {ip}"));
+        lines.push("    tls_port: 0".to_string());
+        lines.push(format!("    udp_port: {turn_port}"));
+        lines.push("    external_tls: false".to_string());
+    }
+    lines.push("logging:".to_string());
+    lines.push("    level: info".to_string());
+    let config = lines.join("\n") + "\n";
 
     let dir = std::env::temp_dir();
     let path = dir.join("paracord-livekit.yaml");
@@ -97,6 +111,7 @@ pub async fn start_livekit(
     api_key: &str,
     api_secret: &str,
     port: u16,
+    external_ip: Option<&str>,
 ) -> Option<LiveKitProcess> {
     let binary = match find_livekit_binary() {
         Some(path) => {
@@ -115,7 +130,7 @@ pub async fn start_livekit(
         }
     };
 
-    let config_path = match write_livekit_config(api_key, api_secret, port) {
+    let config_path = match write_livekit_config(api_key, api_secret, port, external_ip) {
         Ok(path) => path,
         Err(e) => {
             tracing::error!("Failed to write LiveKit config: {}", e);
