@@ -87,8 +87,9 @@ pub struct StreamMetadata {
 }
 
 /// Quality preference a viewer can select when watching a stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ViewerQuality {
+    #[default]
     Auto,
     Low,
     Medium,
@@ -106,12 +107,6 @@ impl ViewerQuality {
             ViewerQuality::Medium => Some("h"),
             ViewerQuality::High | ViewerQuality::Source => Some("f"),
         }
-    }
-}
-
-impl Default for ViewerQuality {
-    fn default() -> Self {
-        ViewerQuality::Auto
     }
 }
 

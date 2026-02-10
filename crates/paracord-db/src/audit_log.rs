@@ -13,6 +13,7 @@ pub struct AuditLogEntryRow {
     pub created_at: DateTime<Utc>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_entry(
     pool: &DbPool,
     id: i64,

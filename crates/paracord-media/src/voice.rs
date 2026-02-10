@@ -62,6 +62,7 @@ impl VoiceManager {
     }
 
     /// Join a voice channel - creates LiveKit room if needed, returns token.
+    #[allow(clippy::too_many_arguments)]
     pub async fn join_channel(
         &self,
         channel_id: i64,
@@ -77,9 +78,9 @@ impl VoiceManager {
         // Create LiveKit room if it doesn't exist
         {
             let mut lk_rooms = self.active_livekit_rooms.write().await;
-            if !lk_rooms.contains_key(&channel_id) {
+            if let std::collections::hash_map::Entry::Vacant(e) = lk_rooms.entry(channel_id) {
                 self.livekit.create_room(&room_name, 99, bitrate).await?;
-                lk_rooms.insert(channel_id, room_name.clone());
+                e.insert(room_name.clone());
             }
         }
 

@@ -181,6 +181,7 @@ pub async fn delete_user(pool: &DbPool, id: i64) -> Result<(), DbError> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn upsert_user_settings(
     pool: &DbPool,
     user_id: i64,

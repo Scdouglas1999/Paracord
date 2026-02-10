@@ -260,7 +260,7 @@ fn build_cors_layer() -> tower_http::cors::CorsLayer {
     if let Ok(public_url) = std::env::var("PARACORD_PUBLIC_URL") {
         let url = public_url.trim_end_matches('/');
         if let Ok(value) = url.parse::<axum::http::HeaderValue>() {
-            if !origins.iter().any(|o| o == &value) {
+            if !origins.contains(&value) {
                 origins.push(value);
             }
         }

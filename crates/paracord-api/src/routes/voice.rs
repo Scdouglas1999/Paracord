@@ -84,7 +84,7 @@ pub async fn join_voice(
         paracord_media::AudioBitrate::default(),
     )
     .await
-    .map_err(|e| ApiError::Internal(e))?;
+    .map_err(ApiError::Internal)?;
 
     let _ = paracord_db::voice_states::upsert_voice_state(
         &state.db,
@@ -171,7 +171,7 @@ pub async fn start_stream(
         stream_title,
     )
     .await
-    .map_err(|e| ApiError::Internal(e))?;
+    .map_err(ApiError::Internal)?;
 
     Ok(Json(json!({
         "token": stream_resp.token,

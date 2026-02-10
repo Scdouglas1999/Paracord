@@ -12,6 +12,7 @@ pub struct AttachmentRow {
     pub height: Option<i32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_attachment(
     pool: &DbPool,
     id: i64,

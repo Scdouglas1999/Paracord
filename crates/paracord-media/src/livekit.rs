@@ -60,9 +60,10 @@ pub struct LiveKitClaims {
 }
 
 /// Audio bitrate presets for voice channels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AudioBitrate {
     Low,     // 64 kbps
+    #[default]
     Medium,  // 96 kbps
     High,    // 128 kbps
 }
@@ -74,12 +75,6 @@ impl AudioBitrate {
             AudioBitrate::Medium => 96,
             AudioBitrate::High => 128,
         }
-    }
-}
-
-impl Default for AudioBitrate {
-    fn default() -> Self {
-        AudioBitrate::Medium
     }
 }
 

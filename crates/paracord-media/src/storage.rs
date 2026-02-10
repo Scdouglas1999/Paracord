@@ -181,7 +181,7 @@ impl StorageManager {
             if entry
                 .file_name()
                 .to_str()
-                .map_or(false, |n| n.starts_with(file_id))
+                .is_some_and(|n| n.starts_with(file_id))
             {
                 fs::remove_file(entry.path()).await?;
                 return Ok(());
@@ -209,7 +209,7 @@ impl StorageManager {
             if entry
                 .file_name()
                 .to_str()
-                .map_or(false, |n| n.starts_with(file_id))
+                .is_some_and(|n| n.starts_with(file_id))
             {
                 return Ok(entry.path());
             }
@@ -227,7 +227,7 @@ impl StorageManager {
         recipient_ids: Vec<i64>,
     ) -> P2PTransferRequest {
         let chunk_size: u64 = 256 * 1024; // 256KB chunks
-        let chunks = (size + chunk_size - 1) / chunk_size;
+        let chunks = size.div_ceil(chunk_size);
 
         P2PTransferRequest {
             transfer_id: Uuid::new_v4().to_string(),
