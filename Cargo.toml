@@ -71,6 +71,7 @@ anyhow = "1"
 igd-next = { version = "0.15", features = ["aio_tokio"] }
 crab_nat = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio-tungstenite = "0.26"
 
 # Process management
 which = "7"

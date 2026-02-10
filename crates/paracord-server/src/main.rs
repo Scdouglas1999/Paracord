@@ -89,7 +89,9 @@ async fn main() -> Result<()> {
                     config.server.public_url = Some(url);
                 }
                 if config.livekit.public_url.is_none() {
-                    let url = format!("ws://{}:{}", ip, upnp_livekit_port);
+                    // Route LiveKit through the main server's /livekit proxy
+                    // so only one port needs to be exposed.
+                    let url = format!("ws://{}:{}/livekit", ip, upnp_server_port);
                     config.livekit.public_url = Some(url);
                 }
 
@@ -151,12 +153,16 @@ async fn main() -> Result<()> {
         },
     ));
 
-    // Resolve the public LiveKit URL
+    // Resolve the public LiveKit URL — default to the /livekit proxy on our port
     let livekit_public_url = config
         .livekit
         .public_url
         .clone()
-        .unwrap_or_else(|| config.livekit.url.clone());
+        .unwrap_or_else(|| {
+            // Use the main server's /livekit proxy so clients only need one port
+            let bind = &config.server.bind_address;
+            format!("ws://{}/livekit", bind)
+        });
 
     let state = paracord_core::AppState {
         db,

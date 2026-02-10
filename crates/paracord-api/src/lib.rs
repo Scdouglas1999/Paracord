@@ -4,7 +4,7 @@ use axum::{
     middleware::{from_fn, Next},
     response::Response,
     response::IntoResponse,
-    routing::{delete, get, patch, post, put},
+    routing::{any, delete, get, patch, post, put},
     Json, Router,
 };
 use paracord_core::AppState;
@@ -241,6 +241,8 @@ pub fn build_router() -> Router<AppState> {
             "/api/v1/admin/guilds/{guild_id}",
             delete(routes::admin::delete_guild),
         )
+        // LiveKit reverse proxy (voice signaling + Twirp API on the same port)
+        .route("/livekit/{*path}", any(routes::livekit_proxy::livekit_proxy))
         // Middleware layers
         .layer(cors)
         .layer(from_fn(rate_limit_middleware))

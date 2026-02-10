@@ -14,3 +14,4 @@ pub mod files;
 pub mod dms;
 pub mod federation;
 pub mod admin;
+pub mod livekit_proxy;
