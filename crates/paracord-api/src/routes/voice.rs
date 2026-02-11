@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use paracord_core::AppState;
@@ -10,6 +10,50 @@ use serde_json::{json, Value};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
+
+fn first_forwarded_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| raw.split(',').next())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn is_frontend_dev_proxy_host(host: &str) -> bool {
+    host.rsplit_once(':')
+        .map(|(_, port)| matches!(port, "1420" | "5173"))
+        .unwrap_or(false)
+}
+
+fn resolve_livekit_client_url(headers: &HeaderMap, fallback: &str) -> String {
+    let host = first_forwarded_value(headers, "x-forwarded-host")
+        .or_else(|| first_forwarded_value(headers, "host"));
+    let forwarded_proto = first_forwarded_value(headers, "x-forwarded-proto")
+        .or_else(|| first_forwarded_value(headers, "x-forwarded-scheme"))
+        .or_else(|| first_forwarded_value(headers, "x-forwarded-protocol"));
+
+    if let Some(host) = host {
+        // When requests are proxied through a frontend dev server (for example
+        // localhost:1420/5173), the host points to Vite instead of the real
+        // backend. Returning that host here can route LiveKit signaling through
+        // the wrong proxy target and break voice. In that case, keep the server
+        // configured fallback URL.
+        if is_frontend_dev_proxy_host(&host) {
+            return fallback.to_string();
+        }
+
+        let ws_scheme = if matches!(forwarded_proto.as_deref(), Some("https") | Some("wss")) {
+            "wss"
+        } else {
+            "ws"
+        };
+        return format!("{ws_scheme}://{host}/livekit");
+    }
+
+    fallback.to_string()
+}
 
 #[derive(Deserialize)]
 pub struct StartStreamRequest {
@@ -37,6 +81,7 @@ pub struct LiveKitParticipant {
 pub async fn join_voice(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(channel_id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
     if !state.config.livekit_available {
@@ -78,19 +123,42 @@ pub async fn join_voice(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
+    // If the user was tracked in any other voice room, remove that stale
+    // in-memory membership before joining the new channel.
+    if let Ok(existing_states) =
+        paracord_db::voice_states::get_all_user_voice_states(&state.db, auth.user_id).await
+    {
+        for existing in existing_states {
+            if existing.channel_id == channel_id {
+                continue;
+            }
+            if let Some(current) = state
+                .voice
+                .leave_room(existing.channel_id, auth.user_id)
+                .await
+            {
+                if current.is_empty() {
+                    let _ = state.voice.cleanup_room(existing.channel_id).await;
+                }
+            }
+        }
+    }
+
     let session_id = uuid::Uuid::new_v4().to_string();
 
-    let join_resp = state.voice.join_channel(
-        channel_id,
-        guild_id,
-        auth.user_id,
-        &user.username,
-        &session_id,
-        true, // can_speak
-        paracord_media::AudioBitrate::default(),
-    )
-    .await
-    .map_err(ApiError::Internal)?;
+    let join_resp = state
+        .voice
+        .join_channel(
+            channel_id,
+            guild_id,
+            auth.user_id,
+            &user.username,
+            &session_id,
+            true, // can_speak
+            paracord_media::AudioBitrate::default(),
+        )
+        .await
+        .map_err(ApiError::Internal)?;
 
     let _ = paracord_db::voice_states::upsert_voice_state(
         &state.db,
@@ -114,9 +182,11 @@ pub async fn join_voice(
         channel.guild_id,
     );
 
+    let livekit_url = resolve_livekit_client_url(&headers, &state.config.livekit_public_url);
+
     Ok(Json(json!({
         "token": join_resp.token,
-        "url": state.config.livekit_public_url,
+        "url": livekit_url,
         "room_name": join_resp.room_name,
         "session_id": session_id,
     })))
@@ -125,6 +195,7 @@ pub async fn join_voice(
 pub async fn start_stream(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(channel_id): Path<i64>,
     body: Option<Json<StartStreamRequest>>,
 ) -> Result<Json<Value>, ApiError> {
@@ -177,19 +248,23 @@ pub async fn start_stream(
     }
     let stream_title = body.as_ref().and_then(|b| b.title.as_deref());
 
-    let stream_resp = state.voice.start_stream(
-        channel_id,
-        guild_id,
-        auth.user_id,
-        &user.username,
-        stream_title,
-    )
-    .await
-    .map_err(ApiError::Internal)?;
+    let stream_resp = state
+        .voice
+        .start_stream(
+            channel_id,
+            guild_id,
+            auth.user_id,
+            &user.username,
+            stream_title,
+        )
+        .await
+        .map_err(ApiError::Internal)?;
+
+    let livekit_url = resolve_livekit_client_url(&headers, &state.config.livekit_public_url);
 
     Ok(Json(json!({
         "token": stream_resp.token,
-        "url": state.config.livekit_public_url,
+        "url": livekit_url,
         "room_name": stream_resp.room_name,
         "quality_preset": requested_quality,
     })))
@@ -268,30 +343,65 @@ pub async fn livekit_webhook(
         return Ok(StatusCode::NO_CONTENT);
     };
 
-    let _ = paracord_db::voice_states::remove_voice_state(&state.db, user_id, guild_id).await;
-    let participants = state.voice.leave_room(channel_id, user_id).await;
-    if let Some(current) = participants {
-        if current.is_empty() {
-            let _ = state.voice.cleanup_room(channel_id).await;
-        }
-    }
-
-    let user = paracord_db::users::get_user_by_id(&state.db, user_id)
-        .await
-        .ok()
-        .flatten();
-    state.event_bus.dispatch(
-        "VOICE_STATE_UPDATE",
-        json!({
-            "user_id": user_id.to_string(),
-            "channel_id": null,
-            "guild_id": guild_id.map(|id| id.to_string()),
-            "self_mute": false,
-            "self_deaf": false,
-            "username": user.as_ref().map(|u| u.username.as_str()),
-            "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
-        }),
-        guild_id,
+    // Grace period: LiveKit fires participant_left during transient reconnects.
+    // Wait 5 seconds before acting — if the participant has re-joined by then,
+    // skip the removal so their icon stays in the sidebar.
+    tracing::debug!(
+        "LiveKit participant_left for user {} in channel {}, starting 5s grace period",
+        user_id,
+        channel_id
     );
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        // Check if the participant actually reconnected to the LiveKit room.
+        // Query LiveKit directly — this is the ground truth for connection status.
+        if state_clone
+            .voice
+            .is_participant_in_livekit_room(channel_id, guild_id, user_id)
+            .await
+        {
+            tracing::debug!(
+                "LiveKit participant_left grace period expired: user {} still in LiveKit room for channel {}, skipping removal",
+                user_id, channel_id
+            );
+            return;
+        }
+
+        tracing::info!(
+            "LiveKit participant_left confirmed: removing user {} from channel {}",
+            user_id,
+            channel_id
+        );
+
+        let _ =
+            paracord_db::voice_states::remove_voice_state(&state_clone.db, user_id, guild_id).await;
+        let participants = state_clone.voice.leave_room(channel_id, user_id).await;
+        if let Some(current) = participants {
+            if current.is_empty() {
+                let _ = state_clone.voice.cleanup_room(channel_id).await;
+            }
+        }
+
+        let user = paracord_db::users::get_user_by_id(&state_clone.db, user_id)
+            .await
+            .ok()
+            .flatten();
+        state_clone.event_bus.dispatch(
+            "VOICE_STATE_UPDATE",
+            json!({
+                "user_id": user_id.to_string(),
+                "channel_id": null,
+                "guild_id": guild_id.map(|id| id.to_string()),
+                "self_mute": false,
+                "self_deaf": false,
+                "username": user.as_ref().map(|u| u.username.as_str()),
+                "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
+            }),
+            guild_id,
+        );
+    });
+
     Ok(StatusCode::NO_CONTENT)
 }

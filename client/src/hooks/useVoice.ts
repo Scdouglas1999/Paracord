@@ -16,6 +16,12 @@ export function useVoice() {
   const participants = useVoiceStore((s) => s.participants);
   const livekitToken = useVoiceStore((s) => s.livekitToken);
   const livekitUrl = useVoiceStore((s) => s.livekitUrl);
+  const micInputActive = useVoiceStore((s) => s.micInputActive);
+  const micInputLevel = useVoiceStore((s) => s.micInputLevel);
+  const micServerDetected = useVoiceStore((s) => s.micServerDetected);
+  const micUplinkState = useVoiceStore((s) => s.micUplinkState);
+  const micUplinkBytesSent = useVoiceStore((s) => s.micUplinkBytesSent);
+  const micUplinkStalledIntervals = useVoiceStore((s) => s.micUplinkStalledIntervals);
   const startStreamStore = useVoiceStore((s) => s.startStream);
   const stopStreamStore = useVoiceStore((s) => s.stopStream);
   const clearConnectionError = useVoiceStore((s) => s.clearConnectionError);
@@ -24,12 +30,18 @@ export function useVoice() {
     async (targetChannelId: string, targetGuildId?: string) => {
       try {
         await useVoiceStore.getState().joinChannel(targetChannelId, targetGuildId);
-        gateway.updateVoiceState(
-          targetGuildId || null,
-          targetChannelId,
-          false,
-          false
-        );
+        // The join/leave REST endpoints are authoritative for membership.
+        // Only send a gateway update here when we need to sync non-default
+        // mute/deafen state immediately after connecting.
+        const state = useVoiceStore.getState();
+        if (state.selfMute || state.selfDeaf) {
+          gateway.updateVoiceState(
+            targetGuildId || state.guildId,
+            targetChannelId,
+            state.selfMute,
+            state.selfDeaf
+          );
+        }
       } catch (err) {
         console.error('[voice] Failed to join channel:', err);
       }
@@ -38,9 +50,8 @@ export function useVoice() {
   );
 
   const leaveChannel = useCallback(async () => {
-    gateway.updateVoiceState(guildId, null, false, false);
     await useVoiceStore.getState().leaveChannel();
-  }, [guildId]);
+  }, []);
 
   const toggleMute = useCallback(() => {
     useVoiceStore.getState().toggleMute();
@@ -86,6 +97,12 @@ export function useVoice() {
     participants,
     livekitToken,
     livekitUrl,
+    micInputActive,
+    micInputLevel,
+    micServerDetected,
+    micUplinkState,
+    micUplinkBytesSent,
+    micUplinkStalledIntervals,
     joinChannel,
     leaveChannel,
     toggleMute,

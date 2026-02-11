@@ -14,10 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use paracord_core::AppState;
 
 /// Combined handler: upgrades WebSocket requests, proxies HTTP requests.
-pub async fn livekit_proxy(
-    State(state): State<AppState>,
-    req: Request,
-) -> Response {
+pub async fn livekit_proxy(State(state): State<AppState>, req: Request) -> Response {
     // Try to extract WebSocketUpgrade from the request
     let (mut parts, body) = req.into_parts();
     if let Ok(ws) = WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
@@ -73,54 +70,59 @@ async fn proxy_ws(client_socket: WebSocket, target: String) {
     let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(16 * 1024 * 1024))
         .max_frame_size(Some(16 * 1024 * 1024));
-    let backend = match tokio_tungstenite::connect_async_with_config(&target, Some(ws_config), false).await {
-        Ok((ws_stream, _)) => ws_stream,
-        Err(e) => {
-            tracing::error!("Failed to connect to LiveKit backend at {}: {}", target, e);
-            return;
-        }
-    };
+    let backend =
+        match tokio_tungstenite::connect_async_with_config(&target, Some(ws_config), false).await {
+            Ok((ws_stream, _)) => ws_stream,
+            Err(e) => {
+                tracing::error!("Failed to connect to LiveKit backend at {}: {}", target, e);
+                return;
+            }
+        };
 
     let (mut backend_write, mut backend_read) = backend.split();
     let (mut client_write, mut client_read) = client_socket.split();
 
-    // Channels for cross-task communication.
-    // Each relay task reads from its source and writes to its sink directly,
-    // but signals shutdown via an mpsc message when it stops.
-    let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<&str>(2);
+    // Use CancellationTokens so each half can signal the other to stop
+    // cooperatively (with a close frame) instead of aborting mid-stream.
+    let cancel = tokio_util::sync::CancellationToken::new();
 
     tracing::debug!("LiveKit WS proxy connected to {}", target);
 
-    let done_c2b = done_tx.clone();
+    let cancel_c2b = cancel.clone();
     let c2b = tokio::spawn(async move {
-        while let Some(result) = client_read.next().await {
-            let msg = match result {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::debug!("LiveKit WS proxy: client read error: {}", e);
-                    break;
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel_c2b.cancelled() => break,
+                maybe_msg = client_read.next() => {
+                    let msg = match maybe_msg {
+                        Some(Ok(m)) => m,
+                        Some(Err(e)) => {
+                            tracing::debug!("LiveKit WS proxy: client read error: {}", e);
+                            break;
+                        }
+                        None => break,
+                    };
+                    let tung_msg = match msg {
+                        AMsg::Text(t) => TMsg::Text(t.as_str().to_string().into()),
+                        AMsg::Binary(b) => TMsg::Binary(b.to_vec().into()),
+                        AMsg::Ping(p) => TMsg::Ping(p.to_vec().into()),
+                        AMsg::Pong(p) => TMsg::Pong(p.to_vec().into()),
+                        AMsg::Close(_) => break,
+                    };
+                    if backend_write.send(tung_msg).await.is_err() {
+                        break;
+                    }
                 }
-            };
-            let tung_msg = match msg {
-                AMsg::Text(t) => TMsg::Text(t.as_str().to_string().into()),
-                AMsg::Binary(b) => TMsg::Binary(b.to_vec().into()),
-                AMsg::Ping(p) => TMsg::Ping(p.to_vec().into()),
-                AMsg::Pong(p) => TMsg::Pong(p.to_vec().into()),
-                AMsg::Close(_) => {
-                    let _ = backend_write.close().await;
-                    let _ = done_c2b.send("c2b").await;
-                    return;
-                }
-            };
-            if backend_write.send(tung_msg).await.is_err() {
-                break;
             }
         }
+        // Always send a proper close frame to LiveKit so it can clean up
+        // the participant session immediately instead of waiting for a timeout.
         let _ = backend_write.close().await;
-        let _ = done_c2b.send("c2b").await;
+        cancel_c2b.cancel();
     });
 
-    let done_b2c = done_tx.clone();
+    let cancel_b2c = cancel.clone();
     let b2c = tokio::spawn(async move {
         let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(15));
         ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -129,6 +131,8 @@ async fn proxy_ws(client_socket: WebSocket, target: String) {
 
         loop {
             tokio::select! {
+                biased;
+                _ = cancel_b2c.cancelled() => break,
                 maybe_msg = backend_read.next() => {
                     let msg = match maybe_msg {
                         Some(Ok(m)) => m,
@@ -139,11 +143,7 @@ async fn proxy_ws(client_socket: WebSocket, target: String) {
                         TMsg::Binary(b) => AMsg::Binary(b.to_vec().into()),
                         TMsg::Ping(p) => AMsg::Ping(p.to_vec().into()),
                         TMsg::Pong(p) => AMsg::Pong(p.to_vec().into()),
-                        TMsg::Close(_) => {
-                            let _ = client_write.send(AMsg::Close(None)).await;
-                            let _ = done_b2c.send("b2c").await;
-                            return;
-                        }
+                        TMsg::Close(_) => break,
                         TMsg::Frame(_) => continue,
                     };
                     if client_write.send(axum_msg).await.is_err() {
@@ -151,8 +151,6 @@ async fn proxy_ws(client_socket: WebSocket, target: String) {
                     }
                 }
                 _ = ping_interval.tick() => {
-                    // Send a WebSocket ping to the client to keep the connection alive.
-                    // This prevents NAT/router/proxy timeouts from killing idle connections.
                     if client_write.send(AMsg::Ping(vec![].into())).await.is_err() {
                         break;
                     }
@@ -160,15 +158,14 @@ async fn proxy_ws(client_socket: WebSocket, target: String) {
             }
         }
         let _ = client_write.send(AMsg::Close(None)).await;
-        let _ = done_b2c.send("b2c").await;
+        cancel_b2c.cancel();
     });
 
-    drop(done_tx);
-
-    // Wait for either direction to finish, then abort the other.
-    let _ = done_rx.recv().await;
-    c2b.abort();
-    b2c.abort();
+    // Wait for both tasks to finish. The cancellation token ensures that
+    // when one side exits, the other gets a cooperative shutdown signal
+    // and sends a proper close frame before exiting.
+    let _ = tokio::join!(c2b, b2c);
+    tracing::debug!("LiveKit WS proxy disconnected from {}", target);
 }
 
 async fn handle_http(state: AppState, req: Request) -> Response {

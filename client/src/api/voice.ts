@@ -4,6 +4,7 @@ export interface VoiceJoinResponse {
   token: string;
   url: string;
   room_name: string;
+  session_id?: string;
   quality_preset?: string;
 }
 

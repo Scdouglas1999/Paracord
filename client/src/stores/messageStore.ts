@@ -55,8 +55,10 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
       });
       set((state) => {
         const existing = params?.before ? state.messages[channelId] || [] : [];
-        // API returns newest first; prepend older messages when paginating
-        const merged = params?.before ? [...data, ...existing] : data;
+        // API returns newest first (ORDER BY id DESC); reverse to
+        // chronological order (oldest at top, newest at bottom).
+        const sorted = [...data].reverse();
+        const merged = params?.before ? [...sorted, ...existing] : sorted;
         return {
           messages: { ...state.messages, [channelId]: merged },
           hasMore: { ...state.hasMore, [channelId]: data.length >= DEFAULT_MESSAGE_FETCH_LIMIT },

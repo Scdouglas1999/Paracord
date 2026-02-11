@@ -94,27 +94,26 @@ impl VoiceManager {
                 audio_bitrate: bitrate,
                 active_streamer: None,
             });
-            room.participants.insert(user_id, VoiceParticipant {
+            room.participants.insert(
                 user_id,
-                session_id: session_id.to_string(),
-                self_mute: false,
-                self_deaf: false,
-                self_stream: false,
-                self_video: false,
-                server_mute: false,
-                server_deaf: false,
-                priority_speaker: false,
-            });
+                VoiceParticipant {
+                    user_id,
+                    session_id: session_id.to_string(),
+                    self_mute: false,
+                    self_deaf: false,
+                    self_stream: false,
+                    self_video: false,
+                    server_mute: false,
+                    server_deaf: false,
+                    priority_speaker: false,
+                },
+            );
         }
 
         // Generate participant token
-        let token = self.livekit.generate_voice_token(
-            &room_name,
-            user_id,
-            username,
-            can_speak,
-            true,
-        )?;
+        let token = self
+            .livekit
+            .generate_voice_token(&room_name, user_id, username, can_speak, true)?;
 
         Ok(VoiceJoinResponse {
             token,
@@ -156,12 +155,9 @@ impl VoiceManager {
             }
         }
 
-        let token = self.livekit.generate_stream_token(
-            &room_name,
-            user_id,
-            username,
-            stream_title,
-        )?;
+        let token =
+            self.livekit
+                .generate_stream_token(&room_name, user_id, username, stream_title)?;
 
         Ok(StreamStartResponse {
             token,
@@ -205,17 +201,20 @@ impl VoiceManager {
             active_streamer: None,
         });
 
-        room.participants.insert(user_id, VoiceParticipant {
+        room.participants.insert(
             user_id,
-            session_id: session_id.to_string(),
-            self_mute: false,
-            self_deaf: false,
-            self_stream: false,
-            self_video: false,
-            server_mute: false,
-            server_deaf: false,
-            priority_speaker: false,
-        });
+            VoiceParticipant {
+                user_id,
+                session_id: session_id.to_string(),
+                self_mute: false,
+                self_deaf: false,
+                self_stream: false,
+                self_video: false,
+                server_mute: false,
+                server_deaf: false,
+                priority_speaker: false,
+            },
+        );
 
         room.participants.values().cloned().collect()
     }
@@ -248,9 +247,68 @@ impl VoiceManager {
         Ok(())
     }
 
+    /// Check whether a specific participant is currently tracked in a room (local state).
+    pub async fn is_participant_in_room(&self, channel_id: i64, user_id: i64) -> bool {
+        let rooms = self.rooms.read().await;
+        rooms
+            .get(&channel_id)
+            .map(|r| r.participants.contains_key(&user_id))
+            .unwrap_or(false)
+    }
+
+    /// Check whether a specific participant is actually connected in the LiveKit room.
+    /// Queries the LiveKit server directly — this is the ground truth for connection status.
+    ///
+    /// `guild_id` is optional and used as a deterministic fallback when
+    /// in-memory room tracking has been lost (e.g. after process restart).
+    pub async fn is_participant_in_livekit_room(
+        &self,
+        channel_id: i64,
+        guild_id: Option<i64>,
+        user_id: i64,
+    ) -> bool {
+        let tracked_room_name = {
+            let lk_rooms = self.active_livekit_rooms.read().await;
+            lk_rooms.get(&channel_id).cloned()
+        };
+        let room_name = if let Some(name) = tracked_room_name {
+            name
+        } else if let Some(gid) = guild_id {
+            format!("guild_{}_channel_{}", gid, channel_id)
+        } else {
+            let rooms = self.rooms.read().await;
+            match rooms.get(&channel_id) {
+                Some(room) => format!("guild_{}_channel_{}", room.guild_id, channel_id),
+                None => return false,
+            }
+        };
+        match self.livekit.list_participants(&room_name).await {
+            Ok(participants) => {
+                let user_id_str = user_id.to_string();
+                participants.iter().any(|p| {
+                    p.get("identity")
+                        .and_then(|v| v.as_str())
+                        .map(|id| id == user_id_str)
+                        .unwrap_or(false)
+                })
+            }
+            Err(err) => {
+                tracing::warn!(
+                    channel_id,
+                    user_id,
+                    room_name = %room_name,
+                    error = %err,
+                    "LiveKit participant check failed; falling back to local voice state"
+                );
+                self.is_participant_in_room(channel_id, user_id).await
+            }
+        }
+    }
+
     pub async fn get_room_participants(&self, channel_id: i64) -> Vec<VoiceParticipant> {
         let rooms = self.rooms.read().await;
-        rooms.get(&channel_id)
+        rooms
+            .get(&channel_id)
             .map(|r| r.participants.values().cloned().collect())
             .unwrap_or_default()
     }
@@ -265,8 +323,9 @@ impl VoiceManager {
     ) -> Result<(), anyhow::Error> {
         let room_name = {
             let rooms = self.rooms.read().await;
-            let room = rooms.get(&channel_id)
-                .ok_or_else(|| anyhow::anyhow!("Voice room not found for channel {}", channel_id))?;
+            let room = rooms.get(&channel_id).ok_or_else(|| {
+                anyhow::anyhow!("Voice room not found for channel {}", channel_id)
+            })?;
             format!("guild_{}_channel_{}", room.guild_id, channel_id)
         };
 
@@ -282,12 +341,14 @@ impl VoiceManager {
 
         // Update LiveKit permissions
         let identity = user_id.to_string();
-        self.livekit.update_participant(
-            &room_name,
-            &identity,
-            Some(!muted), // can_publish = !muted
-            None,
-        ).await?;
+        self.livekit
+            .update_participant(
+                &room_name,
+                &identity,
+                Some(!muted), // can_publish = !muted
+                None,
+            )
+            .await?;
 
         Ok(())
     }
@@ -302,8 +363,9 @@ impl VoiceManager {
     ) -> Result<(), anyhow::Error> {
         let room_name = {
             let rooms = self.rooms.read().await;
-            let room = rooms.get(&channel_id)
-                .ok_or_else(|| anyhow::anyhow!("Voice room not found for channel {}", channel_id))?;
+            let room = rooms.get(&channel_id).ok_or_else(|| {
+                anyhow::anyhow!("Voice room not found for channel {}", channel_id)
+            })?;
             format!("guild_{}_channel_{}", room.guild_id, channel_id)
         };
 
@@ -323,12 +385,14 @@ impl VoiceManager {
 
         // Update LiveKit permissions
         let identity = user_id.to_string();
-        self.livekit.update_participant(
-            &room_name,
-            &identity,
-            Some(!deafened), // can_publish = !deafened (deafen implies mute)
-            Some(!deafened), // can_subscribe = !deafened
-        ).await?;
+        self.livekit
+            .update_participant(
+                &room_name,
+                &identity,
+                Some(!deafened), // can_publish = !deafened (deafen implies mute)
+                Some(!deafened), // can_subscribe = !deafened
+            )
+            .await?;
 
         Ok(())
     }
@@ -353,11 +417,9 @@ impl VoiceManager {
 
         if priority {
             let room_name = format!("guild_{}_channel_{}", guild_id, channel_id);
-            let token = self.livekit.generate_priority_speaker_token(
-                &room_name,
-                user_id,
-                username,
-            )?;
+            let token = self
+                .livekit
+                .generate_priority_speaker_token(&room_name, user_id, username)?;
             Ok(Some(token))
         } else {
             Ok(None)

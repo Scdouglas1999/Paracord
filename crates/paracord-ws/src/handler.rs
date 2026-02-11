@@ -21,7 +21,8 @@ struct CachedSession {
     updated_at: i64,
 }
 
-static SESSION_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedSession>>> = OnceLock::new();
+static SESSION_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedSession>>> =
+    OnceLock::new();
 
 fn session_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedSession>> {
     SESSION_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
@@ -79,6 +80,32 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
             return;
         }
     } else {
+        // Fresh IDENTIFY (not a resume) — the client just loaded, so any
+        // voice state in the DB from a prior session is stale.  Clean it
+        // up *before* building the READY payload so other clients don't
+        // see ghost entries.
+        if let Ok(stale) =
+            paracord_db::voice_states::get_all_user_voice_states(&state.db, session.user_id).await
+        {
+            for vs in &stale {
+                // Only clean up if they're not actually in the LiveKit room
+                // (safety check in case of race with a concurrent join).
+                if !state
+                    .voice
+                    .is_participant_in_livekit_room(vs.channel_id, vs.guild_id, session.user_id)
+                    .await
+                {
+                    let _ = paracord_db::voice_states::remove_voice_state(
+                        &state.db,
+                        session.user_id,
+                        vs.guild_id,
+                    )
+                    .await;
+                    let _ = state.voice.leave_room(vs.channel_id, session.user_id).await;
+                }
+            }
+        }
+
         // Send READY with full user data
         let user = paracord_db::users::get_user_by_id(&state.db, session.user_id)
             .await
@@ -186,41 +213,86 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
 
     run_session(sender, receiver, session, state.clone()).await;
 
-    // Ensure voice state is cleared if the client disconnects abruptly.
-    if let Ok(states) = paracord_db::voice_states::get_all_user_voice_states(&state.db, session_user_id).await {
-        let dc_user = paracord_db::users::get_user_by_id(&state.db, session_user_id)
-            .await
-            .ok()
-            .flatten();
-        for voice_state in states {
-            let _ = paracord_db::voice_states::remove_voice_state(
-                &state.db,
-                session_user_id,
-                voice_state.guild_id,
-            )
-            .await;
-            if let Some(participants) = state
-                .voice
-                .leave_room(voice_state.channel_id, session_user_id)
+    // Voice cleanup: when the gateway WebSocket drops, don't remove voice
+    // state immediately — the user may still be connected to LiveKit (their
+    // media/WebRTC connection is independent of the gateway WS).  Wait a
+    // grace period, then check LiveKit as ground truth before clearing.
+    if let Ok(states) =
+        paracord_db::voice_states::get_all_user_voice_states(&state.db, session_user_id).await
+    {
+        if !states.is_empty() {
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+
+                let dc_user = paracord_db::users::get_user_by_id(&state_clone.db, session_user_id)
+                    .await
+                    .ok()
+                    .flatten();
+
+                // Re-fetch current voice states — they may have been cleared
+                // by another code path (e.g. explicit leave) during the wait.
+                let current_states = paracord_db::voice_states::get_all_user_voice_states(
+                    &state_clone.db,
+                    session_user_id,
+                )
                 .await
-            {
-                if participants.is_empty() {
-                    let _ = state.voice.cleanup_room(voice_state.channel_id).await;
+                .unwrap_or_default();
+
+                for voice_state in current_states {
+                    // Check LiveKit ground truth: is the user actually still
+                    // connected to the media room?  If yes, keep the state.
+                    if state_clone
+                        .voice
+                        .is_participant_in_livekit_room(
+                            voice_state.channel_id,
+                            voice_state.guild_id,
+                            session_user_id,
+                        )
+                        .await
+                    {
+                        tracing::debug!(
+                            "Gateway disconnect grace period: user {} still in LiveKit room for channel {}, keeping voice state",
+                            session_user_id, voice_state.channel_id
+                        );
+                        continue;
+                    }
+
+                    tracing::info!(
+                        "Gateway disconnect grace period: user {} not in LiveKit room for channel {}, cleaning up",
+                        session_user_id, voice_state.channel_id
+                    );
+
+                    let _ = paracord_db::voice_states::remove_voice_state(
+                        &state_clone.db,
+                        session_user_id,
+                        voice_state.guild_id,
+                    )
+                    .await;
+                    if let Some(participants) = state_clone
+                        .voice
+                        .leave_room(voice_state.channel_id, session_user_id)
+                        .await
+                    {
+                        if participants.is_empty() {
+                            let _ = state_clone.voice.cleanup_room(voice_state.channel_id).await;
+                        }
+                    }
+                    state_clone.event_bus.dispatch(
+                        EVENT_VOICE_STATE_UPDATE,
+                        json!({
+                            "user_id": session_user_id.to_string(),
+                            "channel_id": Value::Null,
+                            "guild_id": voice_state.guild_id.map(|id| id.to_string()),
+                            "self_mute": false,
+                            "self_deaf": false,
+                            "username": dc_user.as_ref().map(|u| u.username.as_str()),
+                            "avatar_hash": dc_user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
+                        }),
+                        voice_state.guild_id,
+                    );
                 }
-            }
-            state.event_bus.dispatch(
-                EVENT_VOICE_STATE_UPDATE,
-                json!({
-                    "user_id": session_user_id.to_string(),
-                    "channel_id": Value::Null,
-                    "guild_id": voice_state.guild_id.map(|id| id.to_string()),
-                    "self_mute": false,
-                    "self_deaf": false,
-                    "username": dc_user.as_ref().map(|u| u.username.as_str()),
-                    "avatar_hash": dc_user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
-                }),
-                voice_state.guild_id,
-            );
+            });
         }
     }
 
@@ -244,15 +316,18 @@ async fn wait_for_identify_or_resume(
             if let Ok(payload) = serde_json::from_str::<Value>(&text) {
                 if let Some(d) = payload.get("d") {
                     if let Some(token) = d.get("token").and_then(|v| v.as_str()) {
-                        let claims = paracord_core::auth::validate_token(token, &state.config.jwt_secret).ok()?;
+                        let claims =
+                            paracord_core::auth::validate_token(token, &state.config.jwt_secret)
+                                .ok()?;
                         let op = payload.get("op").and_then(|v| v.as_u64())?;
                         if op == OP_IDENTIFY as u64 {
-                            let guild_ids = paracord_db::guilds::get_user_guilds(&state.db, claims.sub)
-                                .await
-                                .unwrap_or_default()
-                                .iter()
-                                .map(|g| g.id)
-                                .collect();
+                            let guild_ids =
+                                paracord_db::guilds::get_user_guilds(&state.db, claims.sub)
+                                    .await
+                                    .unwrap_or_default()
+                                    .iter()
+                                    .map(|g| g.id)
+                                    .collect();
                             return Some((Session::new(claims.sub, guild_ids), false));
                         }
                         if op == OP_RESUME as u64 {
@@ -261,10 +336,12 @@ async fn wait_for_identify_or_resume(
                             let requested_seq = d.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
                             let now = chrono::Utc::now().timestamp();
                             let mut cache = session_cache().write().await;
-                            cache.retain(|_, cached| now - cached.updated_at <= SESSION_TTL_SECONDS);
+                            cache
+                                .retain(|_, cached| now - cached.updated_at <= SESSION_TTL_SECONDS);
                             if let Some(cached) = cache.get(&requested_session_id) {
                                 if cached.user_id == claims.sub {
-                                    let mut resumed = Session::new(cached.user_id, cached.guild_ids.clone());
+                                    let mut resumed =
+                                        Session::new(cached.user_id, cached.guild_ids.clone());
                                     resumed.session_id = requested_session_id;
                                     resumed.sequence = cached.sequence.max(requested_seq);
                                     return Some((resumed, true));
@@ -364,24 +441,16 @@ async fn handle_client_message(
     session: &mut Session,
     state: &AppState,
 ) {
-    let op = payload
-        .get("op")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(255) as u8;
+    let op = payload.get("op").and_then(|v| v.as_u64()).unwrap_or(255) as u8;
 
     match op {
         OP_HEARTBEAT => {
             let ack = json!({"op": OP_HEARTBEAT_ACK});
-            let _ = sender
-                .send(Message::Text(ack.to_string().into()))
-                .await;
+            let _ = sender.send(Message::Text(ack.to_string().into())).await;
         }
         OP_PRESENCE_UPDATE => {
             if let Some(d) = payload.get("d") {
-                let status = d
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("online");
+                let status = d.get("status").and_then(|v| v.as_str()).unwrap_or("online");
                 let custom_status = d.get("custom_status").and_then(|v| v.as_str());
 
                 state.event_bus.dispatch(
@@ -416,13 +485,20 @@ async fn handle_client_message(
 
                     if guild_id.is_none() {
                         if let Ok(cid) = channel_id_str.parse::<i64>() {
-                            let recipient_ids = paracord_db::dms::get_dm_recipient_ids(&state.db, cid)
-                                .await
-                                .unwrap_or_default();
-                            state.event_bus.dispatch_to_users(EVENT_TYPING_START, typing_payload, recipient_ids);
+                            let recipient_ids =
+                                paracord_db::dms::get_dm_recipient_ids(&state.db, cid)
+                                    .await
+                                    .unwrap_or_default();
+                            state.event_bus.dispatch_to_users(
+                                EVENT_TYPING_START,
+                                typing_payload,
+                                recipient_ids,
+                            );
                         }
                     } else {
-                        state.event_bus.dispatch(EVENT_TYPING_START, typing_payload, guild_id);
+                        state
+                            .event_bus
+                            .dispatch(EVENT_TYPING_START, typing_payload, guild_id);
                     }
                 }
             }

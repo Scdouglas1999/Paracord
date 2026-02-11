@@ -93,32 +93,73 @@ fn write_livekit_config(
     livekit_port: u16,
     server_port: u16,
     external_ip: Option<&str>,
-    _local_ip: Option<&str>,
+    local_ip: Option<&str>,
 ) -> std::io::Result<PathBuf> {
+    let is_local_only = external_ip.is_none();
+
     let mut lines = vec![
         format!("port: {livekit_port}"),
         "rtc:".to_string(),
-        "    use_external_ip: true".to_string(),
     ];
-    if let Some(ip) = external_ip {
-        lines.push(format!("    node_ip: {ip}"));
+
+    if is_local_only {
+        // Local-only mode: disable external IP detection so LiveKit
+        // advertises the machine's actual local/loopback addresses.
+        lines.push("    use_external_ip: false".to_string());
+    } else {
+        // use_external_ip lets LiveKit discover the public IP via STUN and
+        // add it as a server-reflexive candidate.  We intentionally do NOT
+        // set `node_ip` here — setting it rewrites *all* ICE candidate
+        // addresses to the public IP, which breaks media for clients on the
+        // same LAN as the server (they can't reach the public IP without
+        // hairpin NAT).  By omitting `node_ip`, LiveKit keeps the LAN IP
+        // as a host candidate *and* adds the STUN-discovered public IP as
+        // an srflx candidate, so both LAN and remote clients get a
+        // reachable address.
+        lines.push("    use_external_ip: true".to_string());
     }
+
     // UDP mux on the server port (e.g. 8080).  Paracord only binds TCP
     // on this port, so LiveKit can use the UDP side for all WebRTC media.
     // This means only one port needs to be forwarded by the host.
     lines.push(format!("    udp_port: {server_port}"));
-    // Disable ICE/TCP — it would need its own forwarded port and clients
-    // behind restrictive NAT will use TURN (UDP) as the fallback instead.
-    lines.push("    tcp_port: 0".to_string());
-    // Exclude Docker, WSL, and loopback subnets from ICE candidates.
-    // Using excludes (instead of includes) avoids interfering with
-    // LiveKit's ICE connectivity checks from remote clients.
-    lines.push("    ips:".to_string());
-    lines.push("        excludes:".to_string());
-    lines.push("            - 172.16.0.0/12".to_string());
-    lines.push("            - 10.0.0.0/8".to_string());
-    lines.push("            - 127.0.0.0/8".to_string());
-    lines.push("    enable_loopback_candidate: false".to_string());
+    // ICE/TCP on the LiveKit internal port+1 — provides a fallback for
+    // clients on restrictive networks that block UDP.
+    let ice_tcp_port = livekit_port + 1;
+    lines.push(format!("    tcp_port: {ice_tcp_port}"));
+
+    if is_local_only {
+        // Local mode: allow all candidates including loopback so that
+        // connections from localhost and LAN both work.
+        lines.push("    enable_loopback_candidate: true".to_string());
+        // Only exclude Docker/WSL virtual network ranges that are never
+        // useful for real clients.  Keep 192.168.0.0/16 and other common
+        // LAN ranges available.
+        lines.push("    ips:".to_string());
+        lines.push("        excludes:".to_string());
+        lines.push("            - 172.17.0.0/16".to_string()); // Docker default bridge
+        lines.push("            - 172.18.0.0/16".to_string()); // Docker user networks
+    } else {
+        // Internet-facing mode: advertise only the detected local LAN IP
+        // (which maps to the public IP via NAT) and exclude virtual/loopback
+        // ranges that confuse remote clients.
+        lines.push("    enable_loopback_candidate: false".to_string());
+        if let Some(lip) = local_ip {
+            // Use includes to whitelist only the real LAN IP so Docker,
+            // WSL, and loopback addresses are never sent as candidates.
+            lines.push("    ips:".to_string());
+            lines.push("        includes:".to_string());
+            lines.push(format!("            - {lip}/32"));
+        } else {
+            // No local IP detected — fall back to excluding known virtual ranges.
+            lines.push("    ips:".to_string());
+            lines.push("        excludes:".to_string());
+            lines.push("            - 172.17.0.0/16".to_string());
+            lines.push("            - 172.18.0.0/16".to_string());
+            lines.push("            - 127.0.0.0/8".to_string());
+        }
+    }
+
     lines.push("keys:".to_string());
     lines.push(format!("    {api_key}: {api_secret}"));
     if let Some(ip) = external_ip {
@@ -142,6 +183,13 @@ fn write_livekit_config(
     lines.push("logging:".to_string());
     lines.push("    level: info".to_string());
     let config = lines.join("\n") + "\n";
+
+    tracing::info!(
+        "LiveKit config: local_only={}, external_ip={:?}, local_ip={:?}",
+        is_local_only,
+        external_ip,
+        local_ip,
+    );
 
     let dir = std::env::temp_dir();
     let path = dir.join("paracord-livekit.yaml");

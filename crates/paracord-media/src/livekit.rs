@@ -16,6 +16,8 @@ pub struct VideoGrant {
     pub room_create: Option<bool>,
     #[serde(rename = "roomList", skip_serializing_if = "Option::is_none")]
     pub room_list: Option<bool>,
+    #[serde(rename = "roomAdmin", skip_serializing_if = "Option::is_none")]
+    pub room_admin: Option<bool>,
     #[serde(rename = "roomJoin", skip_serializing_if = "Option::is_none")]
     pub room_join: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,6 +39,7 @@ impl VideoGrant {
         Self {
             room_create: Some(true),
             room_list: Some(true),
+            room_admin: Some(true),
             room_join: None,
             room: None,
             can_publish: None,
@@ -149,6 +152,20 @@ impl LiveKitConfig {
             "priority_speaker": false,
         });
 
+        // Only specify can_publish_sources when publishing is allowed.
+        // When can_publish is false (listen-only), can_publish_sources must
+        // be omitted — otherwise LiveKit treats it as a whitelist that
+        // overrides can_publish and allows publishing from those sources.
+        let publish_sources = if can_publish {
+            Some(vec![
+                "microphone".to_string(),
+                "screen_share".to_string(),
+                "screen_share_audio".to_string(),
+            ])
+        } else {
+            None
+        };
+
         let claims = LiveKitClaims {
             exp: now + 86400,
             iss: self.api_key.clone(),
@@ -160,13 +177,10 @@ impl LiveKitConfig {
                 can_publish: Some(can_publish),
                 can_subscribe: Some(can_subscribe),
                 can_publish_data: Some(true),
-                can_publish_sources: Some(vec![
-                    "microphone".to_string(),
-                    "screen_share".to_string(),
-                    "screen_share_audio".to_string(),
-                ]),
+                can_publish_sources: publish_sources,
                 room_create: None,
                 room_list: None,
+                room_admin: None,
                 hidden: None,
             },
             metadata: Some(metadata.to_string()),
@@ -212,6 +226,7 @@ impl LiveKitConfig {
                 ]),
                 room_create: None,
                 room_list: None,
+                room_admin: None,
                 hidden: None,
             },
             metadata: Some(metadata.to_string()),
@@ -259,6 +274,7 @@ impl LiveKitConfig {
                 ]),
                 room_create: None,
                 room_list: None,
+                room_admin: None,
                 hidden: None,
             },
             metadata: Some(metadata.to_string()),
@@ -294,6 +310,7 @@ impl LiveKitConfig {
                 can_publish_sources: None,
                 room_create: None,
                 room_list: None,
+                room_admin: None,
                 hidden: None,
             },
             metadata: None,

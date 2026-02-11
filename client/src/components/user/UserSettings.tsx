@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { X, Monitor, Sun, Moon } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useUIStore } from '../../stores/uiStore';
+import { useVoiceStore } from '../../stores/voiceStore';
 import { useMediaDevices } from '../../hooks/useMediaDevices';
 import { APP_NAME } from '../../lib/constants';
 
@@ -48,6 +49,8 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     selectAudioOutput,
     enumerate,
   } = useMediaDevices();
+  const applyAudioInputDevice = useVoiceStore((s) => s.applyAudioInputDevice);
+  const applyAudioOutputDevice = useVoiceStore((s) => s.applyAudioOutputDevice);
 
   useEffect(() => {
     void fetchSettings();
@@ -340,7 +343,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 <select
                   className="select-field mt-2"
                   value={selectedAudioInput || ''}
-                  onChange={(e) => selectAudioInput(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    selectAudioInput(value);
+                    void applyAudioInputDevice(value || null);
+                  }}
                 >
                   <option value="">Default</option>
                   {audioInputDevices.map((device) => (
@@ -355,7 +362,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 <select
                   className="select-field mt-2"
                   value={selectedAudioOutput || ''}
-                  onChange={(e) => selectAudioOutput(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    selectAudioOutput(value);
+                    void applyAudioOutputDevice(value || null);
+                  }}
                 >
                   <option value="">Default</option>
                   {audioOutputDevices.map((device) => (

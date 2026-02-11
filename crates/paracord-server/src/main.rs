@@ -206,7 +206,14 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| {
             // Use the main server's /livekit proxy so clients only need one port
             let bind = &config.server.bind_address;
-            format!("ws://{}/livekit", bind)
+            let bind_for_clients = if bind.starts_with("0.0.0.0:") {
+                bind.replacen("0.0.0.0", "localhost", 1)
+            } else if bind.starts_with("[::]:") {
+                bind.replacen("[::]", "localhost", 1)
+            } else {
+                bind.to_string()
+            };
+            format!("ws://{}/livekit", bind_for_clients)
         });
 
     let state = paracord_core::AppState {
@@ -444,7 +451,7 @@ fn print_startup_banner(
         println!("  ╔══════════════════════════════════════════════════╗");
         println!("  ║  ⚠  Port forwarding required for remote access  ║");
         println!("  ║                                                  ║");
-        println!("  ║  Forward port {:<5} (TCP) in your router to    ║", server_port);
+        println!("  ║  Forward port {:<5} (TCP + UDP) in router to  ║", server_port);
         println!("  ║  this machine. Most routers have this under:     ║");
         println!("  ║  Settings > Firewall > Port Forwarding           ║");
         println!("  ║                                                  ║");

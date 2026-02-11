@@ -151,10 +151,9 @@ class GatewayConnection {
               created_at: c.created_at ?? new Date().toISOString(),
             });
           });
-          // Load initial voice states for this guild
-          if (g.voice_states?.length) {
-            useVoiceStore.getState().loadVoiceStates(g.voice_states);
-          }
+          // Load initial voice states for this guild. READY is authoritative,
+          // even when empty, so we always refresh to clear stale entries.
+          useVoiceStore.getState().loadVoiceStates(g.id, g.voice_states ?? []);
         });
         break;
 

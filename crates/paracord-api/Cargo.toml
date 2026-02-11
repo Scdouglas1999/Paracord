@@ -27,4 +27,5 @@ uuid = { workspace = true }
 ed25519-dalek = { workspace = true }
 reqwest = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tokio-util = "0.7"
 futures-util = "0.3"

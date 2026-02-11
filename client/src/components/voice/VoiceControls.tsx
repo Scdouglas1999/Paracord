@@ -10,6 +10,12 @@ export function VoiceControls() {
     selfMute,
     selfDeaf,
     selfStream,
+    micInputActive,
+    micInputLevel,
+    micServerDetected,
+    micUplinkState,
+    micUplinkBytesSent,
+    micUplinkStalledIntervals,
     leaveChannel,
     toggleMute,
     toggleDeaf,
@@ -22,6 +28,54 @@ export function VoiceControls() {
     () => channels.find((c) => c.id === channelId)?.name ?? 'Voice Channel',
     [channels, channelId]
   );
+  const micTxLabel = useMemo(() => {
+    switch (micUplinkState) {
+      case 'sending':
+        return 'Mic TX: sending';
+      case 'stalled':
+        return `Mic TX: stalled (${micUplinkStalledIntervals})`;
+      case 'recovering':
+        return 'Mic TX: recovering';
+      case 'muted':
+        return 'Mic TX: muted';
+      case 'no_track':
+        return 'Mic TX: no track';
+      default:
+        return 'Mic TX: idle';
+    }
+  }, [micUplinkState, micUplinkStalledIntervals]);
+  const micTxColor = useMemo(() => {
+    switch (micUplinkState) {
+      case 'sending':
+        return 'var(--accent-success)';
+      case 'stalled':
+      case 'no_track':
+        return 'var(--accent-danger)';
+      case 'recovering':
+        return 'var(--accent-primary)';
+      case 'muted':
+      case 'idle':
+      default:
+        return 'var(--text-muted)';
+    }
+  }, [micUplinkState]);
+  const micInLabel = useMemo(() => {
+    if (selfMute || selfDeaf) return 'Mic In: muted';
+    return micInputActive ? 'Mic In: voice detected' : 'Mic In: silent';
+  }, [selfMute, selfDeaf, micInputActive]);
+  const micInColor = useMemo(() => {
+    if (selfMute || selfDeaf) return 'var(--text-muted)';
+    return micInputActive ? 'var(--accent-success)' : 'var(--accent-danger)';
+  }, [selfMute, selfDeaf, micInputActive]);
+  const micInPercent = Math.round(Math.max(0, Math.min(1, micInputLevel)) * 100);
+  const micServerLabel = useMemo(() => {
+    if (selfMute || selfDeaf) return 'SFU detect: muted';
+    return micServerDetected ? 'SFU detect: yes' : 'SFU detect: no';
+  }, [selfMute, selfDeaf, micServerDetected]);
+  const micServerColor = useMemo(() => {
+    if (selfMute || selfDeaf) return 'var(--text-muted)';
+    return micServerDetected ? 'var(--accent-success)' : 'var(--accent-danger)';
+  }, [selfMute, selfDeaf, micServerDetected]);
 
   if (!connected) return null;
 
@@ -36,6 +90,16 @@ export function VoiceControls() {
             </div>
             <div className="truncate text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
               {channelName}
+            </div>
+            <div className="truncate text-[11px] font-medium" style={{ color: micTxColor }}>
+              {micTxLabel}
+              {micUplinkBytesSent != null ? `  ·  ${micUplinkBytesSent} bytes` : ''}
+            </div>
+            <div className="truncate text-[11px] font-medium" style={{ color: micInColor }}>
+              {micInLabel}  ·  {micInPercent}%
+            </div>
+            <div className="truncate text-[11px] font-medium" style={{ color: micServerColor }}>
+              {micServerLabel}
             </div>
           </div>
         </div>
