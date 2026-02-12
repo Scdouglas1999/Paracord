@@ -13,6 +13,7 @@ export function useVoice() {
   const selfMute = useVoiceStore((s) => s.selfMute);
   const selfDeaf = useVoiceStore((s) => s.selfDeaf);
   const selfStream = useVoiceStore((s) => s.selfStream);
+  const selfVideo = useVoiceStore((s) => s.selfVideo);
   const participants = useVoiceStore((s) => s.participants);
   const livekitToken = useVoiceStore((s) => s.livekitToken);
   const livekitUrl = useVoiceStore((s) => s.livekitUrl);
@@ -83,6 +84,10 @@ export function useVoice() {
     stopStreamStore();
   }, [stopStreamStore]);
 
+  const toggleVideo = useCallback(() => {
+    useVoiceStore.getState().toggleVideo();
+  }, []);
+
   return {
     connected,
     joining,
@@ -94,6 +99,7 @@ export function useVoice() {
     selfMute,
     selfDeaf,
     selfStream,
+    selfVideo,
     participants,
     livekitToken,
     livekitUrl,
@@ -109,6 +115,7 @@ export function useVoice() {
     toggleDeaf,
     startStream,
     stopStream,
+    toggleVideo,
     clearConnectionError,
   };
 }

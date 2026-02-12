@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Mic, MicOff, Headphones, HeadphoneOff, Monitor, PhoneOff, Signal, MonitorOff } from 'lucide-react';
+import { Mic, MicOff, Headphones, HeadphoneOff, Monitor, PhoneOff, Signal, MonitorOff, Video, VideoOff } from 'lucide-react';
 import { useVoice } from '../../hooks/useVoice';
 import { useChannelStore } from '../../stores/channelStore';
 
@@ -10,11 +10,13 @@ export function VoiceControls() {
     selfMute,
     selfDeaf,
     selfStream,
+    selfVideo,
     leaveChannel,
     toggleMute,
     toggleDeaf,
     startStream,
     stopStream,
+    toggleVideo,
   } = useVoice();
   const channels = useChannelStore((s) => s.channels);
   const [startingStream, setStartingStream] = useState(false);
@@ -70,6 +72,17 @@ export function VoiceControls() {
             }}
           >
             {selfDeaf ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
+          </button>
+          <button
+            onClick={toggleVideo}
+            className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+            title={selfVideo ? 'Turn Off Camera' : 'Turn On Camera'}
+            style={{
+              backgroundColor: selfVideo ? 'var(--accent-primary)' : 'transparent',
+              color: selfVideo ? '#fff' : 'var(--text-muted)',
+            }}
+          >
+            {selfVideo ? <VideoOff size={18} /> : <Video size={18} />}
           </button>
           <button
             onClick={async () => {

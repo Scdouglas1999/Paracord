@@ -6,6 +6,7 @@ import { TopBar } from '../components/layout/TopBar';
 import { MessageList } from '../components/message/MessageList';
 import { MessageInput } from '../components/message/MessageInput';
 import { StreamViewer } from '../components/voice/StreamViewer';
+import { VideoGrid } from '../components/voice/VideoGrid';
 import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
 import { useVoice } from '../hooks/useVoice';
@@ -309,6 +310,7 @@ export function GuildPage() {
               </div>
             )}
           </div>
+          {inSelectedVoiceChannel && <VideoGrid />}
           {inSelectedVoiceChannel && (
             <div className="min-h-[300px] flex-1 overflow-hidden rounded-2xl border border-border-subtle">
               {watchedStreamerId ? (

@@ -12,6 +12,8 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@noble/ed25519": "^3.0.0",
+    "@noble/hashes": "^2.0.1",
     "@tanstack/react-virtual": "^3.10.0",
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-notification": "^2.0.0",

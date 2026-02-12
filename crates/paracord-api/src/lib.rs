@@ -46,6 +46,12 @@ pub fn build_router() -> Router<AppState> {
         .route("/api/v1/auth/register", post(routes::auth::register))
         .route("/api/v1/auth/login", post(routes::auth::login))
         .route("/api/v1/auth/refresh", post(routes::auth::refresh))
+        .route("/api/v1/auth/challenge", post(routes::auth::challenge))
+        .route("/api/v1/auth/verify", post(routes::auth::verify))
+        .route(
+            "/api/v1/auth/attach-public-key",
+            post(routes::auth::attach_public_key),
+        )
         // Users
         .route(
             "/api/v1/users/@me",

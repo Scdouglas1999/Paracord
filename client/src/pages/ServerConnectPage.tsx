@@ -1,4 +1,7 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useServerListStore } from '../stores/serverListStore';
+import { connectionManager } from '../lib/connectionManager';
 import { setStoredServerUrl } from '../lib/apiBaseUrl';
 import { isPortableLink, decodePortableLink } from '../lib/portableLinks';
 
@@ -49,8 +52,8 @@ function parseInput(input: string): { serverUrl: string; inviteCode?: string } {
   return { serverUrl: normaliseServerUrl(trimmed) };
 }
 
-/** Probe /health and verify this is a Paracord server. */
-async function probeServer(serverUrl: string): Promise<void> {
+/** Probe /health and verify this is a Paracord server. Returns the server name if available. */
+async function probeServer(serverUrl: string): Promise<string> {
   const resp = await fetch(`${serverUrl}/health`, {
     method: 'GET',
     signal: AbortSignal.timeout(10_000),
@@ -60,17 +63,22 @@ async function probeServer(serverUrl: string): Promise<void> {
   if (data.service !== 'paracord') {
     throw new Error('Not a Paracord server');
   }
+  return data.name || new URL(serverUrl).host;
 }
 
 export function ServerConnectPage() {
   const [url, setUrl] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState('');
+  const navigate = useNavigate();
+  const servers = useServerListStore((s) => s.servers);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+    setStatus('');
 
     const input = url.trim();
     if (!input) {
@@ -82,70 +90,150 @@ export function ServerConnectPage() {
     try {
       const { serverUrl, inviteCode } = parseInput(input);
 
-      await probeServer(serverUrl);
+      setStatus('Probing server...');
+      const serverName = await probeServer(serverUrl);
 
+      // Add server to the multi-server list
+      setStatus('Authenticating...');
+      const serverId = useServerListStore.getState().addServer(serverUrl, serverName);
+
+      // Also store as legacy server URL for backward compat
       setStoredServerUrl(serverUrl);
 
+      // Connect and authenticate via challenge-response
+      try {
+        await connectionManager.connectServer(serverId);
+      } catch (authErr) {
+        // If challenge-response fails, the server might not support it yet.
+        // Keep the server in the list but without a token — user can try legacy login.
+        console.warn('Challenge-response auth failed, falling back to legacy:', authErr);
+      }
+
       if (inviteCode) {
-        // Redirect to the invite acceptance page so the user can join
-        window.location.href = `/invite/${inviteCode}`;
+        // Navigate to the invite acceptance page
+        navigate(`/invite/${inviteCode}`);
       } else {
-        // Plain server connection - go to login
-        window.location.href = '/login';
+        // Navigate to the main app
+        navigate('/app');
       }
     } catch {
       setError('Could not connect. Check the URL and ensure the server is running.');
     } finally {
       setLoading(false);
+      setStatus('');
     }
+  };
+
+  const handleRemoveServer = (serverId: string) => {
+    connectionManager.disconnectServer(serverId);
+    useServerListStore.getState().removeServer(serverId);
   };
 
   return (
     <div className="auth-shell">
-      <form onSubmit={handleSubmit} className="auth-card mx-auto w-full max-w-md">
-        <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold leading-tight text-text-primary">Connect to Server</h1>
-          <p className="mt-2 text-sm text-text-muted">
-            Enter a server URL, invite link, or portable link to connect.
-          </p>
-        </div>
+      <div className="mx-auto w-full max-w-md space-y-6">
+        <form onSubmit={handleSubmit} className="auth-card">
+          <div className="mb-8 text-center">
+            <h1 className="text-3xl font-bold leading-tight text-text-primary">Add Server</h1>
+            <p className="mt-2 text-sm text-text-muted">
+              Enter a server URL, invite link, or portable link to connect.
+            </p>
+          </div>
 
-        {error && (
-          <div className="mb-5 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-4 py-3 text-sm font-medium text-accent-danger">
-            {error}
+          {error && (
+            <div className="mb-5 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-4 py-3 text-sm font-medium text-accent-danger">
+              {error}
+            </div>
+          )}
+
+          <label className="mb-2 block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              Server URL or Invite Link <span className="text-accent-danger">*</span>
+            </span>
+            <input
+              type="text"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              required
+              className="input-field mt-2"
+              placeholder="paracord://invite/... or 73.45.123.99:8080"
+              autoFocus
+            />
+          </label>
+
+          <div className="mb-6 rounded-xl border border-border-subtle bg-bg-mod-subtle/65 px-3.5 py-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              Accepted formats
+            </span>
+            <div className="mt-1.5 text-sm leading-6 text-text-muted">
+              paracord://invite/aBcDeFgH...<br />
+              http://192.168.1.5:8090/invite/abc123<br />
+              192.168.1.5:8090 or chat.example.com
+            </div>
+          </div>
+
+          {status && (
+            <div className="mb-4 text-center text-sm text-text-muted">
+              {status}
+            </div>
+          )}
+
+          <button type="submit" disabled={loading} className="btn-primary w-full">
+            {loading ? 'Connecting...' : 'Add Server'}
+          </button>
+        </form>
+
+        {/* Existing servers */}
+        {servers.length > 0 && (
+          <div className="auth-card">
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-text-secondary">
+              Your Servers
+            </h2>
+            <div className="space-y-2">
+              {servers.map((server) => (
+                <div
+                  key={server.id}
+                  className="flex items-center justify-between rounded-xl border border-border-subtle/60 bg-bg-mod-subtle/40 px-4 py-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-text-primary">
+                      {server.name}
+                    </div>
+                    <div className="truncate text-xs text-text-muted">
+                      {server.url}
+                    </div>
+                  </div>
+                  <div className="ml-3 flex items-center gap-2">
+                    <span
+                      className={`inline-block h-2 w-2 rounded-full ${
+                        server.connected
+                          ? 'bg-accent-success'
+                          : server.token
+                            ? 'bg-accent-warning'
+                            : 'bg-text-muted'
+                      }`}
+                    />
+                    <button
+                      onClick={() => handleRemoveServer(server.id)}
+                      className="text-xs text-text-muted transition-colors hover:text-accent-danger"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {servers.length > 0 && (
+              <button
+                onClick={() => navigate('/app')}
+                className="btn-primary mt-4 w-full"
+              >
+                Continue to App
+              </button>
+            )}
           </div>
         )}
-
-        <label className="mb-2 block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Server URL or Invite Link <span className="text-accent-danger">*</span>
-          </span>
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            required
-            className="input-field mt-2"
-            placeholder="paracord://invite/... or 73.45.123.99:8080"
-            autoFocus
-          />
-        </label>
-
-        <div className="mb-6 rounded-xl border border-border-subtle bg-bg-mod-subtle/65 px-3.5 py-3">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Accepted formats
-          </span>
-          <div className="mt-1.5 text-sm leading-6 text-text-muted">
-            paracord://invite/aBcDeFgH...<br />
-            http://192.168.1.5:8090/invite/abc123<br />
-            192.168.1.5:8090 or chat.example.com
-          </div>
-        </div>
-
-        <button type="submit" disabled={loading} className="btn-primary w-full">
-          {loading ? 'Connecting...' : 'Connect'}
-        </button>
-      </form>
+      </div>
     </div>
   );
 }

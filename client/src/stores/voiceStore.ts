@@ -461,10 +461,10 @@ function synthesizeVoiceStateFromParticipant(
 ): VoiceState {
   const existing = useVoiceStore.getState().participants.get(participant.identity);
 
-  // Derive self_stream from actual LiveKit track publications rather than
-  // blindly preserving the old stored value.  A stale `true` was causing
-  // the stream viewer to persist after a remote user stopped streaming.
+  // Derive self_stream and self_video from actual LiveKit track publications
+  // rather than blindly preserving old stored values.
   let hasScreenShare = false;
+  let hasCamera = false;
   for (const pub of participant.videoTrackPublications.values()) {
     if (
       pub.source === Track.Source.ScreenShare &&
@@ -472,7 +472,13 @@ function synthesizeVoiceStateFromParticipant(
       pub.track.mediaStreamTrack?.readyState !== 'ended'
     ) {
       hasScreenShare = true;
-      break;
+    }
+    if (
+      pub.source === Track.Source.Camera &&
+      pub.track &&
+      pub.track.mediaStreamTrack?.readyState !== 'ended'
+    ) {
+      hasCamera = true;
     }
   }
 
@@ -486,7 +492,7 @@ function synthesizeVoiceStateFromParticipant(
     self_deaf: existing?.self_deaf || false,
     self_mute: existing?.self_mute || false,
     self_stream: hasScreenShare,
-    self_video: existing?.self_video || false,
+    self_video: hasCamera,
     suppress: existing?.suppress || false,
     username: existing?.username || participant.name || undefined,
     avatar_hash: existing?.avatar_hash,
@@ -949,6 +955,22 @@ function registerRoomListeners(
       stopLocalMicAnalyser();
       stopLocalAudioUplinkMonitor();
     }
+    // When the local camera track is unpublished, clear selfVideo.
+    if (publication.source === Track.Source.Camera) {
+      const state = useVoiceStore.getState();
+      if (state.selfVideo) {
+        console.info('[voice] Local camera track unpublished — clearing selfVideo');
+        const localUserId = useAuthStore.getState().user?.id;
+        const participants = new Map(state.participants);
+        if (localUserId) {
+          const existing = participants.get(localUserId);
+          if (existing) {
+            participants.set(localUserId, { ...existing, self_video: false });
+          }
+        }
+        useVoiceStore.setState({ selfVideo: false, participants });
+      }
+    }
     // When the local screen-share track is unpublished (e.g. the user clicked
     // "Stop sharing" in the OS chrome, or the shared window was closed),
     // clear selfStream so the stream viewer UI is removed.
@@ -978,6 +1000,10 @@ function registerRoomListeners(
   );
   room.on(RoomEvent.TrackPublished, (publication, participant) => {
     refreshAudioCodecCompatibility(room, `track-published:${participant.identity}`);
+    // Update presence when camera or screen share tracks are published/unpublished
+    if (publication.source === Track.Source.Camera || publication.source === Track.Source.ScreenShare) {
+      syncLivekitRoomPresence(room);
+    }
     if (publication.source === Track.Source.ScreenShareAudio) return;
     if (publication.kind !== Track.Kind.Audio) return;
     if (!publication.isSubscribed) {
@@ -1035,6 +1061,10 @@ function registerRoomListeners(
     RoomEvent.TrackUnsubscribed,
     (track: RemoteTrack, publication: RemoteTrackPublication, participant: Participant) => {
       detachRemoteAudioTrack(track, publication, participant.identity);
+      // Update presence when video tracks are removed so camera/stream icons update
+      if (publication.source === Track.Source.Camera || publication.source === Track.Source.ScreenShare) {
+        syncLivekitRoomPresence(room);
+      }
     }
   );
   room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
@@ -1744,7 +1774,73 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       return { selfStream: false, participants };
     }),
 
-  toggleVideo: () => set((state) => ({ selfVideo: !state.selfVideo })),
+  toggleVideo: () => {
+    const state = get();
+    const nextSelfVideo = !state.selfVideo;
+    if (!state.room) {
+      set({ selfVideo: nextSelfVideo });
+      return;
+    }
+    const room = state.room;
+    set({ selfVideo: nextSelfVideo });
+
+    if (nextSelfVideo) {
+      // Enable camera
+      const notif = (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
+      const videoDeviceId =
+        typeof notif['videoInputDeviceId'] === 'string'
+          ? (notif['videoInputDeviceId'] as string).trim()
+          : '';
+      const captureOpts: Record<string, unknown> = {
+        resolution: { width: 1280, height: 720, frameRate: 30 },
+      };
+      if (videoDeviceId) {
+        captureOpts.deviceId = videoDeviceId;
+      }
+      void room.localParticipant
+        .setCameraEnabled(true, captureOpts)
+        .then(() => {
+          // Update local participant's voice state
+          const localUserId = useAuthStore.getState().user?.id;
+          if (localUserId) {
+            set((prev) => {
+              const participants = new Map(prev.participants);
+              const existing = participants.get(localUserId);
+              if (existing) {
+                participants.set(localUserId, { ...existing, self_video: true });
+              }
+              return { participants };
+            });
+          }
+          syncLivekitRoomPresence(room);
+        })
+        .catch((err) => {
+          console.warn('[voice] Failed to enable camera:', err);
+          set({ selfVideo: false });
+        });
+    } else {
+      // Disable camera
+      void room.localParticipant
+        .setCameraEnabled(false)
+        .then(() => {
+          const localUserId = useAuthStore.getState().user?.id;
+          if (localUserId) {
+            set((prev) => {
+              const participants = new Map(prev.participants);
+              const existing = participants.get(localUserId);
+              if (existing) {
+                participants.set(localUserId, { ...existing, self_video: false });
+              }
+              return { participants };
+            });
+          }
+          syncLivekitRoomPresence(room);
+        })
+        .catch((err) => {
+          console.warn('[voice] Failed to disable camera:', err);
+        });
+    }
+  },
   applyAudioInputDevice: async (deviceId) => {
     const state = get();
     const room = state.room;

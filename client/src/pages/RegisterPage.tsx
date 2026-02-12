@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
+import { useAccountStore } from '../stores/accountStore';
+import { useServerListStore } from '../stores/serverListStore';
+import { getStoredServerUrl } from '../lib/apiBaseUrl';
+import { hasAccount } from '../lib/account';
+import { authApi } from '../api/auth';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 
 export function RegisterPage() {
@@ -28,7 +33,30 @@ export function RegisterPage() {
     setLoading(true);
     try {
       await register(email, username, password, displayName);
-      navigate('/app');
+
+      // After legacy registration, same migration flow as login:
+      // attach pubkey if account exists, otherwise redirect to setup
+      if (hasAccount()) {
+        const account = useAccountStore.getState();
+        if (account.isUnlocked && account.publicKey) {
+          try {
+            await authApi.attachPublicKey(account.publicKey);
+          } catch {
+            // Non-fatal
+          }
+        }
+        const serverUrl = getStoredServerUrl();
+        if (serverUrl) {
+          const existingServer = useServerListStore.getState().getServerByUrl(serverUrl);
+          if (!existingServer) {
+            const token = localStorage.getItem('token');
+            useServerListStore.getState().addServer(serverUrl, new URL(serverUrl).host, token || undefined);
+          }
+        }
+        navigate('/app');
+      } else {
+        navigate('/setup?migrate=1');
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Registration failed. Please try again.');
     } finally {

@@ -15,6 +15,7 @@ pub struct UserRow {
     pub accent_color: Option<i32>,
     pub flags: i32,
     pub created_at: DateTime<Utc>,
+    pub public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -40,7 +41,7 @@ pub async fn create_user(
     let row = sqlx::query_as::<_, UserRow>(
         "INSERT INTO users (id, username, discriminator, email, password_hash)
          VALUES (?1, ?2, ?3, ?4, ?5)
-         RETURNING id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at"
+         RETURNING id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key"
     )
     .bind(id)
     .bind(username)
@@ -54,7 +55,7 @@ pub async fn create_user(
 
 pub async fn get_user_by_id(pool: &DbPool, id: i64) -> Result<Option<UserRow>, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at
+        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
          FROM users WHERE id = ?1"
     )
     .bind(id)
@@ -65,7 +66,7 @@ pub async fn get_user_by_id(pool: &DbPool, id: i64) -> Result<Option<UserRow>, D
 
 pub async fn get_user_by_email(pool: &DbPool, email: &str) -> Result<Option<UserRow>, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at
+        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
          FROM users WHERE email = ?1"
     )
     .bind(email)
@@ -80,7 +81,7 @@ pub async fn get_user_by_username(
     discriminator: i16,
 ) -> Result<Option<UserRow>, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at
+        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
          FROM users WHERE username = ?1 AND discriminator = ?2"
     )
     .bind(username)
@@ -95,7 +96,7 @@ pub async fn get_user_by_username_only(
     username: &str,
 ) -> Result<Option<UserRow>, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at
+        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
          FROM users
          WHERE username = ?1
          ORDER BY created_at ASC
@@ -117,7 +118,7 @@ pub async fn update_user(
     let row = sqlx::query_as::<_, UserRow>(
         "UPDATE users SET display_name = COALESCE(?2, display_name), bio = COALESCE(?3, bio), avatar_hash = COALESCE(?4, avatar_hash), updated_at = datetime('now')
          WHERE id = ?1
-         RETURNING id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at"
+         RETURNING id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key"
     )
     .bind(id)
     .bind(display_name)
@@ -150,7 +151,7 @@ pub async fn update_user_flags(pool: &DbPool, id: i64, flags: i32) -> Result<Use
     let row = sqlx::query_as::<_, UserRow>(
         "UPDATE users SET flags = ?2, updated_at = datetime('now')
          WHERE id = ?1
-         RETURNING id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at"
+         RETURNING id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key"
     )
     .bind(id)
     .bind(flags)
@@ -161,7 +162,7 @@ pub async fn update_user_flags(pool: &DbPool, id: i64, flags: i32) -> Result<Use
 
 pub async fn list_users_paginated(pool: &DbPool, offset: i64, limit: i64) -> Result<Vec<UserRow>, DbError> {
     let rows = sqlx::query_as::<_, UserRow>(
-        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at
+        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
          FROM users
          ORDER BY created_at ASC
          LIMIT ?1 OFFSET ?2"
@@ -212,6 +213,57 @@ pub async fn upsert_user_settings(
     .bind(custom_css)
     .bind(notifications)
     .bind(keybinds)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn update_user_public_key(
+    pool: &DbPool,
+    id: i64,
+    public_key: &str,
+) -> Result<UserRow, DbError> {
+    let row = sqlx::query_as::<_, UserRow>(
+        "UPDATE users SET public_key = ?2, updated_at = datetime('now')
+         WHERE id = ?1
+         RETURNING id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key"
+    )
+    .bind(id)
+    .bind(public_key)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn get_user_by_public_key(pool: &DbPool, public_key: &str) -> Result<Option<UserRow>, DbError> {
+    let row = sqlx::query_as::<_, UserRow>(
+        "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
+         FROM users WHERE public_key = ?1"
+    )
+    .bind(public_key)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn create_user_from_pubkey(
+    pool: &DbPool,
+    id: i64,
+    public_key: &str,
+    username: &str,
+    display_name: Option<&str>,
+) -> Result<UserRow, DbError> {
+    let placeholder_email = format!("{}@pubkey", public_key);
+    let row = sqlx::query_as::<_, UserRow>(
+        "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, public_key)
+         VALUES (?1, ?2, 0, ?3, '', ?4, ?5)
+         RETURNING id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key"
+    )
+    .bind(id)
+    .bind(username)
+    .bind(&placeholder_email)
+    .bind(display_name)
+    .bind(public_key)
     .fetch_one(pool)
     .await?;
     Ok(row)

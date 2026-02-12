@@ -17,12 +17,15 @@ import {
   HeadphoneOff,
   Command,
   PanelLeftClose,
+  Video,
+  Globe,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';
+import { useServerListStore } from '../../stores/serverListStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useUIStore } from '../../stores/uiStore';
 import { VoiceControls } from '../voice/VoiceControls';
@@ -107,6 +110,10 @@ export function UnifiedSidebar() {
       return [];
     }
   });
+
+  const servers = useServerListStore((s) => s.servers);
+  const activeServerId = useServerListStore((s) => s.activeServerId);
+  const setActiveServer = useServerListStore((s) => s.setActive);
 
   const effectiveGuildId = guildId || selectedGuildId;
   const currentGuild = guilds.find(g => g.id === effectiveGuildId);
@@ -260,9 +267,62 @@ export function UnifiedSidebar() {
     (dm.recipient?.username || 'Direct Message').toLowerCase().includes(dmSearch.toLowerCase())
   );
 
+  const showServerRail = servers.length > 1;
+
   return (
     <>
-      <div className="flex h-full flex-col">
+      <div className="flex h-full">
+        {/* Server rail — only shown when connected to multiple servers */}
+        {showServerRail && !sidebarCollapsed && (
+          <div className="flex h-full w-[52px] shrink-0 flex-col items-center gap-1.5 border-r border-border-subtle/40 py-3 px-1.5">
+            {servers.map((server) => {
+              const isActive = activeServerId === server.id;
+              return (
+                <Tooltip key={server.id} side="right" content={`${server.name}${server.connected ? '' : ' (disconnected)'}`}>
+                  <button
+                    onClick={() => setActiveServer(server.id)}
+                    className={cn(
+                      'group relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-[11px] font-bold text-white transition-all duration-200',
+                      isActive
+                        ? 'rounded-xl bg-accent-primary shadow-md shadow-accent-primary/25'
+                        : 'bg-bg-mod-strong/80 hover:rounded-xl hover:bg-accent-primary/70'
+                    )}
+                  >
+                    {/* Active indicator pip */}
+                    {isActive && (
+                      <div className="absolute -left-1.5 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-text-primary" />
+                    )}
+                    {server.iconUrl ? (
+                      <img src={server.iconUrl} alt={server.name} className="h-full w-full rounded-inherit object-cover" />
+                    ) : (
+                      <Globe size={16} className={server.connected ? '' : 'opacity-50'} />
+                    )}
+                    {/* Connection status dot */}
+                    <div
+                      className={cn(
+                        'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-bg-secondary',
+                        server.connected ? 'bg-accent-success' : 'bg-text-muted'
+                      )}
+                    />
+                  </button>
+                </Tooltip>
+              );
+            })}
+
+            {/* Add server button */}
+            <Tooltip side="right" content="Add Server">
+              <button
+                onClick={() => navigate('/connect')}
+                className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-bg-mod-subtle/60 text-text-muted transition-all duration-200 hover:rounded-xl hover:bg-accent-success/20 hover:text-accent-success"
+              >
+                <Plus size={18} />
+              </button>
+            </Tooltip>
+          </div>
+        )}
+
+        {/* Main sidebar content */}
+        <div className="flex h-full min-w-0 flex-1 flex-col">
         {/* Sidebar header - branding + collapse */}
         <div className="panel-divider flex h-[60px] shrink-0 items-center justify-between border-b px-5">
           {!sidebarCollapsed && (
@@ -606,6 +666,9 @@ export function UnifiedSidebar() {
                                                   {displayName}
                                                 </span>
                                                 <div className="ml-auto flex items-center gap-1">
+                                                  {vs.self_video && (
+                                                    <Video size={11} className="text-accent-primary" />
+                                                  )}
                                                   {isStreaming && (
                                                     <button
                                                       onClick={(e) => {
@@ -761,6 +824,7 @@ export function UnifiedSidebar() {
             </button>
           </div>
         )}
+      </div>
       </div>
 
       {/* Context menu */}

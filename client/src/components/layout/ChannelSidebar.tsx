@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Hash, Volume2, ChevronDown, ChevronRight, Settings, Mic, MicOff, Headphones, HeadphoneOff, Search, Plus } from 'lucide-react';
+import { Hash, Volume2, ChevronDown, ChevronRight, Settings, Mic, MicOff, Headphones, HeadphoneOff, Search, Plus, Video } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -439,6 +439,14 @@ export function ChannelSidebar() {
                               {vs.username || `User ${vs.user_id.slice(0, 6)}`}
                             </span>
                             <div className="ml-auto flex items-center gap-1">
+                              {vs.self_video && (
+                                <Video size={13} className="text-accent-primary" />
+                              )}
+                              {vs.self_stream && (
+                                <span className="inline-flex items-center rounded px-1 py-0.5 text-[9px] font-bold uppercase leading-none tracking-wider text-accent-primary" style={{ backgroundColor: 'rgba(var(--accent-primary-rgb, 88, 101, 242), 0.15)' }}>
+                                  Live
+                                </span>
+                              )}
                               {vs.self_mute && <MicOff size={13} className="text-text-muted" />}
                               {vs.self_deaf && <HeadphoneOff size={13} className="text-text-muted" />}
                             </div>

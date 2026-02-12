@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
+import { useAccountStore } from '../stores/accountStore';
+import { useServerListStore } from '../stores/serverListStore';
 import { getStoredServerUrl, clearStoredServerUrl } from '../lib/apiBaseUrl';
+import { hasAccount } from '../lib/account';
+import { authApi } from '../api/auth';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -23,7 +27,34 @@ export function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      navigate('/app');
+
+      // Check if user already has a local keypair
+      if (hasAccount()) {
+        // Already has a client-side account — attach the pubkey to this server account
+        const account = useAccountStore.getState();
+        if (account.isUnlocked && account.publicKey) {
+          try {
+            await authApi.attachPublicKey(account.publicKey);
+          } catch {
+            // Non-fatal: pubkey may already be attached or server may not support it yet
+          }
+        }
+
+        // Also add to server list if not already there
+        if (serverUrl) {
+          const existingServer = useServerListStore.getState().getServerByUrl(serverUrl);
+          if (!existingServer) {
+            const token = localStorage.getItem('token');
+            useServerListStore.getState().addServer(serverUrl, new URL(serverUrl).host, token || undefined);
+          }
+        }
+
+        navigate('/app');
+      } else {
+        // No local keypair — send to account setup in migration mode
+        // This will create a keypair and attach it to their existing server account
+        navigate('/setup?migrate=1');
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Invalid email or password');
     } finally {

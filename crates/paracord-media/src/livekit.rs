@@ -159,6 +159,7 @@ impl LiveKitConfig {
         let publish_sources = if can_publish {
             Some(vec![
                 "microphone".to_string(),
+                "camera".to_string(),
                 "screen_share".to_string(),
                 "screen_share_audio".to_string(),
             ])
@@ -221,6 +222,7 @@ impl LiveKitConfig {
                 can_publish_data: Some(true),
                 can_publish_sources: Some(vec![
                     "microphone".to_string(),
+                    "camera".to_string(),
                     "screen_share".to_string(),
                     "screen_share_audio".to_string(),
                 ]),
@@ -269,6 +271,7 @@ impl LiveKitConfig {
                 can_publish_data: Some(true),
                 can_publish_sources: Some(vec![
                     "microphone".to_string(),
+                    "camera".to_string(),
                     "screen_share".to_string(),
                     "screen_share_audio".to_string(),
                 ]),

@@ -2,7 +2,9 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use ed25519_dalek::{Signature, VerifyingKey};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -25,6 +27,8 @@ pub struct Claims {
     pub sub: i64,
     pub exp: usize,
     pub iat: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pub_key: Option<String>,
 }
 
 pub fn hash_password(password: &str) -> Result<String, AuthError> {
@@ -49,6 +53,28 @@ pub fn create_token(user_id: i64, secret: &str, expiry_secs: u64) -> Result<Stri
         sub: user_id,
         iat: now,
         exp: now + expiry_secs as usize,
+        pub_key: None,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| AuthError::Internal(e.to_string()))
+}
+
+pub fn create_token_with_pubkey(
+    user_id: i64,
+    public_key: &str,
+    secret: &str,
+    expiry_secs: u64,
+) -> Result<String, AuthError> {
+    let now = chrono::Utc::now().timestamp() as usize;
+    let claims = Claims {
+        sub: user_id,
+        iat: now,
+        exp: now + expiry_secs as usize,
+        pub_key: Some(public_key.to_string()),
     };
     encode(
         &Header::default(),
@@ -66,4 +92,74 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, AuthError> {
     )
     .map(|data| data.claims)
     .map_err(|_| AuthError::InvalidToken)
+}
+
+/// Generate a challenge nonce (32 random bytes as hex)
+pub fn generate_challenge() -> (String, i64) {
+    let mut nonce_bytes = [0u8; 32];
+    rand::thread_rng().fill(&mut nonce_bytes);
+    let nonce = hex_encode(&nonce_bytes);
+    let timestamp = chrono::Utc::now().timestamp();
+    (nonce, timestamp)
+}
+
+/// Verify a signed challenge.
+/// The client signs: "nonce:timestamp:server_origin" as UTF-8 bytes.
+pub fn verify_challenge(
+    public_key_hex: &str,
+    nonce: &str,
+    timestamp: i64,
+    server_origin: &str,
+    signature_hex: &str,
+) -> Result<bool, AuthError> {
+    // Check timestamp freshness (within 60 seconds)
+    let now = chrono::Utc::now().timestamp();
+    if (now - timestamp).abs() > 60 {
+        return Ok(false);
+    }
+
+    // Build the message
+    let message = format!("{}:{}:{}", nonce, timestamp, server_origin);
+
+    // Decode public key
+    let public_key_bytes =
+        hex_decode(public_key_hex).ok_or(AuthError::Internal("invalid public key hex".into()))?;
+    let key_bytes: [u8; 32] = public_key_bytes
+        .try_into()
+        .map_err(|_| AuthError::Internal("invalid public key length".into()))?;
+    let verifying_key = VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|_| AuthError::Internal("invalid public key".into()))?;
+
+    // Decode signature
+    let sig_bytes =
+        hex_decode(signature_hex).ok_or(AuthError::Internal("invalid signature hex".into()))?;
+    let signature = Signature::from_slice(&sig_bytes)
+        .map_err(|_| AuthError::Internal("invalid signature".into()))?;
+
+    // Verify
+    Ok(verifying_key
+        .verify_strict(message.as_bytes(), &signature)
+        .is_ok())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+fn hex_decode(value: &str) -> Option<Vec<u8>> {
+    if value.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(value.len() / 2);
+    let mut i = 0;
+    while i < value.len() {
+        let byte = u8::from_str_radix(&value[i..i + 2], 16).ok()?;
+        out.push(byte);
+        i += 2;
+    }
+    Some(out)
 }
