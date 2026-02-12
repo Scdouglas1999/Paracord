@@ -9,23 +9,29 @@ import {
   Eye,
   EyeOff,
   Signal,
+  X,
 } from 'lucide-react';
 import { RoomEvent, Track, VideoQuality } from 'livekit-client';
 import { useVoiceStore } from '../../stores/voiceStore';
+import { useAuthStore } from '../../stores/authStore';
 
 interface StreamViewerProps {
+  streamerId: string;
   streamerName?: string;
   expectingStream?: boolean;
   onStopStream?: () => void;
+  onStopWatching?: () => void;
 }
 
 export function StreamViewer({
+  streamerId,
   streamerName,
   expectingStream = false,
   onStopStream,
+  onStopWatching,
 }: StreamViewerProps) {
   const [isMuted, setIsMuted] = useState(false);
-  const [activeStreamer, setActiveStreamer] = useState<string | null>(null);
+  const [activeStreamerName, setActiveStreamerName] = useState<string | null>(null);
   const [hasActiveTrack, setHasActiveTrack] = useState(false);
   const [isOwnStream, setIsOwnStream] = useState(false);
   const [hideSelfPreview, setHideSelfPreview] = useState(false);
@@ -36,11 +42,14 @@ export function StreamViewer({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const room = useVoiceStore((s) => s.room);
   const selfStream = useVoiceStore((s) => s.selfStream);
+  const previewStreamerId = useVoiceStore((s) => s.previewStreamerId);
+  const localUserId = useAuthStore((s) => s.user?.id ?? null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const streamStartTime = useRef<number>(Date.now());
+  const screenShareAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  const displayName = streamerName ?? activeStreamer ?? 'Someone';
+  const displayName = streamerName ?? activeStreamerName ?? 'Someone';
 
   // Elapsed time counter
   useEffect(() => {
@@ -71,63 +80,174 @@ export function StreamViewer({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [isMaximized]);
 
-  // Attach video track
-  const attachTrack = useCallback(() => {
-    const videoEl = videoRef.current;
-    if (!room || !videoEl) return;
+  // Clean up screen share audio element
+  const cleanupScreenShareAudio = useCallback(() => {
+    const audioEl = screenShareAudioRef.current;
+    if (audioEl) {
+      audioEl.pause();
+      audioEl.srcObject = null;
+      audioEl.remove();
+      screenShareAudioRef.current = null;
+    }
+  }, []);
 
-    let foundTrack: MediaStreamTrack | null = null;
-    let foundStreamer: string | null = null;
-    let isSelf = false;
+  // Use a ref to track mute state so attachTrack can read the current value
+  // without needing isMuted in its dependency array (avoiding re-attaching
+  // all tracks just because the user toggled mute).
+  const isMutedRef = useRef(isMuted);
+  isMutedRef.current = isMuted;
 
-    // Prefer remote screen shares
-    for (const participant of room.remoteParticipants.values()) {
-      for (const publication of participant.videoTrackPublications.values()) {
-        if (
-          publication.source === Track.Source.ScreenShare &&
-          publication.track
-        ) {
-          if (quality !== 'auto') {
-            if (quality === 'low') publication.setVideoQuality(VideoQuality.LOW);
-            if (quality === 'medium') publication.setVideoQuality(VideoQuality.MEDIUM);
-            if (quality === 'high' || quality === 'source')
-              publication.setVideoQuality(VideoQuality.HIGH);
+  const setScreenShareSubscriptions = useCallback(
+    (targetIdentities: Set<string>) => {
+      if (!room) return;
+      for (const participant of room.remoteParticipants.values()) {
+        const shouldSubscribe = targetIdentities.has(participant.identity);
+        for (const publication of participant.videoTrackPublications.values()) {
+          if (publication.source !== Track.Source.ScreenShare) continue;
+          if (publication.isSubscribed !== shouldSubscribe) {
+            publication.setSubscribed(shouldSubscribe);
           }
-          foundTrack = publication.track.mediaStreamTrack;
-          foundStreamer = participant.name || participant.identity;
-          break;
+        }
+        for (const publication of participant.audioTrackPublications.values()) {
+          if (publication.source !== Track.Source.ScreenShareAudio) continue;
+          if (publication.isSubscribed !== shouldSubscribe) {
+            publication.setSubscribed(shouldSubscribe);
+          }
         }
       }
-      if (foundTrack) break;
-    }
+    },
+    [room]
+  );
 
-    // Fall back to local screen share
-    if (!foundTrack) {
+  // Attach selected streamer's video track and screen share audio track.
+  const attachTrack = useCallback(() => {
+    const videoEl = videoRef.current;
+    if (!room || !videoEl || !streamerId) return;
+
+    const subscribedStreamers = new Set<string>();
+    if (streamerId !== localUserId) {
+      subscribedStreamers.add(streamerId);
+    }
+    if (
+      previewStreamerId &&
+      previewStreamerId !== localUserId &&
+      previewStreamerId !== streamerId
+    ) {
+      subscribedStreamers.add(previewStreamerId);
+    }
+    setScreenShareSubscriptions(subscribedStreamers);
+
+    let foundVideoTrack: MediaStreamTrack | null = null;
+    let foundAudioTrack: MediaStreamTrack | null = null;
+    let foundStreamer: string | null = null;
+    const watchingSelf = localUserId != null && streamerId === localUserId;
+
+    if (watchingSelf) {
       for (const publication of room.localParticipant.videoTrackPublications.values()) {
         if (
           publication.source === Track.Source.ScreenShare &&
-          publication.track
+          publication.track &&
+          publication.track.mediaStreamTrack?.readyState !== 'ended'
         ) {
-          foundTrack = publication.track.mediaStreamTrack;
+          foundVideoTrack = publication.track.mediaStreamTrack;
           foundStreamer = 'You';
-          isSelf = true;
           break;
+        }
+      }
+    } else {
+      const participant = room.remoteParticipants.get(streamerId);
+      if (participant) {
+        foundStreamer = participant.name || participant.identity;
+        for (const publication of participant.videoTrackPublications.values()) {
+          if (
+            publication.source === Track.Source.ScreenShare &&
+            publication.track &&
+            publication.track.mediaStreamTrack?.readyState !== 'ended'
+          ) {
+            if (quality !== 'auto') {
+              if (quality === 'low') publication.setVideoQuality(VideoQuality.LOW);
+              if (quality === 'medium') publication.setVideoQuality(VideoQuality.MEDIUM);
+              if (quality === 'high' || quality === 'source') {
+                publication.setVideoQuality(VideoQuality.HIGH);
+              }
+            }
+            foundVideoTrack = publication.track.mediaStreamTrack;
+            break;
+          }
+        }
+        for (const publication of participant.audioTrackPublications.values()) {
+          if (
+            publication.source === Track.Source.ScreenShareAudio &&
+            publication.track
+          ) {
+            if (!publication.isSubscribed) {
+              publication.setSubscribed(true);
+            }
+            foundAudioTrack = publication.track.mediaStreamTrack;
+            break;
+          }
         }
       }
     }
 
-    if (foundTrack && !(isSelf && hideSelfPreview)) {
-      const stream = new MediaStream([foundTrack]);
-      videoEl.srcObject = stream;
-      videoEl.play().catch(() => { });
+    if (foundVideoTrack && !(watchingSelf && hideSelfPreview)) {
+      // Only reassign srcObject when the track actually changes to avoid
+      // black frame flashing from unnecessary MediaStream recreation.
+      const currentStream = videoEl.srcObject instanceof MediaStream ? videoEl.srcObject : null;
+      const currentTrack = currentStream?.getVideoTracks()[0] ?? null;
+      if (currentTrack !== foundVideoTrack) {
+        const stream = new MediaStream([foundVideoTrack]);
+        videoEl.srcObject = stream;
+        videoEl.play().catch(() => {});
+      }
     } else {
       videoEl.srcObject = null;
     }
 
-    setHasActiveTrack(Boolean(foundTrack));
-    setActiveStreamer(foundStreamer);
-    setIsOwnStream(isSelf);
-  }, [room, quality, hideSelfPreview]);
+    if (foundAudioTrack && !watchingSelf) {
+      let audioEl = screenShareAudioRef.current;
+      if (!audioEl) {
+        audioEl = document.createElement('audio');
+        audioEl.autoplay = true;
+        audioEl.style.display = 'none';
+        audioEl.setAttribute('data-paracord-stream-audio', 'true');
+        document.body.appendChild(audioEl);
+        screenShareAudioRef.current = audioEl;
+      }
+      // Only reassign when the audio track actually changes.
+      const currentAudioStream = audioEl.srcObject instanceof MediaStream ? audioEl.srcObject : null;
+      const currentAudioTrack = currentAudioStream?.getAudioTracks()[0] ?? null;
+      if (currentAudioTrack !== foundAudioTrack) {
+        const audioStream = new MediaStream([foundAudioTrack]);
+        audioEl.srcObject = audioStream;
+        audioEl.muted = isMutedRef.current;
+        audioEl.play().catch(() => {
+          const resumeOnGesture = () => {
+            audioEl?.play().catch(() => {});
+            document.removeEventListener('click', resumeOnGesture);
+            document.removeEventListener('keydown', resumeOnGesture);
+          };
+          document.addEventListener('click', resumeOnGesture, { once: true });
+          document.addEventListener('keydown', resumeOnGesture, { once: true });
+        });
+      }
+    } else {
+      cleanupScreenShareAudio();
+    }
+
+    setHasActiveTrack(Boolean(foundVideoTrack));
+    setActiveStreamerName(foundStreamer);
+    setIsOwnStream(watchingSelf);
+  }, [
+    room,
+    streamerId,
+    localUserId,
+    previewStreamerId,
+    quality,
+    hideSelfPreview,
+    cleanupScreenShareAudio,
+    setScreenShareSubscriptions,
+  ]);
 
   useEffect(() => {
     if (!room) return;
@@ -135,14 +255,25 @@ export function StreamViewer({
     attachTrack();
     room.on(RoomEvent.TrackSubscribed, attachTrack);
     room.on(RoomEvent.TrackUnsubscribed, attachTrack);
+    room.on(RoomEvent.TrackPublished, attachTrack);
+    room.on(RoomEvent.TrackUnpublished, attachTrack);
+    room.on(RoomEvent.TrackMuted, attachTrack);
+    room.on(RoomEvent.TrackUnmuted, attachTrack);
     room.on(RoomEvent.ParticipantConnected, attachTrack);
     room.on(RoomEvent.ParticipantDisconnected, attachTrack);
     room.on(RoomEvent.LocalTrackPublished, attachTrack);
     room.on(RoomEvent.LocalTrackUnpublished, attachTrack);
 
+    const pollInterval = setInterval(attachTrack, 2000);
+
     return () => {
+      clearInterval(pollInterval);
       room.off(RoomEvent.TrackSubscribed, attachTrack);
       room.off(RoomEvent.TrackUnsubscribed, attachTrack);
+      room.off(RoomEvent.TrackPublished, attachTrack);
+      room.off(RoomEvent.TrackUnpublished, attachTrack);
+      room.off(RoomEvent.TrackMuted, attachTrack);
+      room.off(RoomEvent.TrackUnmuted, attachTrack);
       room.off(RoomEvent.ParticipantConnected, attachTrack);
       room.off(RoomEvent.ParticipantDisconnected, attachTrack);
       room.off(RoomEvent.LocalTrackPublished, attachTrack);
@@ -150,8 +281,10 @@ export function StreamViewer({
       setHasActiveTrack(false);
       const videoEl = videoRef.current;
       if (videoEl) videoEl.srcObject = null;
+      cleanupScreenShareAudio();
+      setScreenShareSubscriptions(new Set<string>());
     };
-  }, [room, attachTrack]);
+  }, [room, attachTrack, cleanupScreenShareAudio, setScreenShareSubscriptions]);
 
   const toggleMaximized = () => setIsMaximized((prev) => !prev);
 
@@ -167,7 +300,6 @@ export function StreamViewer({
       }
       style={{ backgroundColor: 'var(--bg-tertiary)' }}
     >
-      {/* ── Top bar ── */}
       <div
         className="relative z-10 flex items-center justify-between gap-3 px-5 py-3"
         style={{
@@ -176,7 +308,6 @@ export function StreamViewer({
           borderBottom: '1px solid var(--border-subtle)',
         }}
       >
-        {/* Left: streamer info + live badge */}
         <div className="min-w-0 flex items-center gap-3">
           <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5"
             style={{
@@ -197,9 +328,7 @@ export function StreamViewer({
           </span>
         </div>
 
-        {/* Right: controls */}
         <div className="flex items-center gap-2">
-          {/* Viewer quality selector — only useful for remote streams */}
           {!isOwnStream && (
             <select
               value={quality}
@@ -219,16 +348,23 @@ export function StreamViewer({
             </select>
           )}
 
-          {/* Volume toggle */}
           <button
-            onClick={() => setIsMuted((prev) => !prev)}
+            onClick={() => {
+              setIsMuted((prev) => {
+                const nextMuted = !prev;
+                const audioEl = screenShareAudioRef.current;
+                if (audioEl) {
+                  audioEl.muted = nextMuted;
+                }
+                return nextMuted;
+              });
+            }}
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
             title={isMuted ? 'Unmute' : 'Mute'}
           >
             {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
           </button>
 
-          {/* Hide own preview (only when streaming) */}
           {isOwnStream && (
             <button
               onClick={() => setHideSelfPreview((prev) => !prev)}
@@ -239,7 +375,6 @@ export function StreamViewer({
             </button>
           )}
 
-          {/* Maximize within app */}
           <button
             onClick={toggleMaximized}
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
@@ -248,7 +383,16 @@ export function StreamViewer({
             {isMaximized ? <Minimize size={16} /> : <Maximize size={16} />}
           </button>
 
-          {/* Stop stream (only streamer) */}
+          {onStopWatching && (
+            <button
+              onClick={onStopWatching}
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+              title="Stop watching"
+            >
+              <X size={16} />
+            </button>
+          )}
+
           {(selfStream || isOwnStream) && onStopStream && (
             <button
               onClick={onStopStream}
@@ -266,9 +410,7 @@ export function StreamViewer({
         </div>
       </div>
 
-      {/* ── Video area ── */}
-      <div className="relative flex flex-1 items-center justify-center overflow-hidden">
-        {/* Single video element always in the DOM so ref is stable */}
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
         <video
           ref={videoRef}
           className="h-full w-full object-contain"
@@ -277,19 +419,16 @@ export function StreamViewer({
           muted={isMuted}
           style={{
             backgroundColor: 'var(--bg-tertiary)',
-            // Hide visually when we don't want to show the video
             opacity: showVideo ? 1 : 0,
             position: showVideo ? 'relative' : 'absolute',
           }}
         />
 
-        {/* Overlay placeholder states on top of the video */}
         {!showVideo && (
           <div className="absolute inset-0 flex items-center justify-center"
             style={{ backgroundColor: 'var(--bg-tertiary)' }}>
             <div className="flex flex-col items-center gap-4">
               {isOwnStream && hideSelfPreview ? (
-                /* Hidden own preview state */
                 <>
                   <div
                     className="flex h-20 w-20 items-center justify-center rounded-2xl"
@@ -310,7 +449,6 @@ export function StreamViewer({
                   </div>
                 </>
               ) : expectingStream ? (
-                /* Waiting for track to publish */
                 <>
                   <div className="relative flex h-20 w-20 items-center justify-center">
                     <div
@@ -340,7 +478,6 @@ export function StreamViewer({
                   </div>
                 </>
               ) : (
-                /* No stream available */
                 <>
                   <div
                     className="flex h-20 w-20 items-center justify-center rounded-2xl"
@@ -353,10 +490,10 @@ export function StreamViewer({
                   </div>
                   <div className="text-center">
                     <div className="text-sm font-semibold text-text-secondary">
-                      No active stream
+                      Stream is not available
                     </div>
                     <div className="mt-1 text-xs text-text-muted">
-                      Waiting for someone to share their screen
+                      {displayName} is not currently publishing a stream track.
                     </div>
                   </div>
                 </>

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickkadutskyi/jb-tauri-v2-schema/main/schema.json",
   "productName": "Paracord",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.paracord.app",
   "build": {
     "frontendDist": "../dist",

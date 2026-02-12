@@ -239,7 +239,7 @@ pub fn build_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/admin/guilds/{guild_id}",
-            delete(routes::admin::delete_guild),
+            patch(routes::admin::update_guild).delete(routes::admin::delete_guild),
         )
         .route(
             "/api/v1/admin/restart-update",

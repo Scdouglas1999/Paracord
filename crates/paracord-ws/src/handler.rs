@@ -92,13 +92,13 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                 // (safety check in case of race with a concurrent join).
                 if !state
                     .voice
-                    .is_participant_in_livekit_room(vs.channel_id, vs.guild_id, session.user_id)
+                    .is_participant_in_livekit_room(vs.channel_id, vs.guild_id(), session.user_id)
                     .await
                 {
                     let _ = paracord_db::voice_states::remove_voice_state(
                         &state.db,
                         session.user_id,
-                        vs.guild_id,
+                        vs.guild_id(),
                     )
                     .await;
                     let _ = state.voice.leave_room(vs.channel_id, session.user_id).await;
@@ -124,6 +124,9 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
             json!({"id": session.user_id.to_string()})
         };
 
+        // Snapshot of currently online users for building presence lists
+        let online_snapshot = state.online_users.read().await.clone();
+
         // Fetch guild data for READY
         let mut guilds_json = Vec::new();
         for &gid in &session.guild_ids {
@@ -143,7 +146,7 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                         "name": c.name,
                         "channel_type": c.channel_type,
                         "position": c.position,
-                        "guild_id": c.guild_id.map(|id| id.to_string()),
+                        "guild_id": c.guild_id().map(|id| id.to_string()),
                         "parent_id": c.parent_id.map(|id| id.to_string()),
                     })
                 })
@@ -158,12 +161,27 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                     json!({
                         "user_id": vs.user_id.to_string(),
                         "channel_id": vs.channel_id.to_string(),
-                        "guild_id": vs.guild_id.map(|id| id.to_string()),
+                        "guild_id": vs.guild_id().map(|id| id.to_string()),
                         "session_id": &vs.session_id,
                         "self_mute": vs.self_mute,
                         "self_deaf": vs.self_deaf,
                         "username": &vs.username,
                         "avatar_hash": &vs.avatar_hash,
+                    })
+                })
+                .collect();
+
+            // Build initial presences: guild members who are currently online
+            let guild_members = paracord_db::members::get_guild_members(&state.db, gid, 10000, None)
+                .await
+                .unwrap_or_default();
+            let presences_json: Vec<Value> = guild_members
+                .iter()
+                .filter(|m| online_snapshot.contains(&m.user_id))
+                .map(|m| {
+                    json!({
+                        "user_id": m.user_id.to_string(),
+                        "status": "online",
                     })
                 })
                 .collect();
@@ -175,6 +193,7 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                     "owner_id": g.owner_id.to_string(),
                     "channels": channels_json,
                     "voice_states": voice_states_json,
+                    "presences": presences_json,
                 }));
             }
         }
@@ -200,6 +219,9 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
 
     // Save user_id before session is moved into run_session
     let session_user_id = session.user_id;
+
+    // Track this user as online
+    state.online_users.write().await.insert(session_user_id);
 
     // Publish presence update for this user coming online
     state.event_bus.dispatch(
@@ -246,7 +268,7 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                         .voice
                         .is_participant_in_livekit_room(
                             voice_state.channel_id,
-                            voice_state.guild_id,
+                            voice_state.guild_id(),
                             session_user_id,
                         )
                         .await
@@ -266,7 +288,7 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                     let _ = paracord_db::voice_states::remove_voice_state(
                         &state_clone.db,
                         session_user_id,
-                        voice_state.guild_id,
+                        voice_state.guild_id(),
                     )
                     .await;
                     if let Some(participants) = state_clone
@@ -283,18 +305,21 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                         json!({
                             "user_id": session_user_id.to_string(),
                             "channel_id": Value::Null,
-                            "guild_id": voice_state.guild_id.map(|id| id.to_string()),
+                            "guild_id": voice_state.guild_id().map(|id| id.to_string()),
                             "self_mute": false,
                             "self_deaf": false,
                             "username": dc_user.as_ref().map(|u| u.username.as_str()),
                             "avatar_hash": dc_user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
                         }),
-                        voice_state.guild_id,
+                        voice_state.guild_id(),
                     );
                 }
             });
         }
     }
+
+    // Remove user from online tracking
+    state.online_users.write().await.remove(&session_user_id);
 
     // Publish presence offline on disconnect
     state.event_bus.dispatch(
@@ -475,7 +500,7 @@ async fn handle_client_message(
                     } else {
                         None
                     };
-                    let guild_id = channel.as_ref().and_then(|c| c.guild_id);
+                    let guild_id = channel.as_ref().and_then(|c| c.guild_id());
 
                     let typing_payload = json!({
                         "channel_id": channel_id_str,
@@ -538,7 +563,7 @@ async fn handle_client_message(
                         let _ = paracord_db::voice_states::remove_voice_state(
                             &state.db,
                             session.user_id,
-                            existing_state.guild_id,
+                            existing_state.guild_id(),
                         )
                         .await;
                         if let Some(participants) = state
@@ -555,13 +580,13 @@ async fn handle_client_message(
                             json!({
                                 "user_id": session.user_id.to_string(),
                                 "channel_id": Value::Null,
-                                "guild_id": existing_state.guild_id.map(|id| id.to_string()),
+                                "guild_id": existing_state.guild_id().map(|id| id.to_string()),
                                 "self_mute": self_mute,
                                 "self_deaf": self_deaf,
                                 "username": vs_user.as_ref().map(|u| u.username.as_str()),
                                 "avatar_hash": vs_user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
                             }),
-                            existing_state.guild_id,
+                            existing_state.guild_id(),
                         );
                     }
                 } else if let Some(channel_id_str) = d.get("channel_id").and_then(|v| v.as_str()) {
@@ -570,7 +595,7 @@ async fn handle_client_message(
                             .await
                             .ok()
                             .flatten();
-                        let guild_id = channel.and_then(|c| c.guild_id);
+                        let guild_id = channel.and_then(|c| c.guild_id());
                         let _ = paracord_db::voice_states::upsert_voice_state(
                             &state.db,
                             session.user_id,

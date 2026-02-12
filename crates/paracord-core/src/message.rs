@@ -23,7 +23,7 @@ pub async fn create_message(
         .ok_or(CoreError::NotFound)?;
 
     // Check permissions if guild channel
-    if let Some(guild_id) = channel.guild_id {
+    if let Some(guild_id) = channel.guild_id() {
         permissions::ensure_guild_member(pool, guild_id, author_id).await?;
         if let Some(member) = paracord_db::members::get_member(pool, author_id, guild_id).await? {
             if let Some(until) = member.communication_disabled_until {
@@ -89,7 +89,7 @@ pub async fn edit_message(
             .await?
             .ok_or(CoreError::NotFound)?;
 
-        if let Some(guild_id) = channel.guild_id {
+        if let Some(guild_id) = channel.guild_id() {
             let guild = paracord_db::guilds::get_guild(pool, guild_id)
                 .await?
                 .ok_or(CoreError::NotFound)?;
@@ -127,7 +127,7 @@ pub async fn delete_message(
             .await?
             .ok_or(CoreError::NotFound)?;
 
-        if let Some(guild_id) = channel.guild_id {
+        if let Some(guild_id) = channel.guild_id() {
             let guild = paracord_db::guilds::get_guild(pool, guild_id)
                 .await?
                 .ok_or(CoreError::NotFound)?;

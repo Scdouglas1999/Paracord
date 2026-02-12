@@ -1,11 +1,12 @@
 import { useRef, useEffect, useState, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDown, Smile, Reply, MoreHorizontal, Hash } from 'lucide-react';
+import { ArrowDown, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon } from 'lucide-react';
 import { useMessages } from '../../hooks/useMessages';
 import { useTypingStore } from '../../stores/typingStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useChannelStore } from '../../stores/channelStore';
+import { useMemberStore } from '../../stores/memberStore';
 import { channelApi } from '../../api/channels';
 import { Permissions, hasPermission, type Message } from '../../types';
 import { UserProfilePopup } from '../user/UserProfile';
@@ -96,6 +97,12 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const [profileUser, setProfileUser] = useState<Message['author'] | null>(null);
   const [profilePos, setProfilePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [emojiPickerFor, setEmojiPickerFor] = useState<{ messageId: string; position: { x: number; y: number } } | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Resolve typing user IDs to usernames
+  const allMembers = useMemberStore((s) => s.members);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -137,20 +144,59 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     if (!emojiPickerFor) return;
     const msgId = emojiPickerFor.messageId;
     setEmojiPickerFor(null);
-    await addReaction(channelId, msgId, emoji);
-    await useMessageStore.getState().fetchMessages(channelId);
+    try {
+      await addReaction(channelId, msgId, emoji);
+    } catch {
+      // non-fatal
+    }
   };
 
-  const handleEditMessage = async (msg: Message) => {
-    const next = window.prompt('Edit message', msg.content || '');
-    if (next == null || next === msg.content) return;
-    await editMessage(channelId, msg.id, next);
+  const startEditingMessage = (msg: Message) => {
+    setEditingMessageId(msg.id);
+    setEditContent(msg.content || '');
     setMenuMessageId(null);
   };
 
+  const cancelEditing = () => {
+    setEditingMessageId(null);
+    setEditContent('');
+  };
+
+  const saveEditMessage = async () => {
+    if (!editingMessageId) return;
+    const trimmed = editContent.trim();
+    if (!trimmed) return;
+    const msg = messages.find((m) => m.id === editingMessageId);
+    if (trimmed === (msg?.content || '')) {
+      cancelEditing();
+      return;
+    }
+    try {
+      await editMessage(channelId, editingMessageId, trimmed);
+    } catch {
+      // keep editing state so user can retry
+      return;
+    }
+    cancelEditing();
+  };
+
+  const handleEditKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void saveEditMessage();
+    } else if (e.key === 'Escape') {
+      cancelEditing();
+    }
+  };
+
   const handleDeleteMessage = async (messageId: string) => {
-    if (!window.confirm('Delete this message?')) return;
     await deleteMessage(channelId, messageId);
+    setMenuMessageId(null);
+    setDeleteConfirmId(null);
+  };
+
+  const requestDelete = (messageId: string) => {
+    setDeleteConfirmId(messageId);
     setMenuMessageId(null);
   };
 
@@ -268,9 +314,53 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                           )}
                         </div>
                       )}
-                      <p className="break-words text-[15px]" style={{ color: 'var(--text-secondary)', lineHeight: '1.48rem' }}>
-                        {msg.content}
-                      </p>
+                      {editingMessageId === msg.id ? (
+                        <div className="mt-0.5">
+                          <textarea
+                            autoFocus
+                            className="w-full resize-none rounded-lg border border-border-subtle bg-bg-primary/80 px-3 py-2 text-[15px] leading-[1.48rem] outline-none focus:border-accent-primary/60"
+                            style={{ color: 'var(--text-secondary)', minHeight: '2.5rem', maxHeight: '50vh' }}
+                            value={editContent}
+                            onChange={(e) => setEditContent(e.target.value)}
+                            onKeyDown={handleEditKeyDown}
+                            rows={1}
+                            ref={(el) => {
+                              if (el) {
+                                el.style.height = 'auto';
+                                el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.5) + 'px';
+                              }
+                            }}
+                          />
+                          <div className="mt-1 flex items-center gap-2">
+                            <button
+                              onClick={() => void saveEditMessage()}
+                              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors hover:bg-accent-primary/15"
+                              style={{ color: 'var(--accent-primary)' }}
+                            >
+                              <Check size={12} /> Save
+                            </button>
+                            <button
+                              onClick={cancelEditing}
+                              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors hover:bg-bg-mod-subtle"
+                              style={{ color: 'var(--text-muted)' }}
+                            >
+                              <XIcon size={12} /> Cancel
+                            </button>
+                            <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                              Enter to save, Esc to cancel
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="break-words text-[15px]" style={{ color: 'var(--text-secondary)', lineHeight: '1.48rem' }}>
+                          {msg.content}
+                          {isGrouped && (msg.edited_timestamp || msg.edited_at) && (
+                            <span className="ml-1 text-[11px]" style={{ color: 'var(--text-muted)' }} title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}>
+                              (edited)
+                            </span>
+                          )}
+                        </p>
+                      )}
                       {/* Reactions */}
                       {msg.reactions && Array.isArray(msg.reactions) && msg.reactions.length > 0 && (
                         <div className="mt-1 flex flex-wrap gap-1">
@@ -278,12 +368,15 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                             <button
                               key={r.emoji}
                               onClick={async () => {
-                                if (r.me) {
-                                  await removeReaction(channelId, msg.id, r.emoji);
-                                } else {
-                                  await addReaction(channelId, msg.id, r.emoji);
+                                try {
+                                  if (r.me) {
+                                    await removeReaction(channelId, msg.id, r.emoji);
+                                  } else {
+                                    await addReaction(channelId, msg.id, r.emoji);
+                                  }
+                                } catch {
+                                  // API errors are non-fatal for reactions
                                 }
-                                await useMessageStore.getState().fetchMessages(channelId);
                               }}
                               className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs transition-colors hover:bg-bg-mod-subtle"
                               style={{
@@ -357,23 +450,55 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                         className="glass-modal absolute right-2 top-11 z-10 rounded-xl p-2"
                       >
                         {canEditMessage && (
-                          <button className="context-menu-item w-full text-left" onClick={() => void handleEditMessage(msg)}>
+                          <button className="context-menu-item w-full text-left" onClick={() => startEditingMessage(msg)}>
                             Edit
                           </button>
                         )}
                         {canPinMessage && (
                           <button
                             className="context-menu-item w-full text-left"
-                            onClick={() => void (msg.pinned ? unpinMessage(channelId, msg.id) : pinMessage(channelId, msg.id))}
+                            onClick={async () => {
+                              setMenuMessageId(null);
+                              try {
+                                if (msg.pinned) {
+                                  await unpinMessage(channelId, msg.id);
+                                } else {
+                                  await pinMessage(channelId, msg.id);
+                                }
+                              } catch {
+                                // pin/unpin errors are non-fatal
+                              }
+                            }}
                           >
                             {msg.pinned ? 'Unpin' : 'Pin'}
                           </button>
                         )}
                         {canDeleteMessage && (
-                          <button className="context-menu-item danger w-full text-left" onClick={() => void handleDeleteMessage(msg.id)}>
+                          <button className="context-menu-item danger w-full text-left" onClick={() => requestDelete(msg.id)}>
                             Delete
                           </button>
                         )}
+                      </div>
+                    )}
+                    {deleteConfirmId === msg.id && (
+                      <div className="glass-modal absolute right-2 top-11 z-10 rounded-xl p-3" style={{ minWidth: '220px' }}>
+                        <p className="mb-2 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Delete message?</p>
+                        <p className="mb-3 text-xs" style={{ color: 'var(--text-muted)' }}>This action cannot be undone.</p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors"
+                            style={{ backgroundColor: 'var(--accent-danger)', color: '#fff' }}
+                            onClick={() => void handleDeleteMessage(msg.id)}
+                          >
+                            Delete
+                          </button>
+                          <button
+                            className="rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-subtle"
+                            onClick={() => setDeleteConfirmId(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -382,9 +507,30 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             })}
             {activeTyping.length > 0 && (
               <div className="px-3 py-2.5 text-sm" style={{ color: 'var(--text-muted)' }}>
-                {activeTyping.length === 1
-                  ? 'Someone is typing...'
-                  : `${activeTyping.length} people are typing...`}
+                {(() => {
+                  // Resolve user IDs to usernames using members from the guild
+                  const guildId = activeChannel?.guild_id;
+                  const guildMembers = guildId ? allMembers.get(guildId) : null;
+                  const resolveUsername = (userId: string): string => {
+                    if (guildMembers) {
+                      const member = guildMembers.find((m) => m.user.id === userId);
+                      if (member) return member.nick || member.user.username;
+                    }
+                    return 'Someone';
+                  };
+
+                  const names = activeTyping.map(resolveUsername);
+                  if (names.length === 1) {
+                    return <><strong>{names[0]}</strong> is typing...</>;
+                  }
+                  if (names.length === 2) {
+                    return <><strong>{names[0]}</strong> and <strong>{names[1]}</strong> are typing...</>;
+                  }
+                  if (names.length === 3) {
+                    return <><strong>{names[0]}</strong>, <strong>{names[1]}</strong>, and <strong>{names[2]}</strong> are typing...</>;
+                  }
+                  return <>{names.length} people are typing...</>;
+                })()}
               </div>
             )}
             <div ref={bottomRef} />

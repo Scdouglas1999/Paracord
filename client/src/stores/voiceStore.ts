@@ -10,12 +10,16 @@ import {
   ConnectionState,
   AudioPresets,
   createAudioAnalyser,
+  type AudioCaptureOptions,
   type Participant,
   type LocalAudioTrack,
   type RemoteTrack,
   type RemoteTrackPublication,
 } from 'livekit-client';
 import { useAuthStore } from './authStore';
+import { playVoiceJoinSound, playVoiceLeaveSound } from '../lib/voiceSounds';
+import { NoiseGateProcessor } from '../lib/noiseGate';
+import { startNativeSystemAudio, stopNativeSystemAudio } from '../lib/systemAudioCapture';
 
 const INTERNAL_LIVEKIT_HOSTS = new Set([
   'host.docker.internal',
@@ -88,6 +92,7 @@ let remoteAudioReconcileInterval: ReturnType<typeof setInterval> | null = null;
 let remoteAudioReconcileRoom: Room | null = null;
 let forceRedForCompatibility = false;
 let audioCodecSwitchCooldownUntil = 0;
+let activeNoiseGate: NoiseGateProcessor | null = null;
 type MicUplinkState = 'idle' | 'sending' | 'stalled' | 'recovering' | 'muted' | 'no_track';
 
 function isRedMime(mime: string | undefined): boolean {
@@ -113,6 +118,19 @@ function trackKey(
 function setAttachedRemoteAudioMuted(muted: boolean): void {
   for (const element of attachedRemoteAudioElements.values()) {
     element.muted = muted;
+    // Belt-and-suspenders: setting volume to 0 ensures silence even when the
+    // muted attribute is not respected for MediaStream sources in some
+    // WebView/browser environments (e.g. Tauri WebView2).
+    element.volume = muted ? 0 : 1;
+    // Disable the underlying MediaStreamTrack objects so no audio data reaches
+    // the output at all. This is the most reliable deafen mechanism because
+    // some runtimes ignore muted/volume on elements with MediaStream sources.
+    const stream = element.srcObject;
+    if (stream instanceof MediaStream) {
+      for (const audioTrack of stream.getAudioTracks()) {
+        audioTrack.enabled = !muted;
+      }
+    }
   }
 }
 
@@ -442,6 +460,22 @@ function synthesizeVoiceStateFromParticipant(
   guildId: string | null
 ): VoiceState {
   const existing = useVoiceStore.getState().participants.get(participant.identity);
+
+  // Derive self_stream from actual LiveKit track publications rather than
+  // blindly preserving the old stored value.  A stale `true` was causing
+  // the stream viewer to persist after a remote user stopped streaming.
+  let hasScreenShare = false;
+  for (const pub of participant.videoTrackPublications.values()) {
+    if (
+      pub.source === Track.Source.ScreenShare &&
+      pub.track &&
+      pub.track.mediaStreamTrack?.readyState !== 'ended'
+    ) {
+      hasScreenShare = true;
+      break;
+    }
+  }
+
   return {
     user_id: participant.identity,
     channel_id: channelId,
@@ -451,7 +485,7 @@ function synthesizeVoiceStateFromParticipant(
     mute: existing?.mute || false,
     self_deaf: existing?.self_deaf || false,
     self_mute: existing?.self_mute || false,
-    self_stream: existing?.self_stream || false,
+    self_stream: hasScreenShare,
     self_video: existing?.self_video || false,
     suppress: existing?.suppress || false,
     username: existing?.username || participant.name || undefined,
@@ -516,6 +550,91 @@ function getSavedOutputDeviceId(): string | undefined {
   return deviceId.length > 0 ? deviceId : undefined;
 }
 
+/** Whether the user has noise suppression enabled (defaults to true). */
+function getSavedNoiseSuppression(): boolean {
+  const notif = (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
+  return Boolean(notif['noiseSuppression'] ?? true);
+}
+
+/** Whether the user has echo cancellation enabled (defaults to true). */
+function getSavedEchoCancellation(): boolean {
+  const notif = (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
+  return Boolean(notif['echoCancellation'] ?? true);
+}
+
+/**
+ * Build the audio capture options reflecting the user's saved voice settings.
+ * When noise suppression is enabled we also request `voiceIsolation` which
+ * is a much stronger ML-based noise suppressor available in Chrome 116+ and
+ * Edge.  It suppresses keyboards, breathing, tapping, and other background
+ * noise far more effectively than the basic `noiseSuppression` constraint.
+ */
+function buildAudioCaptureOptions(deviceId?: string): Record<string, unknown> {
+  const ns = getSavedNoiseSuppression();
+  const ec = getSavedEchoCancellation();
+  const opts: Record<string, unknown> = {
+    autoGainControl: true,
+    echoCancellation: ec,
+    noiseSuppression: ns,
+    // Voice Isolation (W3C mediacapture-extensions) is a stronger, ML-based
+    // alternative to basic noiseSuppression.  When enabled the browser will
+    // isolate the user's voice and suppress environmental noise (keyboards,
+    // fans, breathing, etc).  Unsupported browsers silently ignore this.
+    voiceIsolation: ns,
+    channelCount: 1,
+  };
+  if (deviceId) {
+    opts.deviceId = deviceId;
+  }
+  return opts;
+}
+
+/**
+ * Apply or remove the noise gate processor on the published mic track.
+ * Called after mic is enabled and after voice settings are saved.
+ */
+async function applyNoiseGateIfNeeded(room: Room): Promise<void> {
+  const nsEnabled = getSavedNoiseSuppression();
+  const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const localTrack = publication?.track;
+  if (!localTrack) return;
+
+  // Cast to access setProcessor — LiveKit LocalAudioTrack has this method
+  const audioTrack = localTrack as unknown as {
+    setProcessor(p: NoiseGateProcessor | undefined): Promise<void>;
+    getProcessor(): { name: string } | undefined;
+  };
+
+  if (nsEnabled) {
+    // Only create a new gate if one isn't already active
+    if (!activeNoiseGate || audioTrack.getProcessor()?.name !== 'noise-gate') {
+      if (activeNoiseGate) {
+        await activeNoiseGate.destroy().catch(() => {});
+      }
+      activeNoiseGate = new NoiseGateProcessor();
+      try {
+        await audioTrack.setProcessor(activeNoiseGate);
+        console.info('[voice] Noise gate processor attached');
+      } catch (err) {
+        console.warn('[voice] Failed to attach noise gate processor:', err);
+        activeNoiseGate = null;
+      }
+    }
+  } else {
+    // Remove noise gate
+    if (activeNoiseGate) {
+      try {
+        await audioTrack.setProcessor(undefined as unknown as NoiseGateProcessor);
+      } catch {
+        // Some versions don't support removing — just destroy
+      }
+      await activeNoiseGate.destroy().catch(() => {});
+      activeNoiseGate = null;
+      console.info('[voice] Noise gate processor removed');
+    }
+  }
+}
+
 function normalizeDeviceId(deviceId?: string | null): string | undefined {
   if (!deviceId) return undefined;
   const trimmed = deviceId.trim();
@@ -538,7 +657,6 @@ function attachRemoteAudioTrack(
   }
   const audio = document.createElement('audio');
   audio.autoplay = true;
-  audio.muted = muted;
   audio.style.display = 'none';
   audio.setAttribute('data-paracord-voice-audio', 'true');
   if (participantIdentity) {
@@ -548,7 +666,20 @@ function attachRemoteAudioTrack(
     audio.setAttribute('data-paracord-voice-track-sid', publication.trackSid);
   }
   void setAudioElementOutputDevice(audio, selectedAudioOutputDeviceId);
+  // Attach FIRST — LiveKit's track.attach() internally resets element.muted
+  // to false and may override other properties. We set our deafen overrides
+  // AFTER attach so they stick.
   track.attach(audio);
+  audio.muted = muted;
+  audio.volume = muted ? 0 : 1;
+  if (muted) {
+    const stream = audio.srcObject;
+    if (stream instanceof MediaStream) {
+      for (const audioTrack of stream.getAudioTracks()) {
+        audioTrack.enabled = false;
+      }
+    }
+  }
   document.body.appendChild(audio);
   attachedRemoteAudioElements.set(key, audio);
   void audio.play().catch(() => {
@@ -678,14 +809,20 @@ async function setMicrophoneEnabledWithFallback(
     console.warn('[voice] Failed to reset existing microphone publication:', err);
   }
 
+  // Build capture options that include the user's noise suppression,
+  // echo cancellation, and voice isolation preferences so every mic
+  // enable/republish path applies them consistently.
+  const captureOptions = buildAudioCaptureOptions(preferredDeviceId);
+
   if (preferredDeviceId) {
     try {
       await room.localParticipant.setMicrophoneEnabled(
         true,
-        { deviceId: preferredDeviceId },
+        captureOptions,
         microphonePublishOptions
       );
       await ensurePublishedTrackUnmuted();
+      await applyNoiseGateIfNeeded(room);
       return true;
     } catch (err) {
       console.warn('[voice] Saved input device failed, retrying default input:', err);
@@ -693,8 +830,10 @@ async function setMicrophoneEnabledWithFallback(
   }
 
   try {
-    await room.localParticipant.setMicrophoneEnabled(true, undefined, microphonePublishOptions);
+    const defaultCaptureOptions = buildAudioCaptureOptions();
+    await room.localParticipant.setMicrophoneEnabled(true, defaultCaptureOptions, microphonePublishOptions);
     await ensurePublishedTrackUnmuted();
+    await applyNoiseGateIfNeeded(room);
     return true;
   } catch (err) {
     const name = err instanceof DOMException ? err.name : '';
@@ -714,6 +853,9 @@ async function setMicrophoneEnabledWithFallback(
 function syncRemoteAudioTracks(room: Room, muted: boolean): void {
   for (const participant of room.remoteParticipants.values()) {
     for (const publication of participant.trackPublications.values()) {
+      if (publication.source === Track.Source.ScreenShareAudio) {
+        continue;
+      }
       if (publication.kind === Track.Kind.Audio && !publication.isSubscribed) {
         publication.setSubscribed(true);
       }
@@ -784,6 +926,9 @@ function registerRoomListeners(
     setTimeout(() => refreshAudioCodecCompatibility(room, 'participant-connected-delayed'), 300);
     setTimeout(() => refreshAudioCodecCompatibility(room, 'participant-connected-late'), 1500);
     for (const publication of participant.trackPublications.values()) {
+      if (publication.source === Track.Source.ScreenShareAudio) {
+        continue;
+      }
       if (publication.kind === Track.Kind.Audio && !publication.isSubscribed) {
         publication.setSubscribed(true);
       }
@@ -804,15 +949,36 @@ function registerRoomListeners(
       stopLocalMicAnalyser();
       stopLocalAudioUplinkMonitor();
     }
+    // When the local screen-share track is unpublished (e.g. the user clicked
+    // "Stop sharing" in the OS chrome, or the shared window was closed),
+    // clear selfStream so the stream viewer UI is removed.
+    if (publication.source === Track.Source.ScreenShare) {
+      void stopNativeSystemAudio();
+      const state = useVoiceStore.getState();
+      if (state.selfStream) {
+        console.info('[voice] Local screen share track unpublished — clearing selfStream');
+        const localUserId = useAuthStore.getState().user?.id;
+        const participants = new Map(state.participants);
+        if (localUserId) {
+          const existing = participants.get(localUserId);
+          if (existing) {
+            participants.set(localUserId, { ...existing, self_stream: false });
+          }
+        }
+        useVoiceStore.setState({ selfStream: false, participants });
+      }
+    }
   });
   room.on(
     RoomEvent.TrackSubscribed,
     (track: RemoteTrack, publication: RemoteTrackPublication, participant: Participant) => {
+      if (publication.source === Track.Source.ScreenShareAudio) return;
       attachRemoteAudioTrack(track, publication, useVoiceStore.getState().selfDeaf, participant.identity);
     }
   );
   room.on(RoomEvent.TrackPublished, (publication, participant) => {
     refreshAudioCodecCompatibility(room, `track-published:${participant.identity}`);
+    if (publication.source === Track.Source.ScreenShareAudio) return;
     if (publication.kind !== Track.Kind.Audio) return;
     if (!publication.isSubscribed) {
       publication.setSubscribed(true);
@@ -848,6 +1014,7 @@ function registerRoomListeners(
   });
   room.on(RoomEvent.TrackSubscriptionStatusChanged, (publication, status, participant) => {
     refreshAudioCodecCompatibility(room, `track-subscription-status:${status}`);
+    if (publication.source === Track.Source.ScreenShareAudio) return;
     if (publication.kind !== Track.Kind.Audio) return;
     if (status !== 'subscribed' && !publication.isSubscribed) {
       publication.setSubscribed(true);
@@ -963,6 +1130,8 @@ interface VoiceStoreState {
   micUplinkState: MicUplinkState;
   micUplinkBytesSent: number | null;
   micUplinkStalledIntervals: number;
+  watchedStreamerId: string | null;
+  previewStreamerId: string | null;
 
   joinChannel: (channelId: string, guildId?: string) => Promise<void>;
   leaveChannel: () => Promise<void>;
@@ -973,7 +1142,13 @@ interface VoiceStoreState {
   toggleVideo: () => void;
   applyAudioInputDevice: (deviceId: string | null) => Promise<void>;
   applyAudioOutputDevice: (deviceId: string | null) => Promise<void>;
+  /** Re-acquire the microphone with the latest noise suppression / echo
+   *  cancellation settings from the auth store. Call after saving voice
+   *  settings so changes take effect immediately without mute/unmute. */
+  reapplyAudioConstraints: () => Promise<void>;
   clearConnectionError: () => void;
+  setWatchedStreamer: (userId: string | null) => void;
+  setPreviewStreamer: (userId: string | null) => void;
 
   // Gateway event handlers
   handleVoiceStateUpdate: (state: VoiceState) => void;
@@ -1008,6 +1183,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   micUplinkState: 'idle',
   micUplinkBytesSent: null,
   micUplinkStalledIntervals: 0,
+  watchedStreamerId: null,
+  previewStreamerId: null,
 
   joinChannel: async (channelId, guildId) => {
     const previousSelfMute = get().selfMute;
@@ -1030,18 +1207,16 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       joiningChannelId: channelId,
       connectionError: null,
       connectionErrorChannelId: null,
+      watchedStreamerId: null,
+      previewStreamerId: null,
     });
     try {
       const { data } = await voiceApi.joinChannel(channelId);
       joinedServer = true;
       room = new Room({
-        // Audio capture defaults: enable processing for voice chat quality.
-        audioCaptureDefaults: {
-          autoGainControl: true,
-          echoCancellation: true,
-          noiseSuppression: true,
-          channelCount: 1,
-        },
+        // Audio capture defaults: read user's voice settings for noise
+        // suppression, echo cancellation, and voice isolation.
+        audioCaptureDefaults: buildAudioCaptureOptions() as AudioCaptureOptions,
         // Publish defaults tuned for voice chat.
         publishDefaults: {
           audioPreset: AudioPresets.speech,
@@ -1052,9 +1227,20 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           red: false,
           forceStereo: false,
           stopMicTrackOnMute: false,
+          // Default screen share encoding as a safety net. The startStream
+          // method passes preset-specific encoding on each publish, but this
+          // ensures any fallback screen-share path still gets decent quality.
+          screenShareEncoding: {
+            maxBitrate: 15_000_000,
+            maxFramerate: 60,
+            priority: 'high',
+          },
+          screenShareSimulcastLayers: [],
         },
-        // Let LiveKit manage subscribed video quality automatically.
-        adaptiveStream: true,
+        // Adaptive stream adjusts subscribed quality based on element size.
+        // Disabled because it causes screen share viewers to get low quality
+        // when the video element hasn't been resized to full size yet.
+        adaptiveStream: false,
         // Pause video layers no subscriber is watching.
         dynacast: true,
         // Clean up when the browser tab closes / navigates away.
@@ -1086,6 +1272,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         if (get().room !== thisRoom) return;
         console.warn('[voice] LiveKit room disconnected, reason:', reason);
         detachAllAttachedRemoteAudio();
+        void stopNativeSystemAudio();
         // Do NOT call voiceApi.leaveChannel() here — that tells the server
         // to delete the room, destroying it for all participants.  Let
         // LiveKit's participant_left webhook handle server-side cleanup
@@ -1119,6 +1306,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
             room: null,
             joining: false,
             joiningChannelId: null,
+            watchedStreamerId: null,
+            previewStreamerId: null,
           };
         });
       });
@@ -1189,6 +1378,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           channelParticipants,
           selfMute: shouldMuteOnJoin || !microphoneEnabled,
           selfDeaf: previousSelfDeaf,
+          watchedStreamerId: null,
+          previewStreamerId: null,
         };
       });
       syncLivekitRoomPresence(room);
@@ -1221,6 +1412,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         roomName: null,
         connectionError: message,
         connectionErrorChannelId: channelId,
+        watchedStreamerId: null,
+        previewStreamerId: null,
       });
       throw error;
     }
@@ -1242,6 +1435,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       currentRoom.removeAllListeners();
       currentRoom.disconnect();
     }
+    void stopNativeSystemAudio();
     forceRedForCompatibility = false;
     detachAllAttachedRemoteAudio();
     selectedAudioOutputDeviceId = undefined;
@@ -1278,6 +1472,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         joiningChannelId: null,
         connectionError: null,
         connectionErrorChannelId: null,
+        watchedStreamerId: null,
+        previewStreamerId: null,
       };
     });
   },
@@ -1385,6 +1581,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         if (get().room !== streamRoom) return;
         console.warn('[voice] LiveKit room disconnected (stream), reason:', reason);
         detachAllAttachedRemoteAudio();
+        void stopNativeSystemAudio();
         const cId = get().channelId;
         const auth = useAuthStore.getState().user;
         set((prev) => {
@@ -1404,6 +1601,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
             speakingUsers: new Set<string>(),
             livekitToken: null, livekitUrl: null, roomName: null,
             room: null, joining: false, joiningChannelId: null,
+            watchedStreamerId: null, previewStreamerId: null,
           };
         });
       });
@@ -1411,21 +1609,109 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
 
       // 3. Now that we have the right permissions, start screen share
       //    with resolution/framerate constraints matching the preset.
-      const presetMap: Record<string, { width: number; height: number; frameRate: number }> = {
-        '720p30': { width: 1280, height: 720, frameRate: 30 },
-        '1080p60': { width: 1920, height: 1080, frameRate: 60 },
-        '1440p60': { width: 2560, height: 1440, frameRate: 60 },
-        '4k60': { width: 3840, height: 2160, frameRate: 60 },
+      //    We configure BOTH capture constraints (resolution/fps the browser
+      //    captures at) AND encoding parameters (bitrate/fps the WebRTC
+      //    encoder targets). Without explicit encoding params LiveKit falls
+      //    back to very conservative defaults causing blocky, low-fps streams.
+      const presetMap: Record<string, {
+        width: number;
+        height: number;
+        frameRate: number;
+        maxBitrate: number;
+        /** 'detail' = optimize for sharp text/UI, 'motion' = optimize for video playback */
+        hint: 'detail' | 'motion';
+      }> = {
+        '720p30':      { width: 1280, height: 720,  frameRate: 30, maxBitrate: 5_000_000,   hint: 'detail' },
+        '1080p60':     { width: 1920, height: 1080, frameRate: 60, maxBitrate: 15_000_000,  hint: 'detail' },
+        '1440p60':     { width: 2560, height: 1440, frameRate: 60, maxBitrate: 25_000_000,  hint: 'detail' },
+        '4k60':        { width: 3840, height: 2160, frameRate: 60, maxBitrate: 40_000_000,  hint: 'detail' },
+        'movie-50':    { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000,  hint: 'motion' },
+        'movie-100':   { width: 3840, height: 2160, frameRate: 60, maxBitrate: 100_000_000, hint: 'motion' },
       };
       const capture = presetMap[qualityPreset] ?? presetMap['1080p60'];
 
       await room.localParticipant.setScreenShareEnabled(true, {
-        audio: false,
+        audio: true,
+        // systemAudio: 'include' tells Chrome/Edge to pre-check the "Share
+        // audio" checkbox in the picker when sharing a screen or tab, so
+        // audio is captured automatically without extra user interaction.
+        // Note: window-level sharing does NOT support audio (OS limitation).
+        systemAudio: 'include',
         selfBrowserSurface: 'include',
         surfaceSwitching: 'include',
+        preferCurrentTab: false,
         resolution: { width: capture.width, height: capture.height, frameRate: capture.frameRate },
-        contentHint: 'motion',
+        contentHint: capture.hint,
+      }, {
+        screenShareEncoding: {
+          maxBitrate: capture.maxBitrate,
+          maxFramerate: capture.frameRate,
+          priority: 'high',
+        },
+        screenShareSimulcastLayers: [],
+        videoCodec: 'h264',
+        // Always maintain framerate for screen shares. Frame drops are far
+        // more noticeable than resolution drops, and the viewer's display is
+        // typically smaller than the source resolution anyway.
+        degradationPreference: 'maintain-framerate',
+        scalabilityMode: 'L1T1',
       });
+
+      // Verify whether screen share audio was captured and published
+      const screenShareAudioPub = room.localParticipant.getTrackPublication(
+        Track.Source.ScreenShareAudio
+      );
+      if (screenShareAudioPub) {
+        console.info('[voice] Screen share audio track published — viewers will hear stream audio');
+      } else {
+        console.warn(
+          '[voice] No screen share audio track — audio not captured.',
+          'This happens when sharing a window (audio not supported) or if',
+          '"Share audio" was unchecked. Share an entire screen for automatic audio.'
+        );
+
+        // If no screen share audio was captured (e.g. window sharing), attempt
+        // native system audio capture via Tauri WASAPI loopback.
+        try {
+          const nativeAudioTrack = await startNativeSystemAudio();
+          if (nativeAudioTrack) {
+            await room.localParticipant.publishTrack(nativeAudioTrack, {
+              source: Track.Source.ScreenShareAudio,
+            });
+            console.info('[voice] Published native system audio as ScreenShareAudio');
+          }
+        } catch (err) {
+          console.warn('[voice] Native system audio capture failed:', err);
+        }
+      }
+
+      // Post-publish sender tuning: boost starting bitrate and widen
+      // keyframe interval so the encoder doesn't waste bits on ramp-up
+      // or too-frequent keyframes.
+      try {
+        const pub = room.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+        const sender = pub?.track?.sender;
+        if (sender) {
+          const params = sender.getParameters();
+          if (params.encodings?.[0]) {
+            params.encodings[0].maxBitrate = capture.maxBitrate;
+            // Explicit framerate cap so the encoder never sacrifices fps.
+            params.encodings[0].maxFramerate = capture.frameRate;
+            // Prevent scale-down that some browsers apply by default.
+            params.encodings[0].scaleResolutionDownBy = 1.0;
+            params.encodings[0].networkPriority = 'high';
+            // Wider keyframe interval: fewer full frames = more bits for
+            // quality on P-frames. Default is often 2-3 seconds; we push
+            // to 4 seconds for screen content that changes incrementally.
+            // @ts-expect-error keyInterval is a non-standard but widely
+            // supported Chrome/Edge extension to RTCRtpEncodingParameters
+            params.encodings[0].keyInterval = 240; // 4 seconds at 60fps
+            await sender.setParameters(params);
+          }
+        }
+      } catch (err) {
+        console.warn('[voice] Post-publish sender tuning failed (non-critical):', err);
+      }
       set({
         selfStream: true,
         livekitToken: data.token,
@@ -1433,6 +1719,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         roomName: data.room_name,
       });
     } catch (error) {
+      void stopNativeSystemAudio();
       await room.localParticipant.setScreenShareEnabled(false).catch(() => { });
       set({ selfStream: false });
       throw error;
@@ -1442,7 +1729,19 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   stopStream: () =>
     set((state) => {
       state.room?.localParticipant.setScreenShareEnabled(false).catch(() => { });
-      return { selfStream: false };
+      void stopNativeSystemAudio();
+      // Also update the local user's voice-state entry so that
+      // participants-derived flags reflect the stream ending immediately,
+      // even before a gateway event arrives.
+      const localUserId = useAuthStore.getState().user?.id;
+      const participants = new Map(state.participants);
+      if (localUserId) {
+        const existing = participants.get(localUserId);
+        if (existing) {
+          participants.set(localUserId, { ...existing, self_stream: false });
+        }
+      }
+      return { selfStream: false, participants };
     }),
 
   toggleVideo: () => set((state) => ({ selfVideo: !state.selfVideo })),
@@ -1477,11 +1776,48 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       console.warn('[voice] Failed to switch output device:', err);
     }
   },
+  reapplyAudioConstraints: async () => {
+    const state = get();
+    const room = state.room;
+    if (!room || !state.connected) return;
+    // Only re-acquire if the mic is currently active (not muted/deafened).
+    if (state.selfMute || state.selfDeaf) return;
+    const inputId = getSavedInputDeviceId();
+    try {
+      await setMicrophoneEnabledWithFallback(room, true, inputId);
+    } catch (err) {
+      console.warn('[voice] Failed to reapply audio constraints:', err);
+    }
+  },
   clearConnectionError: () => set({ connectionError: null, connectionErrorChannelId: null }),
 
   handleVoiceStateUpdate: (voiceState) => {
+    // Determine join/leave sounds BEFORE mutating state so we can compare
+    // the previous channel of the updating user against our current channel.
+    const currentState = get();
+    const localUserId = useAuthStore.getState().user?.id;
+    const myChannelId = currentState.channelId;
+
+    if (
+      localUserId &&
+      myChannelId &&
+      currentState.connected &&
+      voiceState.user_id !== localUserId
+    ) {
+      const previousVoiceState = currentState.participants.get(voiceState.user_id);
+      const wasInMyChannel = previousVoiceState?.channel_id === myChannelId;
+      const isNowInMyChannel = voiceState.channel_id === myChannelId;
+
+      if (!wasInMyChannel && isNowInMyChannel) {
+        // Someone joined our voice channel
+        playVoiceJoinSound();
+      } else if (wasInMyChannel && !isNowInMyChannel) {
+        // Someone left our voice channel
+        playVoiceLeaveSound();
+      }
+    }
+
     set((state) => {
-      const localUserId = useAuthStore.getState().user?.id;
       // Ignore stale self-leave updates while the local LiveKit room is still
       // connected. The server can emit transient participant_left events during
       // reconnects, but local room state is the stronger signal for "still in voice".
@@ -1520,7 +1856,16 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         channelParticipants.set(voiceState.channel_id, [...existing, voiceState]);
       }
 
-      return { participants, channelParticipants };
+      const watchedStreamerId =
+        state.watchedStreamerId && participants.has(state.watchedStreamerId)
+          ? state.watchedStreamerId
+          : null;
+      const previewStreamerId =
+        state.previewStreamerId && participants.has(state.previewStreamerId)
+          ? state.previewStreamerId
+          : null;
+
+      return { participants, channelParticipants, watchedStreamerId, previewStreamerId };
     });
   },
 
@@ -1594,4 +1939,14 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     set(() => ({
       speakingUsers: new Set(userIds),
     })),
+
+  setWatchedStreamer: (userId) =>
+    set({
+      watchedStreamerId: userId,
+    }),
+
+  setPreviewStreamer: (userId) =>
+    set({
+      previewStreamerId: userId,
+    }),
 }));

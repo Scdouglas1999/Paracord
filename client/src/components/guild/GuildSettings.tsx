@@ -46,10 +46,18 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
   const [name, setName] = useState(guildName);
   const [description, setDescription] = useState('');
   const [newRoleName, setNewRoleName] = useState('');
+  const [newRoleColor, setNewRoleColor] = useState('#99aab5');
+  const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
+  const [editingRolePermissions, setEditingRolePermissions] = useState<number>(0);
+  const [editingRoleColor, setEditingRoleColor] = useState('#99aab5');
+  const [editingRoleHoist, setEditingRoleHoist] = useState(false);
+  const [editingRoleMentionable, setEditingRoleMentionable] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelType, setNewChannelType] = useState<'text' | 'voice'>('text');
   const [memberSearch, setMemberSearch] = useState('');
   const [iconDataUrl, setIconDataUrl] = useState<string | null>(null);
+  const [banReasonInput, setBanReasonInput] = useState('');
+  const [banConfirmUserId, setBanConfirmUserId] = useState<string | null>(null);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose();
@@ -163,9 +171,11 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
 
   const createRole = async () => {
     if (!newRoleName.trim()) return;
+    const colorInt = parseInt(newRoleColor.replace('#', ''), 16) || 0;
     await runAction(async () => {
-      await guildApi.createRole(guildId, { name: newRoleName.trim(), permissions: 0 });
+      await guildApi.createRole(guildId, { name: newRoleName.trim(), color: colorInt, permissions: 0 });
       setNewRoleName('');
+      setNewRoleColor('#99aab5');
       await refreshAll();
     }, 'Failed to create role');
   };
@@ -176,6 +186,39 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
       await guildApi.updateRole(guildId, roleId, { name: nextName.trim() });
       await refreshAll();
     }, 'Failed to update role');
+  };
+
+  const startEditingRole = (role: Role) => {
+    setEditingRoleId(role.id);
+    setEditingRoleColor('#' + (role.color || 0).toString(16).padStart(6, '0'));
+    setEditingRolePermissions(typeof role.permissions === 'string' ? parseInt(role.permissions, 10) || 0 : role.permissions);
+    setEditingRoleHoist(role.hoist);
+    setEditingRoleMentionable(role.mentionable);
+  };
+
+  const saveRoleEdits = async () => {
+    if (!editingRoleId) return;
+    const colorInt = parseInt(editingRoleColor.replace('#', ''), 16) || 0;
+    await runAction(async () => {
+      await guildApi.updateRole(guildId, editingRoleId!, {
+        color: colorInt,
+        permissions: editingRolePermissions,
+        hoist: editingRoleHoist,
+        mentionable: editingRoleMentionable,
+      } as Partial<Role>);
+      setEditingRoleId(null);
+      await refreshAll();
+    }, 'Failed to save role');
+  };
+
+  const cancelRoleEditing = () => {
+    setEditingRoleId(null);
+  };
+
+  const togglePermission = (flag: number) => {
+    setEditingRolePermissions((prev) =>
+      (prev & flag) ? prev & ~flag : prev | flag
+    );
   };
 
   const deleteRole = async (roleId: string) => {
@@ -212,9 +255,11 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
     }, 'Failed to kick member');
   };
 
-  const banMember = async (userId: string) => {
+  const banMember = async (userId: string, reason: string) => {
     await runAction(async () => {
-      await guildApi.banMember(guildId, userId, 'Banned from guild settings');
+      await guildApi.banMember(guildId, userId, reason || 'No reason provided');
+      setBanConfirmUserId(null);
+      setBanReasonInput('');
       await refreshAll();
     }, 'Failed to ban member');
   };
@@ -377,28 +422,138 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
           <div className="settings-surface-card min-h-[calc(100vh-13.5rem)]">
             <h2 className="settings-section-title mb-6">Roles</h2>
             <div className="space-y-2.5">
-              {roles.map((role) => (
-                <div key={role.id} className="flex items-center gap-3.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-4 py-3.5">
-                  <GripVertical size={16} style={{ color: 'var(--text-muted)' }} />
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: 'var(--interactive-muted)' }} />
-                  <input
-                    className="flex-1 bg-transparent text-base leading-normal outline-none"
-                    style={{ color: 'var(--text-primary)' }}
-                    defaultValue={role.name}
-                    onBlur={(e) => {
-                      if (e.target.value !== role.name) void renameRole(role.id, e.target.value);
-                    }}
-                  />
-                  {role.id !== guildId && (
-                    <button className="icon-btn" onClick={() => void deleteRole(role.id)}>
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </div>
-              ))}
+              {roles.map((role) => {
+                const roleColor = role.color ? '#' + role.color.toString(16).padStart(6, '0') : '#99aab5';
+                const isEditing = editingRoleId === role.id;
+                return (
+                  <div key={role.id}>
+                    <div className="flex items-center gap-3.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-4 py-3.5">
+                      <GripVertical size={16} style={{ color: 'var(--text-muted)' }} />
+                      <div className="w-3.5 h-3.5 rounded-full flex-shrink-0 border border-border-subtle" style={{ backgroundColor: roleColor }} />
+                      <input
+                        className="flex-1 bg-transparent text-base leading-normal outline-none"
+                        style={{ color: roleColor !== '#000000' ? roleColor : 'var(--text-primary)' }}
+                        defaultValue={role.name}
+                        onBlur={(e) => {
+                          if (e.target.value !== role.name) void renameRole(role.id, e.target.value);
+                        }}
+                      />
+                      {role.hoist && (
+                        <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border border-border-subtle" style={{ color: 'var(--text-muted)' }}>Hoisted</span>
+                      )}
+                      {role.id !== guildId && (
+                        <button
+                          className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                          onClick={() => isEditing ? cancelRoleEditing() : startEditingRole(role)}
+                        >
+                          {isEditing ? 'Close' : 'Edit'}
+                        </button>
+                      )}
+                      {role.id !== guildId && (
+                        <button className="icon-btn" onClick={() => void deleteRole(role.id)}>
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                    {isEditing && (
+                      <div className="ml-8 mt-2 rounded-xl border border-border-subtle bg-bg-primary/60 p-4 space-y-4">
+                        <div className="flex items-center gap-4">
+                          <label className="block">
+                            <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>Color</span>
+                            <div className="mt-1 flex items-center gap-2">
+                              <input
+                                type="color"
+                                value={editingRoleColor}
+                                onChange={(e) => setEditingRoleColor(e.target.value)}
+                                className="h-9 w-9 cursor-pointer rounded-lg border border-border-subtle bg-transparent"
+                              />
+                              <input
+                                type="text"
+                                value={editingRoleColor}
+                                onChange={(e) => setEditingRoleColor(e.target.value)}
+                                className="input-field w-28"
+                                maxLength={7}
+                              />
+                            </div>
+                          </label>
+                        </div>
+                        <div className="flex items-center gap-6">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={editingRoleHoist}
+                              onChange={(e) => setEditingRoleHoist(e.target.checked)}
+                              className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
+                            />
+                            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Display separately (hoist)</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={editingRoleMentionable}
+                              onChange={(e) => setEditingRoleMentionable(e.target.checked)}
+                              className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
+                            />
+                            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Allow anyone to @mention this role</span>
+                          </label>
+                        </div>
+                        <div>
+                          <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>Permissions</span>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            {[
+                              { name: 'Manage Channels', flag: 1 << 4 },
+                              { name: 'Manage Server', flag: 1 << 5 },
+                              { name: 'Manage Messages', flag: 1 << 13 },
+                              { name: 'Manage Roles', flag: 1 << 28 },
+                              { name: 'Kick Members', flag: 1 << 1 },
+                              { name: 'Ban Members', flag: 1 << 2 },
+                              { name: 'Administrator', flag: 1 << 3 },
+                              { name: 'Send Messages', flag: 1 << 11 },
+                              { name: 'Attach Files', flag: 1 << 15 },
+                              { name: 'Add Reactions', flag: 1 << 6 },
+                              { name: 'Connect (Voice)', flag: 1 << 20 },
+                              { name: 'Speak (Voice)', flag: 1 << 21 },
+                              { name: 'Stream', flag: 1 << 9 },
+                              { name: 'View Audit Log', flag: 1 << 7 },
+                              { name: 'Create Invite', flag: 1 << 0 },
+                              { name: 'Change Nickname', flag: 1 << 26 },
+                            ].map((perm) => (
+                              <label key={perm.name} className="flex items-center gap-2 cursor-pointer rounded-lg px-2 py-1.5 hover:bg-bg-mod-subtle transition-colors">
+                                <input
+                                  type="checkbox"
+                                  checked={(editingRolePermissions & perm.flag) !== 0}
+                                  onChange={() => togglePermission(perm.flag)}
+                                  className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
+                                />
+                                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{perm.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button className="btn-primary" onClick={() => void saveRoleEdits()}>Save Changes</button>
+                          <button
+                            className="rounded-lg px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                            onClick={cancelRoleEditing}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             <div className="mt-6 flex items-center gap-3">
               <input className="input-field flex-1" placeholder="New role name" value={newRoleName} onChange={(e) => setNewRoleName(e.target.value)} />
+              <input
+                type="color"
+                value={newRoleColor}
+                onChange={(e) => setNewRoleColor(e.target.value)}
+                className="h-10 w-10 cursor-pointer rounded-lg border border-border-subtle bg-transparent"
+                title="Role color"
+              />
               <button className="btn-primary" onClick={() => void createRole()}>Create Role</button>
             </div>
           </div>
@@ -410,15 +565,83 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
             <input type="text" placeholder="Search members" className="input-field mb-4" value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} />
             <div className="space-y-2">
               {filteredMembers.map((member) => (
-                <div key={member.user.id} className="flex items-center gap-2.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-3.5 py-3">
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold" style={{ backgroundColor: 'var(--accent-primary)' }}>
-                    {member.user.username.charAt(0).toUpperCase()}
+                <div key={member.user.id}>
+                  <div className="flex items-center gap-2.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-3.5 py-3">
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold" style={{ backgroundColor: 'var(--accent-primary)' }}>
+                      {member.user.username.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm block" style={{ color: 'var(--text-primary)' }}>
+                        {member.nick || member.user.username}
+                      </span>
+                      {member.nick && (
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                          {member.user.username}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {member.roles && member.roles.length > 0 && (
+                        <div className="hidden sm:flex items-center gap-1 mr-2">
+                          {member.roles.slice(0, 3).map((roleId) => {
+                            const role = roles.find((r) => r.id === roleId);
+                            if (!role) return null;
+                            const rColor = role.color ? '#' + role.color.toString(16).padStart(6, '0') : 'var(--text-muted)';
+                            return (
+                              <span key={roleId} className="inline-flex items-center gap-1 rounded-md border border-border-subtle px-1.5 py-0.5 text-[11px] font-medium" style={{ color: rColor }}>
+                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: rColor }} />
+                                {role.name}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <button className="rounded-lg px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary" onClick={() => void kickMember(member.user.id)}>Kick</button>
+                      <button
+                        className="rounded-lg px-3.5 py-2 text-sm font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
+                        onClick={() => {
+                          setBanConfirmUserId(member.user.id);
+                          setBanReasonInput('');
+                        }}
+                      >
+                        Ban
+                      </button>
+                    </div>
                   </div>
-                  <span className="flex-1 text-sm" style={{ color: 'var(--text-primary)' }}>
-                    {member.nick || member.user.username}
-                  </span>
-                  <button className="rounded-lg px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary" onClick={() => void kickMember(member.user.id)}>Kick</button>
-                  <button className="rounded-lg px-3.5 py-2 text-sm font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15" onClick={() => void banMember(member.user.id)}>Ban</button>
+                  {banConfirmUserId === member.user.id && (
+                    <div className="ml-10 mt-2 rounded-xl border border-accent-danger/30 bg-accent-danger/5 p-3 space-y-2">
+                      <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                        Ban {member.user.username}?
+                      </p>
+                      <input
+                        type="text"
+                        placeholder="Reason for ban (optional)"
+                        value={banReasonInput}
+                        onChange={(e) => setBanReasonInput(e.target.value)}
+                        className="input-field w-full"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void banMember(member.user.id, banReasonInput);
+                          if (e.key === 'Escape') setBanConfirmUserId(null);
+                        }}
+                        autoFocus
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors"
+                          style={{ backgroundColor: 'var(--accent-danger)', color: '#fff' }}
+                          onClick={() => void banMember(member.user.id, banReasonInput)}
+                        >
+                          Confirm Ban
+                        </button>
+                        <button
+                          className="rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-subtle"
+                          onClick={() => setBanConfirmUserId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
               {filteredMembers.length === 0 && <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No members found.</p>}
@@ -494,7 +717,15 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
             <div className="space-y-2">
               {bans.map((ban) => (
                 <div key={ban.user.id} className="flex items-center gap-2.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-3.5 py-3">
-                  <span className="flex-1 text-sm" style={{ color: 'var(--text-primary)' }}>{ban.user.username}</span>
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0" style={{ backgroundColor: 'var(--accent-danger)' }}>
+                    {ban.user.username.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm block" style={{ color: 'var(--text-primary)' }}>{ban.user.username}</span>
+                    {ban.reason && (
+                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Reason: {ban.reason}</span>
+                    )}
+                  </div>
                   <button className="rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary" onClick={() => void unban(ban.user.id)}>Unban</button>
                 </div>
               ))}

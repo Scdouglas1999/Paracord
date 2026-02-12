@@ -30,7 +30,7 @@ pub async fn list_members(
         let role_ids: Vec<String> = roles.iter().map(|r| r.id.to_string()).collect();
         result.push(json!({
             "user_id": m.user_id.to_string(),
-            "guild_id": m.guild_id.to_string(),
+            "guild_id": guild_id.to_string(),
             "nick": m.nick,
             "joined_at": m.joined_at.to_rfc3339(),
             "deaf": m.deaf,
@@ -153,7 +153,7 @@ pub async fn update_member(
     }
 
     let member_json = json!({
-        "guild_id": updated.guild_id.to_string(),
+        "guild_id": guild_id.to_string(),
         "user_id": updated.user_id.to_string(),
         "nick": updated.nick,
         "deaf": updated.deaf,

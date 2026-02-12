@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
-import { X, Copy, Check } from 'lucide-react';
+import { X, Copy, Check, Link } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { inviteApi } from '../../api/invites';
+import { getStoredServerUrl } from '../../lib/apiBaseUrl';
+import { toPortableUri } from '../../lib/portableLinks';
 
 interface InviteModalProps {
   guildName: string;
@@ -24,11 +26,20 @@ const MAX_USES_MAP: Record<string, number | undefined> = {
   'unlimited': undefined,
 };
 
+/** Resolve the server's base URL for encoding into portable links. */
+function resolveServerBaseUrl(): string {
+  const stored = getStoredServerUrl();
+  if (stored) return stored.replace(/\/+$/, '');
+  return window.location.origin;
+}
+
 export function InviteModal({ guildName, channelId, onClose }: InviteModalProps) {
-  const [copied, setCopied] = useState(false);
+  const [copiedPortable, setCopiedPortable] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
   const [expiration, setExpiration] = useState('7days');
   const [maxUses, setMaxUses] = useState('unlimited');
-  const [inviteLink, setInviteLink] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const [portableLink, setPortableLink] = useState('');
   const [loading, setLoading] = useState(false);
 
   const generateInvite = async () => {
@@ -38,9 +49,13 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
         max_age: EXPIRATION_MAP[expiration],
         max_uses: MAX_USES_MAP[maxUses],
       });
-      setInviteLink(`${window.location.origin}/invite/${data.code}`);
+      const code = data.code;
+      const serverUrl = resolveServerBaseUrl();
+      setInviteCode(code);
+      setPortableLink(toPortableUri(serverUrl, code));
     } catch {
-      setInviteLink('Failed to generate invite');
+      setInviteCode('');
+      setPortableLink('Failed to generate invite');
     } finally {
       setLoading(false);
     }
@@ -50,10 +65,16 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
     generateInvite();
   }, [channelId, expiration, maxUses]);
 
-  const handleCopy = async () => {
-    await navigator.clipboard?.writeText(inviteLink);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopyPortable = async () => {
+    await navigator.clipboard?.writeText(portableLink);
+    setCopiedPortable(true);
+    setTimeout(() => setCopiedPortable(false), 2000);
+  };
+
+  const handleCopyCode = async () => {
+    await navigator.clipboard?.writeText(inviteCode);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
   };
 
   const modal = (
@@ -78,30 +99,67 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
 
         {/* Body */}
         <div className="px-7 pb-7">
+          {/* Portable invite link (primary) */}
           <div className="mt-3">
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-              Send a server invite link to a friend
+            <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
+              <Link size={12} />
+              Portable invite link
             </label>
+            <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              Share this link with anyone -- it works from any device, even on a different network.
+            </p>
             <div
               className="mt-2.5 flex items-center overflow-hidden rounded-xl"
               style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)' }}
             >
               <input
                 type="text"
-                value={loading ? 'Generating...' : inviteLink}
+                value={loading ? 'Generating...' : portableLink}
                 readOnly
                 className="flex-1 bg-transparent px-4 py-3 text-[15px] outline-none"
                 style={{ color: 'var(--text-primary)' }}
               />
               <button
-                onClick={handleCopy}
+                onClick={handleCopyPortable}
+                disabled={loading || !portableLink}
                 className="inline-flex items-center justify-center px-4 py-3 text-sm font-semibold text-white transition-colors"
-                style={{ backgroundColor: copied ? 'var(--accent-success)' : 'var(--accent-primary)' }}
+                style={{ backgroundColor: copiedPortable ? 'var(--accent-success)' : 'var(--accent-primary)' }}
               >
-                {copied ? (
+                {copiedPortable ? (
                   <span className="flex items-center gap-1"><Check size={14} /> Copied!</span>
                 ) : (
                   <span className="flex items-center gap-1"><Copy size={14} /> Copy</span>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Raw invite code (secondary) */}
+          <div className="mt-4">
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
+              Invite code
+            </label>
+            <div
+              className="mt-2 flex items-center overflow-hidden rounded-xl"
+              style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)' }}
+            >
+              <input
+                type="text"
+                value={loading ? 'Generating...' : inviteCode}
+                readOnly
+                className="flex-1 bg-transparent px-4 py-2.5 font-mono text-[14px] outline-none"
+                style={{ color: 'var(--text-muted)' }}
+              />
+              <button
+                onClick={handleCopyCode}
+                disabled={loading || !inviteCode}
+                className="inline-flex items-center justify-center px-3 py-2.5 text-xs font-semibold transition-colors"
+                style={{ color: copiedCode ? 'var(--accent-success)' : 'var(--text-secondary)' }}
+              >
+                {copiedCode ? (
+                  <span className="flex items-center gap-1"><Check size={12} /> Copied</span>
+                ) : (
+                  <span className="flex items-center gap-1"><Copy size={12} /> Copy</span>
                 )}
               </button>
             </div>

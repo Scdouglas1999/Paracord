@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import type { Role } from '../../types/index';
 import { UserProfilePopup } from '../user/UserProfile';
 import { useMemberStore } from '../../stores/memberStore';
+import { usePresenceStore } from '../../stores/presenceStore';
 import { useGuildStore } from '../../stores/guildStore';
 
 interface MemberWithUser {
@@ -31,6 +32,8 @@ export function MemberList({ members: propMembers, roles = [] }: MemberListProps
   const selectedGuildId = useGuildStore(s => s.selectedGuildId);
   const storeMembers = useMemberStore(s => selectedGuildId ? s.members.get(selectedGuildId) : undefined);
   const fetchMembers = useMemberStore(s => s.fetchMembers);
+  // Subscribe to the entire presences map so we re-render on any presence change
+  const presences = usePresenceStore(s => s.presences);
 
   useEffect(() => {
     if (selectedGuildId && !storeMembers) {
@@ -38,14 +41,20 @@ export function MemberList({ members: propMembers, roles = [] }: MemberListProps
     }
   }, [selectedGuildId]);
 
-  const members: MemberWithUser[] = propMembers ?? (storeMembers || []).map(m => ({
-    user_id: m.user.id,
-    username: m.user.username,
-    avatar_hash: m.user.avatar || null,
-    nick: m.nick || null,
-    roles: m.roles ?? [],
-    status: 'online' as const,
-  }));
+  const members: MemberWithUser[] = useMemo(() => {
+    if (propMembers) return propMembers;
+    return (storeMembers || []).map(m => {
+      const presence = presences.get(m.user.id);
+      return {
+        user_id: m.user.id,
+        username: m.user.username,
+        avatar_hash: m.user.avatar || null,
+        nick: m.nick || null,
+        roles: m.roles ?? [],
+        status: (presence?.status as MemberWithUser['status']) ?? 'offline',
+      };
+    });
+  }, [propMembers, storeMembers, presences]);
   const [showOffline, setShowOffline] = useState(false);
   const [selectedMember, setSelectedMember] = useState<MemberWithUser | null>(null);
   const [popupPos, setPopupPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });

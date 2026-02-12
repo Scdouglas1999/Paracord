@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ChannelRow {
     pub id: i64,
-    pub guild_id: Option<i64>,
+    pub space_id: Option<i64>,
     pub name: Option<String>,
     pub topic: Option<String>,
     pub channel_type: i16,
@@ -18,22 +18,29 @@ pub struct ChannelRow {
     pub created_at: DateTime<Utc>,
 }
 
+impl ChannelRow {
+    /// Backward compat: return space_id as guild_id
+    pub fn guild_id(&self) -> Option<i64> {
+        self.space_id
+    }
+}
+
 pub async fn create_channel(
     pool: &DbPool,
     id: i64,
-    guild_id: i64,
+    space_id: i64,
     name: &str,
     channel_type: i16,
     position: i32,
     parent_id: Option<i64>,
 ) -> Result<ChannelRow, DbError> {
     let row = sqlx::query_as::<_, ChannelRow>(
-        "INSERT INTO channels (id, guild_id, name, channel_type, position, parent_id)
+        "INSERT INTO channels (id, space_id, name, channel_type, position, parent_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         RETURNING id, guild_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, created_at"
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, created_at"
     )
     .bind(id)
-    .bind(guild_id)
+    .bind(space_id)
     .bind(name)
     .bind(channel_type)
     .bind(position)
@@ -45,7 +52,7 @@ pub async fn create_channel(
 
 pub async fn get_channel(pool: &DbPool, id: i64) -> Result<Option<ChannelRow>, DbError> {
     let row = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, guild_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, created_at
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, created_at
          FROM channels WHERE id = ?1"
     )
     .bind(id)
@@ -54,12 +61,17 @@ pub async fn get_channel(pool: &DbPool, id: i64) -> Result<Option<ChannelRow>, D
     Ok(row)
 }
 
-pub async fn get_guild_channels(pool: &DbPool, guild_id: i64) -> Result<Vec<ChannelRow>, DbError> {
+/// Get channels for a space (alias kept as get_guild_channels for API compat).
+pub async fn get_guild_channels(pool: &DbPool, space_id: i64) -> Result<Vec<ChannelRow>, DbError> {
+    get_space_channels(pool, space_id).await
+}
+
+pub async fn get_space_channels(pool: &DbPool, space_id: i64) -> Result<Vec<ChannelRow>, DbError> {
     let rows = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, guild_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, created_at
-         FROM channels WHERE guild_id = ?1 ORDER BY position"
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, created_at
+         FROM channels WHERE space_id = ?1 ORDER BY position"
     )
-    .bind(guild_id)
+    .bind(space_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -74,7 +86,7 @@ pub async fn update_channel(
     let row = sqlx::query_as::<_, ChannelRow>(
         "UPDATE channels SET name = COALESCE(?2, name), topic = COALESCE(?3, topic), updated_at = datetime('now')
          WHERE id = ?1
-         RETURNING id, guild_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, created_at"
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, created_at"
     )
     .bind(id)
     .bind(name)

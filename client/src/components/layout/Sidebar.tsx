@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Home, Plus, PanelLeftClose, PanelLeftOpen, Shield } from 'lucide-react';
-import { motion } from 'framer-motion';
+
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -76,15 +76,9 @@ export function Sidebar() {
 
   return (
     <>
-      <nav className="flex h-full w-[var(--spacing-sidebar-width)] min-w-[var(--spacing-sidebar-width)] flex-col items-center gap-2.5 overflow-y-auto px-2.5 py-4 scrollbar-thin">
-        <div className="relative flex items-center justify-center">
-          {isHome && (
-            <motion.div
-              layoutId="guild-pill"
-              className="absolute -left-4 h-11 w-1 rounded-r-md bg-accent-primary"
-              transition={{ type: 'spring', stiffness: 360, damping: 30 }}
-            />
-          )}
+      <nav className="glass-sidebar fixed left-0 top-0 z-30 flex h-full w-[var(--sidebar-width)] flex-col items-center gap-4 py-4 pt-[var(--spacing-header-height)]">
+        {/* Home Button */}
+        <div className="flex w-full justify-center px-2">
           <Tooltip side="right" content="Direct Messages">
             <button
               onClick={() => {
@@ -93,120 +87,123 @@ export function Sidebar() {
                 navigate('/app/friends');
               }}
               className={cn(
-                'relative flex h-[3.25rem] w-[3.25rem] items-center justify-center rounded-2xl border transition-all duration-200',
+                'group flex h-[var(--sidebar-item-size)] w-[var(--sidebar-item-size)] items-center justify-center rounded-xl transition-all duration-300',
                 isHome
-                  ? 'border-accent-primary/60 bg-accent-primary/25 text-white shadow-[0_8px_22px_rgba(111,134,255,0.4)]'
-                  : 'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:border-border-strong hover:bg-bg-mod-strong hover:text-text-primary'
+                  ? 'bg-accent-primary text-white shadow-[0_0_20px_rgba(111,134,255,0.3)] ring-1 ring-accent-primary/50'
+                  : 'bg-white/5 text-text-secondary hover:-translate-y-0.5 hover:bg-white/10 hover:text-white'
               )}
             >
-              <Home size={24} />
+              <Home size={26} className={cn("transition-transform duration-300", isHome ? "scale-100" : "group-hover:scale-110")} />
             </button>
           </Tooltip>
         </div>
 
-        <div className="my-1 h-px w-9 rounded-full bg-border-subtle/80" />
+        <div className="h-px w-10 shrink-0 bg-white/10" />
 
-        {guilds.map((guild) => {
-          const isActive = selectedGuildId === guild.id;
-          const iconSrc = guild.icon_hash
-            ? guild.icon_hash.startsWith('data:')
-              ? (isSafeImageDataUrl(guild.icon_hash) ? guild.icon_hash : null)
-              : `/api/v1/guilds/${guild.id}/icon`
-            : null;
-          return (
-            <div key={guild.id} className="relative flex items-center justify-center group">
-              {isActive && (
-                <motion.div
-                  layoutId="guild-pill"
-                  className="absolute -left-4 h-11 w-1 rounded-r-md bg-accent-primary"
-                  transition={{ type: 'spring', stiffness: 360, damping: 30 }}
-                />
-              )}
-              {!isActive && (
-                <div className="absolute -left-4 h-3 w-1 rounded-r-md bg-border-strong opacity-0 transition-all duration-200 group-hover:h-6 group-hover:opacity-100" />
-              )}
+        {/* Guild List */}
+        <div className="flex w-full flex-1 flex-col items-center gap-3 overflow-y-auto px-2 pb-4 scrollbar-none">
+          {guilds.map((guild) => {
+            const isActive = selectedGuildId === guild.id;
+            const iconSrc = guild.icon_hash
+              ? guild.icon_hash.startsWith('data:')
+                ? (isSafeImageDataUrl(guild.icon_hash) ? guild.icon_hash : null)
+                : `/api/v1/guilds/${guild.id}/icon`
+              : null;
+            return (
+              <div key={guild.id} className="relative flex items-center justify-center">
+                <Tooltip side="right" content={guild.name}>
+                  <button
+                    onClick={() => handleGuildClick(guild)}
+                    onContextMenu={(e) => handleContextMenu(e, guild.id)}
+                    className={cn(
+                      'group relative flex h-[var(--sidebar-item-size)] w-[var(--sidebar-item-size)] items-center justify-center overflow-hidden rounded-xl transition-all duration-300',
+                      isActive
+                        ? 'sidebar-item-active z-10 ring-1 ring-white/20'
+                        : 'bg-white/5 hover:-translate-y-0.5 hover:bg-white/10 hover:shadow-lg hover:shadow-black/20'
+                    )}
+                    style={!iconSrc && !isActive ? { backgroundColor: 'rgba(255,255,255,0.05)' } : undefined}
+                  >
+                    {!iconSrc && isActive && (
+                      <div className="absolute inset-0 opacity-20" style={{ backgroundColor: getGuildColor(guild.id) }} />
+                    )}
 
-              <Tooltip side="right" content={guild.name}>
+                    {iconSrc ? (
+                      <img
+                        src={iconSrc}
+                        alt={guild.name}
+                        className={cn(
+                          "h-full w-full object-cover transition-transform duration-500",
+                          isActive ? "scale-110" : "group-hover:scale-110"
+                        )}
+                      />
+                    ) : (
+                      <span
+                        className={cn(
+                          "text-[13px] font-bold transition-colors duration-200",
+                          isActive ? "text-white" : "text-text-secondary group-hover:text-white"
+                        )}
+                        style={isActive ? { color: getGuildColor(guild.id) } : undefined}
+                      >
+                        {guild.name.split(' ').map(w => w[0]).join('').slice(0, 3).toUpperCase()}
+                      </span>
+                    )}
+                  </button>
+                </Tooltip>
+              </div>
+            );
+          })}
+
+          <div className="mt-auto flex flex-col items-center gap-3 pt-2">
+            <Tooltip side="right" content="Add a Server">
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="group flex h-[var(--sidebar-item-size)] w-[var(--sidebar-item-size)] items-center justify-center rounded-xl border border-dashed border-white/20 bg-transparent text-accent-success transition-all duration-300 hover:-translate-y-0.5 hover:border-accent-success/50 hover:bg-accent-success/10 hover:text-accent-success"
+              >
+                <Plus size={24} className="transition-transform duration-300 group-hover:rotate-90" />
+              </button>
+            </Tooltip>
+
+            <Tooltip side="right" content={sidebarOpen ? 'Collapse Channels' : 'Expand Channels'}>
+              <button
+                onClick={toggleSidebar}
+                className="group flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 text-text-secondary transition-all duration-200 hover:bg-white/10 hover:text-white"
+              >
+                {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+              </button>
+            </Tooltip>
+
+            {user && isAdmin(user.flags) && (
+              <Tooltip side="right" content="Admin Dashboard">
                 <button
-                  onClick={() => handleGuildClick(guild)}
-                  onContextMenu={(e) => handleContextMenu(e, guild.id)}
+                  onClick={() => navigate('/app/admin')}
                   className={cn(
-                    'flex h-[3.25rem] w-[3.25rem] items-center justify-center overflow-hidden rounded-2xl border transition-all duration-200',
-                    isActive
-                      ? 'border-accent-primary/50 shadow-[0_10px_30px_rgba(112,138,255,0.35)]'
-                      : 'border-border-subtle hover:-translate-y-0.5 hover:border-border-strong'
+                    'flex h-[var(--sidebar-item-size)] w-[var(--sidebar-item-size)] items-center justify-center rounded-xl transition-all duration-200',
+                    location.pathname === '/app/admin'
+                      ? 'bg-accent-primary text-white shadow-lg ring-1 ring-accent-primary/50'
+                      : 'bg-white/5 text-text-secondary hover:-translate-y-0.5 hover:bg-white/10 hover:text-white'
                   )}
-                  style={{
-                    backgroundColor: guild.icon_hash ? 'transparent' : getGuildColor(guild.id),
-                  }}
                 >
-                  {iconSrc ? (
-                    <img
-                      src={iconSrc}
-                      alt={guild.name}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                      <span className="text-[13px] font-semibold text-white">
-                      {guild.name.split(' ').map(w => w[0]).join('').slice(0, 3).toUpperCase()}
-                    </span>
-                  )}
+                  <Shield size={22} />
                 </button>
               </Tooltip>
-            </div>
-          );
-        })}
-
-        <Tooltip side="right" content="Add a Server">
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex h-[3.25rem] w-[3.25rem] items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle text-accent-success transition-all duration-200 hover:-translate-y-0.5 hover:border-accent-success/50 hover:bg-accent-success hover:text-white"
-          >
-            <Plus size={22} />
-          </button>
-        </Tooltip>
-
-        <Tooltip side="right" content={sidebarOpen ? 'Collapse Channels' : 'Expand Channels'}>
-          <button
-            onClick={toggleSidebar}
-            className="flex h-11 w-11 items-center justify-center rounded-xl border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-all duration-200 hover:border-border-strong hover:bg-bg-mod-strong hover:text-text-primary"
-          >
-            {sidebarOpen ? <PanelLeftClose size={19} /> : <PanelLeftOpen size={19} />}
-          </button>
-        </Tooltip>
-
-        <div className="flex-1" />
-
-        {user && isAdmin(user.flags) && (
-          <Tooltip side="right" content="Admin Dashboard">
-            <button
-              onClick={() => navigate('/app/admin')}
-              className={cn(
-                'flex h-[3.25rem] w-[3.25rem] items-center justify-center rounded-2xl border transition-all duration-200',
-                location.pathname === '/app/admin'
-                  ? 'border-accent-primary/60 bg-accent-primary/25 text-white shadow-[0_8px_22px_rgba(111,134,255,0.4)]'
-                  : 'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:border-border-strong hover:bg-bg-mod-strong hover:text-text-primary'
-              )}
-            >
-              <Shield size={22} />
-            </button>
-          </Tooltip>
-        )}
-
-        <Tooltip side="right" content="User Settings">
-          <button
-            onClick={() => navigate('/app/settings')}
-            className="flex h-[3.25rem] w-[3.25rem] items-center justify-center overflow-hidden rounded-2xl border border-border-subtle bg-bg-mod-subtle transition-all duration-200 hover:border-border-strong hover:brightness-110"
-          >
-            {user?.username ? (
-              <div className="flex h-full w-full items-center justify-center bg-accent-primary text-sm font-semibold text-white">
-                {user.username.charAt(0).toUpperCase()}
-              </div>
-            ) : (
-              <div className="flex h-full w-full items-center justify-center bg-accent-primary text-sm font-semibold text-white">U</div>
             )}
-          </button>
-        </Tooltip>
+
+            <Tooltip side="right" content="User Settings">
+              <button
+                onClick={() => navigate('/app/settings')}
+                className="group relative flex h-[var(--sidebar-item-size)] w-[var(--sidebar-item-size)] items-center justify-center overflow-hidden rounded-xl bg-white/5 transition-all duration-300 hover:ring-2 hover:ring-white/20"
+              >
+                {user?.username ? (
+                  <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-accent-primary to-accent-primary-hover text-sm font-bold text-white">
+                    {user.username.charAt(0).toUpperCase()}
+                  </div>
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center bg-bg-mod-strong text-sm font-bold text-text-muted">U</div>
+                )}
+              </button>
+            </Tooltip>
+          </div>
+        </div>
       </nav>
 
       {contextMenu && (
@@ -214,7 +211,7 @@ export function Sidebar() {
           <div className="fixed inset-0 z-50" onClick={() => setContextMenu(null)} />
           <div
             className="glass-modal fixed z-50 min-w-[200px] rounded-xl p-1.5"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
+            style={{ left: contextMenu.x + 10, top: contextMenu.y }}
           >
             <button
               className="w-full rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"

@@ -239,6 +239,32 @@ fn get_local_ip_for(gateway: Ipv4Addr) -> anyhow::Result<Ipv4Addr> {
     }
 }
 
+/// Forward an additional TCP port via UPnP (e.g. for HTTPS).
+pub async fn forward_extra_port(port: u16, lease_seconds: u32) {
+    let gateway = match igd_next::aio::tokio::search_gateway(igd_next::SearchOptions {
+        timeout: Some(std::time::Duration::from_secs(5)),
+        ..Default::default()
+    })
+    .await
+    {
+        Ok(gw) => gw,
+        Err(e) => {
+            tracing::debug!("Could not forward extra port {} via UPnP: {}", port, e);
+            return;
+        }
+    };
+
+    let local_ip = match get_local_ip(gateway.addr) {
+        Ok(ip) => ip,
+        Err(_) => return,
+    };
+
+    add_upnp_mapping(
+        &gateway, local_ip, port, lease_seconds,
+        "Paracord HTTPS", igd_next::PortMappingProtocol::TCP,
+    ).await;
+}
+
 /// Remove UPnP port mappings on shutdown.
 pub async fn cleanup_upnp(server_port: u16, _livekit_port: u16) {
     let gateway = match igd_next::aio::tokio::search_gateway(igd_next::SearchOptions {
@@ -258,4 +284,21 @@ pub async fn cleanup_upnp(server_port: u16, _livekit_port: u16) {
         .remove_port(igd_next::PortMappingProtocol::UDP, server_port)
         .await;
     tracing::info!("UPnP port mappings removed.");
+}
+
+/// Remove a single extra port mapping (e.g. HTTPS) on shutdown.
+pub async fn cleanup_extra_port(port: u16) {
+    let gateway = match igd_next::aio::tokio::search_gateway(igd_next::SearchOptions {
+        timeout: Some(std::time::Duration::from_secs(3)),
+        ..Default::default()
+    })
+    .await
+    {
+        Ok(gw) => gw,
+        Err(_) => return,
+    };
+
+    let _ = gateway
+        .remove_port(igd_next::PortMappingProtocol::TCP, port)
+        .await;
 }

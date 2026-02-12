@@ -48,6 +48,19 @@ export const adminApi = {
       }>;
     }>('/admin/guilds'),
 
+  updateGuild: (
+    guildId: string,
+    data: { name?: string; description?: string; icon?: string }
+  ) =>
+    apiClient.patch<{
+      id: string;
+      name: string;
+      description: string | null;
+      icon_hash: string | null;
+      owner_id: string;
+      created_at: string;
+    }>(`/admin/guilds/${guildId}`, data),
+
   deleteGuild: (guildId: string) =>
     apiClient.delete(`/admin/guilds/${guildId}`),
 

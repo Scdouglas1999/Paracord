@@ -1,6 +1,6 @@
 [package]
 name = "paracord-desktop"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 
@@ -14,6 +14,9 @@ tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.22"
 
 [features]
 default = ["custom-protocol"]

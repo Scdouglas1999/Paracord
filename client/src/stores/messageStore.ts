@@ -33,6 +33,13 @@ interface MessageState {
   addReaction: (channelId: string, messageId: string, emoji: string) => Promise<void>;
   removeReaction: (channelId: string, messageId: string, emoji: string) => Promise<void>;
 
+  // Reaction gateway event handlers
+  handleReactionAdd: (channelId: string, messageId: string, emoji: string, userId: string, currentUserId: string) => void;
+  handleReactionRemove: (channelId: string, messageId: string, emoji: string, userId: string, currentUserId: string) => void;
+
+  // Pin state update
+  updatePinState: (channelId: string, messageId: string, pinned: boolean) => void;
+
   // Gateway event handlers
   addMessage: (channelId: string, message: Message) => void;
   updateMessage: (channelId: string, message: Message) => void;
@@ -124,27 +131,162 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
 
   pinMessage: async (channelId, messageId) => {
     await channelApi.pinMessage(channelId, messageId);
-    // Refresh pins
+    // Update pinned flag on the message in the message list
+    set((state) => {
+      const existing = state.messages[channelId] || [];
+      return {
+        messages: {
+          ...state.messages,
+          [channelId]: existing.map((m) =>
+            m.id === messageId ? { ...m, pinned: true } : m
+          ),
+        },
+      };
+    });
+    // Refresh pins list
     get().fetchPins(channelId);
   },
 
   unpinMessage: async (channelId, messageId) => {
     await channelApi.unpinMessage(channelId, messageId);
-    set((state) => ({
-      pins: {
-        ...state.pins,
-        [channelId]: (state.pins[channelId] || []).filter((m) => m.id !== messageId),
-      },
-    }));
+    // Update pinned flag on the message in the message list
+    set((state) => {
+      const existing = state.messages[channelId] || [];
+      return {
+        messages: {
+          ...state.messages,
+          [channelId]: existing.map((m) =>
+            m.id === messageId ? { ...m, pinned: false } : m
+          ),
+        },
+        pins: {
+          ...state.pins,
+          [channelId]: (state.pins[channelId] || []).filter((m) => m.id !== messageId),
+        },
+      };
+    });
   },
 
   addReaction: async (channelId, messageId, emoji) => {
+    // Optimistic update: immediately show the reaction locally
+    set((state) => {
+      const existing = state.messages[channelId] || [];
+      return {
+        messages: {
+          ...state.messages,
+          [channelId]: existing.map((m) => {
+            if (m.id !== messageId) return m;
+            const reactions = [...((m.reactions || []) as Array<{ emoji: string; count: number; me: boolean }>)];
+            const idx = reactions.findIndex((r) => r.emoji === emoji);
+            if (idx >= 0) {
+              if (!reactions[idx].me) {
+                reactions[idx] = { ...reactions[idx], count: reactions[idx].count + 1, me: true };
+              }
+            } else {
+              reactions.push({ emoji, count: 1, me: true });
+            }
+            return { ...m, reactions };
+          }),
+        },
+      };
+    });
     await channelApi.addReaction(channelId, messageId, emoji);
   },
 
   removeReaction: async (channelId, messageId, emoji) => {
+    // Optimistic update: immediately remove the reaction locally
+    set((state) => {
+      const existing = state.messages[channelId] || [];
+      return {
+        messages: {
+          ...state.messages,
+          [channelId]: existing.map((m) => {
+            if (m.id !== messageId) return m;
+            let reactions = [...((m.reactions || []) as Array<{ emoji: string; count: number; me: boolean }>)];
+            const idx = reactions.findIndex((r) => r.emoji === emoji);
+            if (idx >= 0) {
+              if (reactions[idx].count <= 1) {
+                reactions = reactions.filter((_, i) => i !== idx);
+              } else {
+                reactions[idx] = { ...reactions[idx], count: reactions[idx].count - 1, me: false };
+              }
+            }
+            return { ...m, reactions };
+          }),
+        },
+      };
+    });
     await channelApi.removeReaction(channelId, messageId, emoji);
   },
+
+  // Reaction gateway event handlers
+  handleReactionAdd: (channelId, messageId, emoji, _userId, currentUserId) =>
+    set((state) => {
+      const existing = state.messages[channelId] || [];
+      return {
+        messages: {
+          ...state.messages,
+          [channelId]: existing.map((m) => {
+            if (m.id !== messageId) return m;
+            const reactions = [...((m.reactions || []) as Array<{ emoji: string; count: number; me: boolean }>)];
+            const idx = reactions.findIndex((r) => r.emoji === emoji);
+            const isMe = _userId === currentUserId;
+            if (idx >= 0) {
+              reactions[idx] = {
+                ...reactions[idx],
+                count: reactions[idx].count + 1,
+                me: reactions[idx].me || isMe,
+              };
+            } else {
+              reactions.push({ emoji, count: 1, me: isMe });
+            }
+            return { ...m, reactions };
+          }),
+        },
+      };
+    }),
+
+  handleReactionRemove: (channelId, messageId, emoji, _userId, currentUserId) =>
+    set((state) => {
+      const existing = state.messages[channelId] || [];
+      return {
+        messages: {
+          ...state.messages,
+          [channelId]: existing.map((m) => {
+            if (m.id !== messageId) return m;
+            let reactions = [...((m.reactions || []) as Array<{ emoji: string; count: number; me: boolean }>)];
+            const idx = reactions.findIndex((r) => r.emoji === emoji);
+            const isMe = _userId === currentUserId;
+            if (idx >= 0) {
+              if (reactions[idx].count <= 1) {
+                reactions = reactions.filter((_, i) => i !== idx);
+              } else {
+                reactions[idx] = {
+                  ...reactions[idx],
+                  count: reactions[idx].count - 1,
+                  me: isMe ? false : reactions[idx].me,
+                };
+              }
+            }
+            return { ...m, reactions };
+          }),
+        },
+      };
+    }),
+
+  // Pin state update
+  updatePinState: (channelId, messageId, pinned) =>
+    set((state) => {
+      const existing = state.messages[channelId] || [];
+      return {
+        messages: {
+          ...state.messages,
+          [channelId]: existing.map((m) =>
+            m.id === messageId ? { ...m, pinned } : m
+          ),
+        },
+      };
+    }),
 
   // Gateway event handlers
   addMessage: (channelId, message) =>

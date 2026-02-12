@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Hash, Search, Pin, Users, Inbox, HelpCircle, Volume2, X, PanelLeft } from 'lucide-react';
+import { Hash, Search, Pin, Users, Inbox, HelpCircle, Volume2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
 import { channelApi } from '../../api/channels';
@@ -22,9 +22,11 @@ interface TopBarProps {
 export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName }: TopBarProps) {
   const { channelId } = useParams();
   const navigate = useNavigate();
-  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const toggleMemberSidebar = useUIStore((s) => s.toggleMemberSidebar);
+  const toggleMemberPanel = useUIStore((s) => s.toggleMemberPanel);
   const memberSidebarOpen = useUIStore((s) => s.memberSidebarOpen);
+  const memberPanelOpen = useUIStore((s) => s.memberPanelOpen);
+  const setCommandPaletteOpen = useUIStore((s) => s.setCommandPaletteOpen);
   const unpinMessage = useMessageStore((s) => s.unpinMessage);
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
 
@@ -72,7 +74,6 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
         setSearchError(null);
       } catch {
         try {
-          // Fallback for older servers that don't expose /messages/search.
           const { data: recent } = await channelApi.getMessages(channelId, { limit: 100 });
           const query = searchQuery.trim().toLowerCase();
           const fallbackResults = recent
@@ -99,11 +100,8 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-        if (!channelId) {
-          return;
-        }
         event.preventDefault();
-        setShowSearch(true);
+        setCommandPaletteOpen(true);
       }
       if (event.key === 'Escape') {
         setShowSearch(false);
@@ -115,7 +113,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [channelId]);
+  }, [channelId, setCommandPaletteOpen]);
 
   useEffect(() => {
     const readMutedGuilds = () => {
@@ -169,6 +167,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
     tooltip,
     disabled,
     className,
+    badge,
   }: {
     onClick: () => void;
     icon: any;
@@ -176,6 +175,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
     tooltip: string;
     disabled?: boolean;
     className?: string;
+    badge?: number;
   }) => (
     <div className={className}>
       <Tooltip content={tooltip} side="bottom">
@@ -183,60 +183,63 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
           onClick={onClick}
           disabled={disabled}
           className={cn(
-            'command-icon-btn',
-            active && 'border-border-subtle bg-bg-mod-subtle text-text-primary',
-            disabled && 'cursor-not-allowed opacity-50 hover:bg-transparent'
+            'relative flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-all hover:bg-bg-mod-subtle hover:text-text-primary',
+            active && 'bg-bg-mod-subtle text-text-primary',
+            disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-text-muted'
           )}
         >
-          <Icon size={18} />
+          <Icon size={16} />
+          {badge != null && badge > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-primary px-1 text-[9px] font-bold text-white">
+              {badge > 99 ? '99+' : badge}
+            </span>
+          )}
         </button>
       </Tooltip>
     </div>
   );
 
   return (
-    <div className="panel-divider z-10 flex h-[var(--spacing-header-height)] w-full shrink-0 items-center justify-between border-b bg-gradient-to-r from-bg-primary/85 to-bg-primary/45 px-5 md:px-6">
+    <div className="z-10 flex h-[var(--spacing-header-height)] w-full shrink-0 items-center justify-between border-b border-border-subtle/50 bg-gradient-to-r from-transparent to-transparent px-3 md:px-5">
+      {/* Left: channel info */}
       <div className="mr-3 flex min-w-0 flex-1 items-center overflow-hidden">
-        <Tooltip content="Toggle Channel Rail" side="bottom">
-          <button onClick={toggleSidebar} className="command-icon-btn mr-3">
-            <PanelLeft size={17} />
-          </button>
-        </Tooltip>
-        <div className="mr-4 h-8 w-px bg-border-subtle" />
         {isDM ? (
-          <div className="flex min-w-0 max-w-full items-center rounded-xl border border-border-subtle/60 bg-bg-mod-subtle/45 px-3 py-1.5">
-            <div className="mr-2.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-primary text-xs font-semibold text-white">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-primary/80 text-xs font-semibold text-white md:h-10 md:w-10">
               {recipientName?.charAt(0).toUpperCase() || '?'}
             </div>
-            <span className="truncate text-[15px] font-semibold text-text-primary">
-              {recipientName || 'Direct Message'}
-            </span>
+            <div className="min-w-0">
+              <span className="block truncate text-[15px] font-semibold text-text-primary">
+                {recipientName || 'Direct Message'}
+              </span>
+            </div>
           </div>
         ) : (
-          <div className="flex min-w-0 max-w-full items-center rounded-xl border border-border-subtle/60 bg-bg-mod-subtle/45 px-3 py-1.5">
+          <div className="flex min-w-0 items-center gap-2">
             {isVoice ? (
-              <Volume2 size={18} className="mr-2 shrink-0 text-channel-icon" />
+              <Volume2 size={16} className="shrink-0 text-accent-primary/70" />
             ) : (
-              <Hash size={18} className="mr-2 shrink-0 text-channel-icon" />
+              <Hash size={16} className="shrink-0 text-text-muted" />
             )}
-            <span className="mr-2 truncate text-[15px] font-semibold text-text-primary">
+            <span className="truncate text-[15px] font-semibold text-text-primary">
               {channelName || 'channel'}
             </span>
             {channelTopic && (
               <>
-                <div className="mx-2.5 hidden h-6 w-px shrink-0 bg-border-subtle md:block" />
-                <span className="hidden max-w-xl truncate text-[13px] text-text-muted md:block">{channelTopic}</span>
+                <div className="mx-2 hidden h-4 w-px shrink-0 bg-border-subtle/80 md:block" />
+                <span className="hidden max-w-md truncate text-[13px] text-text-muted md:block">{channelTopic}</span>
               </>
             )}
           </div>
         )}
       </div>
 
-      <div className="ml-2 flex shrink-0 items-center gap-2 rounded-xl border border-border-subtle/65 bg-bg-mod-subtle/45 px-2.5 py-1.5">
+      {/* Right: action buttons */}
+      <div className="flex shrink-0 items-center gap-1">
         <TopBarIcon
           icon={Search}
           onClick={() => setShowSearch(true)}
-          tooltip={channelId ? 'Search' : 'Select a channel to search'}
+          tooltip={channelId ? 'Search Messages' : 'Select a channel to search'}
           disabled={!channelId}
         />
         <TopBarIcon
@@ -248,15 +251,16 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
         {!isDM && (
           <TopBarIcon
             icon={Users}
-            onClick={toggleMemberSidebar}
-            active={memberSidebarOpen}
+            onClick={() => { toggleMemberSidebar(); toggleMemberPanel(); }}
+            active={memberSidebarOpen || memberPanelOpen}
             tooltip="Member List"
           />
         )}
         <TopBarIcon className="hidden sm:block" icon={Inbox} onClick={() => void openInbox()} tooltip="Inbox" />
-        <TopBarIcon className="hidden md:block" icon={HelpCircle} onClick={() => setShowHelp(true)} tooltip="Help" />
+        <TopBarIcon className="hidden md:block" icon={HelpCircle} onClick={() => setShowHelp(true)} tooltip="Shortcuts" />
       </div>
 
+      {/* Search overlay */}
       <AnimatePresence>
         {showSearch && (
           <div
@@ -313,7 +317,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
                   searchError ? (
                     <div className="p-8 text-center text-accent-danger">{searchError}</div>
                   ) : (
-                  <div className="p-8 text-center text-text-muted">No results found</div>
+                    <div className="p-8 text-center text-text-muted">No results found</div>
                   )
                 ) : (
                   <div className="p-8 text-center text-text-muted">Search for messages, users, or keywords</div>
@@ -324,6 +328,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
         )}
       </AnimatePresence>
 
+      {/* Pins overlay */}
       <AnimatePresence>
         {showPins && (
           <div
@@ -347,7 +352,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
                 {pins.map((msg) => (
                   <div key={msg.id} className="rounded-xl border border-border-subtle bg-bg-mod-subtle p-3.5">
                     <div className="mb-2 flex items-center gap-2">
-                      <div className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full bg-bg-tertiary text-[10px] text-text-muted">
+                      <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-bg-tertiary text-[10px] text-text-muted">
                         {msg.author.avatar ? <img src={msg.author.avatar} alt="" className="h-full w-full object-cover" /> : msg.author.username[0]}
                       </div>
                       <span className="text-sm font-semibold text-text-primary">{msg.author.username}</span>
@@ -380,6 +385,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
         )}
       </AnimatePresence>
 
+      {/* Inbox overlay */}
       <AnimatePresence>
         {showInbox && (
           <div
@@ -436,6 +442,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
         )}
       </AnimatePresence>
 
+      {/* Help/shortcuts overlay */}
       <AnimatePresence>
         {showHelp && (
           <div
@@ -457,7 +464,8 @@ export function TopBar({ channelName, channelTopic, isVoice, isDM, recipientName
               </div>
               <div className="space-y-4 p-5">
                 {[
-                  { label: 'Search', keys: ['Ctrl', 'K'] },
+                  { label: 'Command Palette', keys: ['Ctrl', 'K'] },
+                  { label: 'Search in Channel', keys: ['Ctrl', 'F'] },
                   { label: 'Send Message', keys: ['Enter'] },
                   { label: 'New Line', keys: ['Shift', 'Enter'] },
                   { label: 'Close Modal', keys: ['Esc'] },

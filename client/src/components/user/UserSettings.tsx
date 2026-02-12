@@ -403,7 +403,14 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 />
               </div>
             </div>
-            <button className="btn-primary mt-5" onClick={() => void saveSettings()} disabled={saving}>
+            <button className="btn-primary mt-5" onClick={() => {
+              void saveSettings().then(() => {
+                // Re-acquire the microphone with updated noise suppression /
+                // echo cancellation constraints so changes take effect
+                // immediately without requiring a mute/unmute cycle.
+                void useVoiceStore.getState().reapplyAudioConstraints();
+              });
+            }} disabled={saving}>
               {saving ? 'Saving...' : 'Save Voice Settings'}
             </button>
           </div>

@@ -256,7 +256,7 @@ pub async fn get_channels(
         .map(|c| {
             json!({
                 "id": c.id.to_string(),
-                "guild_id": c.guild_id.map(|id| id.to_string()),
+                "guild_id": c.guild_id().map(|id| id.to_string()),
                 "name": c.name,
                 "topic": c.topic,
                 "type": c.channel_type,

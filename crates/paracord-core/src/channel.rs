@@ -43,7 +43,7 @@ pub async fn delete_channel(
         .await?
         .ok_or(CoreError::NotFound)?;
 
-    let guild_id = channel.guild_id.ok_or(CoreError::BadRequest(
+    let guild_id = channel.guild_id().ok_or(CoreError::BadRequest(
         "Cannot delete a DM channel".into(),
     ))?;
 
@@ -71,7 +71,7 @@ pub async fn update_channel(
         .await?
         .ok_or(CoreError::NotFound)?;
 
-    let guild_id = channel.guild_id.ok_or(CoreError::BadRequest(
+    let guild_id = channel.guild_id().ok_or(CoreError::BadRequest(
         "Cannot update a DM channel".into(),
     ))?;
 

@@ -16,7 +16,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "AGPL-3.0-or-later"
@@ -75,6 +75,12 @@ tokio-tungstenite = "0.26"
 
 # Process management
 which = "7"
+
+# TLS
+rcgen = "0.13"
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls-pemfile = "2"
 
 # Embedded web UI
 rust-embed = "8"

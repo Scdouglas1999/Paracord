@@ -6,7 +6,7 @@
   --color-bg-tertiary: #0a0f18;
   --color-bg-accent: #1d2635;
   --color-bg-floating: rgba(10, 14, 23, 0.9);
-  --color-bg-mod-subtle: rgba(255, 255, 255, 0.05);
+  --color-bg-mod-subtle: rgba(255, 255, 255, 0.04);
   --color-bg-mod-strong: rgba(255, 255, 255, 0.12);
 
   --color-text-primary: #f2f6ff;
@@ -41,20 +41,27 @@
   --font-primary: 'Inter', 'Segoe UI', 'gg sans', 'Noto Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-code: 'JetBrains Mono', 'Consolas', 'Andale Mono WT', 'Andale Mono', 'Courier New', monospace;
 
-  --spacing-header-height: 58px;
-  --spacing-sidebar-width: 80px;
-  --spacing-channel-sidebar-width: 288px;
-  --spacing-member-list-width: 252px;
+  --spacing-header-height: 3.5rem;
+  /* ~56px */
+  --spacing-sidebar-width: 5rem;
+  /* 80px */
+  --spacing-channel-sidebar-width: 18rem;
+  /* 288px */
+  --spacing-member-list-width: 15.75rem;
+  /* 252px */
+
+  --sidebar-item-size: 3.25rem;
+  /* ~52px */
 
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.875rem;
-  --font-size-base: 1.1rem;
-  --font-size-lg: 1rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
   --font-size-xl: 1.25rem;
-  --font-size-2xl: 1.75rem;
+  --font-size-2xl: 1.5rem;
   --line-height-tight: 1.25;
   --line-height-normal: 1.5;
-  --line-height-relaxed: 1.65;
+  --line-height-relaxed: 1.625;
 
   --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 16px 30px rgba(0, 0, 0, 0.28);
@@ -67,6 +74,13 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
   --ease-spring: cubic-bezier(0.2, 0.95, 0.35, 1.12);
+}
+
+@media (max-width: 768px) {
+  :root {
+    --spacing-sidebar-width: 4.5rem;
+    --sidebar-item-size: 2.75rem;
+  }
 }
 
 :root {
@@ -129,6 +143,14 @@
   --glass-modal-fill-bottom: rgba(12, 17, 28, 0.92);
   --panel-divider-glint: rgba(255, 255, 255, 0.03);
   --scrollbar-auto-thumb-hover: rgba(129, 160, 219, 0.52);
+
+  /* Sidebar Specifics */
+  --sidebar-width: 84px;
+  --sidebar-item-size: 52px;
+  --sidebar-icon-size: 26px;
+  --sidebar-bg: rgba(10, 14, 23, 0.65);
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-active-indicator: var(--color-accent-primary);
 }
 
 :root[data-density='compact'] {
@@ -252,10 +274,16 @@ textarea {
 }
 
 button {
-  line-height: 1;
+  line-height: inherit;
 }
 
-html, body, #root {
+html {
+  font-size: 18px;
+}
+
+html,
+body,
+#root {
   height: 100%;
   width: 100%;
   overflow: hidden;
@@ -265,7 +293,6 @@ html, body, #root {
     var(--app-bg-layer-one),
     var(--app-bg-layer-two),
     var(--app-bg-base);
-  font-size: var(--font-size-base);
   line-height: var(--line-height-normal);
 }
 
@@ -291,13 +318,16 @@ html[data-theme='amoled'] #root {
   width: 8px;
   height: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: var(--scrollbar-auto-track);
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-auto-thumb);
   border-radius: 4px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-auto-thumb-hover);
 }
@@ -326,6 +356,17 @@ html[data-theme='amoled'] #root {
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-lg);
   backdrop-filter: blur(20px) saturate(140%);
+}
+
+.glass-sidebar {
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
+}
+
+.sidebar-item-active {
+  box-shadow: 0 0 0 2px var(--sidebar-active-indicator), 0 4px 12px rgba(111, 134, 255, 0.4);
 }
 
 .glass-panel {
@@ -447,14 +488,17 @@ html[data-theme='amoled'] #root {
     transform var(--duration-fast) var(--ease-out),
     opacity var(--duration-normal) var(--ease-out);
 }
+
 .btn-primary:hover {
   background-color: var(--accent-primary-hover);
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--accent-primary-hover) 75%, #ffffff 25%);
 }
+
 .btn-primary:active {
   transform: scale(0.98);
 }
+
 .btn-primary:disabled {
   opacity: 0.62;
   cursor: not-allowed;
@@ -483,6 +527,7 @@ html[data-theme='amoled'] #root {
     background-color var(--duration-normal) var(--ease-out),
     border-color var(--duration-normal) var(--ease-out);
 }
+
 .btn-ghost:hover {
   border-color: var(--border-subtle);
   background: var(--bg-mod-subtle);
@@ -511,9 +556,11 @@ html[data-theme='amoled'] #root {
     border-color var(--duration-normal) var(--ease-out),
     transform var(--duration-fast) var(--ease-out);
 }
+
 .btn-danger:hover {
   background-color: color-mix(in srgb, var(--accent-danger) 88%, black 12%);
 }
+
 .btn-danger:active {
   transform: scale(0.98);
 }
@@ -535,11 +582,13 @@ html[data-theme='amoled'] #root {
     box-shadow var(--duration-normal) var(--ease-out),
     background-color var(--duration-normal) var(--ease-out);
 }
+
 .input-field:focus {
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 30%, transparent);
   background: color-mix(in srgb, var(--bg-secondary) 92%, var(--bg-primary) 8%);
 }
+
 .input-field::placeholder {
   color: var(--text-muted);
 }
@@ -566,6 +615,7 @@ html[data-theme='amoled'] #root {
   background-position: right 0.75rem center;
   padding-right: 2rem;
 }
+
 .select-field:focus {
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 30%, transparent);
@@ -590,10 +640,12 @@ html[data-theme='amoled'] #root {
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
 }
+
 .tab-btn:hover {
   background-color: var(--bg-mod-subtle);
   color: var(--interactive-hover);
 }
+
 .tab-btn.active {
   background-color: var(--bg-mod-subtle);
   color: var(--interactive-active);
@@ -614,10 +666,12 @@ html[data-theme='amoled'] #root {
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
 }
+
 .channel-item:hover {
   background-color: var(--bg-mod-subtle);
   color: var(--interactive-hover);
 }
+
 .channel-item.active {
   background-color: var(--bg-mod-subtle);
   color: var(--interactive-active);
@@ -637,6 +691,7 @@ html[data-theme='amoled'] #root {
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
 }
+
 .member-item:hover {
   background-color: var(--bg-mod-subtle);
   color: var(--interactive-hover);
@@ -661,11 +716,13 @@ html[data-theme='amoled'] #root {
     background-color var(--duration-normal) var(--ease-out),
     border-color var(--duration-normal) var(--ease-out);
 }
+
 .icon-btn:hover {
   color: var(--interactive-hover);
   background-color: var(--bg-mod-subtle);
   border-color: var(--border-subtle);
 }
+
 .icon-btn.active {
   color: var(--interactive-active);
 }
@@ -685,6 +742,7 @@ html[data-theme='amoled'] #root {
   font-size: 1.125rem;
   color: #fff;
 }
+
 .guild-icon:hover,
 .guild-icon.active {
   border-radius: 16px;
@@ -713,11 +771,13 @@ html[data-theme='amoled'] #root {
     border-color var(--duration-normal) var(--ease-out);
   margin-bottom: 0.2rem;
 }
+
 .settings-nav-item:hover {
   background-color: var(--bg-mod-subtle);
   color: var(--interactive-hover);
   border-color: var(--border-subtle);
 }
+
 .settings-nav-item.active {
   background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent 82%);
   color: var(--text-primary);
@@ -741,6 +801,7 @@ html[data-theme='amoled'] #root {
   cursor: pointer;
   transition: color 0.15s;
 }
+
 .category-header:hover {
   color: var(--interactive-hover);
 }
@@ -755,6 +816,7 @@ html[data-theme='amoled'] #root {
   border: 1px solid var(--border-subtle);
   backdrop-filter: blur(18px);
 }
+
 .context-menu-item {
   display: block;
   width: calc(100% - 12px);
@@ -770,13 +832,16 @@ html[data-theme='amoled'] #root {
   cursor: pointer;
   transition: background-color 0.1s, color 0.1s;
 }
+
 .context-menu-item:hover {
   background-color: var(--accent-primary);
   color: #fff;
 }
+
 .context-menu-item.danger {
   color: var(--accent-danger);
 }
+
 .context-menu-item.danger:hover {
   background-color: var(--accent-danger);
   color: #fff;
@@ -793,6 +858,7 @@ html[data-theme='amoled'] #root {
   cursor: pointer;
   transition: background-color 0.15s;
 }
+
 .friend-item:hover {
   background-color: var(--bg-mod-subtle);
 }
@@ -811,6 +877,7 @@ html[data-theme='amoled'] #root {
   box-shadow: 0 10px 20px rgba(0, 0, 0, 0.28);
   overflow: hidden;
 }
+
 .message-action-btn {
   padding: 6px;
   color: var(--interactive-normal);
@@ -819,6 +886,7 @@ html[data-theme='amoled'] #root {
   cursor: pointer;
   transition: color 0.1s, background-color 0.1s;
 }
+
 .message-action-btn:hover {
   color: var(--interactive-hover);
   background-color: var(--bg-mod-subtle);
@@ -830,19 +898,26 @@ html[data-theme='amoled'] #root {
     opacity: 0;
     transform: scale(0.95) translateY(10px);
   }
+
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
   }
 }
+
 .modal-content {
   animation: modal-enter var(--duration-slow) var(--ease-out);
 }
 
 /* Overlay fade-in */
 @keyframes overlay-enter {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 /* Profile popup entry */
@@ -851,20 +926,30 @@ html[data-theme='amoled'] #root {
     opacity: 0;
     transform: scale(0.95);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
   }
 }
+
 .popup-enter {
   animation: popup-enter var(--duration-normal) var(--ease-out);
 }
 
 /* Voice pulse animation */
 @keyframes voice-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(35, 165, 90, 0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(35, 165, 90, 0); }
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(35, 165, 90, 0.4);
+  }
+
+  50% {
+    box-shadow: 0 0 0 6px rgba(35, 165, 90, 0);
+  }
 }
+
 .voice-connected-pulse {
   animation: voice-pulse 2s ease-in-out infinite;
 }
@@ -874,6 +959,7 @@ html[data-theme='amoled'] #root {
     opacity: 0;
     transform: scale(0.96) translateY(-4px);
   }
+
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
@@ -893,6 +979,7 @@ html[data-theme='amoled'] #root {
   cursor: pointer;
   transition: color 0.1s, background-color 0.1s;
 }
+
 .hover-action-btn:hover {
   color: var(--interactive-hover);
   background-color: var(--bg-mod-subtle);
@@ -902,6 +989,7 @@ html[data-theme='amoled'] #root {
 .sidebar-tooltip {
   position: relative;
 }
+
 .sidebar-tooltip::after {
   content: attr(data-tooltip);
   position: absolute;
@@ -921,6 +1009,7 @@ html[data-theme='amoled'] #root {
   transition: opacity 0.1s;
   z-index: 100;
 }
+
 .sidebar-tooltip:hover::after {
   opacity: 1;
 }
@@ -999,4 +1088,11 @@ html[data-theme='amoled'] #root {
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: 0.01em;
+}
+
+@media (max-width: 768px) {
+  :root {
+    --spacing-sidebar-width: 4.5rem;
+    --sidebar-item-size: 2.75rem;
+  }
 }

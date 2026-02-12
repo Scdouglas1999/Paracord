@@ -17,7 +17,7 @@ pub async fn find_dm_channel_between(
     user_b: i64,
 ) -> Result<Option<ChannelRow>, DbError> {
     let row = sqlx::query_as::<_, ChannelRow>(
-        "SELECT c.id, c.guild_id, c.name, c.topic, c.channel_type, c.position, c.parent_id,
+        "SELECT c.id, c.space_id, c.name, c.topic, c.channel_type, c.position, c.parent_id,
                 c.nsfw, c.rate_limit_per_user, c.bitrate, c.user_limit, c.last_message_id, c.created_at
          FROM channels c
          INNER JOIN dm_recipients a ON a.channel_id = c.id AND a.user_id = ?1
@@ -41,7 +41,7 @@ pub async fn create_dm_channel(
     let mut tx = pool.begin().await?;
 
     sqlx::query(
-        "INSERT INTO channels (id, guild_id, name, channel_type, position)
+        "INSERT INTO channels (id, space_id, name, channel_type, position)
          VALUES (?1, NULL, NULL, 1, 0)",
     )
     .bind(channel_id)
@@ -61,7 +61,7 @@ pub async fn create_dm_channel(
     tx.commit().await?;
 
     let row = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, guild_id, name, topic, channel_type, position, parent_id, nsfw,
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, nsfw,
                 rate_limit_per_user, bitrate, user_limit, last_message_id, created_at
          FROM channels
          WHERE id = ?1",

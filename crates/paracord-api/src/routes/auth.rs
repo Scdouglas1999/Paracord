@@ -70,6 +70,17 @@ pub async fn register(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    // Auto-add as server-wide member + assign @everyone roles for all spaces
+    paracord_db::members::add_server_member(&state.db, user.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if let Ok(spaces) = paracord_db::guilds::list_all_spaces(&state.db).await {
+        for space in &spaces {
+            // @everyone role ID == space ID
+            let _ = paracord_db::roles::add_member_role(&state.db, user.id, space.id, space.id).await;
+        }
+    }
+
     // First registered user becomes server admin
     let user_count = paracord_db::users::count_users(&state.db)
         .await

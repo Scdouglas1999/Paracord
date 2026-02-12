@@ -99,7 +99,7 @@ pub async fn join_voice(
         return Err(ApiError::BadRequest("Not a voice channel".into()));
     }
 
-    let guild_id = channel.guild_id.ok_or(ApiError::BadRequest(
+    let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
         "Voice is only supported in guild channels".into(),
     ))?;
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
@@ -163,7 +163,7 @@ pub async fn join_voice(
     let _ = paracord_db::voice_states::upsert_voice_state(
         &state.db,
         auth.user_id,
-        channel.guild_id,
+        channel.guild_id(),
         channel_id,
         &session_id,
     )
@@ -174,12 +174,12 @@ pub async fn join_voice(
         json!({
             "user_id": auth.user_id.to_string(),
             "channel_id": channel_id.to_string(),
-            "guild_id": channel.guild_id.map(|id| id.to_string()),
+            "guild_id": channel.guild_id().map(|id| id.to_string()),
             "session_id": &session_id,
             "username": &user.username,
             "avatar_hash": user.avatar_hash,
         }),
-        channel.guild_id,
+        channel.guild_id(),
     );
 
     let livekit_url = resolve_livekit_client_url(&headers, &state.config.livekit_public_url);
@@ -214,7 +214,7 @@ pub async fn start_stream(
         return Err(ApiError::BadRequest("Not a voice channel".into()));
     }
 
-    let guild_id = channel.guild_id.ok_or(ApiError::BadRequest(
+    let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
         "Streaming is only supported in guild channels".into(),
     ))?;
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
@@ -283,7 +283,7 @@ pub async fn leave_voice(
         return Err(ApiError::BadRequest("Not a voice channel".into()));
     }
 
-    let guild_id = channel.guild_id;
+    let guild_id = channel.guild_id();
     let _ = paracord_db::voice_states::remove_voice_state(&state.db, auth.user_id, guild_id).await;
     let participants = state.voice.leave_room(channel_id, auth.user_id).await;
     if let Some(current) = participants {

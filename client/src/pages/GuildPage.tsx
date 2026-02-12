@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Monitor, MonitorOff, PhoneOff, Users } from 'lucide-react';
 import { RoomEvent, Track } from 'livekit-client';
@@ -11,6 +11,7 @@ import { useGuildStore } from '../stores/guildStore';
 import { useVoice } from '../hooks/useVoice';
 import { useStream } from '../hooks/useStream';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useAuthStore } from '../stores/authStore';
 import type { Message } from '../types';
 
 function getStreamErrorMessage(error: unknown): string {
@@ -65,11 +66,14 @@ export function GuildPage() {
     clearConnectionError,
   } = useVoice();
   const { selfStream, startStream, stopStream } = useStream();
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+  const watchedStreamerId = useVoiceStore((s) => s.watchedStreamerId);
+  const setWatchedStreamer = useVoiceStore((s) => s.setWatchedStreamer);
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [streamStarting, setStreamStarting] = useState(false);
   const [captureQuality, setCaptureQuality] = useState('1080p60');
-  const [roomTrackStreaming, setRoomTrackStreaming] = useState(false);
+  const [activeStreamers, setActiveStreamers] = useState<string[]>([]);
   const room = useVoiceStore((s) => s.room);
 
   const channelName = channel?.name || 'general';
@@ -78,10 +82,12 @@ export function GuildPage() {
   const voiceJoinPending = Boolean(isVoice && voiceJoining && joiningChannelId === channelId);
   const voiceJoinError = connectionErrorChannelId === channelId ? connectionError : null;
   const participantCount = Array.from(participants.values()).filter((p) => p.channel_id === channelId).length;
-  const remoteStreamActive = Array.from(participants.values()).some(
-    (p) => p.channel_id === channelId && p.self_stream
-  );
-  const anyStreamActive = selfStream || remoteStreamActive || roomTrackStreaming;
+  const activeStreamerSet = useMemo(() => new Set(activeStreamers), [activeStreamers]);
+  const watchedStreamerName = useMemo(() => {
+    if (!watchedStreamerId) return undefined;
+    if (currentUserId != null && watchedStreamerId === currentUserId) return 'You';
+    return participants.get(watchedStreamerId)?.username;
+  }, [watchedStreamerId, currentUserId, participants]);
 
   // Fetch channels when guildId changes
   useEffect(() => {
@@ -97,57 +103,90 @@ export function GuildPage() {
       selectChannel(channelId);
       setReplyingTo(null);
       setStreamError(null);
+      setWatchedStreamer(null);
     }
-  }, [channelId, selectChannel]);
+  }, [channelId, selectChannel, setWatchedStreamer]);
 
   useEffect(() => {
     if (!room || !inSelectedVoiceChannel) {
-      setRoomTrackStreaming(false);
+      setActiveStreamers([]);
       return;
     }
 
-    const recomputeStreamState = () => {
-      let hasScreenTrack = false;
+    const recomputeActiveStreamers = () => {
+      const next = new Set<string>();
 
-      for (const publication of room.localParticipant.videoTrackPublications.values()) {
-        if (publication.source === Track.Source.ScreenShare && publication.track) {
-          hasScreenTrack = true;
-          break;
-        }
-      }
-
-      if (!hasScreenTrack) {
-        for (const participant of room.remoteParticipants.values()) {
-          for (const publication of participant.videoTrackPublications.values()) {
-            if (publication.source === Track.Source.ScreenShare && publication.track) {
-              hasScreenTrack = true;
-              break;
-            }
+      if (currentUserId) {
+        for (const publication of room.localParticipant.videoTrackPublications.values()) {
+          if (
+            publication.source === Track.Source.ScreenShare &&
+            publication.track &&
+            publication.track.mediaStreamTrack?.readyState !== 'ended'
+          ) {
+            next.add(currentUserId);
+            break;
           }
-          if (hasScreenTrack) break;
         }
       }
 
-      setRoomTrackStreaming(hasScreenTrack);
+      for (const participant of room.remoteParticipants.values()) {
+        let isStreaming = false;
+        for (const publication of participant.videoTrackPublications.values()) {
+          const hasUsableTrack =
+            publication.track == null ||
+            publication.track.mediaStreamTrack?.readyState !== 'ended';
+          if (publication.source === Track.Source.ScreenShare && hasUsableTrack) {
+            isStreaming = true;
+            break;
+          }
+        }
+        if (!isStreaming) continue;
+        next.add(participant.identity);
+      }
+
+      setActiveStreamers(Array.from(next));
     };
 
-    recomputeStreamState();
-    room.on(RoomEvent.TrackSubscribed, recomputeStreamState);
-    room.on(RoomEvent.TrackUnsubscribed, recomputeStreamState);
-    room.on(RoomEvent.ParticipantConnected, recomputeStreamState);
-    room.on(RoomEvent.ParticipantDisconnected, recomputeStreamState);
-    room.on(RoomEvent.LocalTrackPublished, recomputeStreamState);
-    room.on(RoomEvent.LocalTrackUnpublished, recomputeStreamState);
+    recomputeActiveStreamers();
+
+    room.on(RoomEvent.TrackSubscribed, recomputeActiveStreamers);
+    room.on(RoomEvent.TrackUnsubscribed, recomputeActiveStreamers);
+    room.on(RoomEvent.TrackPublished, recomputeActiveStreamers);
+    room.on(RoomEvent.TrackUnpublished, recomputeActiveStreamers);
+    room.on(RoomEvent.TrackMuted, recomputeActiveStreamers);
+    room.on(RoomEvent.TrackUnmuted, recomputeActiveStreamers);
+    room.on(RoomEvent.ParticipantConnected, recomputeActiveStreamers);
+    room.on(RoomEvent.ParticipantDisconnected, recomputeActiveStreamers);
+    room.on(RoomEvent.LocalTrackPublished, recomputeActiveStreamers);
+    room.on(RoomEvent.LocalTrackUnpublished, recomputeActiveStreamers);
+
+    const pollInterval = setInterval(recomputeActiveStreamers, 2000);
 
     return () => {
-      room.off(RoomEvent.TrackSubscribed, recomputeStreamState);
-      room.off(RoomEvent.TrackUnsubscribed, recomputeStreamState);
-      room.off(RoomEvent.ParticipantConnected, recomputeStreamState);
-      room.off(RoomEvent.ParticipantDisconnected, recomputeStreamState);
-      room.off(RoomEvent.LocalTrackPublished, recomputeStreamState);
-      room.off(RoomEvent.LocalTrackUnpublished, recomputeStreamState);
+      clearInterval(pollInterval);
+      room.off(RoomEvent.TrackSubscribed, recomputeActiveStreamers);
+      room.off(RoomEvent.TrackUnsubscribed, recomputeActiveStreamers);
+      room.off(RoomEvent.TrackPublished, recomputeActiveStreamers);
+      room.off(RoomEvent.TrackUnpublished, recomputeActiveStreamers);
+      room.off(RoomEvent.TrackMuted, recomputeActiveStreamers);
+      room.off(RoomEvent.TrackUnmuted, recomputeActiveStreamers);
+      room.off(RoomEvent.ParticipantConnected, recomputeActiveStreamers);
+      room.off(RoomEvent.ParticipantDisconnected, recomputeActiveStreamers);
+      room.off(RoomEvent.LocalTrackPublished, recomputeActiveStreamers);
+      room.off(RoomEvent.LocalTrackUnpublished, recomputeActiveStreamers);
     };
-  }, [room, inSelectedVoiceChannel]);
+  }, [room, inSelectedVoiceChannel, currentUserId]);
+
+  useEffect(() => {
+    if (!watchedStreamerId) return;
+    const watchingSelf = currentUserId != null && watchedStreamerId === currentUserId;
+    if (watchingSelf && selfStream) {
+      return;
+    }
+    if (!activeStreamerSet.has(watchedStreamerId)) {
+      setWatchedStreamer(null);
+    }
+  }, [watchedStreamerId, activeStreamerSet, currentUserId, selfStream, setWatchedStreamer]);
 
   if (isLoading) {
     return (
@@ -172,7 +211,7 @@ export function GuildPage() {
         isVoice={isVoice}
       />
       {isVoice ? (
-        <div className="flex flex-1 flex-col gap-4 p-4 md:p-5 text-text-muted">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-5 text-text-muted">
           <div className="glass-panel rounded-2xl border p-5">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-3">
@@ -187,7 +226,7 @@ export function GuildPage() {
               {inSelectedVoiceChannel ? (
                 <div className="flex flex-wrap items-center gap-2.5">
                   <button
-                    className="control-pill-btn min-w-[132px]"
+                    className="control-pill-btn w-auto"
                     onClick={() => void leaveChannel()}
                   >
                     <PhoneOff size={16} />
@@ -206,9 +245,11 @@ export function GuildPage() {
                         <option value="1080p60">1080p 60fps</option>
                         <option value="1440p60">1440p 60fps</option>
                         <option value="4k60">4K 60fps</option>
+                        <option value="movie-50">Movie 4K (50 Mbps)</option>
+                        <option value="movie-100">Movie 4K (100 Mbps)</option>
                       </select>
                       <button
-                        className="control-pill-btn min-w-[146px] border-accent-primary/50 bg-accent-primary/15 hover:bg-accent-primary/25 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="control-pill-btn w-auto border-accent-primary/50 bg-accent-primary/15 hover:bg-accent-primary/25 disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={streamStarting}
                         onClick={async () => {
                           setStreamError(null);
@@ -228,7 +269,7 @@ export function GuildPage() {
                     </div>
                   ) : (
                     <button
-                      className="control-pill-btn min-w-[146px] border-accent-primary/50 bg-accent-primary/20 hover:bg-accent-primary/30"
+                      className="control-pill-btn w-auto border-accent-primary/50 bg-accent-primary/20 hover:bg-accent-primary/30"
                       onClick={() => {
                         stopStream();
                         setStreamError(null);
@@ -250,7 +291,7 @@ export function GuildPage() {
                   </div>
                   {voiceJoinError && channelId && guildId && (
                     <button
-                      className="control-pill-btn min-w-[120px]"
+                      className="control-pill-btn w-auto"
                       onClick={() => {
                         clearConnectionError();
                         void joinChannel(channelId, guildId);
@@ -268,32 +309,43 @@ export function GuildPage() {
               </div>
             )}
           </div>
-          {inSelectedVoiceChannel && anyStreamActive && (
-            <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-border-subtle" style={{ minHeight: '300px' }}>
-              <StreamViewer
-                expectingStream={selfStream && !roomTrackStreaming}
-                onStopStream={() => {
-                  stopStream();
-                  setStreamError(null);
-                }}
-              />
-            </div>
-          )}
-          {inSelectedVoiceChannel && !anyStreamActive && (
-            <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-2xl border border-border-subtle bg-bg-mod-subtle/30">
-              <div className="pointer-events-none absolute -top-12 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full bg-accent-primary/15 blur-3xl" />
-              <div className="relative mx-4 flex w-full max-w-md flex-col items-center rounded-2xl border border-border-subtle bg-bg-mod-subtle/70 px-7 py-7 text-center">
-                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-border-subtle bg-bg-primary/70 text-text-secondary">
-                  <Monitor size={20} />
+          {inSelectedVoiceChannel && (
+            <div className="min-h-[300px] flex-1 overflow-hidden rounded-2xl border border-border-subtle">
+              {watchedStreamerId ? (
+                <StreamViewer
+                  streamerId={watchedStreamerId}
+                  streamerName={watchedStreamerName}
+                  expectingStream={Boolean(
+                    currentUserId != null &&
+                    watchedStreamerId === currentUserId &&
+                    selfStream &&
+                    !activeStreamerSet.has(watchedStreamerId)
+                  )}
+                  onStopWatching={() => setWatchedStreamer(null)}
+                  onStopStream={() => {
+                    stopStream();
+                    setStreamError(null);
+                  }}
+                />
+              ) : (
+                <div className="relative flex h-full min-h-[300px] items-center justify-center overflow-hidden bg-bg-mod-subtle/30">
+                  <div className="pointer-events-none absolute -top-12 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full bg-accent-primary/15 blur-3xl" />
+                  <div className="relative mx-4 flex w-full max-w-md flex-col items-center rounded-2xl border border-border-subtle bg-bg-mod-subtle/70 px-7 py-7 text-center">
+                    <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-border-subtle bg-bg-primary/70 text-text-secondary">
+                      <Monitor size={20} />
+                    </div>
+                    <div className="text-base font-semibold text-text-primary">Choose a stream from the sidebar</div>
+                    <div className="mt-1 text-sm text-text-secondary">
+                      Use the red <span className="font-semibold text-accent-danger">LIVE</span> buttons beside voice participants to switch streams.
+                    </div>
+                    <div className="mt-4 text-xs text-text-muted">
+                      {activeStreamers.length > 0
+                        ? `${activeStreamers.length} stream${activeStreamers.length === 1 ? '' : 's'} currently live`
+                        : 'No active streams right now'}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-base font-semibold text-text-primary">No active stream</div>
-                <div className="mt-1 text-sm text-text-secondary">
-                  Share your screen to present docs, demos, or code walkthroughs in this voice room.
-                </div>
-                <div className="mt-4 text-xs text-text-muted">
-                  Stream controls appear automatically once a stream is live.
-                </div>
-              </div>
+              )}
             </div>
           )}
         </div>

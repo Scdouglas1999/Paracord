@@ -44,7 +44,7 @@ pub async fn list_bans(
         .map(|b| {
             json!({
                 "user_id": b.user_id.to_string(),
-                "guild_id": b.guild_id.to_string(),
+                "guild_id": guild_id.to_string(),
                 "reason": b.reason,
                 "banned_by": b.banned_by.map(|id| id.to_string()),
                 "created_at": b.created_at.to_rfc3339(),

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -26,9 +26,8 @@ pub struct VoiceRoom {
     pub channel_id: i64,
     pub participants: HashMap<i64, VoiceParticipant>,
     pub audio_bitrate: AudioBitrate,
-    /// The user_id currently streaming in this channel, if any.
-    /// Only one stream per channel at a time (like Discord Go Live).
-    pub active_streamer: Option<i64>,
+    /// User IDs currently streaming in this channel.
+    pub active_streamers: HashSet<i64>,
 }
 
 pub struct VoiceManager {
@@ -92,7 +91,7 @@ impl VoiceManager {
                 channel_id,
                 participants: HashMap::new(),
                 audio_bitrate: bitrate,
-                active_streamer: None,
+                active_streamers: HashSet::new(),
             });
             room.participants.insert(
                 user_id,
@@ -123,7 +122,6 @@ impl VoiceManager {
     }
 
     /// Start streaming in a voice channel.
-    /// Only one stream per channel at a time. Returns error if someone is already streaming.
     pub async fn start_stream(
         &self,
         channel_id: i64,
@@ -134,19 +132,10 @@ impl VoiceManager {
     ) -> Result<StreamStartResponse, anyhow::Error> {
         let room_name = format!("guild_{}_channel_{}", guild_id, channel_id);
 
-        // Enforce one stream per channel
         {
             let mut rooms = self.rooms.write().await;
             if let Some(room) = rooms.get_mut(&channel_id) {
-                if let Some(existing) = room.active_streamer {
-                    if existing != user_id {
-                        anyhow::bail!(
-                            "Channel already has an active stream from user {}",
-                            existing
-                        );
-                    }
-                }
-                room.active_streamer = Some(user_id);
+                room.active_streamers.insert(user_id);
 
                 // Update participant state
                 if let Some(p) = room.participants.get_mut(&user_id) {
@@ -170,19 +159,20 @@ impl VoiceManager {
     pub async fn stop_stream(&self, channel_id: i64, user_id: i64) {
         let mut rooms = self.rooms.write().await;
         if let Some(room) = rooms.get_mut(&channel_id) {
-            if room.active_streamer == Some(user_id) {
-                room.active_streamer = None;
-            }
+            room.active_streamers.remove(&user_id);
             if let Some(p) = room.participants.get_mut(&user_id) {
                 p.self_stream = false;
             }
         }
     }
 
-    /// Get the active streamer in a channel, if any.
-    pub async fn get_active_streamer(&self, channel_id: i64) -> Option<i64> {
+    /// Get active streamers in a channel.
+    pub async fn get_active_streamers(&self, channel_id: i64) -> Vec<i64> {
         let rooms = self.rooms.read().await;
-        rooms.get(&channel_id).and_then(|r| r.active_streamer)
+        rooms
+            .get(&channel_id)
+            .map(|r| r.active_streamers.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     pub async fn join_room(
@@ -198,7 +188,7 @@ impl VoiceManager {
             channel_id,
             participants: HashMap::new(),
             audio_bitrate: AudioBitrate::default(),
-            active_streamer: None,
+            active_streamers: HashSet::new(),
         });
 
         room.participants.insert(
@@ -224,10 +214,8 @@ impl VoiceManager {
         if let Some(room) = rooms.get_mut(&channel_id) {
             room.participants.remove(&user_id);
 
-            // Clear active streamer if the leaver was streaming
-            if room.active_streamer == Some(user_id) {
-                room.active_streamer = None;
-            }
+            // Clear active stream state if the leaver was streaming
+            room.active_streamers.remove(&user_id);
 
             if room.participants.is_empty() {
                 rooms.remove(&channel_id);
@@ -298,9 +286,14 @@ impl VoiceManager {
                     user_id,
                     room_name = %room_name,
                     error = %err,
-                    "LiveKit participant check failed; falling back to local voice state"
+                    "LiveKit participant check failed; assuming PRESENT to avoid cascading kicks"
                 );
-                self.is_participant_in_room(channel_id, user_id).await
+                // When we cannot reach LiveKit, default to "present".  A stale
+                // voice entry is cosmetic (cleaned up on next connect), but a
+                // false-negative cascades: the grace-period handler removes the
+                // user, sees an "empty" room, deletes the LiveKit room, and
+                // kicks everyone still connected.
+                true
             }
         }
     }

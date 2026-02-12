@@ -1,56 +1,49 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sidebar } from '../components/layout/Sidebar';
-import { ChannelSidebar } from '../components/layout/ChannelSidebar';
+import { UnifiedSidebar } from '../components/layout/UnifiedSidebar';
 import { MemberList } from '../components/layout/MemberList';
+import { CommandPalette } from '../components/layout/CommandPalette';
 import { useUIStore } from '../stores/uiStore';
 import { useGuildStore } from '../stores/guildStore';
-import { cn } from '../lib/utils';
-
 export function AppLayout() {
-  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
+  const memberPanelOpen = useUIStore((s) => s.memberPanelOpen);
   const memberSidebarOpen = useUIStore((s) => s.memberSidebarOpen);
   const selectedGuildId = useGuildStore((s) => s.selectedGuildId);
   const location = useLocation();
+
   const isSettingsRoute =
     location.pathname === '/app/settings'
     || location.pathname === '/app/admin'
     || /^\/app\/guilds\/[^/]+\/settings$/.test(location.pathname);
+
   const isGuildChannelRoute = /^\/app\/guilds\/[^/]+\/channels\/[^/]+$/.test(location.pathname);
-  const showRailedShell = !isSettingsRoute;
+  const showShell = !isSettingsRoute;
+  const showMemberPanel = selectedGuildId && (memberPanelOpen || memberSidebarOpen) && isGuildChannelRoute && showShell;
 
   return (
-    <div className={cn('relative h-screen overflow-hidden', showRailedShell ? 'p-2.5 md:p-3' : 'p-1.5 md:p-2')}>
-      <div className="pointer-events-none absolute -left-24 top-0 h-80 w-80 rounded-full bg-accent-primary/22 blur-[110px]" />
-      <div className="pointer-events-none absolute right-0 top-1/4 h-72 w-72 rounded-full bg-accent-success/12 blur-[120px]" />
-      <div className="pointer-events-none absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-accent-danger/8 blur-[140px]" />
+    <div className="relative h-screen overflow-hidden p-2 md:p-2.5">
+      {/* Ambient background glow */}
+      <div className="pointer-events-none absolute -left-24 top-0 h-80 w-80 rounded-full bg-accent-primary/18 blur-[120px]" />
+      <div className="pointer-events-none absolute right-0 top-1/4 h-72 w-72 rounded-full bg-accent-success/10 blur-[130px]" />
+      <div className="pointer-events-none absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-accent-danger/6 blur-[150px]" />
 
-      <div className={cn('relative flex h-full', showRailedShell ? 'gap-2.5 md:gap-3' : 'gap-0')}>
-        {showRailedShell && (
-          <div className="glass-rail h-full overflow-hidden rounded-2xl">
-            <Sidebar />
-          </div>
-        )}
-
-        {showRailedShell && (
+      <div className="relative flex h-full gap-2 md:gap-2.5">
+        {/* Unified sidebar */}
+        {showShell && (
           <motion.aside
             initial={false}
             animate={{
-              width: sidebarOpen ? 'var(--spacing-channel-sidebar-width)' : 0,
-              opacity: sidebarOpen ? 1 : 0,
+              width: sidebarCollapsed ? 64 : 280,
             }}
-            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className={cn(
-              'h-full overflow-hidden rounded-2xl',
-              sidebarOpen ? 'pointer-events-auto' : 'pointer-events-none'
-            )}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            className="glass-rail h-full shrink-0 overflow-hidden rounded-2xl"
           >
-            <div className="glass-rail h-full overflow-hidden">
-              <ChannelSidebar />
-            </div>
+            <UnifiedSidebar />
           </motion.aside>
         )}
 
+        {/* Main content area */}
         <main className="flex min-w-0 flex-1">
           {isSettingsRoute ? (
             <div className="relative h-full w-full overflow-hidden rounded-2xl border border-border-subtle/70 bg-bg-tertiary/80">
@@ -86,7 +79,8 @@ export function AppLayout() {
           )}
         </main>
 
-        {selectedGuildId && memberSidebarOpen && isGuildChannelRoute && showRailedShell && (
+        {/* Member list panel */}
+        {showMemberPanel && (
           <div className="hidden h-full overflow-hidden rounded-2xl 2xl:block">
             <div className="glass-rail h-full overflow-hidden">
               <MemberList />
@@ -94,6 +88,9 @@ export function AppLayout() {
           </div>
         )}
       </div>
+
+      {/* Command palette overlay */}
+      <CommandPalette />
     </div>
   );
 }

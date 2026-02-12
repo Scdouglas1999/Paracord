@@ -38,18 +38,18 @@ pub async fn create_invite(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    let guild_id = channel
-        .guild_id
+    let space_id = channel
+        .guild_id()
         .ok_or(ApiError::BadRequest("Cannot create invite for DM".into()))?;
 
-    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
-    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+    paracord_core::permissions::ensure_guild_member(&state.db, space_id, auth.user_id).await?;
+    let guild = paracord_db::guilds::get_guild(&state.db, space_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
     let perms = paracord_core::permissions::compute_channel_permissions(
         &state.db,
-        guild_id,
+        space_id,
         channel_id,
         guild.owner_id,
         auth.user_id,
@@ -62,7 +62,7 @@ pub async fn create_invite(
     let invite = paracord_db::invites::create_invite(
         &state.db,
         &code,
-        guild_id,
+        space_id,
         channel_id,
         auth.user_id,
         Some(body.max_uses),
@@ -72,7 +72,7 @@ pub async fn create_invite(
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     audit::log_action(
         &state,
-        guild_id,
+        space_id,
         auth.user_id,
         audit::ACTION_INVITE_CREATE,
         None,
@@ -88,7 +88,7 @@ pub async fn create_invite(
         StatusCode::CREATED,
         Json(json!({
             "code": invite.code,
-            "guild_id": invite.guild_id.to_string(),
+            "guild_id": space_id.to_string(),
             "channel_id": invite.channel_id.to_string(),
             "inviter_id": invite.inviter_id.map(|id| id.to_string()),
             "max_uses": invite.max_uses,
@@ -108,11 +108,18 @@ pub async fn get_invite(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    let guild = paracord_db::guilds::get_guild(&state.db, invite.guild_id)
+    // Look up the space via the invite's channel
+    let channel = paracord_db::channels::get_channel(&state.db, invite.channel_id)
         .await
         .ok()
         .flatten();
-    let member_count = paracord_db::members::get_member_count(&state.db, invite.guild_id)
+    let space_id = channel.and_then(|c| c.guild_id());
+    let guild = if let Some(sid) = space_id {
+        paracord_db::guilds::get_guild(&state.db, sid).await.ok().flatten()
+    } else {
+        None
+    };
+    let member_count = paracord_db::members::get_server_member_count(&state.db)
         .await
         .unwrap_or(0);
 
@@ -137,7 +144,14 @@ pub async fn accept_invite(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    let already_member = paracord_db::members::get_member(&state.db, auth.user_id, preview.guild_id)
+    // Resolve the space from the invite's channel
+    let channel = paracord_db::channels::get_channel(&state.db, preview.channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let space_id = channel.guild_id().unwrap_or(0);
+
+    let already_member = paracord_db::members::get_server_member(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .is_some();
@@ -149,7 +163,7 @@ pub async fn accept_invite(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
     };
-    let invite = if let Some(invite) = invite_state {
+    let _invite = if let Some(invite) = invite_state {
         invite
     } else {
         let existing = paracord_db::invites::get_invite(&state.db, &code)
@@ -164,17 +178,17 @@ pub async fn accept_invite(
     };
 
     if !already_member {
-        // Add user as member
-        paracord_db::members::add_member(&state.db, auth.user_id, invite.guild_id)
+        // Add user as server member
+        paracord_db::members::add_server_member(&state.db, auth.user_id)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-        // Assign @everyone role
+        // Assign @everyone role (role id = space id)
         if let Err(e) = paracord_db::roles::add_member_role(
             &state.db,
             auth.user_id,
-            invite.guild_id,
-            invite.guild_id,
+            space_id,
+            space_id,
         )
         .await
         {
@@ -182,12 +196,12 @@ pub async fn accept_invite(
         }
     }
 
-    let guild = paracord_db::guilds::get_guild(&state.db, invite.guild_id)
+    let guild = paracord_db::guilds::get_guild(&state.db, space_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    let channels = paracord_db::channels::get_guild_channels(&state.db, invite.guild_id)
+    let channels = paracord_db::channels::get_guild_channels(&state.db, space_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let default_channel_id = channels
@@ -196,7 +210,7 @@ pub async fn accept_invite(
         .or_else(|| channels.first())
         .map(|c| c.id.to_string());
 
-    let member_count = paracord_db::members::get_member_count(&state.db, invite.guild_id)
+    let member_count = paracord_db::members::get_server_member_count(&state.db)
         .await
         .unwrap_or(0);
 
@@ -239,7 +253,7 @@ pub async fn list_guild_invites(
         .map(|i| {
             json!({
                 "code": i.code,
-                "guild_id": i.guild_id.to_string(),
+                "guild_id": guild_id.to_string(),
                 "channel_id": i.channel_id.to_string(),
                 "inviter_id": i.inviter_id.map(|id| id.to_string()),
                 "max_uses": i.max_uses,
@@ -262,11 +276,17 @@ pub async fn delete_invite(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let guild = paracord_db::guilds::get_guild(&state.db, invite.guild_id)
+    // Resolve space from channel
+    let channel = paracord_db::channels::get_channel(&state.db, invite.channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, invite.guild_id)
+    let space_id = channel.guild_id().unwrap_or(0);
+    let guild = paracord_db::guilds::get_guild(&state.db, space_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, space_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let perms =
@@ -279,14 +299,14 @@ pub async fn delete_invite(
         "INVITE_DELETE",
         json!({
             "code": code,
-            "guild_id": invite.guild_id.to_string(),
+            "guild_id": space_id.to_string(),
             "channel_id": invite.channel_id.to_string(),
         }),
-        Some(invite.guild_id),
+        Some(space_id),
     );
     audit::log_action(
         &state,
-        invite.guild_id,
+        space_id,
         auth.user_id,
         audit::ACTION_INVITE_DELETE,
         None,

@@ -31,6 +31,10 @@ crab_nat = { workspace = true }
 reqwest = { workspace = true }
 which = { workspace = true }
 rand = { workspace = true }
+rcgen = { workspace = true }
+axum-server = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
 rust-embed = { workspace = true, optional = true }
 mime_guess = { workspace = true, optional = true }
 

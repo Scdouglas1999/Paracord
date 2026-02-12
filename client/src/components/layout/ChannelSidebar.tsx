@@ -230,7 +230,7 @@ export function ChannelSidebar() {
               style={{ backgroundColor: 'var(--overlay-backdrop)' }}
               onClick={() => setShowDmPicker(false)}
             />
-            <div className="glass-modal fixed left-1/2 top-1/2 z-50 max-h-[70vh] w-[480px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl">
+            <div className="glass-modal fixed left-1/2 top-1/2 z-50 max-h-[70vh] w-full max-w-[480px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl">
               <div className="panel-divider border-b px-5 py-4 text-lg font-semibold text-text-primary">Start Direct Message</div>
               <div className="max-h-[50vh] overflow-y-auto p-3">
                 {relationships.filter((r) => r.type === 1).map((rel) => (

@@ -107,17 +107,12 @@ fn write_livekit_config(
         // advertises the machine's actual local/loopback addresses.
         lines.push("    use_external_ip: false".to_string());
     } else {
-        // Disable use_external_ip so LiveKit advertises the real LAN IP
-        // (e.g. 192.168.x.x) as a host candidate.  When use_external_ip
-        // is true, LiveKit rewrites ALL host candidate IPs to the
-        // STUN-discovered public IP, which forces LAN clients through
-        // hairpin NAT — unreliable on most consumer routers and a common
-        // cause of one-way audio.
-        //
-        // Remote/internet clients are served by the TURN relay (configured
-        // below with `domain: <external_ip>`), which provides a working
-        // media path through the port-forwarded server port.
-        lines.push("    use_external_ip: false".to_string());
+        // Enable use_external_ip so LiveKit advertises the public IP as
+        // an ICE candidate.  This allows remote/internet clients to
+        // connect directly via the forwarded UDP port.  LAN clients on
+        // routers that don't support hairpin NAT may need the TURN relay
+        // (configured below) as a fallback.
+        lines.push("    use_external_ip: true".to_string());
     }
 
     // UDP mux on the server port (e.g. 8080).  Paracord only binds TCP

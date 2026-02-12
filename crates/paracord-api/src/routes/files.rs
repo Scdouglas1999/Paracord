@@ -22,7 +22,7 @@ pub async fn upload_file(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    if let Some(guild_id) = channel.guild_id {
+    if let Some(guild_id) = channel.guild_id() {
         paracord_core::permissions::ensure_guild_member(&state.db, guild_id, _auth.user_id).await?;
         let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
             .await
@@ -139,7 +139,7 @@ pub async fn download_file(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    if let Some(guild_id) = channel.guild_id {
+    if let Some(guild_id) = channel.guild_id() {
         paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
         let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
             .await

@@ -15,7 +15,7 @@ use crate::routes::audit;
 fn role_to_json(r: &paracord_db::roles::RoleRow) -> Value {
     json!({
         "id": r.id.to_string(),
-        "guild_id": r.guild_id.to_string(),
+        "guild_id": r.guild_id().to_string(),
         "name": r.name,
         "color": r.color,
         "hoist": r.hoist,

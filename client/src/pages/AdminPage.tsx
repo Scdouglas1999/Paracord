@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Users, Server, Settings, BarChart3, Shield, ShieldOff, Trash2 } from 'lucide-react';
+import { ArrowLeft, Users, Server, Settings, BarChart3, Shield, ShieldOff, Trash2, Pencil } from 'lucide-react';
 import { adminApi } from '../api/admin';
 import { useAuthStore } from '../stores/authStore';
 import { isAdmin, UserFlags } from '../types';
@@ -250,14 +250,20 @@ function UsersPanel() {
 
 // ── Guilds ─────────────────────────────────────────────────────────────
 
+type GuildRow = {
+  id: string;
+  name: string;
+  description: string | null;
+  owner_id: string;
+  created_at: string;
+};
+
 function GuildsPanel() {
-  const [guilds, setGuilds] = useState<Array<{
-    id: string;
-    name: string;
-    description: string | null;
-    owner_id: string;
-    created_at: string;
-  }>>([]);
+  const [guilds, setGuilds] = useState<GuildRow[]>([]);
+  const [editingGuild, setEditingGuild] = useState<GuildRow | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const fetchGuilds = () => {
     adminApi.getGuilds().then(({ data }) => setGuilds(data.guilds)).catch(() => {});
@@ -267,10 +273,45 @@ function GuildsPanel() {
     fetchGuilds();
   }, []);
 
+  const openEdit = (g: GuildRow) => {
+    setEditingGuild(g);
+    setEditName(g.name);
+    setEditDescription(g.description ?? '');
+  };
+
+  const closeEdit = () => {
+    setEditingGuild(null);
+    setSaving(false);
+  };
+
+  const saveGuild = async () => {
+    if (!editingGuild) return;
+    setSaving(true);
+    try {
+      await adminApi.updateGuild(editingGuild.id, {
+        name: editName.trim() || undefined,
+        description: editDescription.trim() || undefined,
+      });
+      setGuilds((prev) =>
+        prev.map((g) =>
+          g.id === editingGuild.id
+            ? { ...g, name: editName.trim() || g.name, description: editDescription.trim() || g.description }
+            : g
+        )
+      );
+      closeEdit();
+    } catch {
+      /* ignore */
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const deleteGuild = async (guildId: string, name: string) => {
     if (!confirm(`Delete guild "${name}"? This will delete all channels and messages. This cannot be undone.`)) return;
     try {
       await adminApi.deleteGuild(guildId);
+      if (editingGuild?.id === guildId) closeEdit();
       fetchGuilds();
     } catch {
       /* ignore */
@@ -304,13 +345,22 @@ function GuildsPanel() {
                   {new Date(g.created_at).toLocaleDateString()}
                 </td>
                 <td className="px-4 py-3">
-                  <button
-                    onClick={() => deleteGuild(g.id, g.name)}
-                    className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
-                    title="Delete guild"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => openEdit(g)}
+                      className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+                      title="Edit guild"
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      onClick={() => deleteGuild(g.id, g.name)}
+                      className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
+                      title="Delete guild"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -324,6 +374,52 @@ function GuildsPanel() {
           </tbody>
         </table>
       </div>
+
+      {editingGuild && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeEdit}>
+          <div
+            className="w-full max-w-md rounded-xl border border-border-subtle bg-bg-primary p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-4 text-lg font-semibold text-text-primary">Edit guild</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-text-secondary">Name</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full rounded-lg border border-border-subtle bg-bg-secondary px-4 py-2.5 text-text-primary outline-none transition-colors focus:border-accent-primary"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-text-secondary">Description</label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  rows={3}
+                  className="w-full rounded-lg border border-border-subtle bg-bg-secondary px-4 py-2.5 text-text-primary outline-none transition-colors focus:border-accent-primary"
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                onClick={closeEdit}
+                className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveGuild}
+                disabled={saving}
+                className="rounded-lg bg-accent-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-primary/80 disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

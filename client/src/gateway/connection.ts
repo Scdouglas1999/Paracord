@@ -156,6 +156,16 @@ class GatewayConnection {
           // Load initial voice states for this guild. READY is authoritative,
           // even when empty, so we always refresh to clear stale entries.
           useVoiceStore.getState().loadVoiceStates(g.id, g.voice_states ?? []);
+
+          // Load initial presences for this guild if the server provided them
+          if (g.presences?.length) {
+            for (const p of g.presences) {
+              usePresenceStore.getState().updatePresence(p);
+            }
+          }
+
+          // Pre-fetch member list for each guild so the member sidebar populates
+          void useMemberStore.getState().fetchMembers(g.id);
         });
         break;
 
@@ -216,6 +226,36 @@ class GatewayConnection {
 
       case GatewayEvents.VOICE_STATE_UPDATE:
         useVoiceStore.getState().handleVoiceStateUpdate(data);
+        break;
+
+      case GatewayEvents.MESSAGE_REACTION_ADD: {
+        const currentUserId = useAuthStore.getState().user?.id || '';
+        useMessageStore.getState().handleReactionAdd(
+          data.channel_id,
+          data.message_id,
+          data.emoji?.name || data.emoji,
+          data.user_id,
+          currentUserId,
+        );
+        break;
+      }
+      case GatewayEvents.MESSAGE_REACTION_REMOVE: {
+        const currentUserId2 = useAuthStore.getState().user?.id || '';
+        useMessageStore.getState().handleReactionRemove(
+          data.channel_id,
+          data.message_id,
+          data.emoji?.name || data.emoji,
+          data.user_id,
+          currentUserId2,
+        );
+        break;
+      }
+
+      case GatewayEvents.CHANNEL_PINS_UPDATE:
+        // Refresh pins for the channel
+        if (data.channel_id) {
+          useMessageStore.getState().fetchPins(data.channel_id);
+        }
         break;
 
       case GatewayEvents.TYPING_START:

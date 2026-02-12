@@ -71,7 +71,7 @@ pub struct UpsertChannelOverwriteRequest {
 fn channel_to_json(c: &paracord_db::channels::ChannelRow) -> Value {
     json!({
         "id": c.id.to_string(),
-        "guild_id": c.guild_id.map(|id| id.to_string()),
+        "guild_id": c.guild_id().map(|id| id.to_string()),
         "name": c.name,
         "topic": c.topic,
         "type": c.channel_type,
@@ -90,7 +90,7 @@ async fn ensure_channel_permissions(
     user_id: i64,
     required: &[Permissions],
 ) -> Result<(), ApiError> {
-    if let Some(guild_id) = channel.guild_id {
+    if let Some(guild_id) = channel.guild_id() {
         paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
         let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
             .await
@@ -274,9 +274,9 @@ pub async fn update_channel(
     state.event_bus.dispatch(
         "CHANNEL_UPDATE",
         channel_json.clone(),
-        updated.guild_id,
+        updated.guild_id(),
     );
-    if let Some(guild_id) = updated.guild_id {
+    if let Some(guild_id) = updated.guild_id() {
         audit::log_action(
             &state,
             guild_id,
@@ -302,10 +302,10 @@ pub async fn delete_channel(
 
     state.event_bus.dispatch(
         "CHANNEL_DELETE",
-        json!({"id": channel_id.to_string(), "guild_id": channel.guild_id.map(|id| id.to_string())}),
-        channel.guild_id,
+        json!({"id": channel_id.to_string(), "guild_id": channel.guild_id().map(|id| id.to_string())}),
+        channel.guild_id(),
     );
-    if let Some(guild_id) = channel.guild_id {
+    if let Some(guild_id) = channel.guild_id() {
         audit::log_action(
             &state,
             guild_id,
@@ -418,7 +418,7 @@ pub async fn bulk_delete_messages(
     let deleted = paracord_db::messages::bulk_delete_messages(&state.db, &ids)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let guild_id = channel.guild_id;
+    let guild_id = channel.guild_id();
     let bulk_payload = json!({
         "channel_id": channel_id.to_string(),
         "ids": body.message_ids,
@@ -505,7 +505,7 @@ pub async fn send_message(
         }
     }
 
-    let guild_id = channel.guild_id;
+    let guild_id = channel.guild_id();
     let msg_json = message_to_json(&state, &msg, auth.user_id).await;
 
     if guild_id.is_none() {
@@ -539,7 +539,7 @@ pub async fn edit_message(
         .await
         .ok()
         .flatten();
-    let guild_id = channel.and_then(|c| c.guild_id);
+    let guild_id = channel.and_then(|c| c.guild_id());
 
     let msg_json = message_to_json(&state, &updated, auth.user_id).await;
 
@@ -571,7 +571,7 @@ pub async fn delete_message(
         .await
         .ok()
         .flatten();
-    let guild_id = channel.and_then(|c| c.guild_id);
+    let guild_id = channel.and_then(|c| c.guild_id());
 
     let delete_payload = json!({"id": message_id.to_string(), "channel_id": channel_id.to_string()});
     if guild_id.is_none() {
@@ -638,7 +638,7 @@ pub async fn pin_message(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let guild_id = channel.guild_id;
+    let guild_id = channel.guild_id();
     let pins_payload = json!({ "channel_id": channel_id.to_string() });
 
     if guild_id.is_none() {
@@ -674,7 +674,7 @@ pub async fn unpin_message(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let guild_id = channel.guild_id;
+    let guild_id = channel.guild_id();
     let pins_payload = json!({ "channel_id": channel_id.to_string() });
 
     if guild_id.is_none() {
@@ -706,7 +706,7 @@ pub async fn typing(
         &[Permissions::VIEW_CHANNEL, Permissions::SEND_MESSAGES],
     )
     .await?;
-    let guild_id = channel.guild_id;
+    let guild_id = channel.guild_id();
     let typing_payload = json!({
         "channel_id": channel_id.to_string(),
         "user_id": auth.user_id.to_string(),
@@ -828,7 +828,7 @@ pub async fn upsert_channel_overwrite(
     state.event_bus.dispatch(
         "CHANNEL_UPDATE",
         json!({ "id": channel_id.to_string() }),
-        channel.guild_id,
+        channel.guild_id(),
     );
     Ok(StatusCode::NO_CONTENT)
 }
@@ -855,7 +855,7 @@ pub async fn delete_channel_overwrite(
     state.event_bus.dispatch(
         "CHANNEL_UPDATE",
         json!({ "id": channel_id.to_string() }),
-        channel.guild_id,
+        channel.guild_id(),
     );
     Ok(StatusCode::NO_CONTENT)
 }
@@ -881,7 +881,7 @@ pub async fn add_reaction(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let guild_id = channel.guild_id;
+    let guild_id = channel.guild_id();
     let reaction_payload = json!({
         "user_id": auth.user_id.to_string(),
         "channel_id": channel_id.to_string(),
@@ -922,7 +922,7 @@ pub async fn remove_reaction(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let guild_id = channel.guild_id;
+    let guild_id = channel.guild_id();
     let reaction_payload = json!({
         "user_id": auth.user_id.to_string(),
         "channel_id": channel_id.to_string(),

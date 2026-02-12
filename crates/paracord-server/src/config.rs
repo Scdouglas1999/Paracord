@@ -17,6 +17,8 @@ pub struct Config {
     pub federation: FederationConfig,
     #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -163,6 +165,32 @@ impl Default for NetworkConfig {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TlsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_tls_port")]
+    pub port: u16,
+    #[serde(default = "default_cert_path")]
+    pub cert_path: String,
+    #[serde(default = "default_key_path")]
+    pub key_path: String,
+    #[serde(default = "default_true")]
+    pub auto_generate: bool,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: default_tls_port(),
+            cert_path: default_cert_path(),
+            key_path: default_key_path(),
+            auto_generate: true,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct FederationConfig {
     #[serde(default)]
@@ -228,6 +256,15 @@ fn default_livekit_http_url() -> String {
 fn default_upnp_lease() -> u32 {
     3600
 }
+fn default_tls_port() -> u16 {
+    8443
+}
+fn default_cert_path() -> String {
+    "./data/certs/cert.pem".into()
+}
+fn default_key_path() -> String {
+    "./data/certs/key.pem".into()
+}
 
 /// Generate a commented config file template with the given values filled in.
 fn generate_config_template(config: &Config) -> String {
@@ -276,6 +313,15 @@ enabled = false
 # detects your public IP, and prints a shareable URL.
 upnp = {upnp}
 upnp_lease_seconds = {upnp_lease}
+
+[tls]
+# HTTPS support — required for getUserMedia() on non-localhost origins.
+# A self-signed certificate is auto-generated on first run.
+enabled = {tls_enabled}
+port = {tls_port}
+cert_path = "{tls_cert}"
+key_path = "{tls_key}"
+auto_generate = {tls_auto}
 "#,
         bind_address = config.server.bind_address,
         server_name = config.server.server_name,
@@ -295,6 +341,11 @@ upnp_lease_seconds = {upnp_lease}
         lk_http_url = config.livekit.http_url,
         upnp = config.network.upnp,
         upnp_lease = config.network.upnp_lease_seconds,
+        tls_enabled = config.tls.enabled,
+        tls_port = config.tls.port,
+        tls_cert = config.tls.cert_path,
+        tls_key = config.tls.key_path,
+        tls_auto = config.tls.auto_generate,
     )
 }
 

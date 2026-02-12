@@ -21,6 +21,18 @@ export function useMediaDevices() {
 
   const enumerate = useCallback(async () => {
     try {
+      // On non-secure origins (plain HTTP), browsers hide device labels
+      // and may only return "default" until mic permission is granted.
+      // Request a temporary stream to trigger the permission prompt,
+      // then immediately stop it before enumerating.
+      // Always request mic permission first so browsers on non-secure
+      // origins (plain HTTP) expose full device list with labels.
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
+      } catch {
+        /* user denied or already granted — either way, enumerate next */
+      }
       const devices = await navigator.mediaDevices.enumerateDevices();
       setState((s) => ({
         ...s,

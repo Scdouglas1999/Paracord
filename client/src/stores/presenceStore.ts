@@ -19,7 +19,12 @@ export const usePresenceStore = create<PresenceState>()((set, get) => ({
   updatePresence: (presence) =>
     set((state) => {
       const presences = new Map(state.presences);
-      presences.set(presence.user_id, presence);
+      const existing = presences.get(presence.user_id);
+      presences.set(presence.user_id, {
+        ...existing,
+        ...presence,
+        activities: presence.activities ?? existing?.activities ?? [],
+      });
       return { presences };
     }),
 

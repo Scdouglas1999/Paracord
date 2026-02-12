@@ -10,10 +10,16 @@ mod config;
 #[cfg(feature = "embed-ui")]
 mod embedded_ui;
 mod livekit_proc;
+mod tls;
 mod upnp;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install rustls crypto provider before any TLS operations
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -112,6 +118,12 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Forward HTTPS port via UPnP if TLS is enabled
+    let tls_port = config.tls.port;
+    if config.network.upnp && config.tls.enabled && detected_external_ip.is_some() {
+        upnp::forward_extra_port(tls_port, config.network.upnp_lease_seconds).await;
+    }
+
     // If we still don't have an external IP (UPnP failed or disabled) but
     // LiveKit is local, detect the public IP via HTTP so we can configure
     // LiveKit's ICE candidates correctly for remote users.
@@ -175,6 +187,15 @@ async fn main() -> Result<()> {
 
     let db = paracord_db::create_pool(&config.database.url, config.database.max_connections).await?;
     paracord_db::run_migrations(&db).await?;
+
+    // Clear stale voice states from the database. After a server restart no
+    // client is actually connected to a LiveKit room, so any leftover rows
+    // are ghosts from a previous process.
+    match paracord_db::voice_states::clear_all_voice_states(&db).await {
+        Ok(n) if n > 0 => tracing::info!("Cleared {} stale voice state(s) from previous session", n),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("Failed to clear stale voice states: {}", e),
+    }
 
     // ── Load runtime settings from database ─────────────────────────────────
     let runtime = load_runtime_settings(&db).await;
@@ -242,6 +263,7 @@ async fn main() -> Result<()> {
         },
         voice,
         storage,
+        online_users: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
     };
 
     let router = paracord_api::build_router()
@@ -272,6 +294,32 @@ async fn main() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&config.server.bind_address).await?;
 
+    // ── TLS / HTTPS setup ───────────────────────────────────────────────────
+    let tls_enabled = config.tls.enabled;
+    let tls_rustls_config = if tls_enabled {
+        match tls::ensure_certs(
+            &config.tls,
+            detected_external_ip.as_deref(),
+            detected_local_ip.as_deref(),
+        ).await {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                tracing::warn!("TLS setup failed, HTTPS disabled: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let tls_status = if let Some(ref _cfg) = tls_rustls_config {
+        format!("Enabled (port {})", tls_port)
+    } else if tls_enabled {
+        "Failed (see logs)".to_string()
+    } else {
+        "Disabled".to_string()
+    };
+
     // ── Startup banner ───────────────────────────────────────────────────────
     print_startup_banner(
         &config.server.bind_address,
@@ -280,19 +328,23 @@ async fn main() -> Result<()> {
         &config.database.url,
         &upnp_status,
         &web_ui_status,
+        &tls_status,
+        tls_rustls_config.is_some(),
+        tls_port,
         needs_manual_forwarding,
         bind_port,
     );
 
     // Graceful shutdown: clean up UPnP on ctrl-c or API-triggered restart
     let upnp_enabled = config.network.upnp;
-    let shutdown_signal = async move {
+    let shutdown_notify_http = shutdown_notify.clone();
+    let shutdown_signal_http = async move {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 println!();
                 tracing::info!("Shutting down (ctrl-c)...");
             }
-            _ = shutdown_notify.notified() => {
+            _ = shutdown_notify_http.notified() => {
                 tracing::info!("Shutting down (restart requested via API)...");
             }
         }
@@ -301,12 +353,36 @@ async fn main() -> Result<()> {
         }
         if upnp_enabled {
             upnp::cleanup_upnp(upnp_server_port, upnp_livekit_port).await;
+            if tls_enabled {
+                upnp::cleanup_extra_port(tls_port).await;
+            }
         }
     };
 
-    axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    if let Some(rustls_config) = tls_rustls_config {
+        // Run HTTP and HTTPS concurrently.
+        // Inject X-Forwarded-Proto so the voice endpoint returns wss:// URLs.
+        let tls_addr: std::net::SocketAddr = format!("0.0.0.0:{}", tls_port).parse()?;
+        let app_https = app
+            .clone()
+            .layer(axum::middleware::from_fn(inject_https_proto));
+
+        let http_server = axum::serve(listener, app.into_make_service())
+            .with_graceful_shutdown(shutdown_signal_http);
+
+        let https_server = axum_server::bind_rustls(tls_addr, rustls_config)
+            .serve(app_https.into_make_service());
+
+        tokio::select! {
+            result = http_server => { result?; }
+            result = https_server => { result?; }
+        }
+    } else {
+        // HTTP only
+        axum::serve(listener, app.into_make_service())
+            .with_graceful_shutdown(shutdown_signal_http)
+            .await?;
+    }
 
     Ok(())
 }
@@ -423,6 +499,20 @@ fn add_windows_firewall_rule(rule_name: &str, program: &str, protocol: &str) {
     }
 }
 
+/// Middleware that injects `X-Forwarded-Proto: https` on requests arriving
+/// via the HTTPS listener, so downstream handlers (e.g. voice join) can
+/// return `wss://` URLs instead of `ws://`.
+async fn inject_https_proto(
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    req.headers_mut().insert(
+        "x-forwarded-proto",
+        axum::http::HeaderValue::from_static("https"),
+    );
+    next.run(req).await
+}
+
 #[allow(clippy::too_many_arguments)]
 fn print_startup_banner(
     bind_address: &str,
@@ -431,6 +521,9 @@ fn print_startup_banner(
     db_url: &str,
     upnp_status: &str,
     web_ui: &str,
+    tls_status: &str,
+    tls_active: bool,
+    tls_port: u16,
     needs_manual_forwarding: bool,
     server_port: u16,
 ) {
@@ -442,8 +535,19 @@ fn print_startup_banner(
     println!(" |_|   \\__,_|_|  \\__,_|\\___\\___/|_|  \\__,_|");
     println!();
     println!("  Listening:   http://{}", bind_address);
+    if tls_active {
+        println!("  HTTPS:       https://0.0.0.0:{}", tls_port);
+    }
     if let Some(url) = public_url {
         println!("  Public URL:  {}", url);
+        if tls_active {
+            // Derive an HTTPS public URL from the HTTP one
+            if let Some(host) = url.strip_prefix("http://") {
+                // Strip the port from the host if present
+                let host_no_port = host.split(':').next().unwrap_or(host);
+                println!("  Public HTTPS: https://{}:{}", host_no_port, tls_port);
+            }
+        }
         println!();
         println!("  ╔══════════════════════════════════════════════════╗");
         println!("  ║  Share this with friends: {:<24}║", url);
@@ -454,13 +558,17 @@ fn print_startup_banner(
     println!("  LiveKit:     {}", livekit_status);
     println!("  Port Fwd:    {}", upnp_status);
     println!("  Web UI:      {}", web_ui);
+    println!("  TLS/HTTPS:   {}", tls_status);
 
     if needs_manual_forwarding {
         println!();
         println!("  ╔══════════════════════════════════════════════════╗");
-        println!("  ║  ⚠  Port forwarding required for remote access  ║");
+        println!("  ║  Port forwarding required for remote access     ║");
         println!("  ║                                                  ║");
         println!("  ║  Forward port {:<5} (TCP + UDP) in router to  ║", server_port);
+        if tls_active {
+        println!("  ║  and port {:<5} (TCP) for HTTPS.              ║", tls_port);
+        }
         println!("  ║  this machine. Most routers have this under:     ║");
         println!("  ║  Settings > Firewall > Port Forwarding           ║");
         println!("  ║                                                  ║");

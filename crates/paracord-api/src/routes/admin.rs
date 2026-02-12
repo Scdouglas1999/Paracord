@@ -288,6 +288,13 @@ pub async fn delete_user(
 
 // ── Guilds ──────────────────────────────────────────────────────────────
 
+#[derive(Deserialize)]
+pub struct UpdateGuildRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+}
+
 pub async fn list_guilds(
     State(state): State<AppState>,
     _admin: AdminUser,
@@ -313,11 +320,49 @@ pub async fn list_guilds(
     Ok(Json(json!({ "guilds": guild_list })))
 }
 
+pub async fn update_guild(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(guild_id): Path<i64>,
+    Json(body): Json<UpdateGuildRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let updated = paracord_core::admin::admin_update_guild(
+        &state.db,
+        guild_id,
+        body.name.as_deref(),
+        body.description.as_deref(),
+        body.icon.as_deref(),
+    )
+    .await?;
+
+    let guild_json = json!({
+        "id": updated.id.to_string(),
+        "name": updated.name,
+        "description": updated.description,
+        "icon_hash": updated.icon_hash,
+        "owner_id": updated.owner_id.to_string(),
+        "created_at": updated.created_at.to_rfc3339(),
+    });
+
+    state
+        .event_bus
+        .dispatch("GUILD_UPDATE", guild_json.clone(), Some(guild_id));
+
+    Ok(Json(guild_json))
+}
+
 pub async fn delete_guild(
     State(state): State<AppState>,
     _admin: AdminUser,
     Path(guild_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
     paracord_core::admin::admin_delete_guild(&state.db, guild_id).await?;
+
+    state.event_bus.dispatch(
+        "GUILD_DELETE",
+        json!({"id": guild_id.to_string()}),
+        Some(guild_id),
+    );
+
     Ok(StatusCode::NO_CONTENT)
 }

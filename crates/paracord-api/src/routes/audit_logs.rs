@@ -57,7 +57,7 @@ pub async fn get_audit_logs(
         .map(|e| {
             json!({
                 "id": e.id.to_string(),
-                "guild_id": e.guild_id.to_string(),
+                "guild_id": e.guild_id().to_string(),
                 "user_id": e.user_id.to_string(),
                 "action_type": e.action_type,
                 "target_id": e.target_id.map(|id| id.to_string()),
