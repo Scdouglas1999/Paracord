@@ -31,8 +31,7 @@ Guilds, channels, and DMs with the full messaging experience — send, edit, del
 
 WebRTC voice powered by a bundled LiveKit SFU. Mute, deafen, pick your mic and speakers, and toggle noise suppression, echo cancellation, and noise gate. Speaking indicators light up in real-time, and join/leave sounds play when people hop in and out of channels. Configurable keybinds for mute, deafen, and push-to-talk.
 
-<!-- Screenshot: voice channel with participants and speaking indicators -->
-<!-- ![Voice chat](docs/screenshots/voice-chat.png) -->
+<img width="2537" height="1379" alt="image" src="https://github.com/user-attachments/assets/8f503411-372f-4dea-9e02-ea14cd9adfc4" />
 
 ### Live Streaming
 
