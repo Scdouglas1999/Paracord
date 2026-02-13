@@ -25,8 +25,7 @@ On February 9th, 2026, Discord's CEO announced that they would be starting to ro
 
 Guilds, channels, and DMs with the full messaging experience — send, edit, delete, reply, pin, react with emoji, attach files via drag-and-drop, and see who's typing in real-time. Images embed inline, files show name and size, and messages group by author just like you'd expect.
 
-<!-- Screenshot: text chat with messages, reactions, and file attachments -->
-<!-- ![Text chat](docs/screenshots/text-chat.png) -->
+<img width="2537" height="1387" alt="image" src="https://github.com/user-attachments/assets/e6e4da61-1352-4e17-bd5e-b2a350aac3b4" />
 
 ### Voice Chat
 
