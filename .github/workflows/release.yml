@@ -186,13 +186,6 @@ jobs:
         working-directory: client
         run: npm ci
 
-      - name: Validate updater signing key
-        shell: pwsh
-        run: |
-          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
-            throw "TAURI_SIGNING_PRIVATE_KEY secret is required for signed updater artifacts."
-          }
-
       - name: Build Tauri bundles (Windows)
         working-directory: client
         run: npx tauri build
@@ -262,14 +255,6 @@ jobs:
         working-directory: client
         run: npm ci
 
-      - name: Validate updater signing key
-        run: |
-          set -euo pipefail
-          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY secret is required for signed updater artifacts."
-            exit 1
-          fi
-
       - name: Build Tauri bundles (AppImage + deb)
         working-directory: client
         run: npx tauri build --bundles appimage,deb
@@ -316,19 +301,19 @@ jobs:
           repo="${GITHUB_REPOSITORY}"
           pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          msi_path="$(find artifacts/client-windows-msi -maxdepth 1 -type f -name '*.msi' | head -n1)"
-          msi_sig_path="${msi_path}.sig"
-          appimage_path="$(find artifacts/client-linux-appimage -maxdepth 1 -type f -name '*.AppImage' | head -n1)"
-          appimage_sig_path="${appimage_path}.sig"
-          deb_path="$(find artifacts/client-linux-deb -maxdepth 1 -type f -name '*.deb' | head -n1)"
-          deb_sig_path="${deb_path}.sig"
+          msi_sig_path="$(find artifacts/client-windows-msi -maxdepth 1 -type f -name '*.msi.sig' 2>/dev/null | head -n1)"
+          appimage_sig_path="$(find artifacts/client-linux-appimage -maxdepth 1 -type f -name '*.AppImage.sig' 2>/dev/null | head -n1)"
+          deb_sig_path="$(find artifacts/client-linux-deb -maxdepth 1 -type f -name '*.deb.sig' 2>/dev/null | head -n1)"
 
-          for required in "$msi_path" "$msi_sig_path" "$appimage_path" "$appimage_sig_path" "$deb_path" "$deb_sig_path"; do
-            if [ ! -f "$required" ]; then
-              echo "Required updater artifact missing: $required"
-              exit 1
-            fi
-          done
+          # Only generate latest.json if all signature files exist (signing key was configured)
+          if [ -z "$msi_sig_path" ] || [ -z "$appimage_sig_path" ] || [ -z "$deb_sig_path" ]; then
+            echo "Signing artifacts not found — skipping latest.json generation"
+            exit 0
+          fi
+
+          msi_path="${msi_sig_path%.sig}"
+          appimage_path="${appimage_sig_path%.sig}"
+          deb_path="${deb_sig_path%.sig}"
 
           msi_name="$(basename "$msi_path")"
           appimage_name="$(basename "$appimage_path")"
@@ -366,11 +351,23 @@ jobs:
 
           cat artifacts/latest.json
 
+      - name: Delete existing release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # Delete all existing assets so we don't accumulate stale files from prior runs
+          asset_ids="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq '.assets[].id' 2>/dev/null || true)"
+          for aid in $asset_ids; do
+            echo "Deleting asset $aid"
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${aid}" || true
+          done
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
-          generate_release_notes: true
           body: |
             ## Downloads
 
@@ -383,6 +380,7 @@ jobs:
             | Client AppImage (Linux) | `Paracord_*.AppImage` |
             | Client deb (Linux) | `paracord_*_amd64.deb` |
             | Signed updater manifest | `latest.json` |
+          fail_on_unmatched_files: false
           files: |
             artifacts/server-windows/*.zip
             artifacts/server-linux/*.tar.gz

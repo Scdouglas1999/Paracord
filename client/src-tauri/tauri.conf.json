@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickkadutskyi/jb-tauri-v2-schema/main/schema.json",
   "productName": "Paracord",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "identifier": "com.paracord.app",
   "build": {
     "frontendDist": "../dist",
@@ -27,7 +27,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": "if-it-exists",
     "targets": "all",
     "icon": [
       "icons/32x32.png",
