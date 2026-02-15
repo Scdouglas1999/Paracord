@@ -102,7 +102,7 @@ pub async fn update_member(
 
     if let Some(raw_roles) = body.roles {
         if !paracord_core::permissions::is_server_admin(actor_perms) {
-            return Err(ApiError::Forbidden);
+            return Err(ApiError::Forbidden("forbidden".into()));
         }
 
         let guild_roles = paracord_db::roles::get_guild_roles(&state.db, guild_id)
@@ -149,7 +149,7 @@ pub async fn update_member(
                     continue;
                 };
                 if role.position >= actor_top_role_pos {
-                    return Err(ApiError::Forbidden);
+                    return Err(ApiError::Forbidden("forbidden".into()));
                 }
             }
         }

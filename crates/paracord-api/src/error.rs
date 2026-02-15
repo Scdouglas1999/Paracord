@@ -12,8 +12,8 @@ pub enum ApiError {
     NotFound,
     #[error("unauthorized")]
     Unauthorized,
-    #[error("forbidden")]
-    Forbidden,
+    #[error("forbidden: {0}")]
+    Forbidden(String),
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error("conflict: {0}")]
@@ -31,7 +31,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match &self {
             ApiError::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
-            ApiError::Forbidden => (StatusCode::FORBIDDEN, self.to_string()),
+            ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, self.to_string()),
             ApiError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate limited".to_string()),
@@ -52,8 +52,8 @@ impl From<paracord_core::error::CoreError> for ApiError {
     fn from(e: paracord_core::error::CoreError) -> Self {
         match e {
             paracord_core::error::CoreError::NotFound => ApiError::NotFound,
-            paracord_core::error::CoreError::Forbidden => ApiError::Forbidden,
-            paracord_core::error::CoreError::MissingPermission => ApiError::Forbidden,
+            paracord_core::error::CoreError::Forbidden => ApiError::Forbidden("forbidden".into()),
+            paracord_core::error::CoreError::MissingPermission => ApiError::Forbidden("missing permission".into()),
             paracord_core::error::CoreError::BadRequest(msg) => ApiError::BadRequest(msg),
             paracord_core::error::CoreError::Conflict(msg) => ApiError::Conflict(msg),
             paracord_core::error::CoreError::Database(_) => {

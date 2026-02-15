@@ -9,6 +9,7 @@ license.workspace = true
 paracord-core = { workspace = true }
 paracord-db = { workspace = true }
 paracord-models = { workspace = true }
+paracord-util = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

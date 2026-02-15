@@ -74,7 +74,7 @@ pub async fn create_role(
         auth.user_id,
     );
     if !paracord_core::permissions::is_server_admin(perms) {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden("forbidden".into()));
     }
 
     let role_id = paracord_util::snowflake::generate(1);
@@ -149,7 +149,7 @@ pub async fn update_role(
         auth.user_id,
     );
     if !paracord_core::permissions::is_server_admin(perms) {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden("forbidden".into()));
     }
 
     let target_role = paracord_db::roles::get_role(&state.db, role_id)
@@ -162,7 +162,7 @@ pub async fn update_role(
     if auth.user_id != guild.owner_id {
         let actor_top_role_pos = user_roles.iter().map(|r| r.position).max().unwrap_or(0);
         if target_role.position >= actor_top_role_pos {
-            return Err(ApiError::Forbidden);
+            return Err(ApiError::Forbidden("forbidden".into()));
         }
     }
 
@@ -227,7 +227,7 @@ pub async fn delete_role(
         auth.user_id,
     );
     if !paracord_core::permissions::is_server_admin(perms) {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden("forbidden".into()));
     }
 
     let target_role = paracord_db::roles::get_role(&state.db, role_id)
@@ -240,7 +240,7 @@ pub async fn delete_role(
     if auth.user_id != guild.owner_id {
         let actor_top_role_pos = user_roles.iter().map(|r| r.position).max().unwrap_or(0);
         if target_role.position >= actor_top_role_pos {
-            return Err(ApiError::Forbidden);
+            return Err(ApiError::Forbidden("forbidden".into()));
         }
     }
 

@@ -17,84 +17,19 @@ pub async fn restart_update(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> Result<Json<Value>, ApiError> {
-    // Resolve the repo root (parent of the `target` directory that contains our binary)
-    let exe = std::env::current_exe()
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Cannot determine exe path: {}", e)))?;
-    let repo_root = exe
-        .ancestors()
-        .find(|p| p.join("Cargo.toml").is_file() && p.join("client").is_dir())
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("Cannot determine repo root from exe path")))?
-        .to_path_buf();
-
-    let repo_root_str = repo_root.display().to_string();
-    let exe_str = exe.display().to_string();
-
-    // Write a PowerShell updater script to a temp file
-    let script = format!(
-        r#"# Paracord auto-update script
-Start-Sleep -Seconds 3
-
-Set-Location -Path "{repo_root}"
-
-Write-Host "Pulling latest code..."
-git pull origin main
-
-Write-Host "Rebuilding client..."
-Set-Location -Path "{repo_root}\client"
-npm install
-npm run build
-Set-Location -Path "{repo_root}"
-
-Write-Host "Rebuilding server..."
-cargo build --release --bin paracord-server
-
-Write-Host "Starting server..."
-Start-Process -FilePath "{exe}" -WorkingDirectory "{repo_root}" -WindowStyle Normal
-
-Write-Host "Update complete."
-"#,
-        repo_root = repo_root_str,
-        exe = exe_str,
-    );
-
-    let script_path = std::env::temp_dir().join("paracord-update.ps1");
-    std::fs::write(&script_path, &script)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to write update script: {}", e)))?;
-
-    // Spawn the PowerShell script as a detached process
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x00000008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-
-        std::process::Command::new("powershell")
-            .args(["-ExecutionPolicy", "Bypass", "-File", &script_path.display().to_string()])
-            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-            .spawn()
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to spawn updater: {}", e)))?;
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        // Fallback for non-Windows: spawn a bash script instead
-        let sh_script = format!(
-            "#!/bin/sh\nsleep 3\ncd '{}'\ngit pull origin main\ncd client && npm install && npm run build && cd ..\ncargo build --release --bin paracord-server\n'{}' &\n",
-            repo_root_str, exe_str,
-        );
-        let sh_path = std::env::temp_dir().join("paracord-update.sh");
-        std::fs::write(&sh_path, &sh_script)
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to write update script: {}", e)))?;
-        std::process::Command::new("sh")
-            .arg(&sh_path)
-            .spawn()
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to spawn updater: {}", e)))?;
+    // Gate behind environment variable for security — shell execution has been
+    // removed entirely.  The server only triggers a graceful shutdown; the
+    // process supervisor (systemd / Docker) is responsible for restarting it.
+    if std::env::var("PARACORD_ALLOW_UPDATE").as_deref() != Ok("1") {
+        return Err(ApiError::Forbidden(
+            "Server updates are disabled for security. Set PARACORD_ALLOW_UPDATE=1 to enable.".into(),
+        ));
     }
 
     // Broadcast SERVER_RESTART to all connected clients
     state.event_bus.dispatch(
         "SERVER_RESTART",
-        json!({"message": "Server is restarting for an update..."}),
+        json!({"message": "Server is restarting..."}),
         None,
     );
 
@@ -139,13 +74,84 @@ pub async fn get_settings(
     })))
 }
 
+const ALLOWED_SETTINGS: &[&str] = &[
+    "registration_enabled",
+    "server_name",
+    "server_description",
+    "max_guilds_per_user",
+    "max_members_per_guild",
+];
+
+const MAX_STRING_SETTING_LEN: usize = 256;
+
+fn validate_setting(key: &str, value: &str) -> Result<(), String> {
+    match key {
+        "registration_enabled" => {
+            if value != "true" && value != "false" {
+                return Err(format!("{key}: must be \"true\" or \"false\""));
+            }
+        }
+        "server_name" => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() || trimmed.len() > MAX_STRING_SETTING_LEN {
+                return Err(format!(
+                    "{key}: must be 1-{MAX_STRING_SETTING_LEN} characters"
+                ));
+            }
+        }
+        "server_description" => {
+            if value.len() > MAX_STRING_SETTING_LEN {
+                return Err(format!(
+                    "{key}: must be at most {MAX_STRING_SETTING_LEN} characters"
+                ));
+            }
+        }
+        "max_guilds_per_user" | "max_members_per_guild" => {
+            let n: u32 = value
+                .parse()
+                .map_err(|_| format!("{key}: must be a positive integer"))?;
+            if n == 0 || n > 100_000 {
+                return Err(format!("{key}: must be between 1 and 100000"));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub async fn update_settings(
     State(state): State<AppState>,
     _admin: AdminUser,
     Json(body): Json<HashMap<String, String>>,
 ) -> Result<Json<Value>, ApiError> {
-    // Write each setting to DB
+    // Reject unknown keys
+    for key in body.keys() {
+        if !ALLOWED_SETTINGS.contains(&key.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "unknown setting: \"{key}\""
+            )));
+        }
+    }
+
+    // Validate values
     for (key, value) in &body {
+        validate_setting(key, value).map_err(|e| ApiError::BadRequest(e))?;
+    }
+
+    // Sanitize string values (trim whitespace)
+    let sanitized: HashMap<String, String> = body
+        .into_iter()
+        .map(|(k, v)| {
+            let v = match k.as_str() {
+                "server_name" | "server_description" => v.trim().to_string(),
+                _ => v,
+            };
+            (k, v)
+        })
+        .collect();
+
+    // Write each setting to DB
+    for (key, value) in &sanitized {
         paracord_db::server_settings::set_setting(&state.db, key, value)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -153,7 +159,7 @@ pub async fn update_settings(
 
     // Update in-memory runtime settings
     let mut settings = state.runtime.write().await;
-    for (key, value) in &body {
+    for (key, value) in &sanitized {
         match key.as_str() {
             "registration_enabled" => {
                 settings.registration_enabled = value == "true";

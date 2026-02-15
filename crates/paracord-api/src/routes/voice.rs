@@ -1,4 +1,5 @@
 use axum::{
+    body::Bytes,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     Json,
@@ -7,6 +8,7 @@ use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
@@ -424,10 +426,87 @@ pub async fn leave_voice(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Verify a LiveKit webhook JWT token.
+///
+/// LiveKit signs webhooks with an `Authorization: <jwt>` header. The JWT is
+/// HS256-signed using the API secret, the `iss` claim must match the API key,
+/// and the `sha256` claim must match the hex-encoded SHA-256 hash of the
+/// request body.
+fn verify_livekit_webhook(
+    auth_header: &str,
+    body: &[u8],
+    api_key: &str,
+    api_secret: &str,
+) -> Result<(), ApiError> {
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+
+    #[derive(Deserialize)]
+    struct WebhookClaims {
+        #[allow(dead_code)]
+        iss: Option<String>,
+        sha256: Option<String>,
+    }
+
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_issuer(&[api_key]);
+    validation.set_required_spec_claims(&["iss"]);
+
+    let token_data = decode::<WebhookClaims>(
+        auth_header,
+        &DecodingKey::from_secret(api_secret.as_bytes()),
+        &validation,
+    )
+    .map_err(|e| {
+        tracing::warn!("LiveKit webhook JWT verification failed: {}", e);
+        ApiError::Unauthorized
+    })?;
+
+    // Verify the body hash
+    if let Some(expected_hash) = &token_data.claims.sha256 {
+        let mut hasher = Sha256::new();
+        hasher.update(body);
+        let digest = hasher.finalize();
+        let actual_hash = digest
+            .iter()
+            .fold(String::with_capacity(64), |mut s, b| {
+                use std::fmt::Write;
+                let _ = write!(s, "{:02x}", b);
+                s
+            });
+        if actual_hash != *expected_hash {
+            tracing::warn!(
+                "LiveKit webhook body hash mismatch: expected={}, actual={}",
+                expected_hash,
+                actual_hash
+            );
+            return Err(ApiError::Unauthorized);
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn livekit_webhook(
     State(state): State<AppState>,
-    Json(payload): Json<LiveKitWebhookPayload>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> Result<StatusCode, ApiError> {
+    // Verify the webhook signature
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(ApiError::Unauthorized)?;
+
+    verify_livekit_webhook(
+        auth_header,
+        &body,
+        &state.config.livekit_api_key,
+        &state.config.livekit_api_secret,
+    )?;
+
+    let payload: LiveKitWebhookPayload =
+        serde_json::from_slice(&body).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
     if payload.event != "participant_left" {
         return Ok(StatusCode::NO_CONTENT);
     }

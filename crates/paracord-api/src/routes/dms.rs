@@ -67,6 +67,19 @@ pub async fn create_dm(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
+    // Check if either user has blocked the other
+    let blocked_by_sender = paracord_db::relationships::get_relationship(&state.db, auth.user_id, recipient_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let blocked_by_recipient = paracord_db::relationships::get_relationship(&state.db, recipient_id, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if matches!(blocked_by_sender, Some(ref r) if r.rel_type == 2)
+        || matches!(blocked_by_recipient, Some(ref r) if r.rel_type == 2)
+    {
+        return Err(ApiError::Forbidden("Cannot create DM with this user".into()));
+    }
+
     let channel = if let Some(existing) =
         paracord_db::dms::find_dm_channel_between(&state.db, auth.user_id, recipient_id)
             .await
