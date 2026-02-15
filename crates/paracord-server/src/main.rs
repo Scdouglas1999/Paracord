@@ -286,7 +286,58 @@ async fn main() -> Result<()> {
         user_presences: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
 
-    let router = paracord_api::build_router()
+    // ── Orphaned attachment cleanup (background) ────────────────────────────
+    {
+        let cleanup_pool = state.db.clone();
+        let cleanup_storage = config.storage.path.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                match paracord_db::attachments::get_orphaned_attachments(&cleanup_pool, 24).await {
+                    Ok(orphans) if orphans.is_empty() => {}
+                    Ok(orphans) => {
+                        let count = orphans.len();
+                        for attachment in &orphans {
+                            let ext = std::path::Path::new(&attachment.filename)
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("bin");
+                            let file_path = std::path::Path::new(&cleanup_storage)
+                                .join("attachments")
+                                .join(format!("{}.{}", attachment.id, ext));
+                            let _ = tokio::fs::remove_file(&file_path).await;
+                        }
+                        match paracord_db::attachments::delete_orphaned_attachments(
+                            &cleanup_pool,
+                            24,
+                        )
+                        .await
+                        {
+                            Ok(deleted) => {
+                                tracing::info!(
+                                    "Attachment cleanup: removed {} orphaned files ({} DB rows)",
+                                    count,
+                                    deleted
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!("Attachment cleanup DB delete failed: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Attachment cleanup query failed: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
+    let router = paracord_api::build_router(
+            &config.server.allowed_origins,
+            config.server.public_url.as_deref(),
+        )
         .merge(paracord_ws::gateway_router())
         .with_state(state);
 

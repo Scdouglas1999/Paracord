@@ -17,8 +17,8 @@ pub mod error;
 pub mod middleware;
 pub mod routes;
 
-pub fn build_router() -> Router<AppState> {
-    let cors = build_cors_layer();
+pub fn build_router(allowed_origins: &[String], public_url: Option<&str>) -> Router<AppState> {
+    let cors = build_cors_layer(allowed_origins, public_url);
     Router::new()
         // Health
         .route("/health", get(health))
@@ -263,15 +263,56 @@ pub fn build_router() -> Router<AppState> {
         .layer(tower_http::trace::TraceLayer::new_for_http())
 }
 
-fn build_cors_layer() -> tower_http::cors::CorsLayer {
-    // Always allow any origin. Paracord is a self-hosted server designed for
-    // desktop clients (Tauri) which send origins like `tauri://localhost` or
-    // `http://tauri.localhost`. Restricting origins would break remote desktop
-    // clients while providing no real security benefit for this use case.
-    tower_http::cors::CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
-        .allow_headers(tower_http::cors::Any)
+fn build_cors_layer(allowed_origins: &[String], public_url: Option<&str>) -> tower_http::cors::CorsLayer {
+    use tower_http::cors::{AllowOrigin, Any};
+
+    let methods = [Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE];
+
+    // Tauri desktop client origins that must always be allowed.
+    const TAURI_ORIGINS: &[&str] = &["tauri://localhost", "http://tauri.localhost"];
+
+    // Build the explicit origin list (if any).
+    let mut origins: Vec<String> = allowed_origins.to_vec();
+
+    // If no explicit origins but a public_url is set, derive from it.
+    if origins.is_empty() {
+        if let Some(url) = public_url {
+            origins.push(url.trim_end_matches('/').to_string());
+        }
+    }
+
+    if origins.is_empty() {
+        // Development mode: no restrictions.
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(methods)
+            .allow_headers(Any)
+    } else {
+        // Production mode: explicit origin list + Tauri origins.
+        for tauri in TAURI_ORIGINS {
+            let s = (*tauri).to_string();
+            if !origins.contains(&s) {
+                origins.push(s);
+            }
+        }
+
+        let header_list = vec![
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::ACCEPT,
+        ];
+
+        let parsed: Vec<axum::http::HeaderValue> = origins
+            .iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(AllowOrigin::list(parsed))
+            .allow_methods(methods)
+            .allow_headers(header_list)
+            .allow_credentials(true)
+    }
 }
 
 async fn health() -> impl IntoResponse {

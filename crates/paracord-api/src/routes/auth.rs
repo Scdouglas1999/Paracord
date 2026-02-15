@@ -47,7 +47,7 @@ pub async fn register(
 ) -> Result<(StatusCode, Json<AuthResponse>), ApiError> {
     // Check runtime settings for registration status
     if !state.runtime.read().await.registration_enabled {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden("forbidden".into()));
     }
 
     if body.username.len() < 2 || body.username.len() > 32 {
@@ -74,13 +74,15 @@ pub async fn register(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     let id = paracord_util::snowflake::generate(1);
-    let mut user = paracord_db::users::create_user(
+    // Atomically create user and promote to admin if first user (prevents race condition)
+    let mut user = paracord_db::users::create_user_as_first_admin(
         &state.db,
         id,
         &body.username,
         0,
         &body.email,
         &password_hash,
+        paracord_core::USER_FLAG_ADMIN,
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -94,20 +96,6 @@ pub async fn register(
             // @everyone role ID == space ID
             let _ = paracord_db::roles::add_member_role(&state.db, user.id, space.id, space.id).await;
         }
-    }
-
-    // First registered user becomes server admin
-    let user_count = paracord_db::users::count_users(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    if user_count == 1 {
-        user = paracord_db::users::update_user_flags(
-            &state.db,
-            user.id,
-            user.flags | paracord_core::USER_FLAG_ADMIN,
-        )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
 
     if let Some(display_name) = body.display_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {

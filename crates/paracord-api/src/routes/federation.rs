@@ -90,7 +90,7 @@ pub async fn ingest_event(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let service = federation_service();
     if !service.is_enabled() {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden("forbidden".into()));
     }
     let inserted = service
         .persist_event(&state.db, &payload)
@@ -111,7 +111,7 @@ pub async fn get_event(
 ) -> Result<Json<Value>, ApiError> {
     let service = federation_service();
     if !service.is_enabled() {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden("forbidden".into()));
     }
     let event = service
         .fetch_event(&state.db, &event_id)

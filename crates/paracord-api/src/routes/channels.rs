@@ -123,7 +123,7 @@ async fn normalize_required_role_ids(
         actor_id,
     );
     if !paracord_core::permissions::is_server_admin(actor_perms) {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden("forbidden".into()));
     }
 
     let mut parsed_role_ids = parse_role_id_strings(raw_role_ids)?;
@@ -174,7 +174,7 @@ async fn ensure_channel_permissions(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
     {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden("forbidden".into()));
     }
     Ok(())
 }
@@ -498,7 +498,7 @@ pub async fn bulk_delete_messages(
                 .map_err(|_| ApiError::BadRequest("Invalid message ID".into()))?,
         );
     }
-    let deleted = paracord_db::messages::bulk_delete_messages(&state.db, &ids)
+    let deleted = paracord_db::messages::bulk_delete_messages(&state.db, channel_id, &ids)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let guild_id = channel.guild_id();
@@ -540,6 +540,26 @@ pub async fn send_message(
         &[Permissions::VIEW_CHANNEL, Permissions::SEND_MESSAGES],
     )
     .await?;
+
+    // Block check for DM channels
+    if channel.guild_id().is_none() {
+        let recipients = paracord_db::dms::get_dm_recipient_ids(&state.db, channel_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if let Some(&other_id) = recipients.iter().find(|&&id| id != auth.user_id) {
+            let fwd = paracord_db::relationships::get_relationship(&state.db, auth.user_id, other_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            let rev = paracord_db::relationships::get_relationship(&state.db, other_id, auth.user_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            if matches!(fwd, Some(ref r) if r.rel_type == 2)
+                || matches!(rev, Some(ref r) if r.rel_type == 2)
+            {
+                return Err(ApiError::Forbidden("Cannot send messages to this user".into()));
+            }
+        }
+    }
 
     let referenced_message_id = match body.referenced_message_id.as_deref() {
         Some(id) => Some(
@@ -717,6 +737,15 @@ pub async fn pin_message(
     )
     .await?;
 
+    // Verify the message belongs to this channel
+    let message = paracord_db::messages::get_message(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if message.channel_id != channel_id {
+        return Err(ApiError::NotFound);
+    }
+
     paracord_db::messages::pin_message(&state.db, message_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -752,6 +781,15 @@ pub async fn unpin_message(
         &[Permissions::VIEW_CHANNEL, Permissions::MANAGE_MESSAGES],
     )
     .await?;
+
+    // Verify the message belongs to this channel
+    let message = paracord_db::messages::get_message(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if message.channel_id != channel_id {
+        return Err(ApiError::NotFound);
+    }
 
     paracord_db::messages::unpin_message(&state.db, message_id)
         .await

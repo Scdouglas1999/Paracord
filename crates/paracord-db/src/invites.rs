@@ -40,7 +40,8 @@ pub async fn create_invite(
 pub async fn get_invite(pool: &DbPool, code: &str) -> Result<Option<InviteRow>, DbError> {
     let row = sqlx::query_as::<_, InviteRow>(
         "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, temporary, created_at
-         FROM invites WHERE code = ?1"
+         FROM invites WHERE code = ?1
+           AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))"
     )
     .bind(code)
     .fetch_optional(pool)
@@ -82,7 +83,9 @@ pub async fn get_guild_invites(pool: &DbPool, _guild_id: i64) -> Result<Vec<Invi
 pub async fn get_all_invites(pool: &DbPool) -> Result<Vec<InviteRow>, DbError> {
     let rows = sqlx::query_as::<_, InviteRow>(
         "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, temporary, created_at
-         FROM invites ORDER BY created_at DESC"
+         FROM invites
+         WHERE (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))
+         ORDER BY created_at DESC"
     )
     .fetch_all(pool)
     .await?;
@@ -92,10 +95,23 @@ pub async fn get_all_invites(pool: &DbPool) -> Result<Vec<InviteRow>, DbError> {
 pub async fn get_channel_invites(pool: &DbPool, channel_id: i64) -> Result<Vec<InviteRow>, DbError> {
     let rows = sqlx::query_as::<_, InviteRow>(
         "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, temporary, created_at
-         FROM invites WHERE channel_id = ?1 ORDER BY created_at DESC"
+         FROM invites WHERE channel_id = ?1
+           AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))
+         ORDER BY created_at DESC"
     )
     .bind(channel_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+pub async fn delete_expired_invites(pool: &DbPool) -> Result<u64, DbError> {
+    let result = sqlx::query(
+        "DELETE FROM invites
+         WHERE max_age IS NOT NULL AND max_age > 0
+           AND datetime(created_at, '+' || max_age || ' seconds') <= datetime('now')"
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }

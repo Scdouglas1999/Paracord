@@ -31,6 +31,10 @@ pub struct ServerConfig {
     /// Public URL of this server (e.g., https://chat.example.com).
     /// Used for CORS auto-configuration and invite links.
     pub public_url: Option<String>,
+    /// Explicit list of allowed CORS origins. When empty, origins are
+    /// derived from `public_url` or left open (development mode).
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -40,6 +44,7 @@ impl Default for ServerConfig {
             server_name: default_server_name(),
             web_dir: None,
             public_url: None,
+            allowed_origins: Vec::new(),
         }
     }
 }

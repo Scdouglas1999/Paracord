@@ -1,4 +1,20 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::{DbError, DbPool};
+
+/// Custom epoch matching paracord_util::snowflake: 2024-01-01T00:00:00Z
+const PARACORD_EPOCH: u64 = 1_704_067_200_000;
+
+/// Generate a cutoff snowflake ID for the given age in hours.
+fn cutoff_snowflake_id(hours_ago: u64) -> i64 {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let cutoff_ms = now_ms.saturating_sub(hours_ago * 3_600_000);
+    let ts = cutoff_ms.saturating_sub(PARACORD_EPOCH);
+    (ts << 22) as i64
+}
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AttachmentRow {
@@ -70,6 +86,42 @@ pub async fn get_message_attachments(pool: &DbPool, message_id: i64) -> Result<V
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Get unlinked attachments older than the given threshold.
+///
+/// Uses snowflake ID to determine age: generates a cutoff ID for the threshold
+/// time and selects attachments with `message_id IS NULL AND id < cutoff_id`.
+pub async fn get_orphaned_attachments(
+    pool: &DbPool,
+    older_than_hours: i64,
+) -> Result<Vec<AttachmentRow>, DbError> {
+    let cutoff_id = cutoff_snowflake_id(older_than_hours as u64);
+    let rows = sqlx::query_as::<_, AttachmentRow>(
+        "SELECT id, message_id, filename, content_type, size, url, width, height
+         FROM attachments
+         WHERE message_id IS NULL AND id < ?1",
+    )
+    .bind(cutoff_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Delete all orphaned attachments older than threshold, return count deleted.
+pub async fn delete_orphaned_attachments(
+    pool: &DbPool,
+    older_than_hours: i64,
+) -> Result<u64, DbError> {
+    let cutoff_id = cutoff_snowflake_id(older_than_hours as u64);
+    let result = sqlx::query(
+        "DELETE FROM attachments
+         WHERE message_id IS NULL AND id < ?1",
+    )
+    .bind(cutoff_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn attach_to_message(pool: &DbPool, id: i64, message_id: i64) -> Result<bool, DbError> {

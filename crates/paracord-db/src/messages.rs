@@ -158,13 +158,17 @@ pub async fn unpin_message(pool: &DbPool, id: i64) -> Result<(), DbError> {
     Ok(())
 }
 
-pub async fn bulk_delete_messages(pool: &DbPool, ids: &[i64]) -> Result<u64, DbError> {
+pub async fn bulk_delete_messages(pool: &DbPool, channel_id: i64, ids: &[i64]) -> Result<u64, DbError> {
     if ids.is_empty() {
         return Ok(0);
     }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
-    let sql = format!("DELETE FROM messages WHERE id IN ({})", placeholders.join(", "));
-    let mut query = sqlx::query(&sql);
+    // Offset placeholders: ?1 is channel_id, message IDs start at ?2
+    let placeholders: Vec<String> = (2..=ids.len() + 1).map(|i| format!("?{}", i)).collect();
+    let sql = format!(
+        "DELETE FROM messages WHERE channel_id = ?1 AND id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut query = sqlx::query(&sql).bind(channel_id);
     for id in ids {
         query = query.bind(id);
     }
@@ -179,17 +183,24 @@ pub async fn count_messages(pool: &DbPool) -> Result<i64, DbError> {
     Ok(row.0)
 }
 
+fn escape_like(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 pub async fn search_messages(
     pool: &DbPool,
     channel_id: i64,
     query: &str,
     limit: i64,
 ) -> Result<Vec<MessageRow>, DbError> {
-    let pattern = format!("%{}%", query);
+    let pattern = format!("%{}%", escape_like(query));
     let rows = sqlx::query_as::<_, MessageRow>(
         "SELECT id, channel_id, author_id, content, message_type, flags, edited_at, pinned, reference_id, created_at
          FROM messages
-         WHERE channel_id = ?1 AND content LIKE ?2
+         WHERE channel_id = ?1 AND content LIKE ?2 ESCAPE '\\'
          ORDER BY id DESC
          LIMIT ?3"
     )

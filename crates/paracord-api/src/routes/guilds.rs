@@ -207,7 +207,7 @@ pub async fn transfer_ownership(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
     if guild.owner_id != auth.user_id {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden("forbidden".into()));
     }
     let is_member = paracord_db::members::get_member(&state.db, new_owner_id, guild_id)
         .await

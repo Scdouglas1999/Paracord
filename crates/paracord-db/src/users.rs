@@ -54,6 +54,45 @@ pub async fn create_user(
     Ok(row)
 }
 
+/// Create a user and atomically promote to admin if this is the first user.
+/// Uses a transaction to prevent TOCTOU race where two simultaneous
+/// registrations both see count==0 and both become admin.
+pub async fn create_user_as_first_admin(
+    pool: &DbPool,
+    id: i64,
+    username: &str,
+    discriminator: i16,
+    email: &str,
+    password_hash: &str,
+    admin_flag: i32,
+) -> Result<UserRow, DbError> {
+    let mut tx = pool.begin().await?;
+
+    // Count existing users inside the transaction (serialized by SQLite's write lock)
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+        .fetch_one(&mut *tx)
+        .await?;
+
+    let flags = if count == 0 { admin_flag } else { 0 };
+
+    let row = sqlx::query_as::<_, UserRow>(
+        "INSERT INTO users (id, username, discriminator, email, password_hash, flags)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         RETURNING id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key"
+    )
+    .bind(id)
+    .bind(username)
+    .bind(discriminator)
+    .bind(email)
+    .bind(password_hash)
+    .bind(flags)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(row)
+}
+
 pub async fn get_user_by_id(pool: &DbPool, id: i64) -> Result<Option<UserRow>, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
         "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
