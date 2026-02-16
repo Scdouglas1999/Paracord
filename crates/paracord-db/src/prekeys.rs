@@ -26,8 +26,12 @@ pub async fn upsert_signed_prekey(
     signature: &str,
 ) -> Result<SignedPrekeyRow, DbError> {
     let row = sqlx::query_as::<_, SignedPrekeyRow>(
-        "INSERT OR REPLACE INTO signed_prekeys (id, user_id, public_key, signature)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO signed_prekeys (id, user_id, public_key, signature)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id) DO UPDATE SET
+            id = EXCLUDED.id,
+            public_key = EXCLUDED.public_key,
+            signature = EXCLUDED.signature
          RETURNING id, user_id, public_key, signature, created_at",
     )
     .bind(id)
@@ -46,7 +50,7 @@ pub async fn get_signed_prekey(
 ) -> Result<Option<SignedPrekeyRow>, DbError> {
     let row = sqlx::query_as::<_, SignedPrekeyRow>(
         "SELECT id, user_id, public_key, signature, created_at
-         FROM signed_prekeys WHERE user_id = ?1",
+         FROM signed_prekeys WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -54,7 +58,7 @@ pub async fn get_signed_prekey(
     Ok(row)
 }
 
-/// Batch insert one-time prekeys for a user. Uses INSERT OR IGNORE so
+/// Batch insert one-time prekeys for a user. Uses ON CONFLICT DO NOTHING so
 /// duplicate (user_id, id) pairs are silently skipped.
 /// `keys` is a slice of (id, public_key) tuples.
 /// Returns the number of keys actually inserted.
@@ -66,8 +70,9 @@ pub async fn upload_one_time_prekeys(
     let mut inserted: u64 = 0;
     for (id, public_key) in keys {
         let result = sqlx::query(
-            "INSERT OR IGNORE INTO one_time_prekeys (id, user_id, public_key)
-             VALUES (?1, ?2, ?3)",
+            "INSERT INTO one_time_prekeys (id, user_id, public_key)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, id) DO NOTHING",
         )
         .bind(id)
         .bind(user_id)
@@ -86,9 +91,9 @@ pub async fn consume_one_time_prekey(
 ) -> Result<Option<OneTimePrekeyRow>, DbError> {
     let row = sqlx::query_as::<_, OneTimePrekeyRow>(
         "DELETE FROM one_time_prekeys
-         WHERE rowid = (
-             SELECT rowid FROM one_time_prekeys
-             WHERE user_id = ?1
+         WHERE id IN (
+             SELECT id FROM one_time_prekeys
+             WHERE user_id = $1
              ORDER BY created_at ASC, id ASC
              LIMIT 1
          )
@@ -102,7 +107,7 @@ pub async fn consume_one_time_prekey(
 
 /// Count the number of remaining one-time prekeys for a user.
 pub async fn count_one_time_prekeys(pool: &DbPool, user_id: i64) -> Result<i64, DbError> {
-    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM one_time_prekeys WHERE user_id = ?1")
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM one_time_prekeys WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(pool)
         .await?;
@@ -111,11 +116,11 @@ pub async fn count_one_time_prekeys(pool: &DbPool, user_id: i64) -> Result<i64, 
 
 /// Delete all prekeys (signed and one-time) for a user.
 pub async fn delete_all_prekeys(pool: &DbPool, user_id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM signed_prekeys WHERE user_id = ?1")
+    sqlx::query("DELETE FROM signed_prekeys WHERE user_id = $1")
         .bind(user_id)
         .execute(pool)
         .await?;
-    sqlx::query("DELETE FROM one_time_prekeys WHERE user_id = ?1")
+    sqlx::query("DELETE FROM one_time_prekeys WHERE user_id = $1")
         .bind(user_id)
         .execute(pool)
         .await?;

@@ -38,9 +38,23 @@ class GatewayConnection {
   private allowReconnect = true;
   private sessionId: string | null = null;
   private _connected = false;
+  private lastHeartbeatSent: number = 0;
+  private missedAcks: number = 0;
+  private _connectionLatency: number = 0;
+  private pendingMessages: unknown[] = [];
+  private static readonly MAX_PENDING_MESSAGES = 50;
+
+  private shouldManageUiStatus(): boolean {
+    const { hydrated, servers } = useServerListStore.getState();
+    return !(hydrated && servers.length > 0);
+  }
 
   get connected() {
     return this._connected;
+  }
+
+  get connectionLatency() {
+    return this._connectionLatency;
   }
 
   connect() {
@@ -59,12 +73,17 @@ class GatewayConnection {
       return;
     }
 
+    if (this.shouldManageUiStatus()) {
+      useUIStore.getState().setConnectionStatus('connecting');
+    }
     this.ws = new WebSocket(resolveWsUrl());
     const activeWs = this.ws;
 
     activeWs.onopen = () => {
-      this.reconnectAttempts = 0;
       this._connected = true;
+      if (this.shouldManageUiStatus()) {
+        useUIStore.getState().setConnectionStatus('connected');
+      }
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
@@ -87,7 +106,14 @@ class GatewayConnection {
       this._connected = false;
       this.cleanup();
       if (this.allowReconnect) {
+        if (this.shouldManageUiStatus()) {
+          useUIStore.getState().setConnectionStatus('reconnecting');
+        }
         this.reconnect();
+      } else {
+        if (this.shouldManageUiStatus()) {
+          useUIStore.getState().setConnectionStatus('disconnected');
+        }
       }
     };
 
@@ -107,6 +133,11 @@ class GatewayConnection {
         break;
 
       case 11: // HEARTBEAT_ACK
+        if (this.lastHeartbeatSent > 0) {
+          this._connectionLatency = Date.now() - this.lastHeartbeatSent;
+          useUIStore.getState().setConnectionLatency(this._connectionLatency);
+        }
+        this.missedAcks = 0;
         break;
 
       case 0: // DISPATCH
@@ -144,6 +175,12 @@ class GatewayConnection {
   private startHeartbeat() {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = setInterval(() => {
+      this.lastHeartbeatSent = Date.now();
+      this.missedAcks++;
+      if (this.missedAcks >= 3) {
+        this.ws?.close();
+        return;
+      }
       this.send({ op: 1, d: this.sequence });
     }, this.heartbeatInterval!);
   }
@@ -154,6 +191,11 @@ class GatewayConnection {
     switch (event) {
       case GatewayEvents.READY:
         this.sessionId = data.session_id;
+        this.reconnectAttempts = 0;
+        this.flushPendingMessages();
+        if (this.shouldManageUiStatus()) {
+          useUIStore.getState().setConnectionStatus('connected');
+        }
         useUIStore.getState().setServerRestarting(false);
         useAuthStore.getState().fetchUser();
         data.guilds?.forEach((g: any) => {
@@ -213,9 +255,9 @@ class GatewayConnection {
         useMessageStore.getState().removeMessage(data.channel_id, data.id);
         break;
       case GatewayEvents.MESSAGE_DELETE_BULK:
-        data.ids?.forEach((id: string) => {
-          useMessageStore.getState().removeMessage(data.channel_id, id);
-        });
+        if (data.ids?.length) {
+          useMessageStore.getState().removeMessages(data.channel_id, data.ids);
+        }
         break;
 
       case GatewayEvents.GUILD_CREATE:
@@ -239,7 +281,11 @@ class GatewayConnection {
         break;
 
       case GatewayEvents.GUILD_MEMBER_ADD:
-        void useMemberStore.getState().fetchMembers(data.guild_id);
+        if (data.user) {
+          useMemberStore.getState().addMember(data.guild_id, data);
+        } else {
+          void useMemberStore.getState().fetchMembers(data.guild_id);
+        }
         break;
       case GatewayEvents.GUILD_MEMBER_REMOVE:
         if (data.user?.id || data.user_id) {
@@ -251,7 +297,11 @@ class GatewayConnection {
         }
         break;
       case GatewayEvents.GUILD_MEMBER_UPDATE:
-        void useMemberStore.getState().fetchMembers(data.guild_id);
+        if (data.user?.id) {
+          useMemberStore.getState().updateMember(data.guild_id, data);
+        } else {
+          void useMemberStore.getState().fetchMembers(data.guild_id);
+        }
         break;
 
       case GatewayEvents.PRESENCE_UPDATE:
@@ -333,6 +383,15 @@ class GatewayConnection {
   send(data: unknown) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
+    } else if (this.allowReconnect && this.pendingMessages.length < GatewayConnection.MAX_PENDING_MESSAGES) {
+      this.pendingMessages.push(data);
+    }
+  }
+
+  private flushPendingMessages() {
+    const messages = this.pendingMessages.splice(0);
+    for (const msg of messages) {
+      this.send(msg);
     }
   }
 
@@ -396,6 +455,7 @@ class GatewayConnection {
 
   disconnect() {
     this.allowReconnect = false;
+    this.pendingMessages = [];
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

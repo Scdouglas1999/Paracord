@@ -9,6 +9,7 @@ export interface ServerEntry {
   iconUrl?: string;     // server icon
   token: string | null; // JWT token for this server
   connected: boolean;   // WebSocket connected
+  apiReachable?: boolean; // Last known HTTP/API reachability
   userId?: string;      // user ID on this server (different per server since it's a snowflake)
 }
 
@@ -24,11 +25,32 @@ interface ServerListState {
   updateToken: (id: string, token: string) => void;
   updateServerInfo: (id: string, data: Partial<ServerEntry>) => void;
   setConnected: (id: string, connected: boolean) => void;
+  setApiReachable: (id: string, apiReachable: boolean) => void;
   markHydrated: () => void;
   hydrateTokens: () => Promise<void>;
   getServer: (id: string) => ServerEntry | undefined;
   getActiveServer: () => ServerEntry | undefined;
   getServerByUrl: (url: string) => ServerEntry | undefined;
+}
+
+function normalizeServerUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    let pathname = parsed.pathname.replace(/\/+$/, '');
+    if (
+      pathname === '/api' ||
+      pathname === '/api/v1' ||
+      pathname === '/health' ||
+      pathname === '/api/v1/health'
+    ) {
+      pathname = '';
+    }
+    return `${parsed.protocol}//${parsed.host}${pathname}`.replace(/\/+$/, '');
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
 }
 
 function generateServerId(url: string): string {
@@ -62,26 +84,39 @@ export const useServerListStore = create<ServerListState>()(
       activeServerId: null,
 
       addServer: (url, name, token) => {
-        const existing = get().servers.find((s) => s.url === url);
+        const normalizedUrl = normalizeServerUrl(url);
+        const existing = get().servers.find((s) => normalizeServerUrl(s.url) === normalizedUrl);
         if (existing) {
           if (token) {
             void saveServerToken(existing.id, token);
             set((state) => ({
               servers: state.servers.map((s) =>
-                s.id === existing.id ? { ...s, token, name } : s
+                s.id === existing.id
+                  ? { ...s, token, name, url: normalizedUrl, apiReachable: true }
+                  : s
+              ),
+              activeServerId: existing.id,
+            }));
+          } else {
+            set((state) => ({
+              servers: state.servers.map((s) =>
+                s.id === existing.id
+                  ? { ...s, name, url: normalizedUrl, apiReachable: true }
+                  : s
               ),
               activeServerId: existing.id,
             }));
           }
           return existing.id;
         }
-        const id = generateServerId(url);
+        const id = generateServerId(normalizedUrl);
         const entry: ServerEntry = {
           id,
-          url,
+          url: normalizedUrl,
           name,
           token: token || null,
           connected: false,
+          apiReachable: true,
         };
         if (token) {
           void saveServerToken(id, token);
@@ -124,7 +159,14 @@ export const useServerListStore = create<ServerListState>()(
       setConnected: (id, connected) =>
         set((state) => ({
           servers: state.servers.map((s) =>
-            s.id === id ? { ...s, connected } : s
+            s.id === id ? { ...s, connected, apiReachable: connected || s.apiReachable } : s
+          ),
+        })),
+
+      setApiReachable: (id, apiReachable) =>
+        set((state) => ({
+          servers: state.servers.map((s) =>
+            s.id === id ? { ...s, apiReachable } : s
           ),
         })),
 
@@ -152,7 +194,10 @@ export const useServerListStore = create<ServerListState>()(
         const { servers, activeServerId } = get();
         return servers.find((s) => s.id === activeServerId);
       },
-      getServerByUrl: (url) => get().servers.find((s) => s.url === url),
+      getServerByUrl: (url) => {
+        const normalizedUrl = normalizeServerUrl(url);
+        return get().servers.find((s) => normalizeServerUrl(s.url) === normalizedUrl);
+      },
     }),
     {
       name: 'paracord:server-list',
@@ -160,7 +205,12 @@ export const useServerListStore = create<ServerListState>()(
         state?.markHydrated();
       },
       partialize: (state) => ({
-        servers: state.servers.map((s) => ({ ...s, token: null, connected: false })),
+        servers: state.servers.map((s) => ({
+          ...s,
+          token: null,
+          connected: false,
+          apiReachable: s.apiReachable ?? false,
+        })),
         activeServerId: state.activeServerId,
       }),
     }

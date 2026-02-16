@@ -29,6 +29,8 @@ const EMPTY_TYPING: string[] = [];
 const EMPTY_CHANNELS: Channel[] = [];
 const MAX_REPLY_NEST_DEPTH = 6;
 const REPLY_INDENT_PX = 18;
+const THREAD_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const _threadHydratedAt = new Map<string, number>();
 
 interface MessageListProps {
   channelId: string;
@@ -315,15 +317,19 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     return el.scrollHeight - el.scrollTop - el.clientHeight <= 140;
   }, []);
 
+  const readStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markLatestRead = useCallback(() => {
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage?.id || lastReadStateMessageIdRef.current === lastMessage.id) return;
     lastReadStateMessageIdRef.current = lastMessage.id;
-    channelApi.updateReadState(channelId, lastMessage.id).then(() => {
-      window.dispatchEvent(new CustomEvent('paracord:read-state-updated'));
-    }).catch(() => {
-      /* ignore */
-    });
+    if (readStateTimerRef.current) clearTimeout(readStateTimerRef.current);
+    readStateTimerRef.current = setTimeout(() => {
+      channelApi.updateReadState(channelId, lastMessage.id).then(() => {
+        window.dispatchEvent(new CustomEvent('paracord:read-state-updated'));
+      }).catch(() => {
+        /* ignore */
+      });
+    }, 500);
   }, [messages, channelId]);
 
   // Virtualizer
@@ -365,6 +371,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       Boolean(activeGuildId) &&
       (activeChannelType === 0 || activeChannelType === 5 || activeChannelType === 7);
     if (!shouldHydrateThreads) return;
+    const lastHydrated = _threadHydratedAt.get(channelId) ?? 0;
+    if (Date.now() - lastHydrated < THREAD_CACHE_TTL_MS) return;
     let cancelled = false;
     const hydrateThreads = async () => {
       try {
@@ -373,6 +381,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           channelApi.getArchivedThreads(channelId),
         ]);
         if (cancelled) return;
+        _threadHydratedAt.set(channelId, Date.now());
         const upsertChannel = useChannelStore.getState();
         for (const thread of [...activeRes.data, ...archivedRes.data]) {
           upsertChannel.addChannel(thread);
@@ -1089,12 +1098,16 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           {msg.attachments && msg.attachments.length > 0 && (
             <div className="mt-1.5 flex flex-col gap-2">
               {msg.attachments.map((att) => {
-                const src = att.url.startsWith('http') ? att.url : `${API_BASE_URL}${att.url}`;
+                // att.url from the server is already a full path like /api/v1/attachments/{id},
+                // so strip the /api/v1 prefix before prepending API_BASE_URL to avoid doubling it.
+                const resolveAttUrl = (url: string) =>
+                  url.startsWith('http') ? url : `${API_BASE_URL}${url.replace(/^\/api\/v1/, '')}`;
+                const src = resolveAttUrl(att.url);
                 if (att.content_type?.startsWith('image/')) {
                   const imageAttachments = msg.attachments!.filter((a) => a.content_type?.startsWith('image/'));
                   const imageIndex = imageAttachments.findIndex((a) => a.id === att.id);
                   const lightboxImages: LightboxImage[] = imageAttachments.map((a) => ({
-                    src: a.url.startsWith('http') ? a.url : `${API_BASE_URL}${a.url}`,
+                    src: resolveAttUrl(a.url),
                     alt: a.filename,
                     filename: a.filename,
                   }));

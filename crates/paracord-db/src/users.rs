@@ -1,11 +1,12 @@
-use crate::{DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, json_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
 fn normalize_email(email: &str) -> String {
     email.trim().to_ascii_lowercase()
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct UserRow {
     pub id: i64,
     pub username: String,
@@ -21,7 +22,7 @@ pub struct UserRow {
     pub public_key: Option<String>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct UserAuthRow {
     pub id: i64,
     pub username: String,
@@ -38,7 +39,7 @@ pub struct UserAuthRow {
     pub public_key: Option<String>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct UserSettingsRow {
     pub user_id: i64,
     pub theme: String,
@@ -49,6 +50,66 @@ pub struct UserSettingsRow {
     pub notifications: serde_json::Value,
     pub keybinds: serde_json::Value,
     pub updated_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for UserRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            username: row.try_get("username")?,
+            discriminator: row.try_get("discriminator")?,
+            email: row.try_get("email")?,
+            display_name: row.try_get("display_name")?,
+            avatar_hash: row.try_get("avatar_hash")?,
+            banner_hash: row.try_get("banner_hash")?,
+            bio: row.try_get("bio")?,
+            accent_color: row.try_get("accent_color")?,
+            flags: row.try_get("flags")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+            public_key: row.try_get("public_key")?,
+        })
+    }
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for UserAuthRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            username: row.try_get("username")?,
+            discriminator: row.try_get("discriminator")?,
+            email: row.try_get("email")?,
+            password_hash: row.try_get("password_hash")?,
+            display_name: row.try_get("display_name")?,
+            avatar_hash: row.try_get("avatar_hash")?,
+            banner_hash: row.try_get("banner_hash")?,
+            bio: row.try_get("bio")?,
+            accent_color: row.try_get("accent_color")?,
+            flags: row.try_get("flags")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+            public_key: row.try_get("public_key")?,
+        })
+    }
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for UserSettingsRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let notifications_raw: String = row.try_get("notifications")?;
+        let keybinds_raw: String = row.try_get("keybinds")?;
+        let updated_at_raw: String = row.try_get("updated_at")?;
+        Ok(Self {
+            user_id: row.try_get("user_id")?,
+            theme: row.try_get("theme")?,
+            custom_css: row.try_get("custom_css")?,
+            locale: row.try_get("locale")?,
+            message_display: row.try_get("message_display")?,
+            crypto_auth_enabled: bool_from_any_row(row, "crypto_auth_enabled")?,
+            notifications: json_from_db_text(&notifications_raw)?,
+            keybinds: json_from_db_text(&keybinds_raw)?,
+            updated_at: datetime_from_db_text(&updated_at_raw)?,
+        })
+    }
 }
 
 pub async fn create_user(
@@ -62,7 +123,7 @@ pub async fn create_user(
     let normalized_email = normalize_email(email);
     let row = sqlx::query_as::<_, UserRow>(
         "INSERT INTO users (id, username, discriminator, email, password_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key",
     )
     .bind(id)
@@ -95,7 +156,7 @@ pub async fn create_user_as_first_admin(
 
     let row = sqlx::query_as::<_, UserRow>(
         "INSERT INTO users (id, username, discriminator, email, password_hash, flags)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key",
     )
     .bind(id)
@@ -114,7 +175,7 @@ pub async fn create_user_as_first_admin(
 pub async fn get_user_by_id(pool: &DbPool, id: i64) -> Result<Option<UserRow>, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
         "SELECT id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
-         FROM users WHERE id = ?1",
+         FROM users WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -126,7 +187,7 @@ pub async fn get_user_by_email(pool: &DbPool, email: &str) -> Result<Option<User
     let normalized_email = normalize_email(email);
     let row = sqlx::query_as::<_, UserAuthRow>(
         "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
-         FROM users WHERE lower(email) = ?1",
+         FROM users WHERE lower(email) = $1",
     )
     .bind(normalized_email)
     .fetch_optional(pool)
@@ -137,7 +198,7 @@ pub async fn get_user_by_email(pool: &DbPool, email: &str) -> Result<Option<User
 pub async fn get_user_auth_by_id(pool: &DbPool, id: i64) -> Result<Option<UserAuthRow>, DbError> {
     let row = sqlx::query_as::<_, UserAuthRow>(
         "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
-         FROM users WHERE id = ?1",
+         FROM users WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -152,7 +213,7 @@ pub async fn get_user_by_username(
 ) -> Result<Option<UserRow>, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
         "SELECT id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
-         FROM users WHERE username = ?1 AND discriminator = ?2",
+         FROM users WHERE username = $1 AND discriminator = $2",
     )
     .bind(username)
     .bind(discriminator)
@@ -169,7 +230,7 @@ pub async fn get_user_auth_by_username(
     let normalized_username = username.trim().to_ascii_lowercase();
     let row = sqlx::query_as::<_, UserAuthRow>(
         "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
-         FROM users WHERE lower(username) = ?1 AND discriminator = ?2",
+         FROM users WHERE lower(username) = $1 AND discriminator = $2",
     )
     .bind(normalized_username)
     .bind(discriminator)
@@ -185,7 +246,7 @@ pub async fn get_user_by_username_only(
     let row = sqlx::query_as::<_, UserRow>(
         "SELECT id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
          FROM users
-         WHERE username = ?1
+         WHERE username = $1
          ORDER BY created_at ASC
          LIMIT 1",
     )
@@ -203,7 +264,7 @@ pub async fn get_user_auth_by_username_only(
     let row = sqlx::query_as::<_, UserAuthRow>(
         "SELECT id, username, discriminator, email, password_hash, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
          FROM users
-         WHERE lower(username) = ?1
+         WHERE lower(username) = $1
          ORDER BY created_at ASC
          LIMIT 1",
     )
@@ -221,8 +282,8 @@ pub async fn update_user(
     avatar_hash: Option<&str>,
 ) -> Result<UserRow, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "UPDATE users SET display_name = COALESCE(?2, display_name), bio = COALESCE(?3, bio), avatar_hash = COALESCE(?4, avatar_hash), updated_at = datetime('now')
-         WHERE id = ?1
+        "UPDATE users SET display_name = COALESCE($2, display_name), bio = COALESCE($3, bio), avatar_hash = COALESCE($4, avatar_hash), updated_at = datetime('now')
+         WHERE id = $1
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key",
     )
     .bind(id)
@@ -239,8 +300,8 @@ pub async fn get_user_settings(
     user_id: i64,
 ) -> Result<Option<UserSettingsRow>, DbError> {
     let row = sqlx::query_as::<_, UserSettingsRow>(
-        "SELECT user_id, theme, custom_css, locale, message_display, crypto_auth_enabled, notifications, keybinds, updated_at
-         FROM user_settings WHERE user_id = ?1",
+        "SELECT user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, notifications, keybinds, updated_at
+         FROM user_settings WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -257,8 +318,8 @@ pub async fn count_users(pool: &DbPool) -> Result<i64, DbError> {
 
 pub async fn update_user_flags(pool: &DbPool, id: i64, flags: i32) -> Result<UserRow, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "UPDATE users SET flags = ?2, updated_at = datetime('now')
-         WHERE id = ?1
+        "UPDATE users SET flags = $2, updated_at = datetime('now')
+         WHERE id = $1
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key",
     )
     .bind(id)
@@ -277,7 +338,7 @@ pub async fn list_users_paginated(
         "SELECT id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
          FROM users
          ORDER BY created_at ASC
-         LIMIT ?1 OFFSET ?2",
+         LIMIT $1 OFFSET $2",
     )
     .bind(limit)
     .bind(offset)
@@ -287,7 +348,7 @@ pub async fn list_users_paginated(
 }
 
 pub async fn delete_user(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM users WHERE id = ?1")
+    sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -306,19 +367,31 @@ pub async fn upsert_user_settings(
     notifications: Option<&serde_json::Value>,
     keybinds: Option<&serde_json::Value>,
 ) -> Result<UserSettingsRow, DbError> {
+    let notifications = notifications
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| {
+            DbError::Sqlx(sqlx::Error::Protocol(format!(
+                "invalid notifications json: {e}"
+            )))
+        })?;
+    let keybinds = keybinds
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| DbError::Sqlx(sqlx::Error::Protocol(format!("invalid keybinds json: {e}"))))?;
     let row = sqlx::query_as::<_, UserSettingsRow>(
         "INSERT INTO user_settings (user_id, theme, locale, message_display, custom_css, crypto_auth_enabled, notifications, keybinds)
-         VALUES (?1, ?2, ?3, ?4, ?5, COALESCE(?6, FALSE), COALESCE(?7, '{}'), COALESCE(?8, '{}'))
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6, FALSE), COALESCE($7, '{}'), COALESCE($8, '{}'))
          ON CONFLICT (user_id) DO UPDATE SET
-            theme = ?2,
-            locale = ?3,
-            message_display = ?4,
-            custom_css = ?5,
-            crypto_auth_enabled = COALESCE(?6, user_settings.crypto_auth_enabled),
-            notifications = COALESCE(?7, user_settings.notifications),
-            keybinds = COALESCE(?8, user_settings.keybinds),
+            theme = $2,
+            locale = $3,
+            message_display = $4,
+            custom_css = $5,
+            crypto_auth_enabled = COALESCE($6, user_settings.crypto_auth_enabled),
+            notifications = COALESCE($7, user_settings.notifications),
+            keybinds = COALESCE($8, user_settings.keybinds),
             updated_at = datetime('now')
-         RETURNING user_id, theme, custom_css, locale, message_display, crypto_auth_enabled, notifications, keybinds, updated_at",
+         RETURNING user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, notifications, keybinds, updated_at",
     )
     .bind(user_id)
     .bind(theme)
@@ -339,8 +412,8 @@ pub async fn update_user_public_key(
     public_key: &str,
 ) -> Result<UserRow, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "UPDATE users SET public_key = ?2, updated_at = datetime('now')
-         WHERE id = ?1
+        "UPDATE users SET public_key = $2, updated_at = datetime('now')
+         WHERE id = $1
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key",
     )
     .bind(id)
@@ -357,8 +430,8 @@ pub async fn update_user_password_hash(
 ) -> Result<(), DbError> {
     sqlx::query(
         "UPDATE users
-         SET password_hash = ?2, updated_at = datetime('now')
-         WHERE id = ?1",
+         SET password_hash = $2, updated_at = datetime('now')
+         WHERE id = $1",
     )
     .bind(id)
     .bind(password_hash)
@@ -371,8 +444,8 @@ pub async fn update_user_email(pool: &DbPool, id: i64, email: &str) -> Result<Us
     let normalized_email = normalize_email(email);
     let row = sqlx::query_as::<_, UserRow>(
         "UPDATE users
-         SET email = ?2, updated_at = datetime('now')
-         WHERE id = ?1
+         SET email = $2, updated_at = datetime('now')
+         WHERE id = $1
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key",
     )
     .bind(id)
@@ -388,7 +461,7 @@ pub async fn get_user_by_public_key(
 ) -> Result<Option<UserRow>, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
         "SELECT id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key
-         FROM users WHERE public_key = ?1",
+         FROM users WHERE public_key = $1",
     )
     .bind(public_key)
     .fetch_optional(pool)
@@ -419,8 +492,8 @@ pub async fn get_mutual_guilds(
     let rows = sqlx::query_as::<_, MutualGuildRow>(
         "SELECT s.id, s.name, s.icon_hash
          FROM spaces s
-         INNER JOIN members ma ON ma.guild_id = s.id AND ma.user_id = ?1
-         INNER JOIN members mb ON mb.guild_id = s.id AND mb.user_id = ?2
+         INNER JOIN members ma ON ma.guild_id = s.id AND ma.user_id = $1
+         INNER JOIN members mb ON mb.guild_id = s.id AND mb.user_id = $2
          ORDER BY s.name",
     )
     .bind(user_a)
@@ -440,7 +513,7 @@ pub async fn get_mutual_friends(
          FROM relationships ra
          INNER JOIN relationships rb ON ra.target_id = rb.target_id
          INNER JOIN users u ON u.id = ra.target_id
-         WHERE ra.user_id = ?1 AND rb.user_id = ?2
+         WHERE ra.user_id = $1 AND rb.user_id = $2
            AND ra.rel_type = 1 AND rb.rel_type = 1
          ORDER BY u.username",
     )
@@ -461,7 +534,7 @@ pub async fn create_user_from_pubkey(
     let placeholder_email = format!("{}@pubkey", public_key);
     let row = sqlx::query_as::<_, UserRow>(
         "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, public_key)
-         VALUES (?1, ?2, 0, ?3, '', ?4, ?5)
+         VALUES ($1, $2, 0, $3, '', $4, $5)
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key",
     )
     .bind(id)
@@ -492,7 +565,7 @@ pub async fn create_user_from_pubkey_as_first_admin(
 
     let row = sqlx::query_as::<_, UserRow>(
         "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, public_key, flags)
-         VALUES (?1, ?2, 0, ?3, '', ?4, ?5, ?6)
+         VALUES ($1, $2, 0, $3, '', $4, $5, $6)
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key",
     )
     .bind(id)

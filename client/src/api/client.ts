@@ -1,6 +1,7 @@
 import axios, { type AxiosError, type AxiosInstance } from 'axios';
 import { resolveApiBaseUrl } from '../lib/apiBaseUrl';
 import { clearLegacyPersistedAuth, getAccessToken, setAccessToken } from '../lib/authToken';
+import { useServerListStore } from '../stores/serverListStore';
 import { toast } from '../stores/toastStore';
 
 /** Standardized API error response shape from the server. */
@@ -68,8 +69,17 @@ const clearPersistedAuth = () => {
   clearLegacyPersistedAuth();
 };
 
+function markActiveServerApiReachable(reachable: boolean): void {
+  const store = useServerListStore.getState();
+  const activeServerId = store.activeServerId;
+  if (!activeServerId) return;
+  store.setApiReachable(activeServerId, reachable);
+}
+
 // Auth interceptor for legacy client
 apiClient.interceptors.request.use((config) => {
+  // Resolve at request time so "Add Server" updates apply without full reload.
+  config.baseURL = resolveApiBaseUrl();
   const token = getAccessToken();
   if (token && token !== 'null' && token !== 'undefined') {
     config.headers.Authorization = `Bearer ${token}`;
@@ -79,9 +89,16 @@ apiClient.interceptors.request.use((config) => {
 
 // Error interceptor for legacy client
 apiClient.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    markActiveServerApiReachable(true);
+    return res;
+  },
   async (err) => {
     const original = err.config as { _retry?: boolean; url?: string; headers?: Record<string, string> };
+    if (err.response) {
+      // HTTP response means transport was reachable (even for 4xx/5xx).
+      markActiveServerApiReachable(true);
+    }
 
     if (
       err.response?.status === 401 &&
@@ -120,11 +137,13 @@ export function createApiClient(
   getToken: () => string | null,
   onTokenRefreshed?: (token: string) => void,
   onAuthFailed?: () => void,
+  onApiReachabilityChanged?: (reachable: boolean) => void,
 ): AxiosInstance {
   const client = axios.create({
     baseURL: baseUrl,
     headers: { 'Content-Type': 'application/json' },
     withCredentials: true,
+    timeout: 15_000,
   });
 
   // Auth interceptor
@@ -138,9 +157,15 @@ export function createApiClient(
 
   // Error + refresh interceptor
   client.interceptors.response.use(
-    (res) => res,
+    (res) => {
+      onApiReachabilityChanged?.(true);
+      return res;
+    },
     async (err) => {
       const original = err.config as { _retry?: boolean; url?: string; headers?: Record<string, string> };
+      if (err.response) {
+        onApiReachabilityChanged?.(true);
+      }
       const token = getToken();
       if (
         err.response?.status === 401 &&

@@ -1,7 +1,8 @@
-use crate::DbPool;
+use crate::{bool_from_any_row, json_from_db_text, DbPool};
 use serde_json::Value;
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FederatedServerRow {
     pub id: i64,
     pub server_name: String,
@@ -14,6 +15,22 @@ pub struct FederatedServerRow {
     pub created_at: String,
 }
 
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for FederatedServerRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            server_name: row.try_get("server_name")?,
+            domain: row.try_get("domain")?,
+            federation_endpoint: row.try_get("federation_endpoint")?,
+            public_key_hex: row.try_get("public_key_hex")?,
+            key_id: row.try_get("key_id")?,
+            trusted: bool_from_any_row(row, "trusted")?,
+            last_seen_at: row.try_get("last_seen_at")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ServerKeypairRow {
     pub id: i64,
@@ -23,7 +40,7 @@ pub struct ServerKeypairRow {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct OutboundFederationEventRow {
     pub id: i64,
     pub destination_server: String,
@@ -39,6 +56,29 @@ pub struct OutboundFederationEventRow {
     pub state_key: Option<String>,
     pub signatures: Value,
     pub attempt_count: i64,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for OutboundFederationEventRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let content_raw: String = row.try_get("content")?;
+        let signatures_raw: String = row.try_get("signatures")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            destination_server: row.try_get("destination_server")?,
+            federation_endpoint: row.try_get("federation_endpoint")?,
+            event_id: row.try_get("event_id")?,
+            room_id: row.try_get("room_id")?,
+            event_type: row.try_get("event_type")?,
+            sender: row.try_get("sender")?,
+            origin_server: row.try_get("origin_server")?,
+            origin_ts: row.try_get("origin_ts")?,
+            content: json_from_db_text(&content_raw)?,
+            depth: row.try_get("depth")?,
+            state_key: row.try_get("state_key")?,
+            signatures: json_from_db_text(&signatures_raw)?,
+            attempt_count: row.try_get("attempt_count")?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -261,7 +301,7 @@ pub async fn enqueue_outbound_event(
              $12, $12
          )
          ON CONFLICT (destination_server, event_id) DO UPDATE SET
-             next_attempt_at_ms = MIN(federation_outbound_queue.next_attempt_at_ms, EXCLUDED.next_attempt_at_ms),
+             next_attempt_at_ms = CASE WHEN federation_outbound_queue.next_attempt_at_ms < EXCLUDED.next_attempt_at_ms THEN federation_outbound_queue.next_attempt_at_ms ELSE EXCLUDED.next_attempt_at_ms END,
              updated_at_ms = EXCLUDED.updated_at_ms",
     )
     .bind(destination_server)
@@ -271,10 +311,14 @@ pub async fn enqueue_outbound_event(
     .bind(sender)
     .bind(origin_server)
     .bind(origin_ts)
-    .bind(content)
+    .bind(serde_json::to_string(content).map_err(|e| {
+        sqlx::Error::Protocol(format!("invalid federation content json: {e}").into())
+    })?)
     .bind(depth)
     .bind(state_key)
-    .bind(signatures)
+    .bind(serde_json::to_string(signatures).map_err(|e| {
+        sqlx::Error::Protocol(format!("invalid federation signatures json: {e}").into())
+    })?)
     .bind(now_ms)
     .execute(pool)
     .await?;
@@ -761,6 +805,26 @@ pub async fn upsert_room_sync_cursor(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Purge expired outbound events that have exceeded max retry attempts or age.
+pub async fn purge_expired_outbound_events(
+    pool: &DbPool,
+    now_ms: i64,
+    max_attempts: i64,
+    max_age_ms: i64,
+) -> Result<u64, sqlx::Error> {
+    let cutoff_ms = now_ms.saturating_sub(max_age_ms);
+    let rows = sqlx::query(
+        "DELETE FROM federation_outbound_queue
+         WHERE attempt_count >= $1 OR created_at_ms < $2",
+    )
+    .bind(max_attempts)
+    .bind(cutoff_ms)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(rows)
 }
 
 /// Store or replace the local server's ed25519 keypair (singleton row, id=1).

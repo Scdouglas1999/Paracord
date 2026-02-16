@@ -170,6 +170,7 @@ interface MessageState {
   addMessage: (channelId: string, message: Message) => void;
   updateMessage: (channelId: string, message: Message) => void;
   removeMessage: (channelId: string, messageId: string) => void;
+  removeMessages: (channelId: string, messageIds: string[]) => void;
 }
 
 export const useMessageStore = create<MessageState>()((set, get) => ({
@@ -207,12 +208,12 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
             ...state.hasMore,
             [channelId]: decrypted.length >= DEFAULT_MESSAGE_FETCH_LIMIT,
           },
-          loading: { ...state.loading, [channelId]: false },
         };
       });
     } catch (err) {
-      set((state) => ({ loading: { ...state.loading, [channelId]: false } }));
       toast.error(`Failed to load messages: ${extractApiError(err)}`);
+    } finally {
+      set((state) => ({ loading: { ...state.loading, [channelId]: false } }));
     }
   },
 
@@ -506,6 +507,18 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
         messages: {
           ...state.messages,
           [channelId]: existing.filter((m) => m.id !== messageId),
+        },
+      };
+    }),
+
+  removeMessages: (channelId, messageIds) =>
+    set((state) => {
+      const existing = state.messages[channelId] || [];
+      const idSet = new Set(messageIds);
+      return {
+        messages: {
+          ...state.messages,
+          [channelId]: existing.filter((m) => !idSet.has(m.id)),
         },
       };
     }),

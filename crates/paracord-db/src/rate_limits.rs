@@ -22,7 +22,7 @@ pub async fn increment_window_counter(
 ) -> Result<i64, DbError> {
     let row: (i64,) = sqlx::query_as(
         "INSERT INTO rate_limit_counters (bucket_key, window_start, window_seconds, count, updated_at)
-         VALUES (?1, ?2, ?3, 1, datetime('now'))
+         VALUES ($1, $2, $3, 1, datetime('now'))
          ON CONFLICT(bucket_key, window_start) DO UPDATE SET
             count = rate_limit_counters.count + 1,
             updated_at = datetime('now'),
@@ -44,12 +44,12 @@ pub async fn purge_window_counters_older_than(
 ) -> Result<u64, DbError> {
     let result = sqlx::query(
         "DELETE FROM rate_limit_counters
-         WHERE rowid IN (
-             SELECT rowid
+         WHERE (bucket_key, window_start) IN (
+             SELECT bucket_key, window_start
              FROM rate_limit_counters
-             WHERE window_start < ?1
+             WHERE window_start < $1
              ORDER BY window_start ASC
-             LIMIT ?2
+             LIMIT $2
          )",
     )
     .bind(oldest_window_start)
@@ -72,7 +72,7 @@ pub async fn get_auth_guard_states(
         )));
     }
 
-    let placeholders: Vec<String> = (1..=keys.len()).map(|i| format!("?{i}")).collect();
+    let placeholders: Vec<String> = (1..=keys.len()).map(|i| format!("${i}")).collect();
     let sql = format!(
         "SELECT guard_key, failures, locked_until, last_seen
          FROM auth_guard_state
@@ -97,7 +97,7 @@ pub async fn clear_auth_guard_keys(pool: &DbPool, keys: &[String]) -> Result<u64
         )));
     }
 
-    let placeholders: Vec<String> = (1..=keys.len()).map(|i| format!("?{i}")).collect();
+    let placeholders: Vec<String> = (1..=keys.len()).map(|i| format!("${i}")).collect();
     let sql = format!(
         "DELETE FROM auth_guard_state
          WHERE guard_key IN ({})",
@@ -118,12 +118,12 @@ pub async fn purge_auth_guard_older_than(
 ) -> Result<u64, DbError> {
     let result = sqlx::query(
         "DELETE FROM auth_guard_state
-         WHERE rowid IN (
-             SELECT rowid
+         WHERE guard_key IN (
+             SELECT guard_key
              FROM auth_guard_state
-             WHERE last_seen < ?1
+             WHERE last_seen < $1
              ORDER BY last_seen ASC
-             LIMIT ?2
+             LIMIT $2
          )",
     )
     .bind(min_last_seen)
@@ -142,7 +142,7 @@ pub async fn record_auth_guard_failure(
     let existing = sqlx::query_as::<_, AuthGuardStateRow>(
         "SELECT guard_key, failures, locked_until, last_seen
          FROM auth_guard_state
-         WHERE guard_key = ?1",
+         WHERE guard_key = $1",
     )
     .bind(guard_key)
     .fetch_optional(&mut *tx)
@@ -161,10 +161,10 @@ pub async fn record_auth_guard_failure(
     if existing.is_some() {
         sqlx::query(
             "UPDATE auth_guard_state
-             SET failures = ?2,
-                 locked_until = ?3,
-                 last_seen = ?4
-             WHERE guard_key = ?1",
+             SET failures = $2,
+                 locked_until = $3,
+                 last_seen = $4
+             WHERE guard_key = $1",
         )
         .bind(guard_key)
         .bind(next_failures)
@@ -175,7 +175,7 @@ pub async fn record_auth_guard_failure(
     } else {
         sqlx::query(
             "INSERT INTO auth_guard_state (guard_key, failures, locked_until, last_seen)
-             VALUES (?1, ?2, ?3, ?4)",
+             VALUES ($1, $2, $3, $4)",
         )
         .bind(guard_key)
         .bind(next_failures)

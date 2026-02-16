@@ -12,6 +12,7 @@ pub mod permissions;
 pub mod user;
 
 use paracord_db::DbPool;
+use paracord_federation::FederationService;
 use paracord_media::{Storage, StorageManager, VoiceManager};
 use paracord_models::permissions::Permissions;
 use std::collections::{HashMap, HashSet};
@@ -83,6 +84,8 @@ pub struct AppState {
     pub user_presences: Arc<RwLock<HashMap<i64, serde_json::Value>>>,
     /// Cached computed channel permissions: (user_id, channel_id) -> Permissions.
     pub permission_cache: moka::future::Cache<PermissionCacheKey, Permissions>,
+    /// Pre-built federation service (avoids re-parsing env vars on every request).
+    pub federation_service: Option<FederationService>,
 }
 
 #[derive(Clone, Debug)]
@@ -111,4 +114,8 @@ pub struct AppConfig {
     pub file_cryptor: Option<paracord_util::at_rest::FileCryptor>,
     pub backup_dir: String,
     pub database_url: String,
+    /// Per-peer rate limit for inbound federation events (per minute). None = no limit.
+    pub federation_max_events_per_peer_per_minute: Option<u32>,
+    /// Per-peer rate limit for remote user creation (per hour). None = no limit.
+    pub federation_max_user_creates_per_peer_per_hour: Option<u32>,
 }

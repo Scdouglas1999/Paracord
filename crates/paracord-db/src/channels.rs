@@ -1,8 +1,22 @@
-use crate::{DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+fn thread_is_archived(thread_metadata: Option<&str>) -> bool {
+    let Some(raw) = thread_metadata else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    value
+        .get("archived")
+        .and_then(|archived| archived.as_bool())
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Clone)]
 pub struct ChannelRow {
     pub id: i64,
     pub space_id: Option<i64>,
@@ -25,7 +39,7 @@ pub struct ChannelRow {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct ForumTagRow {
     pub id: i64,
     pub channel_id: i64,
@@ -34,6 +48,48 @@ pub struct ForumTagRow {
     pub moderated: bool,
     pub position: i32,
     pub created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ChannelRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            space_id: row.try_get("space_id")?,
+            name: row.try_get("name")?,
+            topic: row.try_get("topic")?,
+            channel_type: row.try_get("channel_type")?,
+            position: row.try_get("position")?,
+            parent_id: row.try_get("parent_id")?,
+            nsfw: bool_from_any_row(row, "nsfw")?,
+            rate_limit_per_user: row.try_get("rate_limit_per_user")?,
+            bitrate: row.try_get("bitrate")?,
+            user_limit: row.try_get("user_limit")?,
+            last_message_id: row.try_get("last_message_id")?,
+            required_role_ids: row.try_get("required_role_ids")?,
+            thread_metadata: row.try_get("thread_metadata")?,
+            owner_id: row.try_get("owner_id")?,
+            message_count: row.try_get("message_count")?,
+            applied_tags: row.try_get("applied_tags")?,
+            default_sort_order: row.try_get("default_sort_order")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ForumTagRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            channel_id: row.try_get("channel_id")?,
+            name: row.try_get("name")?,
+            emoji: row.try_get("emoji")?,
+            moderated: bool_from_any_row(row, "moderated")?,
+            position: row.try_get("position")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
 }
 
 impl ChannelRow {
@@ -55,8 +111,8 @@ pub async fn create_channel(
 ) -> Result<ChannelRow, DbError> {
     let row = sqlx::query_as::<_, ChannelRow>(
         "INSERT INTO channels (id, space_id, name, channel_type, position, parent_id, required_role_ids)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, '[]'))
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+         VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, '[]'))
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
     )
     .bind(id)
     .bind(space_id)
@@ -72,8 +128,8 @@ pub async fn create_channel(
 
 pub async fn get_channel(pool: &DbPool, id: i64) -> Result<Option<ChannelRow>, DbError> {
     let row = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
-         FROM channels WHERE id = ?1"
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+         FROM channels WHERE id = $1"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -88,8 +144,8 @@ pub async fn get_guild_channels(pool: &DbPool, space_id: i64) -> Result<Vec<Chan
 
 pub async fn get_space_channels(pool: &DbPool, space_id: i64) -> Result<Vec<ChannelRow>, DbError> {
     let rows = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
-         FROM channels WHERE space_id = ?1 ORDER BY position"
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+         FROM channels WHERE space_id = $1 ORDER BY position"
     )
     .bind(space_id)
     .fetch_all(pool)
@@ -106,12 +162,12 @@ pub async fn update_channel(
 ) -> Result<ChannelRow, DbError> {
     let row = sqlx::query_as::<_, ChannelRow>(
         "UPDATE channels
-         SET name = COALESCE(?2, name),
-             topic = COALESCE(?3, topic),
-             required_role_ids = COALESCE(?4, required_role_ids),
+         SET name = COALESCE($2, name),
+             topic = COALESCE($3, topic),
+             required_role_ids = COALESCE($4, required_role_ids),
              updated_at = datetime('now')
-         WHERE id = ?1
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+         WHERE id = $1
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
     )
     .bind(id)
     .bind(name)
@@ -123,7 +179,7 @@ pub async fn update_channel(
 }
 
 pub async fn delete_channel(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM channels WHERE id = ?1")
+    sqlx::query("DELETE FROM channels WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -140,7 +196,7 @@ pub async fn count_channels(pool: &DbPool) -> Result<i64, DbError> {
 pub async fn reorder_channels(pool: &DbPool, updates: &[(i64, i32)]) -> Result<(), DbError> {
     for (channel_id, position) in updates {
         sqlx::query(
-            "UPDATE channels SET position = ?2, updated_at = datetime('now') WHERE id = ?1",
+            "UPDATE channels SET position = $2, updated_at = datetime('now') WHERE id = $1",
         )
         .bind(channel_id)
         .bind(position)
@@ -161,8 +217,8 @@ pub async fn update_channel_positions(
     let mut changed = Vec::new();
     for &(channel_id, position, ref parent_id) in positions {
         let existing = sqlx::query_as::<_, ChannelRow>(
-            "SELECT id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
-             FROM channels WHERE id = ?1 AND space_id = ?2"
+            "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+             FROM channels WHERE id = $1 AND space_id = $2"
         )
         .bind(channel_id)
         .bind(guild_id)
@@ -181,9 +237,9 @@ pub async fn update_channel_positions(
         }
 
         let row = sqlx::query_as::<_, ChannelRow>(
-            "UPDATE channels SET position = ?2, parent_id = ?3, updated_at = datetime('now')
-             WHERE id = ?1
-             RETURNING id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+            "UPDATE channels SET position = $2, parent_id = $3, updated_at = datetime('now')
+             WHERE id = $1
+             RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
         )
         .bind(channel_id)
         .bind(position)
@@ -227,8 +283,8 @@ pub async fn create_thread(
 
     let row = sqlx::query_as::<_, ChannelRow>(
         "INSERT INTO channels (id, space_id, name, channel_type, position, parent_id, required_role_ids, thread_metadata, owner_id, message_count)
-         VALUES (?1, ?2, ?3, 6, 0, ?4, '[]', ?5, ?6, 0)
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+         VALUES ($1, $2, $3, 6, 0, $4, '[]', $5, $6, 0)
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
     )
     .bind(id)
     .bind(space_id)
@@ -247,16 +303,18 @@ pub async fn get_channel_threads(
     parent_channel_id: i64,
 ) -> Result<Vec<ChannelRow>, DbError> {
     let rows = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels
-         WHERE parent_id = ?1 AND channel_type = 6
-           AND (thread_metadata IS NULL OR json_extract(thread_metadata, '$.archived') = 0 OR json_extract(thread_metadata, '$.archived') = false)
+         WHERE parent_id = $1 AND channel_type = 6
          ORDER BY created_at DESC"
     )
     .bind(parent_channel_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+    Ok(rows
+        .into_iter()
+        .filter(|row| !thread_is_archived(row.thread_metadata.as_deref()))
+        .collect())
 }
 
 /// Get archived threads under a parent channel.
@@ -265,16 +323,18 @@ pub async fn get_archived_threads(
     parent_channel_id: i64,
 ) -> Result<Vec<ChannelRow>, DbError> {
     let rows = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels
-         WHERE parent_id = ?1 AND channel_type = 6
-           AND thread_metadata IS NOT NULL AND (json_extract(thread_metadata, '$.archived') = 1 OR json_extract(thread_metadata, '$.archived') = true)
+         WHERE parent_id = $1 AND channel_type = 6
          ORDER BY created_at DESC"
     )
     .bind(parent_channel_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+    Ok(rows
+        .into_iter()
+        .filter(|row| thread_is_archived(row.thread_metadata.as_deref()))
+        .collect())
 }
 
 /// Update thread archived/locked state and optionally rename.
@@ -285,53 +345,58 @@ pub async fn update_thread(
     archived: Option<bool>,
     locked: Option<bool>,
 ) -> Result<ChannelRow, DbError> {
-    // Build updated thread_metadata JSON using SQL json_set
-    let mut sets = vec![
-        "name = COALESCE(?2, name)".to_string(),
-        "updated_at = datetime('now')".to_string(),
-    ];
-    let mut bind_idx = 3;
+    let existing = sqlx::query_as::<_, ChannelRow>(
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+         FROM channels
+         WHERE id = $1 AND channel_type = 6",
+    )
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(existing) = existing else {
+        return Err(DbError::NotFound);
+    };
 
-    if archived.is_some() {
-        sets.push(format!(
-            "thread_metadata = json_set(COALESCE(thread_metadata, '{{}}'), '$.archived', ?{}, '$.archive_timestamp', CASE WHEN ?{} THEN datetime('now') ELSE json_extract(thread_metadata, '$.archive_timestamp') END)",
-            bind_idx, bind_idx
-        ));
-        bind_idx += 1;
-    }
-    if locked.is_some() {
-        sets.push(format!(
-            "thread_metadata = json_set(COALESCE(thread_metadata, '{{}}'), '$.locked', ?{})",
-            bind_idx
-        ));
-        bind_idx += 1;
-    }
-    let _ = bind_idx; // suppress unused warning
+    let mut metadata = existing
+        .thread_metadata
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
 
-    let sql = format!(
-        "UPDATE channels SET {} WHERE id = ?1 AND channel_type = 6
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at",
-        sets.join(", ")
-    );
-
-    let mut query = sqlx::query_as::<_, ChannelRow>(&sql);
-    query = query.bind(thread_id);
-    query = query.bind(name);
     if let Some(archived_val) = archived {
-        query = query.bind(archived_val);
+        metadata["archived"] = serde_json::Value::Bool(archived_val);
+        if archived_val {
+            metadata["archive_timestamp"] = serde_json::Value::String(
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            );
+        }
     }
     if let Some(locked_val) = locked {
-        query = query.bind(locked_val);
+        metadata["locked"] = serde_json::Value::Bool(locked_val);
     }
 
-    let row = query.fetch_one(pool).await?;
+    let metadata_raw = serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".to_string());
+
+    let row = sqlx::query_as::<_, ChannelRow>(
+        "UPDATE channels
+         SET name = COALESCE($2, name),
+             thread_metadata = $3,
+             updated_at = datetime('now')
+         WHERE id = $1 AND channel_type = 6
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at",
+    )
+    .bind(thread_id)
+    .bind(name)
+    .bind(metadata_raw)
+    .fetch_one(pool)
+    .await?;
     Ok(row)
 }
 
 /// Increment the message count for a thread channel.
 pub async fn increment_thread_message_count(pool: &DbPool, thread_id: i64) -> Result<(), DbError> {
     sqlx::query(
-        "UPDATE channels SET message_count = COALESCE(message_count, 0) + 1 WHERE id = ?1 AND channel_type = 6"
+        "UPDATE channels SET message_count = COALESCE(message_count, 0) + 1 WHERE id = $1 AND channel_type = 6"
     )
     .bind(thread_id)
     .execute(pool)
@@ -364,8 +429,8 @@ pub async fn create_forum_post(
 
     let row = sqlx::query_as::<_, ChannelRow>(
         "INSERT INTO channels (id, space_id, name, channel_type, position, parent_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags)
-         VALUES (?1, ?2, ?3, 6, 0, ?4, '[]', ?5, ?6, 0, ?7)
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+         VALUES ($1, $2, $3, 6, 0, $4, '[]', $5, $6, 0, $7)
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
     )
     .bind(id)
     .bind(space_id)
@@ -387,12 +452,6 @@ pub async fn get_forum_posts(
     sort_order: i32,
     include_archived: bool,
 ) -> Result<Vec<ChannelRow>, DbError> {
-    let archive_filter = if include_archived {
-        ""
-    } else {
-        "AND (thread_metadata IS NULL OR json_extract(thread_metadata, '$.archived') = 0 OR json_extract(thread_metadata, '$.archived') = false)"
-    };
-
     let order = if sort_order == 1 {
         "created_at DESC"
     } else {
@@ -400,26 +459,32 @@ pub async fn get_forum_posts(
     };
 
     let sql = format!(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels
-         WHERE parent_id = ?1 AND channel_type = 6
-           {}
+         WHERE parent_id = $1 AND channel_type = 6
          ORDER BY {}",
-        archive_filter, order
+        order
     );
 
     let rows = sqlx::query_as::<_, ChannelRow>(&sql)
         .bind(forum_channel_id)
         .fetch_all(pool)
         .await?;
-    Ok(rows)
+    if include_archived {
+        Ok(rows)
+    } else {
+        Ok(rows
+            .into_iter()
+            .filter(|row| !thread_is_archived(row.thread_metadata.as_deref()))
+            .collect())
+    }
 }
 
 /// Get forum tags for a forum channel.
 pub async fn get_forum_tags(pool: &DbPool, channel_id: i64) -> Result<Vec<ForumTagRow>, DbError> {
     let rows = sqlx::query_as::<_, ForumTagRow>(
-        "SELECT id, channel_id, name, emoji, moderated, position, created_at
-         FROM forum_tags WHERE channel_id = ?1 ORDER BY position",
+        "SELECT id, channel_id, name, emoji, CASE WHEN moderated THEN 1 ELSE 0 END AS moderated, position, created_at
+         FROM forum_tags WHERE channel_id = $1 ORDER BY position",
     )
     .bind(channel_id)
     .fetch_all(pool)
@@ -436,15 +501,15 @@ pub async fn create_forum_tag(
     emoji: Option<&str>,
     moderated: bool,
 ) -> Result<ForumTagRow, DbError> {
-    let position: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM forum_tags WHERE channel_id = ?1")
+    let position: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM forum_tags WHERE channel_id = $1")
         .bind(channel_id)
         .fetch_one(pool)
         .await?;
 
     let row = sqlx::query_as::<_, ForumTagRow>(
         "INSERT INTO forum_tags (id, channel_id, name, emoji, moderated, position)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         RETURNING id, channel_id, name, emoji, moderated, position, created_at",
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, channel_id, name, emoji, CASE WHEN moderated THEN 1 ELSE 0 END AS moderated, position, created_at",
     )
     .bind(id)
     .bind(channel_id)
@@ -463,7 +528,7 @@ pub async fn delete_forum_tag(
     tag_id: i64,
     channel_id: i64,
 ) -> Result<bool, DbError> {
-    let result = sqlx::query("DELETE FROM forum_tags WHERE id = ?1 AND channel_id = ?2")
+    let result = sqlx::query("DELETE FROM forum_tags WHERE id = $1 AND channel_id = $2")
         .bind(tag_id)
         .bind(channel_id)
         .execute(pool)
@@ -477,7 +542,7 @@ pub async fn update_post_tags(
     thread_id: i64,
     applied_tags: &str,
 ) -> Result<(), DbError> {
-    sqlx::query("UPDATE channels SET applied_tags = ?2, updated_at = datetime('now') WHERE id = ?1 AND channel_type = 6")
+    sqlx::query("UPDATE channels SET applied_tags = $2, updated_at = datetime('now') WHERE id = $1 AND channel_type = 6")
         .bind(thread_id)
         .bind(applied_tags)
         .execute(pool)
@@ -491,7 +556,7 @@ pub async fn update_forum_sort_order(
     channel_id: i64,
     sort_order: i32,
 ) -> Result<(), DbError> {
-    sqlx::query("UPDATE channels SET default_sort_order = ?2, updated_at = datetime('now') WHERE id = ?1 AND channel_type = 7")
+    sqlx::query("UPDATE channels SET default_sort_order = $2, updated_at = datetime('now') WHERE id = $1 AND channel_type = 7")
         .bind(channel_id)
         .bind(sort_order)
         .execute(pool)

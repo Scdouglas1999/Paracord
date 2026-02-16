@@ -85,16 +85,40 @@ impl Default for ServerConfig {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DatabaseConfig {
+    #[serde(default = "default_database_engine")]
+    pub engine: DatabaseEngine,
     pub url: String,
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
+    /// Statement timeout in seconds for PostgreSQL connections (0 = disabled).
+    #[serde(default)]
+    pub statement_timeout_secs: u64,
+    /// Idle-in-transaction timeout in seconds for PostgreSQL (0 = disabled).
+    #[serde(default)]
+    pub idle_in_transaction_timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseEngine {
+    Sqlite,
+    Postgres,
+}
+
+impl Default for DatabaseEngine {
+    fn default() -> Self {
+        Self::Sqlite
+    }
 }
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
+            engine: default_database_engine(),
             url: "sqlite://./data/paracord.db?mode=rwc".into(),
             max_connections: default_max_connections(),
+            statement_timeout_secs: 0,
+            idle_in_transaction_timeout_secs: 0,
         }
     }
 }
@@ -359,6 +383,10 @@ pub struct FederationConfig {
     pub signing_key_path: Option<String>,
     #[serde(default = "default_false")]
     pub allow_discovery: bool,
+    #[serde(default = "default_max_events_per_peer_per_minute")]
+    pub max_events_per_peer_per_minute: Option<u32>,
+    #[serde(default = "default_max_user_creates_per_peer_per_hour")]
+    pub max_user_creates_per_peer_per_hour: Option<u32>,
 }
 
 impl Default for FederationConfig {
@@ -368,6 +396,8 @@ impl Default for FederationConfig {
             domain: None,
             signing_key_path: default_federation_signing_key_path(),
             allow_discovery: false,
+            max_events_per_peer_per_minute: default_max_events_per_peer_per_minute(),
+            max_user_creates_per_peer_per_hour: default_max_user_creates_per_peer_per_hour(),
         }
     }
 }
@@ -417,6 +447,9 @@ fn generate_random_hex(len: usize) -> String {
 
 fn default_server_name() -> String {
     "localhost".into()
+}
+fn default_database_engine() -> DatabaseEngine {
+    DatabaseEngine::Sqlite
 }
 fn default_max_connections() -> u32 {
     20
@@ -499,6 +532,12 @@ fn default_at_rest_key_env() -> String {
 fn default_federation_signing_key_path() -> Option<String> {
     Some("./data/federation_signing_key.hex".into())
 }
+fn default_max_events_per_peer_per_minute() -> Option<u32> {
+    Some(120)
+}
+fn default_max_user_creates_per_peer_per_hour() -> Option<u32> {
+    Some(100)
+}
 fn default_backup_dir() -> String {
     "./data/backups".into()
 }
@@ -554,6 +593,7 @@ server_name = "{server_name}"
 # Set explicitly to override: public_url = "https://your-domain-or-ip:8443"
 
 [database]
+engine = "{db_engine}"
 url = "{db_url}"
 max_connections = {max_connections}
 
@@ -608,6 +648,10 @@ enabled = {federation_enabled}
 # Hex-encoded ed25519 private key file used for federation request signing.
 signing_key_path = "{federation_signing_key_path}"
 allow_discovery = {federation_allow_discovery}
+# Per-peer rate limit for inbound federation events (per minute). Set to 0 to disable.
+# max_events_per_peer_per_minute = 120
+# Per-peer rate limit for remote user creation (per hour). Set to 0 to disable.
+# max_user_creates_per_peer_per_hour = 100
 
 [network]
 # Automatically forward ports via UPnP on startup.
@@ -687,6 +731,10 @@ max_backups = {backup_max_backups}
 "#,
         bind_address = config.server.bind_address,
         server_name = config.server.server_name,
+        db_engine = match config.database.engine {
+            DatabaseEngine::Sqlite => "sqlite",
+            DatabaseEngine::Postgres => "postgres",
+        },
         db_url = config.database.url,
         max_connections = config.database.max_connections,
         jwt_secret = config.auth.jwt_secret,
@@ -786,9 +834,32 @@ impl Config {
         if let Ok(value) = std::env::var("PARACORD_DATABASE_URL") {
             config.database.url = value;
         }
+        if let Ok(value) = std::env::var("PARACORD_DATABASE_ENGINE") {
+            let normalized = value.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "sqlite" => config.database.engine = DatabaseEngine::Sqlite,
+                "postgres" | "postgresql" => config.database.engine = DatabaseEngine::Postgres,
+                _ => {
+                    tracing::warn!(
+                        "Ignoring invalid PARACORD_DATABASE_ENGINE value '{}'; expected sqlite or postgres",
+                        value
+                    );
+                }
+            }
+        }
         if let Ok(value) = std::env::var("PARACORD_DATABASE_MAX_CONNECTIONS") {
             if let Ok(parsed) = value.parse::<u32>() {
                 config.database.max_connections = parsed;
+            }
+        }
+        if let Ok(value) = std::env::var("PARACORD_DATABASE_STATEMENT_TIMEOUT_SECS") {
+            if let Ok(parsed) = value.parse::<u64>() {
+                config.database.statement_timeout_secs = parsed;
+            }
+        }
+        if let Ok(value) = std::env::var("PARACORD_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_SECS") {
+            if let Ok(parsed) = value.parse::<u64>() {
+                config.database.idle_in_transaction_timeout_secs = parsed;
             }
         }
         if let Ok(value) = std::env::var("PARACORD_JWT_SECRET") {
@@ -980,6 +1051,16 @@ impl Config {
                 config.federation.allow_discovery = parsed;
             }
         }
+        if let Ok(value) = std::env::var("PARACORD_FEDERATION_MAX_EVENTS_PER_PEER_PER_MINUTE") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                config.federation.max_events_per_peer_per_minute = Some(parsed);
+            }
+        }
+        if let Ok(value) = std::env::var("PARACORD_FEDERATION_MAX_USER_CREATES_PER_PEER_PER_HOUR") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                config.federation.max_user_creates_per_peer_per_hour = Some(parsed);
+            }
+        }
         if let Ok(value) = std::env::var("PARACORD_RETENTION_ENABLED") {
             if let Ok(parsed) = value.parse::<bool>() {
                 config.retention.enabled = parsed;
@@ -1072,12 +1153,31 @@ fn parse_optional_days(raw: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::TlsConfig;
+    use super::{Config, DatabaseConfig, DatabaseEngine, TlsConfig};
 
     #[test]
     fn tls_defaults_enable_self_signed_bootstrap() {
         let tls = TlsConfig::default();
         assert!(tls.enabled);
         assert!(tls.auto_generate);
+    }
+
+    #[test]
+    fn database_defaults_to_sqlite_engine() {
+        let db = DatabaseConfig::default();
+        assert_eq!(db.engine, DatabaseEngine::Sqlite);
+    }
+
+    #[test]
+    fn env_override_accepts_postgres_engine() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("paracord-test.toml");
+        std::env::set_var("PARACORD_JWT_SECRET", "0123456789abcdef0123456789abcdef");
+        std::env::set_var("PARACORD_DATABASE_ENGINE", "postgres");
+        let config =
+            Config::load(config_path.to_str().expect("config path utf8")).expect("load config");
+        std::env::remove_var("PARACORD_DATABASE_ENGINE");
+        std::env::remove_var("PARACORD_JWT_SECRET");
+        assert_eq!(config.database.engine, DatabaseEngine::Postgres);
     }
 }

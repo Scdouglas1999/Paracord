@@ -1,7 +1,8 @@
-use crate::{DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct InviteRow {
     pub code: String,
     pub channel_id: i64,
@@ -11,6 +12,22 @@ pub struct InviteRow {
     pub max_age: Option<i32>,
     pub temporary: bool,
     pub created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for InviteRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            code: row.try_get("code")?,
+            channel_id: row.try_get("channel_id")?,
+            inviter_id: row.try_get("inviter_id")?,
+            max_uses: row.try_get("max_uses")?,
+            uses: row.try_get("uses")?,
+            max_age: row.try_get("max_age")?,
+            temporary: bool_from_any_row(row, "temporary")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
 }
 
 pub async fn create_invite(
@@ -24,14 +41,14 @@ pub async fn create_invite(
 ) -> Result<InviteRow, DbError> {
     let row = sqlx::query_as::<_, InviteRow>(
         "INSERT INTO invites (code, channel_id, inviter_id, max_uses, max_age)
-         SELECT ?1, ?2, ?3, ?4, ?5
+         SELECT $1, $2, $3, $4, $5
          WHERE EXISTS (
              SELECT 1
              FROM channels c
-             WHERE c.id = ?2
-               AND c.space_id = ?6
+             WHERE c.id = $2
+               AND c.space_id = $6
          )
-         RETURNING code, channel_id, inviter_id, max_uses, uses, max_age, temporary, created_at",
+         RETURNING code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at",
     )
     .bind(code)
     .bind(channel_id)
@@ -46,8 +63,8 @@ pub async fn create_invite(
 
 pub async fn get_invite(pool: &DbPool, code: &str) -> Result<Option<InviteRow>, DbError> {
     let row = sqlx::query_as::<_, InviteRow>(
-        "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, temporary, created_at
-         FROM invites WHERE code = ?1
+        "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at
+         FROM invites WHERE code = $1
            AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))",
     )
     .bind(code)
@@ -60,13 +77,13 @@ pub async fn use_invite(pool: &DbPool, code: &str) -> Result<Option<InviteRow>, 
     let row = sqlx::query_as::<_, InviteRow>(
         "UPDATE invites
          SET uses = uses + 1
-         WHERE code = ?1
+         WHERE code = $1
            AND (max_uses IS NULL OR max_uses = 0 OR uses < max_uses)
            AND (
                 max_age IS NULL OR max_age = 0
                 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now')
            )
-         RETURNING code, channel_id, inviter_id, max_uses, uses, max_age, temporary, created_at",
+         RETURNING code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at",
     )
     .bind(code)
     .fetch_optional(pool)
@@ -75,7 +92,7 @@ pub async fn use_invite(pool: &DbPool, code: &str) -> Result<Option<InviteRow>, 
 }
 
 pub async fn delete_invite(pool: &DbPool, code: &str) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM invites WHERE code = ?1")
+    sqlx::query("DELETE FROM invites WHERE code = $1")
         .bind(code)
         .execute(pool)
         .await?;
@@ -84,10 +101,10 @@ pub async fn delete_invite(pool: &DbPool, code: &str) -> Result<(), DbError> {
 
 pub async fn get_guild_invites(pool: &DbPool, guild_id: i64) -> Result<Vec<InviteRow>, DbError> {
     let rows = sqlx::query_as::<_, InviteRow>(
-        "SELECT i.code, i.channel_id, i.inviter_id, i.max_uses, i.uses, i.max_age, i.temporary, i.created_at
+        "SELECT i.code, i.channel_id, i.inviter_id, i.max_uses, i.uses, i.max_age, CASE WHEN i.temporary THEN 1 ELSE 0 END AS temporary, i.created_at
          FROM invites i
          INNER JOIN channels c ON c.id = i.channel_id
-         WHERE c.space_id = ?1
+         WHERE c.space_id = $1
            AND (i.max_age IS NULL OR i.max_age = 0 OR datetime(i.created_at, '+' || i.max_age || ' seconds') > datetime('now'))
          ORDER BY i.created_at DESC",
     )
@@ -99,7 +116,7 @@ pub async fn get_guild_invites(pool: &DbPool, guild_id: i64) -> Result<Vec<Invit
 
 pub async fn get_all_invites(pool: &DbPool) -> Result<Vec<InviteRow>, DbError> {
     let rows = sqlx::query_as::<_, InviteRow>(
-        "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, temporary, created_at
+        "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at
          FROM invites
          WHERE (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))
          ORDER BY created_at DESC",
@@ -114,9 +131,9 @@ pub async fn get_channel_invites(
     channel_id: i64,
 ) -> Result<Vec<InviteRow>, DbError> {
     let rows = sqlx::query_as::<_, InviteRow>(
-        "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, temporary, created_at
+        "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at
          FROM invites
-         WHERE channel_id = ?1
+         WHERE channel_id = $1
            AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))
          ORDER BY created_at DESC",
     )
@@ -220,7 +237,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "UPDATE invites SET created_at = datetime('now', '-5 seconds') WHERE code = ?1",
+            "UPDATE invites SET created_at = datetime('now', '-5 seconds') WHERE code = $1",
         )
         .bind("expired_read")
         .execute(&pool)
@@ -329,7 +346,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "UPDATE invites SET created_at = datetime('now', '-5 seconds') WHERE code = ?1",
+            "UPDATE invites SET created_at = datetime('now', '-5 seconds') WHERE code = $1",
         )
         .bind("expired_list")
         .execute(&pool)

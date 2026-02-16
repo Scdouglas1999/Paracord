@@ -37,8 +37,20 @@ renew_interval_seconds = 43200
 # additional_args = ["--preferred-challenges", "http"]
 
 [database]
+engine = "sqlite" # "sqlite" or "postgres"
 url = "sqlite://./data/paracord.db?mode=rwc"
 max_connections = 5
+# PostgreSQL example:
+#   engine = "postgres"
+#   url = "postgresql://user:password@localhost:5432/paracord?sslmode=prefer"
+#   max_connections = 20
+# Statement timeout in seconds for PostgreSQL (0 = disabled). Prevents runaway queries.
+# statement_timeout_secs = 30
+# Idle-in-transaction timeout in seconds for PostgreSQL (0 = disabled).
+# idle_in_transaction_timeout_secs = 60
+# Env overrides: PARACORD_DATABASE_URL, PARACORD_DATABASE_ENGINE,
+#   PARACORD_DATABASE_MAX_CONNECTIONS, PARACORD_DATABASE_STATEMENT_TIMEOUT_SECS,
+#   PARACORD_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_SECS
 
 [auth]
 # jwt_secret is auto-generated on first run. Override here or via PARACORD_JWT_SECRET env var.
@@ -101,6 +113,10 @@ enabled = true
 signing_key_path = "./data/federation_signing_key.hex"
 # Allow other servers to discover this server's federation info.
 allow_discovery = false
+# Per-peer rate limit for inbound federation events (per minute). Set to 0 to disable.
+# max_events_per_peer_per_minute = 120
+# Per-peer rate limit for remote user creation (per hour). Set to 0 to disable.
+# max_user_creates_per_peer_per_hour = 100
 
 [network]
 # Automatically forward ports via UPnP on startup (default: false).
@@ -128,7 +144,7 @@ batch_size = 256
 # session_days = 30
 
 [backup]
-# Backup configuration. Backups include a SQLite snapshot and optionally media files.
+# Backup configuration. Backups include a DB snapshot/dump and optionally media files.
 backup_dir = "./data/backups"
 # Enable automatic periodic backups.
 auto_backup_enabled = false

@@ -32,8 +32,9 @@ fn parse_signing_key() -> Option<SigningKey> {
 
 /// Build a `FederationService` from environment variables.
 ///
-/// This is used both by the federation API routes and by the channels module
-/// when forwarding messages to federated peers.
+/// Prefer using `state.federation_service` from AppState when available.
+/// This fallback is kept for backward compatibility with code paths that
+/// don't have access to AppState (e.g. standalone CLI tools).
 pub fn build_federation_service() -> FederationService {
     let enabled = std::env::var("PARACORD_FEDERATION_ENABLED")
         .ok()
@@ -59,8 +60,46 @@ pub fn build_federation_service() -> FederationService {
     })
 }
 
+/// Get the FederationService from AppState, falling back to env-var construction.
+fn federation_service_from_state(state: &AppState) -> FederationService {
+    state
+        .federation_service
+        .clone()
+        .unwrap_or_else(build_federation_service)
+}
+
 fn federation_service() -> FederationService {
     build_federation_service()
+}
+
+/// Maximum serialized content size for inbound federation events (1 MB).
+const MAX_CONTENT_SIZE_BYTES: usize = 1_048_576;
+/// Maximum JSON nesting depth for inbound federation event content.
+const MAX_CONTENT_DEPTH: usize = 32;
+
+fn validate_federation_content(content: &Value) -> Result<(), ApiError> {
+    let serialized = serde_json::to_vec(content).unwrap_or_default();
+    if serialized.len() > MAX_CONTENT_SIZE_BYTES {
+        return Err(ApiError::BadRequest(format!(
+            "federation event content exceeds maximum size of {} bytes",
+            MAX_CONTENT_SIZE_BYTES
+        )));
+    }
+    if json_depth(content) > MAX_CONTENT_DEPTH {
+        return Err(ApiError::BadRequest(format!(
+            "federation event content exceeds maximum nesting depth of {}",
+            MAX_CONTENT_DEPTH
+        )));
+    }
+    Ok(())
+}
+
+fn json_depth(value: &Value) -> usize {
+    match value {
+        Value::Array(arr) => 1 + arr.iter().map(json_depth).max().unwrap_or(0),
+        Value::Object(obj) => 1 + obj.values().map(json_depth).max().unwrap_or(0),
+        _ => 0,
+    }
 }
 
 pub fn build_signed_federation_client(service: &FederationService) -> Option<FederationClient> {
@@ -442,6 +481,26 @@ async fn ensure_remote_user_mapping(
         return Ok(existing.local_user_id);
     }
 
+    // Per-peer rate limiting on remote user creation
+    if let Some(limit) = state.config.federation_max_user_creates_per_peer_per_hour {
+        if limit > 0 {
+            let now = chrono::Utc::now().timestamp();
+            let hour = now / 3600;
+            let bucket_key = format!("fed:user_create:{}", identity.server);
+            let count = paracord_db::rate_limits::increment_window_counter(
+                &state.db,
+                &bucket_key,
+                hour,
+                3600,
+            )
+            .await
+            .unwrap_or(0);
+            if count > limit as i64 {
+                return Err(ApiError::RateLimited);
+            }
+        }
+    }
+
     let digest = paracord_federation::transport::sha256_hex(remote_id.as_bytes());
     let username = format!(
         "{}_{}",
@@ -645,7 +704,7 @@ pub async fn well_known() -> Result<Json<Value>, ApiError> {
 }
 
 pub async fn get_keys(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Ok(Json(json!({
             "server_name": service.server_name(),
@@ -684,7 +743,7 @@ pub async fn ingest_event(
     headers: HeaderMap,
     Json(payload): Json<FederationEventEnvelope>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
@@ -701,6 +760,29 @@ pub async fn ingest_event(
         true,
     )
     .await?;
+
+    // Per-peer rate limiting on event ingestion
+    if let Some(limit) = state.config.federation_max_events_per_peer_per_minute {
+        if limit > 0 {
+            let now = chrono::Utc::now().timestamp();
+            let minute = now / 60;
+            let bucket_key = format!("fed:ingest:{}", transport.origin);
+            let count = paracord_db::rate_limits::increment_window_counter(
+                &state.db,
+                &bucket_key,
+                minute,
+                60,
+            )
+            .await
+            .unwrap_or(0);
+            if count > limit as i64 {
+                return Err(ApiError::RateLimited);
+            }
+        }
+    }
+
+    // Validate content size and depth
+    validate_federation_content(&payload.content)?;
 
     verify_envelope_origin_signature(&state, &service, &payload).await?;
     let inserted =
@@ -1502,7 +1584,7 @@ async fn dispatch_federated_reaction_remove(state: &AppState, payload: &Federati
 }
 
 async fn dispatch_federated_member_join(state: &AppState, payload: &FederationEventEnvelope) {
-    let service = federation_service();
+    let service = federation_service_from_state(state);
     if !service.is_enabled() {
         return;
     }
@@ -1569,7 +1651,7 @@ async fn dispatch_federated_member_join(state: &AppState, payload: &FederationEv
 }
 
 async fn dispatch_federated_member_leave(state: &AppState, payload: &FederationEventEnvelope) {
-    let service = federation_service();
+    let service = federation_service_from_state(state);
     if !service.is_enabled() {
         return;
     }
@@ -1656,7 +1738,7 @@ pub async fn get_event(
     uri: Uri,
     Path(event_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
@@ -1684,7 +1766,7 @@ pub async fn list_events(
     uri: Uri,
     Query(query): Query<ListEventsQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
@@ -1708,7 +1790,7 @@ pub async fn run_federation_catchup_once(
     per_room_limit: i64,
     max_rooms_per_peer: usize,
 ) {
-    let service = federation_service();
+    let service = federation_service_from_state(state);
     if !service.is_enabled() {
         return;
     }
@@ -1934,7 +2016,7 @@ pub async fn invite(
     headers: HeaderMap,
     Json(body): Json<FederationInviteRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
@@ -1985,7 +2067,7 @@ pub async fn join(
     headers: HeaderMap,
     Json(body): Json<FederationJoinRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
@@ -2064,7 +2146,7 @@ pub async fn leave(
     headers: HeaderMap,
     Json(body): Json<FederationLeaveRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
@@ -2127,7 +2209,7 @@ pub async fn media_token(
     headers: HeaderMap,
     Json(body): Json<FederationMediaTokenRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
@@ -2227,7 +2309,7 @@ pub async fn media_relay(
     headers: HeaderMap,
     Json(body): Json<FederationMediaRelayRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
@@ -2351,7 +2433,7 @@ pub async fn list_servers(
     _admin: AdminUser,
     State(state): State<AppState>,
 ) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::BadRequest("federation is disabled".to_string()));
     }
@@ -2367,7 +2449,7 @@ pub async fn add_server(
     State(state): State<AppState>,
     Json(body): Json<AddServerRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::BadRequest("federation is disabled".to_string()));
     }
@@ -2435,7 +2517,7 @@ pub async fn get_server(
     State(state): State<AppState>,
     Path(server_name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::BadRequest("federation is disabled".to_string()));
     }
@@ -2454,7 +2536,7 @@ pub async fn delete_server(
     State(state): State<AppState>,
     Path(server_name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let service = federation_service();
+    let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::BadRequest("federation is disabled".to_string()));
     }

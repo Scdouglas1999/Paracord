@@ -1,7 +1,8 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct AttachmentRow {
     pub id: i64,
     pub message_id: Option<i64>,
@@ -15,6 +16,30 @@ pub struct AttachmentRow {
     pub upload_channel_id: Option<i64>,
     pub upload_created_at: DateTime<Utc>,
     pub upload_expires_at: Option<DateTime<Utc>>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for AttachmentRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_raw: String = row.try_get("upload_created_at")?;
+        let expires_raw: Option<String> = row.try_get("upload_expires_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            message_id: row.try_get("message_id")?,
+            filename: row.try_get("filename")?,
+            content_type: row.try_get("content_type")?,
+            size: row.try_get("size")?,
+            url: row.try_get("url")?,
+            width: row.try_get("width")?,
+            height: row.try_get("height")?,
+            uploader_id: row.try_get("uploader_id")?,
+            upload_channel_id: row.try_get("upload_channel_id")?,
+            upload_created_at: datetime_from_db_text(&created_raw)?,
+            upload_expires_at: expires_raw
+                .as_deref()
+                .map(datetime_from_db_text)
+                .transpose()?,
+        })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -37,7 +62,7 @@ pub async fn create_attachment(
             id, message_id, filename, content_type, size, url, width, height,
             uploader_id, upload_channel_id, upload_expires_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING
             id, message_id, filename, content_type, size, url, width, height,
             uploader_id, upload_channel_id, upload_created_at, upload_expires_at",
@@ -52,7 +77,7 @@ pub async fn create_attachment(
     .bind(height)
     .bind(uploader_id)
     .bind(upload_channel_id)
-    .bind(upload_expires_at)
+    .bind(upload_expires_at.map(datetime_to_db_text))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -63,7 +88,7 @@ pub async fn get_attachment(pool: &DbPool, id: i64) -> Result<Option<AttachmentR
         "SELECT
             id, message_id, filename, content_type, size, url, width, height,
             uploader_id, upload_channel_id, upload_created_at, upload_expires_at
-         FROM attachments WHERE id = ?1",
+         FROM attachments WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -72,7 +97,7 @@ pub async fn get_attachment(pool: &DbPool, id: i64) -> Result<Option<AttachmentR
 }
 
 pub async fn delete_attachment(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM attachments WHERE id = ?1")
+    sqlx::query("DELETE FROM attachments WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -87,7 +112,7 @@ pub async fn get_message_attachments(
         "SELECT
             id, message_id, filename, content_type, size, url, width, height,
             uploader_id, upload_channel_id, upload_created_at, upload_expires_at
-         FROM attachments WHERE message_id = ?1",
+         FROM attachments WHERE message_id = $1",
     )
     .bind(message_id)
     .fetch_all(pool)
@@ -105,18 +130,18 @@ pub async fn attach_to_message(
 ) -> Result<bool, DbError> {
     let result = sqlx::query(
         "UPDATE attachments
-         SET message_id = ?2, upload_expires_at = NULL
-         WHERE id = ?1
+         SET message_id = $2, upload_expires_at = NULL
+         WHERE id = $1
            AND message_id IS NULL
-           AND uploader_id = ?3
-           AND upload_channel_id = ?4
-           AND (upload_expires_at IS NULL OR upload_expires_at > ?5)",
+           AND uploader_id = $3
+           AND upload_channel_id = $4
+           AND (upload_expires_at IS NULL OR upload_expires_at > $5)",
     )
     .bind(id)
     .bind(message_id)
     .bind(uploader_id)
     .bind(channel_id)
-    .bind(now)
+    .bind(datetime_to_db_text(now))
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
@@ -134,11 +159,11 @@ pub async fn get_expired_pending_attachments(
          FROM attachments
          WHERE message_id IS NULL
            AND upload_expires_at IS NOT NULL
-           AND upload_expires_at <= ?1
+           AND upload_expires_at <= $1
          ORDER BY upload_expires_at ASC
-         LIMIT ?2",
+         LIMIT $2",
     )
-    .bind(now)
+    .bind(datetime_to_db_text(now))
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -160,7 +185,7 @@ pub async fn get_attachments_for_message_ids(
         )));
     }
 
-    let placeholders: Vec<String> = (1..=message_ids.len()).map(|i| format!("?{}", i)).collect();
+    let placeholders: Vec<String> = (1..=message_ids.len()).map(|i| format!("${}", i)).collect();
     let sql = format!(
         "SELECT
             id, message_id, filename, content_type, size, url, width, height,
@@ -168,7 +193,7 @@ pub async fn get_attachments_for_message_ids(
          FROM attachments
          WHERE message_id IN ({})
          ORDER BY upload_created_at ASC
-         LIMIT ?{}",
+         LIMIT ${}",
         placeholders.join(", "),
         message_ids.len() + 1
     );
@@ -193,11 +218,11 @@ pub async fn get_unlinked_attachments_older_than(
             uploader_id, upload_channel_id, upload_created_at, upload_expires_at
          FROM attachments
          WHERE message_id IS NULL
-           AND upload_created_at <= ?1
+           AND upload_created_at <= $1
          ORDER BY upload_created_at ASC
-         LIMIT ?2",
+         LIMIT $2",
     )
-    .bind(older_than)
+    .bind(datetime_to_db_text(older_than))
     .bind(limit)
     .fetch_all(pool)
     .await?;

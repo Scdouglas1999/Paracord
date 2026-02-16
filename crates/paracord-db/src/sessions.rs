@@ -1,5 +1,6 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
 fn max_sessions_per_user() -> i64 {
     std::env::var("PARACORD_MAX_SESSIONS_PER_USER")
@@ -9,7 +10,7 @@ fn max_sessions_per_user() -> i64 {
         .unwrap_or(20)
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct AuthSessionRow {
     pub id: String,
     pub user_id: i64,
@@ -24,6 +25,33 @@ pub struct AuthSessionRow {
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub revoked_reason: Option<String>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for AuthSessionRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let issued_at_raw: String = row.try_get("issued_at")?;
+        let last_seen_at_raw: String = row.try_get("last_seen_at")?;
+        let expires_at_raw: String = row.try_get("expires_at")?;
+        let revoked_at_raw: Option<String> = row.try_get("revoked_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            user_id: row.try_get("user_id")?,
+            refresh_token_hash: row.try_get("refresh_token_hash")?,
+            current_jti: row.try_get("current_jti")?,
+            pub_key: row.try_get("pub_key")?,
+            device_id: row.try_get("device_id")?,
+            user_agent: row.try_get("user_agent")?,
+            ip_address: row.try_get("ip_address")?,
+            issued_at: datetime_from_db_text(&issued_at_raw)?,
+            last_seen_at: datetime_from_db_text(&last_seen_at_raw)?,
+            expires_at: datetime_from_db_text(&expires_at_raw)?,
+            revoked_at: revoked_at_raw
+                .as_deref()
+                .map(datetime_from_db_text)
+                .transpose()?,
+            revoked_reason: row.try_get("revoked_reason")?,
+        })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -43,12 +71,12 @@ pub async fn create_session(
     let active_count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*)
          FROM auth_sessions
-         WHERE user_id = ?1
+         WHERE user_id = $1
            AND revoked_at IS NULL
-           AND expires_at > ?2",
+           AND expires_at > $2",
     )
     .bind(user_id)
-    .bind(Utc::now())
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
 
@@ -57,19 +85,19 @@ pub async fn create_session(
         let now = Utc::now();
         sqlx::query(
             "UPDATE auth_sessions
-             SET revoked_at = ?2,
+             SET revoked_at = $2,
                  revoked_reason = 'session_limit'
              WHERE id IN (
                  SELECT id
                  FROM auth_sessions
-                 WHERE user_id = ?1
+                 WHERE user_id = $1
                    AND revoked_at IS NULL
                  ORDER BY last_seen_at ASC
-                 LIMIT ?3
+                 LIMIT $3
              )",
         )
         .bind(user_id)
-        .bind(now)
+        .bind(datetime_to_db_text(now))
         .bind(revoke_count)
         .execute(pool)
         .await?;
@@ -79,7 +107,7 @@ pub async fn create_session(
         "INSERT INTO auth_sessions (
             id, user_id, refresh_token_hash, current_jti, pub_key, device_id, user_agent, ip_address, expires_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, user_id, refresh_token_hash, current_jti, pub_key, device_id, user_agent, ip_address,
                    issued_at, last_seen_at, expires_at, revoked_at, revoked_reason",
     )
@@ -91,7 +119,7 @@ pub async fn create_session(
     .bind(device_id)
     .bind(user_agent)
     .bind(ip_address)
-    .bind(expires_at)
+    .bind(datetime_to_db_text(expires_at))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -105,7 +133,7 @@ pub async fn get_session_by_refresh_hash(
         "SELECT id, user_id, refresh_token_hash, current_jti, pub_key, device_id, user_agent, ip_address,
                 issued_at, last_seen_at, expires_at, revoked_at, revoked_reason
          FROM auth_sessions
-         WHERE refresh_token_hash = ?1",
+         WHERE refresh_token_hash = $1",
     )
     .bind(refresh_token_hash)
     .fetch_optional(pool)
@@ -121,7 +149,7 @@ pub async fn get_session_by_id(
         "SELECT id, user_id, refresh_token_hash, current_jti, pub_key, device_id, user_agent, ip_address,
                 issued_at, last_seen_at, expires_at, revoked_at, revoked_reason
          FROM auth_sessions
-         WHERE id = ?1",
+         WHERE id = $1",
     )
     .bind(session_id)
     .fetch_optional(pool)
@@ -138,13 +166,13 @@ pub async fn list_user_sessions(
         "SELECT id, user_id, refresh_token_hash, current_jti, pub_key, device_id, user_agent, ip_address,
                 issued_at, last_seen_at, expires_at, revoked_at, revoked_reason
          FROM auth_sessions
-         WHERE user_id = ?1
+         WHERE user_id = $1
            AND revoked_at IS NULL
-           AND expires_at > ?2
+           AND expires_at > $2
          ORDER BY last_seen_at DESC",
     )
     .bind(user_id)
-    .bind(now)
+    .bind(datetime_to_db_text(now))
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -161,21 +189,21 @@ pub async fn rotate_session_refresh_token(
 ) -> Result<bool, DbError> {
     let result = sqlx::query(
         "UPDATE auth_sessions
-         SET refresh_token_hash = ?3,
-             current_jti = ?4,
-             last_seen_at = ?5,
-             expires_at = ?6
-         WHERE id = ?1
-           AND refresh_token_hash = ?2
+         SET refresh_token_hash = $3,
+             current_jti = $4,
+             last_seen_at = $5,
+             expires_at = $6
+         WHERE id = $1
+           AND refresh_token_hash = $2
            AND revoked_at IS NULL
-           AND expires_at > ?5",
+           AND expires_at > $5",
     )
     .bind(session_id)
     .bind(old_refresh_token_hash)
     .bind(new_refresh_token_hash)
     .bind(new_jti)
-    .bind(now)
-    .bind(expires_at)
+    .bind(datetime_to_db_text(now))
+    .bind(datetime_to_db_text(expires_at))
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
@@ -189,15 +217,15 @@ pub async fn update_session_jti(
 ) -> Result<bool, DbError> {
     let result = sqlx::query(
         "UPDATE auth_sessions
-         SET current_jti = ?2,
-             last_seen_at = ?3
-         WHERE id = ?1
+         SET current_jti = $2,
+             last_seen_at = $3
+         WHERE id = $1
            AND revoked_at IS NULL
-           AND expires_at > ?3",
+           AND expires_at > $3",
     )
     .bind(session_id)
     .bind(new_jti)
-    .bind(now)
+    .bind(datetime_to_db_text(now))
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
@@ -212,14 +240,14 @@ pub async fn revoke_session(
 ) -> Result<bool, DbError> {
     let result = sqlx::query(
         "UPDATE auth_sessions
-         SET revoked_at = ?3, revoked_reason = ?4
-         WHERE id = ?1
-           AND user_id = ?2
+         SET revoked_at = $3, revoked_reason = $4
+         WHERE id = $1
+           AND user_id = $2
            AND revoked_at IS NULL",
     )
     .bind(session_id)
     .bind(user_id)
-    .bind(now)
+    .bind(datetime_to_db_text(now))
     .bind(reason)
     .execute(pool)
     .await?;
@@ -236,26 +264,26 @@ pub async fn revoke_all_user_sessions_except(
     let result = if let Some(keep_id) = keep_session_id {
         sqlx::query(
             "UPDATE auth_sessions
-             SET revoked_at = ?3, revoked_reason = ?4
-             WHERE user_id = ?1
-               AND id != ?2
+             SET revoked_at = $3, revoked_reason = $4
+             WHERE user_id = $1
+               AND id != $2
                AND revoked_at IS NULL",
         )
         .bind(user_id)
         .bind(keep_id)
-        .bind(now)
+        .bind(datetime_to_db_text(now))
         .bind(reason)
         .execute(pool)
         .await?
     } else {
         sqlx::query(
             "UPDATE auth_sessions
-             SET revoked_at = ?2, revoked_reason = ?3
-             WHERE user_id = ?1
+             SET revoked_at = $2, revoked_reason = $3
+             WHERE user_id = $1
                AND revoked_at IS NULL",
         )
         .bind(user_id)
-        .bind(now)
+        .bind(datetime_to_db_text(now))
         .bind(reason)
         .execute(pool)
         .await?
@@ -274,17 +302,17 @@ pub async fn is_access_token_active(
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT 1
          FROM auth_sessions
-         WHERE id = ?1
-           AND user_id = ?2
-           AND current_jti = ?3
+         WHERE id = $1
+           AND user_id = $2
+           AND current_jti = $3
            AND revoked_at IS NULL
-           AND expires_at > ?4
+           AND expires_at > $4
          LIMIT 1",
     )
     .bind(session_id)
     .bind(user_id)
     .bind(jti)
-    .bind(now)
+    .bind(datetime_to_db_text(now))
     .fetch_optional(pool)
     .await?;
 
@@ -300,12 +328,12 @@ pub async fn purge_expired_sessions(
         "DELETE FROM auth_sessions
          WHERE id IN (
              SELECT id FROM auth_sessions
-             WHERE expires_at <= ?1
-                OR (revoked_at IS NOT NULL AND revoked_at <= datetime(?1, '-7 days'))
-             LIMIT ?2
+             WHERE expires_at <= $1
+                OR (revoked_at IS NOT NULL AND revoked_at <= datetime($1, '-7 days'))
+             LIMIT $2
          )",
     )
-    .bind(now)
+    .bind(datetime_to_db_text(now))
     .bind(limit)
     .execute(pool)
     .await?;

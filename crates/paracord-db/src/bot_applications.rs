@@ -1,8 +1,9 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct BotApplicationRow {
     pub id: i64,
     pub name: String,
@@ -16,13 +17,45 @@ pub struct BotApplicationRow {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct BotGuildInstallRow {
     pub bot_app_id: i64,
     pub guild_id: i64,
     pub added_by: Option<i64>,
     pub permissions: i64,
     pub created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for BotApplicationRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        let updated_at_raw: String = row.try_get("updated_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            description: row.try_get("description")?,
+            owner_id: row.try_get("owner_id")?,
+            bot_user_id: row.try_get("bot_user_id")?,
+            token_hash: row.try_get("token_hash")?,
+            redirect_uri: row.try_get("redirect_uri")?,
+            permissions: row.try_get("permissions")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+            updated_at: datetime_from_db_text(&updated_at_raw)?,
+        })
+    }
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for BotGuildInstallRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            bot_app_id: row.try_get("bot_app_id")?,
+            guild_id: row.try_get("guild_id")?,
+            added_by: row.try_get("added_by")?,
+            permissions: row.try_get("permissions")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
 }
 
 pub fn hash_token(token: &str) -> String {
@@ -49,7 +82,7 @@ pub async fn create_bot_application(
 ) -> Result<BotApplicationRow, DbError> {
     let row = sqlx::query_as::<_, BotApplicationRow>(
         "INSERT INTO bot_applications (id, name, description, owner_id, bot_user_id, token_hash, redirect_uri, permissions)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id, name, description, owner_id, bot_user_id, token_hash, redirect_uri, permissions, created_at, updated_at",
     )
     .bind(id)
@@ -71,7 +104,7 @@ pub async fn get_bot_application(
 ) -> Result<Option<BotApplicationRow>, DbError> {
     let row = sqlx::query_as::<_, BotApplicationRow>(
         "SELECT id, name, description, owner_id, bot_user_id, token_hash, redirect_uri, permissions, created_at, updated_at
-         FROM bot_applications WHERE id = ?1",
+         FROM bot_applications WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -85,7 +118,7 @@ pub async fn get_bot_application_by_token_hash(
 ) -> Result<Option<BotApplicationRow>, DbError> {
     let row = sqlx::query_as::<_, BotApplicationRow>(
         "SELECT id, name, description, owner_id, bot_user_id, token_hash, redirect_uri, permissions, created_at, updated_at
-         FROM bot_applications WHERE token_hash = ?1",
+         FROM bot_applications WHERE token_hash = $1",
     )
     .bind(token_hash)
     .fetch_optional(pool)
@@ -99,7 +132,7 @@ pub async fn list_user_bot_applications(
 ) -> Result<Vec<BotApplicationRow>, DbError> {
     let rows = sqlx::query_as::<_, BotApplicationRow>(
         "SELECT id, name, description, owner_id, bot_user_id, token_hash, redirect_uri, permissions, created_at, updated_at
-         FROM bot_applications WHERE owner_id = ?1 ORDER BY created_at",
+         FROM bot_applications WHERE owner_id = $1 ORDER BY created_at",
     )
     .bind(owner_id)
     .fetch_all(pool)
@@ -116,11 +149,11 @@ pub async fn update_bot_application(
 ) -> Result<BotApplicationRow, DbError> {
     let row = sqlx::query_as::<_, BotApplicationRow>(
         "UPDATE bot_applications SET
-            name = COALESCE(?2, name),
-            description = COALESCE(?3, description),
-            redirect_uri = COALESCE(?4, redirect_uri),
+            name = COALESCE($2, name),
+            description = COALESCE($3, description),
+            redirect_uri = COALESCE($4, redirect_uri),
             updated_at = datetime('now')
-         WHERE id = ?1
+         WHERE id = $1
          RETURNING id, name, description, owner_id, bot_user_id, token_hash, redirect_uri, permissions, created_at, updated_at",
     )
     .bind(id)
@@ -138,8 +171,8 @@ pub async fn regenerate_bot_token(
     new_token_hash: &str,
 ) -> Result<BotApplicationRow, DbError> {
     let row = sqlx::query_as::<_, BotApplicationRow>(
-        "UPDATE bot_applications SET token_hash = ?2, updated_at = datetime('now')
-         WHERE id = ?1
+        "UPDATE bot_applications SET token_hash = $2, updated_at = datetime('now')
+         WHERE id = $1
          RETURNING id, name, description, owner_id, bot_user_id, token_hash, redirect_uri, permissions, created_at, updated_at",
     )
     .bind(id)
@@ -150,7 +183,7 @@ pub async fn regenerate_bot_token(
 }
 
 pub async fn delete_bot_application(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM bot_applications WHERE id = ?1")
+    sqlx::query("DELETE FROM bot_applications WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -168,8 +201,8 @@ pub async fn add_bot_to_guild(
 ) -> Result<BotGuildInstallRow, DbError> {
     let row = sqlx::query_as::<_, BotGuildInstallRow>(
         "INSERT INTO bot_guild_installs (bot_app_id, guild_id, added_by, permissions)
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (bot_app_id, guild_id) DO UPDATE SET permissions = ?4
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (bot_app_id, guild_id) DO UPDATE SET permissions = $4
          RETURNING bot_app_id, guild_id, added_by, permissions, created_at",
     )
     .bind(bot_app_id)
@@ -186,7 +219,7 @@ pub async fn remove_bot_from_guild(
     bot_app_id: i64,
     guild_id: i64,
 ) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM bot_guild_installs WHERE bot_app_id = ?1 AND guild_id = ?2")
+    sqlx::query("DELETE FROM bot_guild_installs WHERE bot_app_id = $1 AND guild_id = $2")
         .bind(bot_app_id)
         .bind(guild_id)
         .execute(pool)
@@ -200,7 +233,7 @@ pub async fn list_bot_guild_installs(
 ) -> Result<Vec<BotGuildInstallRow>, DbError> {
     let rows = sqlx::query_as::<_, BotGuildInstallRow>(
         "SELECT bot_app_id, guild_id, added_by, permissions, created_at
-         FROM bot_guild_installs WHERE bot_app_id = ?1 ORDER BY created_at",
+         FROM bot_guild_installs WHERE bot_app_id = $1 ORDER BY created_at",
     )
     .bind(bot_app_id)
     .fetch_all(pool)
@@ -214,7 +247,7 @@ pub async fn list_guild_bots(
 ) -> Result<Vec<BotGuildInstallRow>, DbError> {
     let rows = sqlx::query_as::<_, BotGuildInstallRow>(
         "SELECT bot_app_id, guild_id, added_by, permissions, created_at
-         FROM bot_guild_installs WHERE guild_id = ?1 ORDER BY created_at",
+         FROM bot_guild_installs WHERE guild_id = $1 ORDER BY created_at",
     )
     .bind(guild_id)
     .fetch_all(pool)
@@ -228,7 +261,7 @@ pub async fn is_bot_in_guild(
     guild_id: i64,
 ) -> Result<bool, DbError> {
     let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM bot_guild_installs WHERE bot_app_id = ?1 AND guild_id = ?2",
+        "SELECT COUNT(*) FROM bot_guild_installs WHERE bot_app_id = $1 AND guild_id = $2",
     )
     .bind(bot_app_id)
     .bind(guild_id)

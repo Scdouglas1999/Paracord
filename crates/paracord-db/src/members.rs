@@ -1,7 +1,8 @@
-use crate::{DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct MemberRow {
     pub user_id: i64,
     pub nick: Option<String>,
@@ -12,7 +13,7 @@ pub struct MemberRow {
     pub communication_disabled_until: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct MemberWithUserRow {
     pub user_id: i64,
     pub nick: Option<String>,
@@ -27,9 +28,51 @@ pub struct MemberWithUserRow {
     pub user_flags: i32,
 }
 
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MemberRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let joined_at_raw: String = row.try_get("joined_at")?;
+        let timeout_raw: Option<String> = row.try_get("communication_disabled_until")?;
+        Ok(Self {
+            user_id: row.try_get("user_id")?,
+            nick: row.try_get("nick")?,
+            avatar_hash: row.try_get("avatar_hash")?,
+            joined_at: datetime_from_db_text(&joined_at_raw)?,
+            deaf: bool_from_any_row(row, "deaf")?,
+            mute: bool_from_any_row(row, "mute")?,
+            communication_disabled_until: timeout_raw
+                .as_deref()
+                .map(datetime_from_db_text)
+                .transpose()?,
+        })
+    }
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MemberWithUserRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let joined_at_raw: String = row.try_get("joined_at")?;
+        let timeout_raw: Option<String> = row.try_get("communication_disabled_until")?;
+        Ok(Self {
+            user_id: row.try_get("user_id")?,
+            nick: row.try_get("nick")?,
+            avatar_hash: row.try_get("avatar_hash")?,
+            joined_at: datetime_from_db_text(&joined_at_raw)?,
+            deaf: bool_from_any_row(row, "deaf")?,
+            mute: bool_from_any_row(row, "mute")?,
+            communication_disabled_until: timeout_raw
+                .as_deref()
+                .map(datetime_from_db_text)
+                .transpose()?,
+            username: row.try_get("username")?,
+            discriminator: row.try_get("discriminator")?,
+            user_avatar_hash: row.try_get("user_avatar_hash")?,
+            user_flags: row.try_get("user_flags")?,
+        })
+    }
+}
+
 /// Add a user as a server-wide member. guild_id kept for API compat but ignored.
 pub async fn add_member(pool: &DbPool, user_id: i64, guild_id: i64) -> Result<(), DbError> {
-    sqlx::query("INSERT INTO members (user_id, guild_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING")
+    sqlx::query("INSERT INTO members (user_id, guild_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
         .bind(user_id)
         .bind(guild_id)
         .execute(pool)
@@ -40,7 +83,7 @@ pub async fn add_member(pool: &DbPool, user_id: i64, guild_id: i64) -> Result<()
 pub async fn add_server_member(pool: &DbPool, user_id: i64) -> Result<(), DbError> {
     sqlx::query(
         "INSERT INTO members (user_id, guild_id)
-         SELECT ?1, s.id
+         SELECT $1, s.id
          FROM spaces s
          ON CONFLICT DO NOTHING",
     )
@@ -56,8 +99,8 @@ pub async fn get_member(
     guild_id: i64,
 ) -> Result<Option<MemberRow>, DbError> {
     let row = sqlx::query_as::<_, MemberRow>(
-        "SELECT user_id, nick, avatar_hash, joined_at, deaf, mute, communication_disabled_until
-         FROM members WHERE user_id = ?1 AND guild_id = ?2",
+        "SELECT user_id, nick, avatar_hash, joined_at, CASE WHEN deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN mute THEN 1 ELSE 0 END AS mute, communication_disabled_until
+         FROM members WHERE user_id = $1 AND guild_id = $2",
     )
     .bind(user_id)
     .bind(guild_id)
@@ -68,8 +111,8 @@ pub async fn get_member(
 
 pub async fn get_server_member(pool: &DbPool, user_id: i64) -> Result<Option<MemberRow>, DbError> {
     let row = sqlx::query_as::<_, MemberRow>(
-        "SELECT user_id, nick, avatar_hash, joined_at, deaf, mute, communication_disabled_until
-         FROM members WHERE user_id = ?1 ORDER BY joined_at ASC LIMIT 1",
+        "SELECT user_id, nick, avatar_hash, joined_at, CASE WHEN deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN mute THEN 1 ELSE 0 END AS mute, communication_disabled_until
+         FROM members WHERE user_id = $1 ORDER BY joined_at ASC LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -85,14 +128,14 @@ pub async fn get_guild_members(
 ) -> Result<Vec<MemberWithUserRow>, DbError> {
     let rows = if let Some(after_id) = after {
         sqlx::query_as::<_, MemberWithUserRow>(
-            "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, m.deaf, m.mute, m.communication_disabled_until,
+            "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
                     u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
              FROM members m
              INNER JOIN users u ON u.id = m.user_id
-             WHERE m.guild_id = ?3
-               AND m.user_id > ?2
+             WHERE m.guild_id = $3
+               AND m.user_id > $2
              ORDER BY m.user_id
-             LIMIT ?1"
+             LIMIT $1"
         )
         .bind(limit)
         .bind(after_id)
@@ -101,13 +144,13 @@ pub async fn get_guild_members(
         .await?
     } else {
         sqlx::query_as::<_, MemberWithUserRow>(
-            "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, m.deaf, m.mute, m.communication_disabled_until,
+            "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
                     u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
              FROM members m
              INNER JOIN users u ON u.id = m.user_id
-             WHERE m.guild_id = ?2
+             WHERE m.guild_id = $2
              ORDER BY joined_at
-             LIMIT ?1"
+             LIMIT $1"
         )
         .bind(limit)
         .bind(guild_id)
@@ -124,14 +167,14 @@ pub async fn get_server_members(
 ) -> Result<Vec<MemberWithUserRow>, DbError> {
     let rows = if let Some(after_id) = after {
         sqlx::query_as::<_, MemberWithUserRow>(
-            "SELECT m.user_id, m.nick, m.avatar_hash, MIN(m.joined_at) AS joined_at, m.deaf, m.mute, m.communication_disabled_until,
+            "SELECT m.user_id, m.nick, m.avatar_hash, MIN(m.joined_at) AS joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
                     u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
              FROM members m
              INNER JOIN users u ON u.id = m.user_id
-             WHERE m.user_id > ?2
+             WHERE m.user_id > $2
              GROUP BY m.user_id, m.nick, m.avatar_hash, m.deaf, m.mute, m.communication_disabled_until, u.username, u.discriminator, u.avatar_hash, u.flags
              ORDER BY m.user_id
-             LIMIT ?1"
+             LIMIT $1"
         )
         .bind(limit)
         .bind(after_id)
@@ -139,13 +182,13 @@ pub async fn get_server_members(
         .await?
     } else {
         sqlx::query_as::<_, MemberWithUserRow>(
-            "SELECT m.user_id, m.nick, m.avatar_hash, MIN(m.joined_at) AS joined_at, m.deaf, m.mute, m.communication_disabled_until,
+            "SELECT m.user_id, m.nick, m.avatar_hash, MIN(m.joined_at) AS joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
                     u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
              FROM members m
              INNER JOIN users u ON u.id = m.user_id
              GROUP BY m.user_id, m.nick, m.avatar_hash, m.deaf, m.mute, m.communication_disabled_until, u.username, u.discriminator, u.avatar_hash, u.flags
              ORDER BY m.joined_at
-             LIMIT ?1"
+             LIMIT $1"
         )
         .bind(limit)
         .fetch_all(pool)
@@ -163,9 +206,9 @@ pub async fn update_member(
     mute: Option<bool>,
 ) -> Result<MemberRow, DbError> {
     let row = sqlx::query_as::<_, MemberRow>(
-        "UPDATE members SET nick = COALESCE(?2, nick), deaf = COALESCE(?3, deaf), mute = COALESCE(?4, mute)
-         WHERE user_id = ?1 AND guild_id = ?5
-         RETURNING user_id, nick, avatar_hash, joined_at, deaf, mute, communication_disabled_until"
+        "UPDATE members SET nick = COALESCE($2, nick), deaf = COALESCE($3, deaf), mute = COALESCE($4, mute)
+         WHERE user_id = $1 AND guild_id = $5
+         RETURNING user_id, nick, avatar_hash, joined_at, CASE WHEN deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN mute THEN 1 ELSE 0 END AS mute, communication_disabled_until"
     )
     .bind(user_id)
     .bind(nick)
@@ -178,7 +221,7 @@ pub async fn update_member(
 }
 
 pub async fn remove_member(pool: &DbPool, user_id: i64, guild_id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM members WHERE user_id = ?1 AND guild_id = ?2")
+    sqlx::query("DELETE FROM members WHERE user_id = $1 AND guild_id = $2")
         .bind(user_id)
         .bind(guild_id)
         .execute(pool)
@@ -194,12 +237,12 @@ pub async fn set_member_timeout(
 ) -> Result<MemberRow, DbError> {
     let row = sqlx::query_as::<_, MemberRow>(
         "UPDATE members
-         SET communication_disabled_until = ?2
-         WHERE user_id = ?1 AND guild_id = ?3
-         RETURNING user_id, nick, avatar_hash, joined_at, deaf, mute, communication_disabled_until",
+         SET communication_disabled_until = $2
+         WHERE user_id = $1 AND guild_id = $3
+         RETURNING user_id, nick, avatar_hash, joined_at, CASE WHEN deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN mute THEN 1 ELSE 0 END AS mute, communication_disabled_until",
     )
     .bind(user_id)
-    .bind(communication_disabled_until)
+    .bind(communication_disabled_until.map(datetime_to_db_text))
     .bind(guild_id)
     .fetch_one(pool)
     .await?;
@@ -207,7 +250,7 @@ pub async fn set_member_timeout(
 }
 
 pub async fn get_member_count(pool: &DbPool, guild_id: i64) -> Result<i64, DbError> {
-    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM members WHERE guild_id = ?1")
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM members WHERE guild_id = $1")
         .bind(guild_id)
         .fetch_one(pool)
         .await?;
@@ -218,7 +261,7 @@ pub async fn get_guild_member_user_ids(pool: &DbPool, guild_id: i64) -> Result<V
     let rows: Vec<(i64,)> = sqlx::query_as(
         "SELECT user_id
          FROM members
-         WHERE guild_id = ?1",
+         WHERE guild_id = $1",
     )
     .bind(guild_id)
     .fetch_all(pool)
@@ -231,8 +274,8 @@ pub async fn share_any_guild(pool: &DbPool, user_a: i64, user_b: i64) -> Result<
         "SELECT 1
          FROM members a
          INNER JOIN members b ON a.guild_id = b.guild_id
-         WHERE a.user_id = ?1
-           AND b.user_id = ?2
+         WHERE a.user_id = $1
+           AND b.user_id = $2
          LIMIT 1",
     )
     .bind(user_a)

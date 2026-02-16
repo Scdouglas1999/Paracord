@@ -7,7 +7,7 @@
 use axum::{
     body::Body,
     extract::{ws::WebSocket, FromRequestParts, Request, State, WebSocketUpgrade},
-    http::StatusCode,
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use futures_util::{SinkExt, StreamExt};
@@ -62,19 +62,42 @@ fn is_livekit_access_token_valid(state: &AppState, uri: &axum::http::Uri) -> boo
     .unwrap_or(false)
 }
 
+fn has_ws_upgrade_intent(headers: &HeaderMap) -> bool {
+    if headers
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+    {
+        return true;
+    }
+    if headers.get("sec-websocket-key").is_some() || headers.get("sec-websocket-version").is_some()
+    {
+        return true;
+    }
+    headers
+        .get(header::CONNECTION)
+        .and_then(|v| v.to_str().ok())
+        .map(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        .unwrap_or(false)
+}
+
 /// Combined handler: upgrades WebSocket requests, proxies HTTP requests.
 pub async fn livekit_proxy(State(state): State<AppState>, req: Request) -> Response {
     let uri_for_log = sanitize_request_uri_for_log(req.uri());
     let path = req.uri().path().to_string();
     let method = req.method().clone();
-    let has_upgrade = req.headers().get("upgrade").is_some();
+    let has_upgrade_intent = has_ws_upgrade_intent(req.headers());
 
-    if !is_allowed_livekit_request(&path, &method, has_upgrade) {
+    if !is_allowed_livekit_request(&path, &method, has_upgrade_intent) {
         tracing::warn!(
-            "LiveKit proxy blocked disallowed request: method={}, path={}, upgrade={}",
+            "LiveKit proxy blocked disallowed request: method={}, path={}, ws_intent={}",
             method,
             path,
-            has_upgrade
+            has_upgrade_intent
         );
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -101,11 +124,16 @@ pub async fn livekit_proxy(State(state): State<AppState>, req: Request) -> Respo
             handle_ws(state, ws, req)
         }
         Err(e) => {
-            if has_upgrade {
+            if has_upgrade_intent {
                 tracing::warn!(
-                    "LiveKit proxy: WebSocket upgrade extraction FAILED for {} {} (had Upgrade header): {}",
+                    "LiveKit proxy: WebSocket upgrade extraction FAILED for {} {} (ws intent detected): {}",
                     method, uri_for_log, e
                 );
+                return (
+                    StatusCode::UPGRADE_REQUIRED,
+                    "WebSocket upgrade required for LiveKit signaling",
+                )
+                    .into_response();
             } else {
                 tracing::debug!("LiveKit proxy: HTTP request {} {}", method, uri_for_log);
             }

@@ -1,7 +1,8 @@
-use crate::{DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct RoleRow {
     pub id: i64,
     pub space_id: i64,
@@ -14,6 +15,25 @@ pub struct RoleRow {
     pub mentionable: bool,
     pub server_wide: bool,
     pub created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for RoleRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            space_id: row.try_get("space_id")?,
+            name: row.try_get("name")?,
+            color: row.try_get("color")?,
+            hoist: bool_from_any_row(row, "hoist")?,
+            position: row.try_get("position")?,
+            permissions: row.try_get("permissions")?,
+            managed: bool_from_any_row(row, "managed")?,
+            mentionable: bool_from_any_row(row, "mentionable")?,
+            server_wide: bool_from_any_row(row, "server_wide")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
 }
 
 impl RoleRow {
@@ -32,8 +52,8 @@ pub async fn create_role(
 ) -> Result<RoleRow, DbError> {
     let row = sqlx::query_as::<_, RoleRow>(
         "INSERT INTO roles (id, space_id, name, permissions)
-         VALUES (?1, ?2, ?3, ?4)
-         RETURNING id, space_id, name, color, hoist, position, permissions, managed, mentionable, server_wide, created_at"
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, space_id, name, color, CASE WHEN hoist THEN 1 ELSE 0 END AS hoist, position, permissions, CASE WHEN managed THEN 1 ELSE 0 END AS managed, CASE WHEN mentionable THEN 1 ELSE 0 END AS mentionable, CASE WHEN server_wide THEN 1 ELSE 0 END AS server_wide, created_at"
     )
     .bind(id)
     .bind(space_id)
@@ -46,8 +66,8 @@ pub async fn create_role(
 
 pub async fn get_role(pool: &DbPool, id: i64) -> Result<Option<RoleRow>, DbError> {
     let row = sqlx::query_as::<_, RoleRow>(
-        "SELECT id, space_id, name, color, hoist, position, permissions, managed, mentionable, server_wide, created_at
-         FROM roles WHERE id = ?1"
+        "SELECT id, space_id, name, color, CASE WHEN hoist THEN 1 ELSE 0 END AS hoist, position, permissions, CASE WHEN managed THEN 1 ELSE 0 END AS managed, CASE WHEN mentionable THEN 1 ELSE 0 END AS mentionable, CASE WHEN server_wide THEN 1 ELSE 0 END AS server_wide, created_at
+         FROM roles WHERE id = $1"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -66,13 +86,13 @@ pub async fn update_role(
 ) -> Result<RoleRow, DbError> {
     let row = sqlx::query_as::<_, RoleRow>(
         "UPDATE roles SET
-            name = COALESCE(?2, name),
-            color = COALESCE(?3, color),
-            hoist = COALESCE(?4, hoist),
-            permissions = COALESCE(?5, permissions),
-            mentionable = COALESCE(?6, mentionable)
-         WHERE id = ?1
-         RETURNING id, space_id, name, color, hoist, position, permissions, managed, mentionable, server_wide, created_at"
+            name = COALESCE($2, name),
+            color = COALESCE($3, color),
+            hoist = COALESCE($4, hoist),
+            permissions = COALESCE($5, permissions),
+            mentionable = COALESCE($6, mentionable)
+         WHERE id = $1
+         RETURNING id, space_id, name, color, CASE WHEN hoist THEN 1 ELSE 0 END AS hoist, position, permissions, CASE WHEN managed THEN 1 ELSE 0 END AS managed, CASE WHEN mentionable THEN 1 ELSE 0 END AS mentionable, CASE WHEN server_wide THEN 1 ELSE 0 END AS server_wide, created_at"
     )
     .bind(id)
     .bind(name)
@@ -86,7 +106,7 @@ pub async fn update_role(
 }
 
 pub async fn delete_role(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM roles WHERE id = ?1")
+    sqlx::query("DELETE FROM roles WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -99,8 +119,8 @@ pub async fn get_guild_roles(pool: &DbPool, space_id: i64) -> Result<Vec<RoleRow
 
 pub async fn get_space_roles(pool: &DbPool, space_id: i64) -> Result<Vec<RoleRow>, DbError> {
     let rows = sqlx::query_as::<_, RoleRow>(
-        "SELECT id, space_id, name, color, hoist, position, permissions, managed, mentionable, server_wide, created_at
-         FROM roles WHERE space_id = ?1 ORDER BY position"
+        "SELECT id, space_id, name, color, CASE WHEN hoist THEN 1 ELSE 0 END AS hoist, position, permissions, CASE WHEN managed THEN 1 ELSE 0 END AS managed, CASE WHEN mentionable THEN 1 ELSE 0 END AS mentionable, CASE WHEN server_wide THEN 1 ELSE 0 END AS server_wide, created_at
+         FROM roles WHERE space_id = $1 ORDER BY position"
     )
     .bind(space_id)
     .fetch_all(pool)
@@ -117,16 +137,16 @@ pub async fn add_member_role(
 ) -> Result<(), DbError> {
     sqlx::query(
         "INSERT INTO member_roles (user_id, role_id)
-         SELECT ?1, ?3
+         SELECT $1, $3
          WHERE EXISTS (
              SELECT 1 FROM roles r
-             WHERE r.id = ?3
-               AND r.space_id = ?2
+             WHERE r.id = $3
+               AND r.space_id = $2
          )
            AND EXISTS (
              SELECT 1 FROM members m
-             WHERE m.user_id = ?1
-               AND m.guild_id = ?2
+             WHERE m.user_id = $1
+               AND m.guild_id = $2
          )
          ON CONFLICT DO NOTHING",
     )
@@ -146,12 +166,12 @@ pub async fn remove_member_role(
 ) -> Result<(), DbError> {
     sqlx::query(
         "DELETE FROM member_roles
-         WHERE user_id = ?1
-           AND role_id = ?2
+         WHERE user_id = $1
+           AND role_id = $2
            AND EXISTS (
                SELECT 1 FROM roles r
-               WHERE r.id = ?2
-                 AND r.space_id = ?3
+               WHERE r.id = $2
+                 AND r.space_id = $3
            )",
     )
     .bind(user_id)
@@ -169,20 +189,20 @@ pub async fn get_member_roles(
 ) -> Result<Vec<RoleRow>, DbError> {
     let rows = sqlx::query_as::<_, RoleRow>(
         "SELECT DISTINCT
-            r.id, r.space_id, r.name, r.color, r.hoist, r.position, r.permissions, r.managed, r.mentionable, r.server_wide, r.created_at
+            r.id, r.space_id, r.name, r.color, CASE WHEN r.hoist THEN 1 ELSE 0 END AS hoist, r.position, r.permissions, CASE WHEN r.managed THEN 1 ELSE 0 END AS managed, CASE WHEN r.mentionable THEN 1 ELSE 0 END AS mentionable, CASE WHEN r.server_wide THEN 1 ELSE 0 END AS server_wide, r.created_at
          FROM roles r
          LEFT JOIN member_roles mr
             ON mr.role_id = r.id
-            AND mr.user_id = ?1
-         WHERE r.space_id = ?2
+            AND mr.user_id = $1
+         WHERE r.space_id = $2
            AND (
                 mr.user_id IS NOT NULL
                 OR (
-                    r.id = ?2
+                    r.id = $2
                     AND EXISTS (
                         SELECT 1 FROM members m
-                        WHERE m.user_id = ?1
-                          AND m.guild_id = ?2
+                        WHERE m.user_id = $1
+                          AND m.guild_id = $2
                     )
                 )
            )
@@ -197,10 +217,10 @@ pub async fn get_member_roles(
 
 pub async fn get_user_all_roles(pool: &DbPool, user_id: i64) -> Result<Vec<RoleRow>, DbError> {
     let rows = sqlx::query_as::<_, RoleRow>(
-        "SELECT r.id, r.space_id, r.name, r.color, r.hoist, r.position, r.permissions, r.managed, r.mentionable, r.server_wide, r.created_at
+        "SELECT r.id, r.space_id, r.name, r.color, CASE WHEN r.hoist THEN 1 ELSE 0 END AS hoist, r.position, r.permissions, CASE WHEN r.managed THEN 1 ELSE 0 END AS managed, CASE WHEN r.mentionable THEN 1 ELSE 0 END AS mentionable, CASE WHEN r.server_wide THEN 1 ELSE 0 END AS server_wide, r.created_at
          FROM roles r
          INNER JOIN member_roles mr ON mr.role_id = r.id
-         WHERE mr.user_id = ?1
+         WHERE mr.user_id = $1
          ORDER BY r.position"
     )
     .bind(user_id)

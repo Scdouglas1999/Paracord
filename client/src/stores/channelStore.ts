@@ -43,6 +43,8 @@ interface ChannelState {
   updateLastMessageId: (channelId: string, messageId: string) => void;
 }
 
+const _fetchInFlight = new Set<string>();
+
 export const useChannelStore = create<ChannelState>()((set, _get) => ({
   channelsByGuild: {},
   channels: [],
@@ -51,6 +53,8 @@ export const useChannelStore = create<ChannelState>()((set, _get) => ({
   isLoading: false,
 
   fetchChannels: async (guildId) => {
+    if (_fetchInFlight.has(guildId)) return;
+    _fetchInFlight.add(guildId);
     set({ isLoading: true });
     try {
       const { data } = await guildApi.getChannels(guildId);
@@ -63,6 +67,8 @@ export const useChannelStore = create<ChannelState>()((set, _get) => ({
     } catch (err) {
       set({ isLoading: false });
       toast.error(`Failed to load channels: ${extractApiError(err)}`);
+    } finally {
+      _fetchInFlight.delete(guildId);
     }
   },
 

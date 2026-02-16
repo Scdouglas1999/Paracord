@@ -4,9 +4,9 @@ use paracord_core::{observability, AppState};
 use paracord_models::gateway::*;
 use paracord_models::permissions::Permissions;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use tokio::time::{Duration, Instant};
 
 use crate::session::Session;
@@ -14,6 +14,9 @@ use crate::session::Session;
 const HEARTBEAT_INTERVAL_MS: u64 = 41250;
 const HEARTBEAT_TIMEOUT_MS: u64 = 90000;
 const SESSION_TTL_SECONDS: i64 = 3600;
+const HEARTBEAT_ACK_MSG: &str = r#"{"op":11}"#;
+const HELLO_MSG_PREFIX: &str = r#"{"op":10,"d":{"heartbeat_interval":"#;
+const HELLO_MSG_SUFFIX: &str = r#"}}"#;
 const SESSION_CACHE_MAX_ENTRIES_DEFAULT: usize = 20_000;
 const WS_MAX_GLOBAL_CONNECTIONS_DEFAULT: usize = 2_000;
 const WS_MAX_CONNECTIONS_PER_USER_DEFAULT: usize = 5;
@@ -23,6 +26,7 @@ const WS_MAX_TYPING_EVENTS_PER_MINUTE_DEFAULT: u32 = 120;
 const WS_MAX_VOICE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct CachedSession {
     user_id: i64,
     guild_ids: Vec<i64>,
@@ -30,17 +34,21 @@ struct CachedSession {
     updated_at: i64,
 }
 
-static SESSION_CACHE: OnceLock<tokio::sync::RwLock<HashMap<String, CachedSession>>> =
-    OnceLock::new();
+static SESSION_CACHE: OnceLock<moka::future::Cache<String, CachedSession>> = OnceLock::new();
 static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
-static USER_CONNECTIONS: OnceLock<Mutex<HashMap<i64, usize>>> = OnceLock::new();
+static USER_CONNECTIONS: OnceLock<dashmap::DashMap<i64, usize>> = OnceLock::new();
 
-fn session_cache() -> &'static tokio::sync::RwLock<HashMap<String, CachedSession>> {
-    SESSION_CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+fn session_cache() -> &'static moka::future::Cache<String, CachedSession> {
+    SESSION_CACHE.get_or_init(|| {
+        moka::future::Cache::builder()
+            .max_capacity(ws_limits().session_cache_max_entries as u64)
+            .time_to_live(std::time::Duration::from_secs(SESSION_TTL_SECONDS as u64))
+            .build()
+    })
 }
 
-fn user_connections() -> &'static Mutex<HashMap<i64, usize>> {
-    USER_CONNECTIONS.get_or_init(|| Mutex::new(HashMap::new()))
+fn user_connections() -> &'static dashmap::DashMap<i64, usize> {
+    USER_CONNECTIONS.get_or_init(dashmap::DashMap::new)
 }
 
 const MAX_ACTIVITY_ITEMS: usize = 8;
@@ -125,13 +133,10 @@ impl ConnectionGuard {
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         if let Some(user_id) = self.user_id.take() {
-            let mut map = match user_connections().lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if let Some(count) = map.get_mut(&user_id) {
+            if let Some(mut count) = user_connections().get_mut(&user_id) {
                 if *count <= 1 {
-                    map.remove(&user_id);
+                    drop(count);
+                    user_connections().remove(&user_id);
                 } else {
                     *count -= 1;
                 }
@@ -165,11 +170,7 @@ fn try_acquire_global_connection_slot() -> bool {
 
 fn try_acquire_user_connection_slot(user_id: i64) -> bool {
     let limits = ws_limits();
-    let mut map = match user_connections().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let count = map.entry(user_id).or_insert(0);
+    let mut count = user_connections().entry(user_id).or_insert(0);
     if *count >= limits.max_connections_per_user {
         return false;
     }
@@ -372,17 +373,8 @@ fn extract_channel_id_from_event(event_type: &str, payload: &Value) -> Option<i6
     None
 }
 
-async fn can_receive_guild_event(state: &AppState, session: &mut Session, guild_id: i64) -> bool {
-    if !session.guild_ids.contains(&guild_id) {
-        return false;
-    }
-    match paracord_db::members::get_member(&state.db, session.user_id, guild_id).await {
-        Ok(Some(_)) => true,
-        _ => {
-            session.remove_guild(guild_id);
-            false
-        }
-    }
+async fn can_receive_guild_event(_state: &AppState, session: &mut Session, guild_id: i64) -> bool {
+    session.guild_ids.contains(&guild_id)
 }
 
 async fn can_receive_channel_event(
@@ -433,15 +425,11 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
     // Send HELLO
-    let hello = json!({
-        "op": OP_HELLO,
-        "d": { "heartbeat_interval": HEARTBEAT_INTERVAL_MS }
-    });
-    if sender
-        .send(Message::Text(hello.to_string().into()))
-        .await
-        .is_err()
-    {
+    let hello_msg = format!(
+        "{}{}{}",
+        HELLO_MSG_PREFIX, HEARTBEAT_INTERVAL_MS, HELLO_MSG_SUFFIX
+    );
+    if sender.send(Message::Text(hello_msg.into())).await.is_err() {
         return;
     }
 
@@ -540,98 +528,121 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
         let online_snapshot = state.online_users.read().await.clone();
         let presence_snapshot = state.user_presences.read().await.clone();
 
-        // Fetch guild data for READY
-        let mut guilds_json = Vec::new();
-        for &gid in &session.guild_ids {
-            let guild = paracord_db::guilds::get_guild(&state.db, gid)
-                .await
-                .ok()
-                .flatten();
+        // Fetch guild data for READY (parallel)
+        let guild_futures: Vec<_> = session
+            .guild_ids
+            .iter()
+            .map(|&gid| {
+                let state = state.clone();
+                let online_snapshot = online_snapshot.clone();
+                let presence_snapshot = presence_snapshot.clone();
+                let user_id = session.user_id;
+                async move {
+                    let guild = paracord_db::guilds::get_guild(&state.db, gid)
+                        .await
+                        .ok()
+                        .flatten();
+                    let Some(g) = guild else {
+                        return None;
+                    };
 
-            let voice_states = paracord_db::voice_states::get_guild_voice_states(&state.db, gid)
-                .await
-                .unwrap_or_default();
-            let voice_states_json: Vec<Value> = voice_states
-                .iter()
-                .map(|vs| {
-                    json!({
-                        "user_id": vs.user_id.to_string(),
-                        "channel_id": vs.channel_id.to_string(),
-                        "guild_id": vs.guild_id().map(|id| id.to_string()),
-                        "session_id": &vs.session_id,
-                        "self_mute": vs.self_mute,
-                        "self_deaf": vs.self_deaf,
-                        "self_stream": vs.self_stream,
-                        "self_video": vs.self_video,
-                        "suppress": vs.suppress,
-                        "mute": false,
-                        "deaf": false,
-                        "username": &vs.username,
-                        "avatar_hash": &vs.avatar_hash,
-                    })
-                })
-                .collect();
+                    // Three independent queries in parallel
+                    let (voice_states, member_ids, channels) = tokio::join!(
+                        paracord_db::voice_states::get_guild_voice_states(&state.db, gid),
+                        paracord_db::members::get_guild_member_user_ids(&state.db, gid),
+                        paracord_db::channels::get_guild_channels(&state.db, gid),
+                    );
 
-            // Build initial presences: guild members who are currently online
-            let guild_members =
-                paracord_db::members::get_guild_members(&state.db, gid, 10000, None)
-                    .await
-                    .unwrap_or_default();
-            let presences_json: Vec<Value> = guild_members
-                .iter()
-                .filter(|m| online_snapshot.contains(&m.user_id))
-                .map(|m| {
-                    presence_snapshot
-                        .get(&m.user_id)
-                        .cloned()
-                        .unwrap_or_else(|| default_presence_payload(m.user_id, "online"))
-                })
-                .collect();
+                    let voice_states = voice_states.unwrap_or_default();
+                    let member_ids = member_ids.unwrap_or_default();
+                    let channels = channels.unwrap_or_default();
 
-            if let Some(g) = guild {
-                let channels = paracord_db::channels::get_guild_channels(&state.db, gid)
-                    .await
-                    .unwrap_or_default();
-                let mut channels_json: Vec<Value> = Vec::with_capacity(channels.len());
-                for c in channels {
-                    let perms = paracord_core::permissions::compute_channel_permissions(
-                        &state.db,
-                        gid,
-                        c.id,
-                        g.owner_id,
-                        session.user_id,
-                    )
-                    .await
-                    .unwrap_or_else(|_| paracord_models::permissions::Permissions::empty());
-                    if !perms.contains(paracord_models::permissions::Permissions::VIEW_CHANNEL) {
-                        continue;
+                    // Build voice_states JSON
+                    let voice_states_json: Vec<Value> = voice_states
+                        .iter()
+                        .map(|vs| {
+                            json!({
+                                "user_id": vs.user_id.to_string(),
+                                "channel_id": vs.channel_id.to_string(),
+                                "guild_id": vs.guild_id().map(|id| id.to_string()),
+                                "session_id": &vs.session_id,
+                                "self_mute": vs.self_mute,
+                                "self_deaf": vs.self_deaf,
+                                "self_stream": vs.self_stream,
+                                "self_video": vs.self_video,
+                                "suppress": vs.suppress,
+                                "mute": false,
+                                "deaf": false,
+                                "username": &vs.username,
+                                "avatar_hash": &vs.avatar_hash,
+                            })
+                        })
+                        .collect();
+
+                    // Build presences from member IDs (lightweight query)
+                    let presences_json: Vec<Value> = member_ids
+                        .iter()
+                        .filter(|uid| online_snapshot.contains(uid))
+                        .map(|uid| {
+                            presence_snapshot.get(uid).cloned().unwrap_or_else(|| {
+                                json!({
+                                    "user_id": uid.to_string(),
+                                    "status": "online",
+                                    "custom_status": Value::Null,
+                                    "activities": [],
+                                })
+                            })
+                        })
+                        .collect();
+
+                    // Batch permission check
+                    let channel_perms =
+                        paracord_core::permissions::compute_all_channel_permissions(
+                            &state.db, gid, &channels, g.owner_id, user_id,
+                        )
+                        .await
+                        .unwrap_or_default();
+
+                    let mut channels_json: Vec<Value> = Vec::with_capacity(channels.len());
+                    for c in &channels {
+                        let perms = channel_perms
+                            .get(&c.id)
+                            .copied()
+                            .unwrap_or_else(|| paracord_models::permissions::Permissions::empty());
+                        if !perms.contains(paracord_models::permissions::Permissions::VIEW_CHANNEL)
+                        {
+                            continue;
+                        }
+                        let required_role_ids: Vec<String> =
+                            paracord_db::channels::parse_required_role_ids(&c.required_role_ids)
+                                .into_iter()
+                                .map(|id| id.to_string())
+                                .collect();
+                        channels_json.push(json!({
+                            "id": c.id.to_string(),
+                            "name": c.name,
+                            "channel_type": c.channel_type,
+                            "position": c.position,
+                            "guild_id": c.guild_id().map(|id| id.to_string()),
+                            "parent_id": c.parent_id.map(|id| id.to_string()),
+                            "required_role_ids": required_role_ids,
+                        }));
                     }
-                    let required_role_ids: Vec<String> =
-                        paracord_db::channels::parse_required_role_ids(&c.required_role_ids)
-                            .into_iter()
-                            .map(|id| id.to_string())
-                            .collect();
-                    channels_json.push(json!({
-                        "id": c.id.to_string(),
-                        "name": c.name,
-                        "channel_type": c.channel_type,
-                        "position": c.position,
-                        "guild_id": c.guild_id().map(|id| id.to_string()),
-                        "parent_id": c.parent_id.map(|id| id.to_string()),
-                        "required_role_ids": required_role_ids,
-                    }));
-                }
 
-                guilds_json.push(json!({
-                    "id": g.id.to_string(),
-                    "name": g.name,
-                    "owner_id": g.owner_id.to_string(),
-                    "channels": channels_json,
-                    "voice_states": voice_states_json,
-                    "presences": presences_json,
-                }));
-            }
-        }
+                    Some(json!({
+                        "id": g.id.to_string(),
+                        "name": g.name,
+                        "owner_id": g.owner_id.to_string(),
+                        "channels": channels_json,
+                        "voice_states": voice_states_json,
+                        "presences": presences_json,
+                    }))
+                }
+            })
+            .collect();
+
+        let guild_results = futures_util::future::join_all(guild_futures).await;
+        let guilds_json: Vec<Value> = guild_results.into_iter().flatten().collect();
 
         let ready = json!({
             "op": OP_DISPATCH,
@@ -786,11 +797,11 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
     // `USER_CONNECTIONS` still includes this connection until `connection_guard` drops,
     // so `<= 1` means no other live session remains.
     let should_mark_offline = {
-        let map = match user_connections().lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        map.get(&session_user_id).copied().unwrap_or(0) <= 1
+        user_connections()
+            .get(&session_user_id)
+            .map(|c| *c)
+            .unwrap_or(0)
+            <= 1
     };
 
     if should_mark_offline {
@@ -857,11 +868,7 @@ async fn wait_for_identify_or_resume(
                             let requested_session_id =
                                 d.get("session_id").and_then(|v| v.as_str())?.to_string();
                             let requested_seq = d.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let now = chrono::Utc::now().timestamp();
-                            let mut cache = session_cache().write().await;
-                            cache
-                                .retain(|_, cached| now - cached.updated_at <= SESSION_TTL_SECONDS);
-                            if let Some(cached) = cache.get(&requested_session_id) {
+                            if let Some(cached) = session_cache().get(&requested_session_id).await {
                                 if cached.user_id == claims.sub {
                                     let mut resumed =
                                         Session::new(cached.user_id, cached.guild_ids.clone());
@@ -901,9 +908,10 @@ async fn run_session(
         session.user_id,
         &session.guild_ids,
     );
-    let mut last_heartbeat = Instant::now();
     let heartbeat_timeout = Duration::from_millis(HEARTBEAT_TIMEOUT_MS);
     let mut rate_limiter = WsMessageRateLimiter::new();
+    let heartbeat_sleep = tokio::time::sleep(heartbeat_timeout);
+    tokio::pin!(heartbeat_sleep);
 
     let (disconnect_reason, heartbeat_timed_out) = loop {
         tokio::select! {
@@ -926,7 +934,7 @@ async fn run_session(
                         if let Ok(payload) = parsed_payload {
                             handle_client_message(&payload, &mut sender, &mut session, &state).await;
                             if opcode == OP_HEARTBEAT {
-                                last_heartbeat = Instant::now();
+                                heartbeat_sleep.as_mut().reset(Instant::now() + heartbeat_timeout);
                             }
                         }
                     }
@@ -1014,13 +1022,18 @@ async fn run_session(
                         }
 
                         let seq = session.next_sequence();
-                        let dispatch = json!({
-                            "op": OP_DISPATCH,
-                            "t": event.event_type,
-                            "s": seq,
-                            "d": event.payload,
-                        });
-                        if sender.send(Message::Text(dispatch.to_string().into())).await.is_err() {
+                        let dispatch_str = if let Some(ref pre) = event.serialized_payload {
+                            format!(r#"{{"op":0,"t":"{}","s":{},"d":{}}}"#, event.event_type, seq, pre)
+                        } else {
+                            let dispatch = json!({
+                                "op": OP_DISPATCH,
+                                "t": event.event_type,
+                                "s": seq,
+                                "d": *event.payload,
+                            });
+                            dispatch.to_string()
+                        };
+                        if sender.send(Message::Text(dispatch_str.into())).await.is_err() {
                             break ("websocket send error".to_string(), false);
                         }
                         observability::ws_event_dispatched(&event.event_type);
@@ -1044,13 +1057,11 @@ async fn run_session(
                     }
                 }
             }
-            _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                if last_heartbeat.elapsed() > heartbeat_timeout {
-                    break (
-                        format!("heartbeat timeout after {}ms", HEARTBEAT_TIMEOUT_MS),
-                        true,
-                    );
-                }
+            () = &mut heartbeat_sleep => {
+                break (
+                    format!("heartbeat timeout after {}ms", HEARTBEAT_TIMEOUT_MS),
+                    true,
+                );
             }
         }
     };
@@ -1068,30 +1079,17 @@ async fn run_session(
         );
     }
     state.event_bus.unregister_session(&session.session_id);
-    let now = chrono::Utc::now().timestamp();
-    let mut cache = session_cache().write().await;
-    cache.retain(|_, cached| now - cached.updated_at <= SESSION_TTL_SECONDS);
-    let max_entries = ws_limits().session_cache_max_entries;
-    if cache.len() >= max_entries {
-        let mut entries: Vec<(String, i64)> = cache
-            .iter()
-            .map(|(key, value)| (key.clone(), value.updated_at))
-            .collect();
-        entries.sort_by_key(|(_, updated_at)| *updated_at);
-        let remove_count = cache.len() - max_entries + 1;
-        for (session_id, _) in entries.into_iter().take(remove_count) {
-            cache.remove(&session_id);
-        }
-    }
-    cache.insert(
-        session.session_id.clone(),
-        CachedSession {
-            user_id: session.user_id,
-            guild_ids: session.guild_ids.clone(),
-            sequence: session.sequence,
-            updated_at: now,
-        },
-    );
+    session_cache()
+        .insert(
+            session.session_id.clone(),
+            CachedSession {
+                user_id: session.user_id,
+                guild_ids: session.guild_ids.clone(),
+                sequence: session.sequence,
+                updated_at: chrono::Utc::now().timestamp(),
+            },
+        )
+        .await;
     session
 }
 
@@ -1105,8 +1103,7 @@ async fn handle_client_message(
 
     match op {
         OP_HEARTBEAT => {
-            let ack = json!({"op": OP_HEARTBEAT_ACK});
-            let _ = sender.send(Message::Text(ack.to_string().into())).await;
+            let _ = sender.send(Message::Text(HEARTBEAT_ACK_MSG.into())).await;
         }
         OP_PRESENCE_UPDATE => {
             if let Some(d) = payload.get("d") {

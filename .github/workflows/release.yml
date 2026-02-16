@@ -351,6 +351,38 @@ jobs:
 
           cat artifacts/latest.json
 
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: RELEASE_NOTES.md
+          sparse-checkout-cone-mode: false
+
+      - name: Build release body from RELEASE_NOTES.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f RELEASE_NOTES.md ]; then
+            cp RELEASE_NOTES.md artifacts/body.md
+          else
+            echo "## Release ${GITHUB_REF_NAME}" > artifacts/body.md
+          fi
+
+          cat >> artifacts/body.md <<'DOWNLOADS'
+
+          ---
+
+          ## Downloads
+
+          | Component | File |
+          |-----------|------|
+          | Server (Windows x64) | `paracord-server-windows-x64-*.zip` |
+          | Server (Linux x64) | `paracord-server-linux-x64-*.tar.gz` |
+          | Client Installer (Windows) | `Paracord-Setup-*.exe` |
+          | Client MSI (Windows) | `Paracord_*_x64_en-US.msi` |
+          | Client AppImage (Linux) | `Paracord_*.AppImage` |
+          | Client deb (Linux) | `paracord_*_amd64.deb` |
+          | Signed updater manifest | `latest.json` |
+          DOWNLOADS
+
       - name: Delete existing release assets
         shell: bash
         env:
@@ -368,18 +400,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body: |
-            ## Downloads
-
-            | Component | File |
-            |-----------|------|
-            | Server (Windows x64) | `paracord-server-windows-x64-*.zip` |
-            | Server (Linux x64) | `paracord-server-linux-x64-*.tar.gz` |
-            | Client Installer (Windows) | `Paracord-Setup-*.exe` |
-            | Client MSI (Windows) | `Paracord_*_x64_en-US.msi` |
-            | Client AppImage (Linux) | `Paracord_*.AppImage` |
-            | Client deb (Linux) | `paracord_*_amd64.deb` |
-            | Signed updater manifest | `latest.json` |
+          body_path: artifacts/body.md
           fail_on_unmatched_files: false
           files: |
             artifacts/server-windows/*.zip

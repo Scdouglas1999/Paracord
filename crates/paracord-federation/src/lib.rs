@@ -8,6 +8,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use paracord_db::DbPool;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::Row;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FederationError {
@@ -167,10 +168,18 @@ impl FederationService {
         .bind(&envelope.sender)
         .bind(&envelope.origin_server)
         .bind(envelope.origin_ts)
-        .bind(&envelope.content)
+        .bind(serde_json::to_string(&envelope.content).map_err(|e| {
+            FederationError::Database(sqlx::Error::Protocol(format!(
+                "invalid federation content json: {e}"
+            )))
+        })?)
         .bind(envelope.depth)
         .bind(&envelope.state_key)
-        .bind(&envelope.signatures)
+        .bind(serde_json::to_string(&envelope.signatures).map_err(|e| {
+            FederationError::Database(sqlx::Error::Protocol(format!(
+                "invalid federation signatures json: {e}"
+            )))
+        })?)
         .execute(pool)
         .await?
         .rows_affected();
@@ -391,6 +400,25 @@ impl FederationService {
             return;
         }
 
+        // Relay cycle guard: if we already persisted this event, skip relaying.
+        match self.fetch_event(pool, &envelope.event_id).await {
+            Ok(Some(_)) => {
+                tracing::debug!(
+                    "federation: skipping relay of already-persisted event {}",
+                    envelope.event_id
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "federation: relay dedup check failed for {}: {}",
+                    envelope.event_id,
+                    e
+                );
+            }
+            Ok(None) => {}
+        }
+
         let now_ms = chrono::Utc::now().timestamp_millis();
         let peers = match paracord_db::federation::list_trusted_federated_servers(pool).await {
             Ok(servers) => servers,
@@ -548,7 +576,29 @@ impl FederationService {
             return;
         }
 
+        // Purge events that have exceeded max retries or max age before processing.
+        const MAX_RETRY_ATTEMPTS: i64 = 12;
+        const MAX_EVENT_AGE_MS: i64 = 86_400_000; // 24 hours
         let now_ms = chrono::Utc::now().timestamp_millis();
+        match paracord_db::federation::purge_expired_outbound_events(
+            pool,
+            now_ms,
+            MAX_RETRY_ATTEMPTS,
+            MAX_EVENT_AGE_MS,
+        )
+        .await
+        {
+            Ok(purged) if purged > 0 => {
+                tracing::info!(
+                    "federation: purged {} expired outbound queue entries",
+                    purged
+                );
+            }
+            Err(e) => {
+                tracing::warn!("federation: failed to purge expired outbound events: {}", e);
+            }
+            _ => {}
+        }
         let due =
             match paracord_db::federation::fetch_due_outbound_events(pool, now_ms, limit).await {
                 Ok(rows) => rows,
@@ -698,7 +748,7 @@ pub fn canonical_envelope_bytes(envelope: &FederationEventEnvelope) -> Vec<u8> {
     .unwrap_or_default()
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 struct FederationEventEnvelopeRow {
     event_id: String,
     room_id: String,
@@ -710,6 +760,29 @@ struct FederationEventEnvelopeRow {
     depth: i64,
     state_key: Option<String>,
     signatures: Value,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for FederationEventEnvelopeRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let content_raw: String = row.try_get("content")?;
+        let signatures_raw: String = row.try_get("signatures")?;
+        let content = serde_json::from_str(&content_raw)
+            .map_err(|e| sqlx::Error::Protocol(format!("invalid content json: {e}")))?;
+        let signatures = serde_json::from_str(&signatures_raw)
+            .map_err(|e| sqlx::Error::Protocol(format!("invalid signatures json: {e}")))?;
+        Ok(Self {
+            event_id: row.try_get("event_id")?,
+            room_id: row.try_get("room_id")?,
+            event_type: row.try_get("event_type")?,
+            sender: row.try_get("sender")?,
+            origin_server: row.try_get("origin_server")?,
+            origin_ts: row.try_get("origin_ts")?,
+            content,
+            depth: row.try_get("depth")?,
+            state_key: row.try_get("state_key")?,
+            signatures,
+        })
+    }
 }
 
 impl From<FederationEventEnvelopeRow> for FederationEventEnvelope {

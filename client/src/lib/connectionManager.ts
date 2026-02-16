@@ -1,4 +1,4 @@
-import { type AxiosInstance } from 'axios';
+﻿import { type AxiosInstance } from 'axios';
 import { createApiClient } from '../api/client';
 import { useServerListStore, type ServerEntry } from '../stores/serverListStore';
 import { useAccountStore } from '../stores/accountStore';
@@ -35,10 +35,46 @@ export interface ServerConnection {
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   allowReconnect: boolean;
   connected: boolean;
+  lastHeartbeatSent: number;
+  missedAcks: number;
+  connectionLatency: number;
+  pendingMessages: unknown[];
 }
 
 class ConnectionManager {
   private connections = new Map<string, ServerConnection>();
+  private connecting = new Map<string, Promise<void>>();
+  private static readonly MAX_PENDING_MESSAGES = 50;
+
+  private isCurrentConnection(conn: ServerConnection): boolean {
+    return this.connections.get(conn.serverId) === conn;
+  }
+
+  /** Keep the global status bar aligned with aggregate per-server socket state. */
+  private syncUiConnectionStatus(): void {
+    const all = Array.from(this.connections.values());
+    if (all.length === 0) {
+      useUIStore.getState().setConnectionStatus('disconnected');
+      return;
+    }
+
+    if (all.some((conn) => conn.connected)) {
+      useUIStore.getState().setConnectionStatus('connected');
+      return;
+    }
+
+    if (all.some((conn) => conn.ws?.readyState === WebSocket.CONNECTING)) {
+      useUIStore.getState().setConnectionStatus('connecting');
+      return;
+    }
+
+    if (all.some((conn) => conn.reconnectTimer !== null)) {
+      useUIStore.getState().setConnectionStatus('reconnecting');
+      return;
+    }
+
+    useUIStore.getState().setConnectionStatus('disconnected');
+  }
 
   /** Get or create a connection for a server */
   getConnection(serverId: string): ServerConnection | undefined {
@@ -59,6 +95,25 @@ class ConnectionManager {
 
   /** Authenticate with a server using challenge-response, then connect gateway */
   async connectServer(serverId: string): Promise<void> {
+    const inFlight = this.connecting.get(serverId);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+
+    const connectTask = this.connectServerInternal(serverId);
+    this.connecting.set(serverId, connectTask);
+    try {
+      await connectTask;
+    } finally {
+      const current = this.connecting.get(serverId);
+      if (current === connectTask) {
+        this.connecting.delete(serverId);
+      }
+    }
+  }
+
+  private async connectServerInternal(serverId: string): Promise<void> {
     const existing = this.connections.get(serverId);
     if (existing) {
       existing.allowReconnect = true;
@@ -70,9 +125,11 @@ class ConnectionManager {
     if (!server) throw new Error(`Server ${serverId} not found`);
 
     const account = useAccountStore.getState();
-    if (!account.isUnlocked || !account.publicKey || !hasUnlockedPrivateKey()) {
-      throw new Error('Account not unlocked');
-    }
+    const canUseChallengeAuth =
+      account.isUnlocked &&
+      !!account.publicKey &&
+      !!account.username &&
+      hasUnlockedPrivateKey();
 
     // Create API client for this server
     const apiBaseUrl = `${server.url.replace(/\/+$/, '')}/api/v1`;
@@ -81,15 +138,21 @@ class ConnectionManager {
       () => useServerListStore.getState().getServer(serverId)?.token || null,
       (token) => useServerListStore.getState().updateToken(serverId, token),
       () => {
-        // Auth failed — clear token, disconnect
+        // Auth failed; clear token and disconnect.
         useServerListStore.getState().updateToken(serverId, '');
+        useServerListStore.getState().setApiReachable(serverId, false);
         this.disconnectServer(serverId);
       },
+      (reachable) => useServerListStore.getState().setApiReachable(serverId, reachable),
     );
 
-    // If we don't have a valid token, do challenge-response auth
+    // If we don't have a valid token, do challenge-response auth.
+    // Do not require local key unlock when a token already exists.
     if (!server.token) {
-      const token = await this.authenticate(client, server, account.publicKey, account.username!);
+      if (!canUseChallengeAuth) {
+        throw new Error('No server token and local account is not unlocked');
+      }
+      const token = await this.authenticate(client, server, account.publicKey!, account.username!);
       useServerListStore.getState().updateToken(serverId, token);
     }
 
@@ -106,6 +169,10 @@ class ConnectionManager {
       reconnectTimer: null,
       allowReconnect: true,
       connected: false,
+      lastHeartbeatSent: 0,
+      missedAcks: 0,
+      connectionLatency: 0,
+      pendingMessages: [],
     };
     this.connections.set(serverId, conn);
 
@@ -186,6 +253,7 @@ class ConnectionManager {
 
   /** Connect WebSocket gateway for a server */
   private connectGateway(conn: ServerConnection): void {
+    if (!this.isCurrentConnection(conn)) return;
     const token = useServerListStore.getState().getServer(conn.serverId)?.token;
     if (!token) return;
 
@@ -204,20 +272,26 @@ class ConnectionManager {
     const wsUrl = `${wsBase}/gateway`;
 
     conn.ws = new WebSocket(wsUrl);
+    this.syncUiConnectionStatus();
     conn.allowReconnect = true;
     const activeWs = conn.ws;
 
     activeWs.onopen = () => {
-      conn.reconnectAttempts = 0;
+      if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) {
+        activeWs.close();
+        return;
+      }
       conn.connected = true;
       if (conn.reconnectTimer) {
         clearTimeout(conn.reconnectTimer);
         conn.reconnectTimer = null;
       }
       useServerListStore.getState().setConnected(conn.serverId, true);
+      this.syncUiConnectionStatus();
     };
 
     activeWs.onmessage = (event) => {
+      if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
       try {
         const payload: GatewayPayload = JSON.parse(event.data);
         this.handlePayload(conn, payload);
@@ -227,17 +301,20 @@ class ConnectionManager {
     };
 
     activeWs.onclose = () => {
-      if (conn.ws !== activeWs) return;
+      if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
       conn.ws = null;
       conn.connected = false;
       useServerListStore.getState().setConnected(conn.serverId, false);
       this.cleanupConnection(conn);
       if (conn.allowReconnect) {
         this.reconnectGateway(conn);
+      } else {
+        this.syncUiConnectionStatus();
       }
     };
 
     activeWs.onerror = () => {
+      if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
       activeWs.close();
     };
   }
@@ -253,6 +330,11 @@ class ConnectionManager {
         break;
       }
       case 11: // HEARTBEAT_ACK
+        if (conn.lastHeartbeatSent > 0) {
+          conn.connectionLatency = Date.now() - conn.lastHeartbeatSent;
+          useUIStore.getState().setConnectionLatency(conn.connectionLatency);
+        }
+        conn.missedAcks = 0;
         break;
       case 0: // DISPATCH
         this.handleDispatch(conn, payload.t!, payload.d);
@@ -287,6 +369,12 @@ class ConnectionManager {
   private startHeartbeat(conn: ServerConnection): void {
     if (conn.heartbeatTimer) clearInterval(conn.heartbeatTimer);
     conn.heartbeatTimer = setInterval(() => {
+      conn.lastHeartbeatSent = Date.now();
+      conn.missedAcks++;
+      if (conn.missedAcks >= 3) {
+        conn.ws?.close();
+        return;
+      }
       this.send(conn, { op: 1, d: conn.sequence });
     }, conn.heartbeatInterval!);
   }
@@ -295,10 +383,13 @@ class ConnectionManager {
   private handleDispatch(conn: ServerConnection, event: string, data: any): void {
     // Dispatch events are the same as before, but now they can come from any server.
     // Since guild/channel/message IDs are unique snowflakes per server, the existing
-    // stores handle this naturally — data from different servers has different IDs.
+    // stores handle this naturally â€” data from different servers has different IDs.
     switch (event) {
       case GatewayEvents.READY:
         conn.sessionId = data.session_id;
+        conn.reconnectAttempts = 0;
+        this.flushPendingMessages(conn);
+        this.syncUiConnectionStatus();
         useUIStore.getState().setServerRestarting(false);
 
         // Update server info with actual name
@@ -341,7 +432,7 @@ class ConnectionManager {
 
         // Set our own presence to online. The server dispatches PRESENCE_UPDATE
         // before our session starts listening, so we never receive our own
-        // online event — set it locally from the READY user data.
+        // online event â€” set it locally from the READY user data.
         if (data.user?.id) {
           usePresenceStore.getState().updatePresence({
             user_id: data.user.id,
@@ -383,9 +474,9 @@ class ConnectionManager {
         useMessageStore.getState().removeMessage(data.channel_id, data.id);
         break;
       case GatewayEvents.MESSAGE_DELETE_BULK:
-        data.ids?.forEach((id: string) => {
-          useMessageStore.getState().removeMessage(data.channel_id, id);
-        });
+        if (data.ids?.length) {
+          useMessageStore.getState().removeMessages(data.channel_id, data.ids);
+        }
         break;
 
       case GatewayEvents.GUILD_CREATE:
@@ -444,7 +535,11 @@ class ConnectionManager {
       }
 
       case GatewayEvents.GUILD_MEMBER_ADD:
-        void useMemberStore.getState().fetchMembers(data.guild_id);
+        if (data.user) {
+          useMemberStore.getState().addMember(data.guild_id, data);
+        } else {
+          void useMemberStore.getState().fetchMembers(data.guild_id);
+        }
         break;
       case GatewayEvents.GUILD_MEMBER_REMOVE:
         if (data.user?.id || data.user_id) {
@@ -454,7 +549,11 @@ class ConnectionManager {
         }
         break;
       case GatewayEvents.GUILD_MEMBER_UPDATE:
-        void useMemberStore.getState().fetchMembers(data.guild_id);
+        if (data.user?.id) {
+          useMemberStore.getState().updateMember(data.guild_id, data);
+        } else {
+          void useMemberStore.getState().fetchMembers(data.guild_id);
+        }
         break;
 
       case GatewayEvents.PRESENCE_UPDATE:
@@ -533,6 +632,15 @@ class ConnectionManager {
   private send(conn: ServerConnection, data: unknown): void {
     if (conn.ws?.readyState === WebSocket.OPEN) {
       conn.ws.send(JSON.stringify(data));
+    } else if (conn.allowReconnect && conn.pendingMessages.length < ConnectionManager.MAX_PENDING_MESSAGES) {
+      conn.pendingMessages.push(data);
+    }
+  }
+
+  private flushPendingMessages(conn: ServerConnection): void {
+    const messages = conn.pendingMessages.splice(0);
+    for (const msg of messages) {
+      this.send(conn, msg);
     }
   }
 
@@ -574,15 +682,16 @@ class ConnectionManager {
 
   private reconnectGateway(conn: ServerConnection): void {
     if (!conn.allowReconnect || conn.reconnectTimer) return;
-    if (!this.connections.has(conn.serverId)) return;
+    if (!this.isCurrentConnection(conn)) return;
     const delay = Math.min(1000 * Math.pow(2, Math.min(conn.reconnectAttempts, 5)), 30000);
     conn.reconnectAttempts++;
     conn.reconnectTimer = setTimeout(() => {
       conn.reconnectTimer = null;
       if (!conn.allowReconnect) return;
-      if (!this.connections.has(conn.serverId)) return;
+      if (!this.isCurrentConnection(conn)) return;
       this.connectGateway(conn);
     }, delay);
+    this.syncUiConnectionStatus();
   }
 
   private cleanupConnection(conn: ServerConnection): void {
@@ -597,6 +706,7 @@ class ConnectionManager {
     const conn = this.connections.get(serverId);
     if (!conn) return;
     conn.allowReconnect = false;
+    conn.pendingMessages = [];
     if (conn.reconnectTimer) {
       clearTimeout(conn.reconnectTimer);
       conn.reconnectTimer = null;
@@ -607,6 +717,7 @@ class ConnectionManager {
     conn.connected = false;
     useServerListStore.getState().setConnected(serverId, false);
     this.connections.delete(serverId);
+    this.syncUiConnectionStatus();
   }
 
   /** Connect to all saved servers */
@@ -631,3 +742,4 @@ class ConnectionManager {
 }
 
 export const connectionManager = new ConnectionManager();
+

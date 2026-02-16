@@ -23,8 +23,8 @@ pub async fn find_dm_channel_between(
                 c.required_role_ids, c.thread_metadata, c.owner_id, c.message_count,
                 c.applied_tags, c.default_sort_order, c.created_at
          FROM channels c
-         INNER JOIN dm_recipients a ON a.channel_id = c.id AND a.user_id = ?1
-         INNER JOIN dm_recipients b ON b.channel_id = c.id AND b.user_id = ?2
+         INNER JOIN dm_recipients a ON a.channel_id = c.id AND a.user_id = $1
+         INNER JOIN dm_recipients b ON b.channel_id = c.id AND b.user_id = $2
          WHERE c.channel_type = 1
          LIMIT 1",
     )
@@ -45,7 +45,7 @@ pub async fn create_dm_channel(
 
     sqlx::query(
         "INSERT INTO channels (id, space_id, name, channel_type, position)
-         VALUES (?1, NULL, NULL, 1, 0)",
+         VALUES ($1, NULL, NULL, 1, 0)",
     )
     .bind(channel_id)
     .execute(&mut *tx)
@@ -53,7 +53,7 @@ pub async fn create_dm_channel(
 
     sqlx::query(
         "INSERT INTO dm_recipients (channel_id, user_id)
-         VALUES (?1, ?2), (?1, ?3)",
+         VALUES ($1, $2), ($1, $3)",
     )
     .bind(channel_id)
     .bind(user_a)
@@ -69,7 +69,7 @@ pub async fn create_dm_channel(
                 thread_metadata, owner_id, message_count, applied_tags, default_sort_order,
                 created_at
          FROM channels
-         WHERE id = ?1",
+         WHERE id = $1",
     )
     .bind(channel_id)
     .fetch_one(pool)
@@ -93,7 +93,7 @@ pub async fn list_user_dm_channels(
          INNER JOIN dm_recipients me ON me.channel_id = c.id
          INNER JOIN dm_recipients other ON other.channel_id = c.id AND other.user_id != me.user_id
          INNER JOIN users u ON u.id = other.user_id
-         WHERE c.channel_type = 1 AND me.user_id = ?1
+         WHERE c.channel_type = 1 AND me.user_id = $1
          ORDER BY CASE WHEN c.last_message_id IS NULL THEN 1 ELSE 0 END, c.last_message_id DESC, c.id DESC",
     )
     .bind(user_id)
@@ -105,7 +105,7 @@ pub async fn list_user_dm_channels(
 
 pub async fn get_dm_recipient_ids(pool: &DbPool, channel_id: i64) -> Result<Vec<i64>, DbError> {
     let rows: Vec<(i64,)> =
-        sqlx::query_as("SELECT user_id FROM dm_recipients WHERE channel_id = ?1")
+        sqlx::query_as("SELECT user_id FROM dm_recipients WHERE channel_id = $1")
             .bind(channel_id)
             .fetch_all(pool)
             .await?;
@@ -118,7 +118,7 @@ pub async fn is_dm_recipient(
     user_id: i64,
 ) -> Result<bool, DbError> {
     let exists: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM dm_recipients WHERE channel_id = ?1 AND user_id = ?2 LIMIT 1",
+        "SELECT 1 FROM dm_recipients WHERE channel_id = $1 AND user_id = $2 LIMIT 1",
     )
     .bind(channel_id)
     .bind(user_id)

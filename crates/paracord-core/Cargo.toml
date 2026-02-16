@@ -22,6 +22,7 @@ rand = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 moka = { workspace = true }
+dashmap = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 flate2 = "1"
 tar = "0.4"

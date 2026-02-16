@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-pub const DEFAULT_MAX_SKEW_MS: i64 = 300_000;
+pub const DEFAULT_MAX_SKEW_MS: i64 = 60_000;
 
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();

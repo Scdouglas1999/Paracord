@@ -8,6 +8,7 @@ import { useGuildStore } from '../stores/guildStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { RestartBanner } from '../components/RestartBanner';
+import { ConnectionStatusBar } from '../components/ConnectionStatusBar';
 import { UpdateNotification } from '../components/UpdateNotification';
 import { ToastContainer } from '../components/ui/Toast';
 import { ImageLightbox } from '../components/ui/ImageLightbox';
@@ -65,6 +66,7 @@ function AppInitializer({ children }: { children: ReactNode }) {
 
   return (
     <>
+      <ConnectionStatusBar />
       <RestartBanner />
       <UpdateNotification />
       <ToastContainer />

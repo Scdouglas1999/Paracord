@@ -1,7 +1,8 @@
-use crate::{DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct PollRow {
     pub id: i64,
     pub message_id: i64,
@@ -43,6 +44,25 @@ pub struct CreatePollOption {
     pub emoji: Option<String>,
 }
 
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for PollRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let expires_at_raw: Option<String> = row.try_get("expires_at")?;
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            message_id: row.try_get("message_id")?,
+            channel_id: row.try_get("channel_id")?,
+            question: row.try_get("question")?,
+            allow_multiselect: bool_from_any_row(row, "allow_multiselect")?,
+            expires_at: expires_at_raw
+                .as_deref()
+                .map(datetime_from_db_text)
+                .transpose()?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
+}
+
 pub async fn create_poll(
     pool: &DbPool,
     poll_id: i64,
@@ -55,7 +75,7 @@ pub async fn create_poll(
 ) -> Result<PollRow, DbError> {
     let row = sqlx::query_as::<_, PollRow>(
         "INSERT INTO polls (id, message_id, channel_id, question, allow_multiselect, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id, message_id, channel_id, question, allow_multiselect, expires_at, created_at",
     )
     .bind(poll_id)
@@ -63,7 +83,7 @@ pub async fn create_poll(
     .bind(channel_id)
     .bind(question)
     .bind(allow_multiselect)
-    .bind(expires_at)
+    .bind(expires_at.map(datetime_to_db_text))
     .fetch_one(pool)
     .await?;
 
@@ -71,7 +91,7 @@ pub async fn create_poll(
         let option_id = paracord_util::snowflake::generate(1);
         sqlx::query(
             "INSERT INTO poll_options (id, poll_id, text, emoji, position)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(option_id)
         .bind(poll_id)
@@ -92,7 +112,7 @@ pub async fn get_poll(
 ) -> Result<Option<PollWithOptions>, DbError> {
     let poll = sqlx::query_as::<_, PollRow>(
         "SELECT id, message_id, channel_id, question, allow_multiselect, expires_at, created_at
-         FROM polls WHERE id = ?1",
+         FROM polls WHERE id = $1",
     )
     .bind(poll_id)
     .fetch_optional(pool)
@@ -119,7 +139,7 @@ pub async fn get_message_poll(
 ) -> Result<Option<PollWithOptions>, DbError> {
     let poll = sqlx::query_as::<_, PollRow>(
         "SELECT id, message_id, channel_id, question, allow_multiselect, expires_at, created_at
-         FROM polls WHERE message_id = ?1",
+         FROM polls WHERE message_id = $1",
     )
     .bind(message_id)
     .fetch_optional(pool)
@@ -146,7 +166,7 @@ async fn build_options_with_votes(
 ) -> Result<Vec<PollOptionWithVotes>, DbError> {
     let option_rows = sqlx::query_as::<_, PollOptionRow>(
         "SELECT id, poll_id, text, emoji, position
-         FROM poll_options WHERE poll_id = ?1 ORDER BY position",
+         FROM poll_options WHERE poll_id = $1 ORDER BY position",
     )
     .bind(poll_id)
     .fetch_all(pool)
@@ -155,14 +175,14 @@ async fn build_options_with_votes(
     let mut result = Vec::with_capacity(option_rows.len());
     for opt in option_rows {
         let vote_count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM poll_votes WHERE poll_id = ?1 AND option_id = ?2")
+            sqlx::query_as("SELECT COUNT(*) FROM poll_votes WHERE poll_id = $1 AND option_id = $2")
                 .bind(poll_id)
                 .bind(opt.id)
                 .fetch_one(pool)
                 .await?;
 
         let voted: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM poll_votes WHERE poll_id = ?1 AND option_id = ?2 AND user_id = ?3)",
+            "SELECT EXISTS(SELECT 1 FROM poll_votes WHERE poll_id = $1 AND option_id = $2 AND user_id = $3)",
         )
         .bind(poll_id)
         .bind(opt.id)
@@ -192,7 +212,7 @@ pub async fn add_vote(
     // Check if poll allows multiselect
     let poll = sqlx::query_as::<_, PollRow>(
         "SELECT id, message_id, channel_id, question, allow_multiselect, expires_at, created_at
-         FROM polls WHERE id = ?1",
+         FROM polls WHERE id = $1",
     )
     .bind(poll_id)
     .fetch_optional(pool)
@@ -201,7 +221,7 @@ pub async fn add_vote(
 
     // If single-select, remove existing votes first
     if !poll.allow_multiselect {
-        sqlx::query("DELETE FROM poll_votes WHERE poll_id = ?1 AND user_id = ?2")
+        sqlx::query("DELETE FROM poll_votes WHERE poll_id = $1 AND user_id = $2")
             .bind(poll_id)
             .bind(user_id)
             .execute(pool)
@@ -209,8 +229,9 @@ pub async fn add_vote(
     }
 
     sqlx::query(
-        "INSERT OR IGNORE INTO poll_votes (poll_id, option_id, user_id)
-         VALUES (?1, ?2, ?3)",
+        "INSERT INTO poll_votes (poll_id, option_id, user_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (poll_id, option_id, user_id) DO NOTHING",
     )
     .bind(poll_id)
     .bind(option_id)
@@ -227,7 +248,7 @@ pub async fn remove_vote(
     option_id: i64,
     user_id: i64,
 ) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM poll_votes WHERE poll_id = ?1 AND option_id = ?2 AND user_id = ?3")
+    sqlx::query("DELETE FROM poll_votes WHERE poll_id = $1 AND option_id = $2 AND user_id = $3")
         .bind(poll_id)
         .bind(option_id)
         .bind(user_id)

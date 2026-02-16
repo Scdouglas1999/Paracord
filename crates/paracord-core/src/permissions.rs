@@ -36,22 +36,35 @@ pub async fn invalidate_user_channel(
 }
 
 /// Invalidate all cached permissions for a specific channel (all users).
-/// Since moka doesn't support prefix invalidation, we invalidate the whole cache
-/// when a channel's overwrites change.
+/// Uses targeted invalidation to only remove entries for this channel.
 pub async fn invalidate_channel(
     cache: &moka::future::Cache<PermissionCacheKey, Permissions>,
-    _channel_id: i64,
+    channel_id: i64,
 ) {
-    cache.invalidate_all();
+    let keys_to_invalidate: Vec<PermissionCacheKey> = cache
+        .iter()
+        .filter(|(k, _)| k.1 == channel_id)
+        .map(|(k, _)| *k)
+        .collect();
+    for key in keys_to_invalidate {
+        cache.invalidate(&key).await;
+    }
 }
 
 /// Invalidate all cached permissions for a user across all channels.
 /// Used when a user's roles change.
 pub async fn invalidate_user(
     cache: &moka::future::Cache<PermissionCacheKey, Permissions>,
-    _user_id: i64,
+    user_id: i64,
 ) {
-    cache.invalidate_all();
+    let keys_to_invalidate: Vec<PermissionCacheKey> = cache
+        .iter()
+        .filter(|(k, _)| k.0 == user_id)
+        .map(|(k, _)| *k)
+        .collect();
+    for key in keys_to_invalidate {
+        cache.invalidate(&key).await;
+    }
 }
 
 /// Invalidate the entire permission cache (e.g. when roles are modified).
@@ -199,6 +212,114 @@ pub async fn compute_channel_permissions(
     }
 
     Ok(perms)
+}
+
+/// Compute channel permissions for multiple channels in a single batch.
+/// Loads roles once and all overwrites once, then computes in-memory.
+pub async fn compute_all_channel_permissions(
+    pool: &DbPool,
+    guild_id: i64,
+    channels: &[paracord_db::channels::ChannelRow],
+    guild_owner_id: i64,
+    user_id: i64,
+) -> Result<std::collections::HashMap<i64, Permissions>, CoreError> {
+    use std::collections::HashMap;
+
+    // Owner fast path
+    if user_id == guild_owner_id {
+        return Ok(channels
+            .iter()
+            .map(|c| (c.id, Permissions::all()))
+            .collect());
+    }
+
+    // Load roles once
+    let roles = paracord_db::roles::get_member_roles(pool, user_id, guild_id).await?;
+    let base_perms = compute_permissions_from_roles(&roles, guild_owner_id, user_id);
+    if base_perms.contains(Permissions::ADMINISTRATOR) {
+        return Ok(channels
+            .iter()
+            .map(|c| (c.id, Permissions::all()))
+            .collect());
+    }
+
+    let role_ids: std::collections::HashSet<i64> = roles.iter().map(|r| r.id).collect();
+
+    // Load all overwrites for all channels in one query
+    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
+    let all_overwrites =
+        paracord_db::channel_overwrites::get_overwrites_for_channels(pool, &channel_ids).await?;
+
+    // Group overwrites by channel_id
+    let mut overwrites_by_channel: HashMap<
+        i64,
+        Vec<paracord_db::channel_overwrites::ChannelOverwriteRow>,
+    > = HashMap::new();
+    for ow in all_overwrites {
+        overwrites_by_channel
+            .entry(ow.channel_id)
+            .or_default()
+            .push(ow);
+    }
+
+    // Compute permissions per channel
+    let mut result = HashMap::with_capacity(channels.len());
+    for channel in channels {
+        let mut perms = base_perms;
+
+        // Check required_role_ids
+        let required_role_ids =
+            paracord_db::channels::parse_required_role_ids(&channel.required_role_ids);
+        if !required_role_ids.is_empty()
+            && !required_role_ids.iter().any(|id| role_ids.contains(id))
+        {
+            perms.remove(Permissions::VIEW_CHANNEL);
+            result.insert(channel.id, perms);
+            continue;
+        }
+
+        // Apply overwrites
+        let overwrites = overwrites_by_channel.get(&channel.id);
+        if let Some(overwrites) = overwrites {
+            // @everyone role overwrite
+            if let Some(everyone) = overwrites
+                .iter()
+                .find(|o| o.target_type == OVERWRITE_TARGET_ROLE && o.target_id == guild_id)
+            {
+                let deny = Permissions::from_bits_truncate(everyone.deny_perms);
+                let allow = Permissions::from_bits_truncate(everyone.allow_perms);
+                perms &= !deny;
+                perms |= allow;
+            }
+
+            // Role overwrites
+            let mut role_deny = Permissions::empty();
+            let mut role_allow = Permissions::empty();
+            for overwrite in overwrites.iter().filter(|o| {
+                o.target_type == OVERWRITE_TARGET_ROLE && role_ids.contains(&o.target_id)
+            }) {
+                role_deny |= Permissions::from_bits_truncate(overwrite.deny_perms);
+                role_allow |= Permissions::from_bits_truncate(overwrite.allow_perms);
+            }
+            perms &= !role_deny;
+            perms |= role_allow;
+
+            // Member overwrite
+            if let Some(member_ow) = overwrites
+                .iter()
+                .find(|o| o.target_type == OVERWRITE_TARGET_MEMBER && o.target_id == user_id)
+            {
+                let deny = Permissions::from_bits_truncate(member_ow.deny_perms);
+                let allow = Permissions::from_bits_truncate(member_ow.allow_perms);
+                perms &= !deny;
+                perms |= allow;
+            }
+        }
+
+        result.insert(channel.id, perms);
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]

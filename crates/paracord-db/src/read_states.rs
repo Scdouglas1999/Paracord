@@ -15,7 +15,7 @@ pub async fn get_user_read_states(
     let rows = sqlx::query_as::<_, ReadStateRow>(
         "SELECT user_id, channel_id, last_message_id, mention_count
          FROM read_states
-         WHERE user_id = ?1",
+         WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -30,7 +30,7 @@ pub async fn get_read_state(
 ) -> Result<Option<ReadStateRow>, DbError> {
     let row = sqlx::query_as::<_, ReadStateRow>(
         "SELECT user_id, channel_id, last_message_id, mention_count
-         FROM read_states WHERE user_id = ?1 AND channel_id = ?2",
+         FROM read_states WHERE user_id = $1 AND channel_id = $2",
     )
     .bind(user_id)
     .bind(channel_id)
@@ -47,8 +47,8 @@ pub async fn update_read_state(
 ) -> Result<ReadStateRow, DbError> {
     let row = sqlx::query_as::<_, ReadStateRow>(
         "INSERT INTO read_states (user_id, channel_id, last_message_id, mention_count)
-         VALUES (?1, ?2, ?3, 0)
-         ON CONFLICT (user_id, channel_id) DO UPDATE SET last_message_id = ?3, mention_count = 0
+         VALUES ($1, $2, $3, 0)
+         ON CONFLICT (user_id, channel_id) DO UPDATE SET last_message_id = $3, mention_count = 0
          RETURNING user_id, channel_id, last_message_id, mention_count",
     )
     .bind(user_id)

@@ -1,13 +1,27 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct BanRow {
     pub user_id: i64,
     pub guild_id: i64,
     pub reason: Option<String>,
     pub banned_by: Option<i64>,
     pub created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for BanRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            user_id: row.try_get("user_id")?,
+            guild_id: row.try_get("guild_id")?,
+            reason: row.try_get("reason")?,
+            banned_by: row.try_get("banned_by")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
 }
 
 pub async fn create_ban(
@@ -19,9 +33,9 @@ pub async fn create_ban(
 ) -> Result<BanRow, DbError> {
     let row = sqlx::query_as::<_, BanRow>(
         "INSERT INTO bans (user_id, guild_id, reason, banned_by)
-         VALUES (?1, ?2, ?3, ?4)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (user_id, guild_id)
-         DO UPDATE SET reason = ?3, banned_by = ?4, created_at = datetime('now')
+         DO UPDATE SET reason = $3, banned_by = $4, created_at = datetime('now')
          RETURNING user_id, guild_id, reason, banned_by, created_at",
     )
     .bind(user_id)
@@ -40,7 +54,7 @@ pub async fn get_ban(
 ) -> Result<Option<BanRow>, DbError> {
     let row = sqlx::query_as::<_, BanRow>(
         "SELECT user_id, guild_id, reason, banned_by, created_at
-         FROM bans WHERE user_id = ?1 AND guild_id = ?2",
+         FROM bans WHERE user_id = $1 AND guild_id = $2",
     )
     .bind(user_id)
     .bind(guild_id)
@@ -50,7 +64,7 @@ pub async fn get_ban(
 }
 
 pub async fn delete_ban(pool: &DbPool, user_id: i64, guild_id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM bans WHERE user_id = ?1 AND guild_id = ?2")
+    sqlx::query("DELETE FROM bans WHERE user_id = $1 AND guild_id = $2")
         .bind(user_id)
         .bind(guild_id)
         .execute(pool)
@@ -62,7 +76,7 @@ pub async fn get_guild_bans(pool: &DbPool, guild_id: i64) -> Result<Vec<BanRow>,
     let rows = sqlx::query_as::<_, BanRow>(
         "SELECT user_id, guild_id, reason, banned_by, created_at
          FROM bans
-         WHERE guild_id = ?1
+         WHERE guild_id = $1
          ORDER BY created_at DESC",
     )
     .bind(guild_id)

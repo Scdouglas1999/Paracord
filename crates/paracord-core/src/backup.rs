@@ -21,11 +21,11 @@ pub struct BackupInfo {
     pub created_at: String,
 }
 
-/// Create a full backup archive (SQLite snapshot + optional media tar).
+/// Create a full backup archive (database snapshot/dump + optional media tar).
 ///
 /// The backup is written as a `.tar.gz` file containing:
 ///   - `manifest.json` (version, timestamp, etc.)
-///   - `paracord.db` (VACUUM INTO copy of the live database)
+///   - database payload (`paracord.db` for SQLite, `paracord.pgdump` for PostgreSQL)
 ///   - `media/` directory tree (uploads + files, if `include_media` is true)
 ///
 /// Returns the filename of the created backup.
@@ -45,24 +45,34 @@ pub async fn create_backup(
     let filename = format!("paracord_backup_{timestamp}.tar.gz");
     let backup_path = backup_dir.join(&filename);
 
-    // Extract the file system path from the SQLite URL
-    let db_path = parse_sqlite_path(db_url)?;
-
-    // VACUUM INTO a temporary copy so the live DB is not locked
+    let postgres = is_postgres_url(db_url);
     let temp_dir = tempfile::tempdir()
         .map_err(|e| CoreError::Internal(format!("Failed to create temp dir: {e}")))?;
-    let snapshot_path = temp_dir.path().join("paracord.db");
+    let db_filename = if postgres {
+        "paracord.pgdump"
+    } else {
+        "paracord.db"
+    };
+    let snapshot_path = temp_dir.path().join(db_filename);
 
-    // VACUUM INTO creates a clean, defragmented copy of the database
     let snapshot_path_str = snapshot_path
         .to_str()
         .ok_or_else(|| CoreError::Internal("Invalid snapshot path".into()))?
         .to_string();
-    let db_path_clone = db_path.clone();
-    tokio::task::spawn_blocking(move || vacuum_into(&db_path_clone, &snapshot_path_str))
-        .await
-        .map_err(|e| CoreError::Internal(format!("VACUUM INTO task failed: {e}")))?
-        .map_err(|e| CoreError::Internal(format!("VACUUM INTO failed: {e}")))?;
+    if postgres {
+        let db_url_owned = db_url.to_string();
+        tokio::task::spawn_blocking(move || pg_dump_into(&db_url_owned, &snapshot_path_str))
+            .await
+            .map_err(|e| CoreError::Internal(format!("pg_dump task failed: {e}")))?
+            .map_err(|e| CoreError::Internal(format!("pg_dump failed: {e}")))?;
+    } else {
+        let db_path = parse_sqlite_path(db_url)?;
+        let db_path_clone = db_path.clone();
+        tokio::task::spawn_blocking(move || vacuum_into(&db_path_clone, &snapshot_path_str))
+            .await
+            .map_err(|e| CoreError::Internal(format!("VACUUM INTO task failed: {e}")))?
+            .map_err(|e| CoreError::Internal(format!("VACUUM INTO failed: {e}")))?;
+    }
 
     // Build the tar.gz archive
     let manifest = BackupManifest {
@@ -70,7 +80,7 @@ pub async fn create_backup(
         created_at: Utc::now().to_rfc3339(),
         server_version: env!("CARGO_PKG_VERSION").to_string(),
         includes_media: include_media,
-        db_filename: "paracord.db".to_string(),
+        db_filename: db_filename.to_string(),
     };
 
     let backup_path_clone = backup_path.clone();
@@ -153,8 +163,6 @@ pub async fn restore_backup(
         return Err(CoreError::NotFound);
     }
 
-    let db_path = parse_sqlite_path(db_url)?;
-
     // Extract to a temporary directory first to validate
     let temp_dir = tempfile::tempdir()
         .map_err(|e| CoreError::Internal(format!("Failed to create temp dir: {e}")))?;
@@ -182,7 +190,7 @@ pub async fn restore_backup(
         )));
     }
 
-    // Replace the database file
+    // Replace/restore the database payload
     let extracted_db = temp_path.join(&manifest.db_filename);
     if !extracted_db.exists() {
         return Err(CoreError::Internal(
@@ -190,22 +198,37 @@ pub async fn restore_backup(
         ));
     }
 
-    let db_path_clone = db_path.clone();
-    let extracted_db_clone = extracted_db.clone();
-    tokio::task::spawn_blocking(move || {
-        // Backup the current DB file before replacing
-        let current_backup = format!("{}.pre-restore", db_path_clone);
-        if Path::new(&db_path_clone).exists() {
-            std::fs::copy(&db_path_clone, &current_backup)
-                .map_err(|e| format!("Failed to backup current DB: {e}"))?;
-        }
-        std::fs::copy(&extracted_db_clone, &db_path_clone)
-            .map_err(|e| format!("Failed to replace database: {e}"))?;
-        Ok::<(), String>(())
-    })
-    .await
-    .map_err(|e| CoreError::Internal(format!("DB replace task failed: {e}")))?
-    .map_err(|e| CoreError::Internal(e))?;
+    if is_postgres_url(db_url) {
+        let db_url_owned = db_url.to_string();
+        let extracted_db_clone = extracted_db.clone();
+        tokio::task::spawn_blocking(move || {
+            let dump_path = extracted_db_clone
+                .to_str()
+                .ok_or_else(|| "Invalid extracted dump path".to_string())?;
+            pg_restore_from_dump(&db_url_owned, dump_path)
+        })
+        .await
+        .map_err(|e| CoreError::Internal(format!("pg_restore task failed: {e}")))?
+        .map_err(|e| CoreError::Internal(e))?;
+    } else {
+        let db_path = parse_sqlite_path(db_url)?;
+        let db_path_clone = db_path.clone();
+        let extracted_db_clone = extracted_db.clone();
+        tokio::task::spawn_blocking(move || {
+            // Backup the current DB file before replacing
+            let current_backup = format!("{}.pre-restore", db_path_clone);
+            if Path::new(&db_path_clone).exists() {
+                std::fs::copy(&db_path_clone, &current_backup)
+                    .map_err(|e| format!("Failed to backup current DB: {e}"))?;
+            }
+            std::fs::copy(&extracted_db_clone, &db_path_clone)
+                .map_err(|e| format!("Failed to replace database: {e}"))?;
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| CoreError::Internal(format!("DB replace task failed: {e}")))?
+        .map_err(|e| CoreError::Internal(e))?;
+    }
 
     // Restore media files if included
     if manifest.includes_media {
@@ -259,11 +282,47 @@ fn parse_sqlite_path(url: &str) -> Result<String, CoreError> {
     Ok(path.to_string())
 }
 
+fn is_postgres_url(url: &str) -> bool {
+    let normalized = url.trim().to_ascii_lowercase();
+    normalized.starts_with("postgres://") || normalized.starts_with("postgresql://")
+}
+
 fn vacuum_into(db_path: &str, dest_path: &str) -> Result<(), String> {
     let conn =
         rusqlite::Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
     conn.execute_batch(&format!("VACUUM INTO '{dest_path}';"))
         .map_err(|e| format!("VACUUM INTO failed: {e}"))?;
+    Ok(())
+}
+
+fn pg_dump_into(db_url: &str, dest_path: &str) -> Result<(), String> {
+    let status = std::process::Command::new("pg_dump")
+        .args(["--format=custom", "--file", dest_path, "--dbname", db_url])
+        .status()
+        .map_err(|e| format!("Failed to run pg_dump: {e}"))?;
+    if !status.success() {
+        return Err(format!("pg_dump exited with status {status}"));
+    }
+    Ok(())
+}
+
+fn pg_restore_from_dump(db_url: &str, dump_path: &str) -> Result<(), String> {
+    let status = std::process::Command::new("pg_restore")
+        .args([
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-privileges",
+            "--single-transaction",
+            "--dbname",
+            db_url,
+            dump_path,
+        ])
+        .status()
+        .map_err(|e| format!("Failed to run pg_restore: {e}"))?;
+    if !status.success() {
+        return Err(format!("pg_restore exited with status {status}"));
+    }
     Ok(())
 }
 
@@ -291,8 +350,8 @@ fn build_tar_gz(
     tar.append_data(&mut header, "manifest.json", manifest_bytes)
         .map_err(|e| format!("Failed to add manifest: {e}"))?;
 
-    // Add database snapshot
-    tar.append_path_with_name(db_snapshot, "paracord.db")
+    // Add database snapshot/dump
+    tar.append_path_with_name(db_snapshot, &manifest.db_filename)
         .map_err(|e| format!("Failed to add database: {e}"))?;
 
     // Add media directories if requested

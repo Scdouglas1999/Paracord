@@ -10,9 +10,30 @@
 
 export const SERVER_URL_KEY = 'paracord:server-url';
 
+function normalizeServerBaseUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    let pathname = parsed.pathname.replace(/\/+$/, '');
+    if (
+      pathname === '/api' ||
+      pathname === '/api/v1' ||
+      pathname === '/health' ||
+      pathname === '/api/v1/health'
+    ) {
+      pathname = '';
+    }
+    return `${parsed.protocol}//${parsed.host}${pathname}`.replace(/\/+$/, '');
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
+
 export function getStoredServerUrl(): string | null {
   try {
-    return window.localStorage.getItem(SERVER_URL_KEY);
+    const value = window.localStorage.getItem(SERVER_URL_KEY);
+    return value ? normalizeServerBaseUrl(value) : null;
   } catch {
     return null;
   }
@@ -31,7 +52,7 @@ export function getCurrentOriginServerUrl(): string | null {
 }
 
 export function setStoredServerUrl(url: string): void {
-  window.localStorage.setItem(SERVER_URL_KEY, url);
+  window.localStorage.setItem(SERVER_URL_KEY, normalizeServerBaseUrl(url));
 }
 
 export function clearStoredServerUrl(): void {

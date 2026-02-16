@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware';
 
 type Theme = 'dark' | 'light' | 'amoled';
 
+type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'disconnected';
+
 interface UIState {
   sidebarOpen: boolean;
   memberSidebarOpen: boolean;
@@ -14,6 +16,8 @@ interface UIState {
   memberPanelOpen: boolean;
   sidebarCollapsed: boolean;
   searchPanelOpen: boolean;
+  connectionStatus: ConnectionStatus;
+  connectionLatency: number;
 
   toggleSidebar: () => void;
   toggleMemberSidebar: () => void;
@@ -29,6 +33,8 @@ interface UIState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSearchPanel: () => void;
   setSearchPanelOpen: (open: boolean) => void;
+  setConnectionStatus: (status: ConnectionStatus) => void;
+  setConnectionLatency: (latency: number) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -44,6 +50,8 @@ export const useUIStore = create<UIState>()(
       memberPanelOpen: true,
       sidebarCollapsed: false,
       searchPanelOpen: false,
+      connectionStatus: 'disconnected' as ConnectionStatus,
+      connectionLatency: 0,
 
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       toggleMemberSidebar: () => set((s) => ({ memberSidebarOpen: !s.memberSidebarOpen })),
@@ -59,6 +67,8 @@ export const useUIStore = create<UIState>()(
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSearchPanel: () => set((s) => ({ searchPanelOpen: !s.searchPanelOpen })),
       setSearchPanelOpen: (searchPanelOpen) => set({ searchPanelOpen }),
+      setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
+      setConnectionLatency: (connectionLatency) => set({ connectionLatency }),
     }),
     {
       name: 'ui-storage',

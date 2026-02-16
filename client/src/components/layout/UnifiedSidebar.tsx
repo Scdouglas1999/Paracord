@@ -679,7 +679,7 @@ export function UnifiedSidebar() {
     (dm.recipient?.username || 'Direct Message').toLowerCase().includes(dmSearch.toLowerCase())
   );
 
-  const showServerRail = servers.length > 1;
+  const showServerRail = servers.length >= 1;
 
   return (
     <>
@@ -689,8 +689,10 @@ export function UnifiedSidebar() {
           <div className="hidden h-full w-[52px] shrink-0 flex-col items-center gap-1.5 border-r border-border-subtle/40 px-1.5 py-3 md:flex">
             {servers.map((server) => {
               const isActive = activeServerId === server.id;
+              const serverOnline = server.connected || server.apiReachable === true;
+              const statusSuffix = serverOnline ? '' : ' (disconnected)';
               return (
-                <Tooltip key={server.id} side="right" content={`${server.name}${server.connected ? '' : ' (disconnected)'}`}>
+                <Tooltip key={server.id} side="right" content={`${server.name}${statusSuffix}`}>
                   <button
                     onClick={() => setActiveServer(server.id)}
                     className={cn(
@@ -707,13 +709,13 @@ export function UnifiedSidebar() {
                     {server.iconUrl ? (
                       <img src={server.iconUrl} alt={server.name} className="h-full w-full rounded-inherit object-cover" />
                     ) : (
-                      <Globe size={16} className={server.connected ? '' : 'opacity-50'} />
+                      <Globe size={16} className={serverOnline ? '' : 'opacity-50'} />
                     )}
                     {/* Connection status dot */}
                     <div
                       className={cn(
                         'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-bg-secondary',
-                        server.connected ? 'bg-accent-success' : 'bg-text-muted'
+                        serverOnline ? 'bg-accent-success' : 'bg-text-muted'
                       )}
                     />
                   </button>
@@ -764,11 +766,13 @@ export function UnifiedSidebar() {
             <div className="scrollbar-thin flex items-center gap-2 overflow-x-auto pb-1">
               {servers.map((server) => {
                 const isActive = activeServerId === server.id;
+                const serverOnline = server.connected || server.apiReachable === true;
+                const statusSuffix = serverOnline ? '' : ' (disconnected)';
                 return (
                   <button
                     key={server.id}
                     onClick={() => setActiveServer(server.id)}
-                    title={`${server.name}${server.connected ? '' : ' (disconnected)'}`}
+                    title={`${server.name}${statusSuffix}`}
                     className={cn(
                       'group relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-[11px] font-bold text-white transition-all duration-200',
                       isActive
@@ -779,12 +783,12 @@ export function UnifiedSidebar() {
                     {server.iconUrl ? (
                       <img src={server.iconUrl} alt={server.name} className="h-full w-full rounded-xl object-cover" />
                     ) : (
-                      <Globe size={16} className={server.connected ? '' : 'opacity-50'} />
+                      <Globe size={16} className={serverOnline ? '' : 'opacity-50'} />
                     )}
                     <div
                       className={cn(
                         'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-bg-secondary',
-                        server.connected ? 'bg-accent-success' : 'bg-text-muted'
+                        serverOnline ? 'bg-accent-success' : 'bg-text-muted'
                       )}
                     />
                   </button>

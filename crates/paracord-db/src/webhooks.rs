@@ -1,8 +1,9 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct WebhookRow {
     pub id: i64,
     pub space_id: i64,
@@ -11,6 +12,21 @@ pub struct WebhookRow {
     pub name: String,
     pub token: String,
     pub created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for WebhookRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            space_id: row.try_get("space_id")?,
+            channel_id: row.try_get("channel_id")?,
+            creator_id: row.try_get("creator_id")?,
+            name: row.try_get("name")?,
+            token: row.try_get("token")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
 }
 
 fn sha256_hex(value: &str) -> String {
@@ -49,7 +65,7 @@ pub async fn create_webhook(
     let token_hash = normalize_token_hash(token);
     let row = sqlx::query_as::<_, WebhookRow>(
         "INSERT INTO webhooks (id, space_id, channel_id, name, token, creator_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id, space_id, channel_id, creator_id, name, token, created_at",
     )
     .bind(id)
@@ -66,7 +82,7 @@ pub async fn create_webhook(
 pub async fn get_webhook(pool: &DbPool, id: i64) -> Result<Option<WebhookRow>, DbError> {
     let row = sqlx::query_as::<_, WebhookRow>(
         "SELECT id, space_id, channel_id, creator_id, name, token, created_at
-         FROM webhooks WHERE id = ?1",
+         FROM webhooks WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -82,7 +98,7 @@ pub async fn get_webhook_by_id_and_token(
     let token_hash = normalize_token_hash(token);
     let row = sqlx::query_as::<_, WebhookRow>(
         "SELECT id, space_id, channel_id, creator_id, name, token, created_at
-         FROM webhooks WHERE id = ?1 AND (token = ?2 OR token = ?3)",
+         FROM webhooks WHERE id = $1 AND (token = $2 OR token = $3)",
     )
     .bind(id)
     .bind(token_hash)
@@ -98,7 +114,7 @@ pub async fn get_channel_webhooks(
 ) -> Result<Vec<WebhookRow>, DbError> {
     let rows = sqlx::query_as::<_, WebhookRow>(
         "SELECT id, space_id, channel_id, creator_id, name, token, created_at
-         FROM webhooks WHERE channel_id = ?1 ORDER BY created_at",
+         FROM webhooks WHERE channel_id = $1 ORDER BY created_at",
     )
     .bind(channel_id)
     .fetch_all(pool)
@@ -109,7 +125,7 @@ pub async fn get_channel_webhooks(
 pub async fn get_guild_webhooks(pool: &DbPool, space_id: i64) -> Result<Vec<WebhookRow>, DbError> {
     let rows = sqlx::query_as::<_, WebhookRow>(
         "SELECT id, space_id, channel_id, creator_id, name, token, created_at
-         FROM webhooks WHERE space_id = ?1 ORDER BY created_at",
+         FROM webhooks WHERE space_id = $1 ORDER BY created_at",
     )
     .bind(space_id)
     .fetch_all(pool)
@@ -123,8 +139,8 @@ pub async fn update_webhook(
     name: Option<&str>,
 ) -> Result<WebhookRow, DbError> {
     let row = sqlx::query_as::<_, WebhookRow>(
-        "UPDATE webhooks SET name = COALESCE(?2, name)
-         WHERE id = ?1
+        "UPDATE webhooks SET name = COALESCE($2, name)
+         WHERE id = $1
          RETURNING id, space_id, channel_id, creator_id, name, token, created_at",
     )
     .bind(id)
@@ -135,7 +151,7 @@ pub async fn update_webhook(
 }
 
 pub async fn delete_webhook(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM webhooks WHERE id = ?1")
+    sqlx::query("DELETE FROM webhooks WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;

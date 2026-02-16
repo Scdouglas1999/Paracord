@@ -77,11 +77,11 @@ pub fn detect_local_ip() -> Option<String> {
 
 /// Generate a minimal LiveKit config YAML and write it to a temp file.
 ///
-/// All client-facing traffic shares the single `server_port` (default 8080):
+/// All client-facing traffic shares a single public signaling port:
 ///   - TCP signaling is proxied through the main Paracord HTTP server
 ///     (`/livekit` WebSocket route).
-///   - UDP media uses a UDP mux bound to the same `server_port`.  Since the
-///     Paracord HTTP server only binds TCP on that port, LiveKit can bind
+///   - UDP media uses a UDP mux bound to that same port. Since the
+///     Paracord listener binds TCP only on that port, LiveKit can bind
 ///     UDP on the same port number without conflict.  This means the server
 ///     host only needs to forward **one port** (TCP + UDP) for everything.
 ///

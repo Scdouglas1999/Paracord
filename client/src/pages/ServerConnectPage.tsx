@@ -30,6 +30,15 @@ function normaliseServerUrl(raw: string): string {
   return serverUrl.replace(/\/+$/, '');
 }
 
+function canonicalServerBaseFromResolvedUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return normaliseServerUrl(value);
+  }
+}
+
 /**
  * Parse user input to detect server URL + optional invite code.
  *
@@ -67,8 +76,8 @@ function isLocalhostHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
-/** Probe /health and verify this is a Paracord server. Returns the server name if available. */
-async function probeServer(serverUrl: string): Promise<string> {
+/** Probe /health and verify this is a Paracord server. Returns canonical server base + name. */
+async function probeServer(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
   const resp = await fetch(`${serverUrl}/health`, {
     method: 'GET',
     signal: AbortSignal.timeout(10_000),
@@ -78,7 +87,17 @@ async function probeServer(serverUrl: string): Promise<string> {
   if (data.service !== 'paracord') {
     throw new Error('Not a Paracord server');
   }
-  return data.name || new URL(serverUrl).host;
+  const canonicalServerUrl = canonicalServerBaseFromResolvedUrl(resp.url || serverUrl);
+  let fallbackName = canonicalServerUrl;
+  try {
+    fallbackName = new URL(canonicalServerUrl).host;
+  } catch {
+    // keep canonical URL as fallback
+  }
+  return {
+    name: data.name || fallbackName,
+    canonicalServerUrl,
+  };
 }
 
 export function ServerConnectPage() {
@@ -116,14 +135,16 @@ export function ServerConnectPage() {
       }
 
       setStatus('Probing server...');
-      const serverName = await probeServer(serverUrl);
+      const probe = await probeServer(serverUrl);
+      const canonicalServerUrl = probe.canonicalServerUrl;
+      const serverName = probe.name;
 
       // Add server to the multi-server list
       setStatus('Authenticating...');
-      const serverId = useServerListStore.getState().addServer(serverUrl, serverName);
+      const serverId = useServerListStore.getState().addServer(canonicalServerUrl, serverName);
 
       // Also store as legacy server URL for backward compat
-      setStoredServerUrl(serverUrl);
+      setStoredServerUrl(canonicalServerUrl);
 
       // Connect and authenticate via challenge-response
       try {
@@ -131,7 +152,11 @@ export function ServerConnectPage() {
       } catch (authErr) {
         // If challenge-response fails, the server might not support it yet.
         // Keep the server in the list but without a token — user can try legacy login.
-        console.warn('Challenge-response auth failed, falling back to legacy:', authErr);
+        if (authErr instanceof Error && authErr.message === 'Account not unlocked') {
+          console.info('Challenge-response auth skipped: local identity is locked.');
+        } else {
+          console.warn('Challenge-response auth failed, falling back to legacy:', authErr);
+        }
       }
 
       if (inviteCode) {

@@ -265,7 +265,18 @@ export function StreamViewer({
         if (wantAudio) tracks.push(wantAudio);
         const stream = new MediaStream(tracks);
         videoEl.srcObject = stream;
-        videoEl.play().catch(() => {});
+        videoEl.play().catch(() => {
+          // Autoplay with audio may be blocked by browser policy.
+          // Register a one-shot user-gesture listener to retry, matching
+          // the hidden <audio> fallback behavior below.
+          const resumeOnGesture = () => {
+            videoEl.play().catch(() => {});
+            document.removeEventListener('click', resumeOnGesture);
+            document.removeEventListener('keydown', resumeOnGesture);
+          };
+          document.addEventListener('click', resumeOnGesture, { once: true });
+          document.addEventListener('keydown', resumeOnGesture, { once: true });
+        });
       }
     } else {
       videoEl.srcObject = null;

@@ -1,13 +1,27 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct ReactionRow {
     pub message_id: i64,
     pub user_id: i64,
     pub emoji_id: Option<i64>,
     pub emoji_name: String,
     pub created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ReactionRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            message_id: row.try_get("message_id")?,
+            user_id: row.try_get("user_id")?,
+            emoji_id: row.try_get("emoji_id")?,
+            emoji_name: row.try_get("emoji_name")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -26,7 +40,7 @@ pub async fn add_reaction(
 ) -> Result<(), DbError> {
     sqlx::query(
         "INSERT INTO reactions (message_id, user_id, emoji_name, emoji_id)
-         VALUES (?1, ?2, ?3, ?4)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (message_id, user_id, emoji_name) DO NOTHING",
     )
     .bind(message_id)
@@ -44,7 +58,7 @@ pub async fn remove_reaction(
     user_id: i64,
     emoji_name: &str,
 ) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji_name = ?3")
+    sqlx::query("DELETE FROM reactions WHERE message_id = $1 AND user_id = $2 AND emoji_name = $3")
         .bind(message_id)
         .bind(user_id)
         .bind(emoji_name)
@@ -59,7 +73,7 @@ pub async fn get_message_reactions(
 ) -> Result<Vec<ReactionCountRow>, DbError> {
     let rows = sqlx::query_as::<_, ReactionCountRow>(
         "SELECT emoji_name, emoji_id, COUNT(*) as count
-         FROM reactions WHERE message_id = ?1
+         FROM reactions WHERE message_id = $1
          GROUP BY emoji_name, emoji_id
          ORDER BY MIN(created_at)",
     )
@@ -77,9 +91,9 @@ pub async fn get_reaction_users(
 ) -> Result<Vec<i64>, DbError> {
     let rows: Vec<(i64,)> = sqlx::query_as(
         "SELECT user_id FROM reactions
-         WHERE message_id = ?1 AND emoji_name = ?2
+         WHERE message_id = $1 AND emoji_name = $2
          ORDER BY created_at
-         LIMIT ?3",
+         LIMIT $3",
     )
     .bind(message_id)
     .bind(emoji_name)

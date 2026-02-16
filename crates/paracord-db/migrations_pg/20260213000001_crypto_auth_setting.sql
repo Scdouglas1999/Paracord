@@ -1,0 +1,2 @@
+ALTER TABLE user_settings
+ADD COLUMN crypto_auth_enabled BOOLEAN NOT NULL DEFAULT FALSE;

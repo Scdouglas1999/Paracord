@@ -67,6 +67,8 @@ impl TestContext {
                 file_cryptor: None,
                 backup_dir: backup_dir.path().to_string_lossy().into_owned(),
                 database_url: "sqlite::memory:".to_string(),
+                federation_max_events_per_peer_per_minute: None,
+                federation_max_user_creates_per_peer_per_hour: None,
             },
             runtime: Arc::new(RwLock::new(RuntimeSettings::default())),
             voice: Arc::new(VoiceManager::new(livekit)),
@@ -81,6 +83,7 @@ impl TestContext {
             online_users: Arc::new(RwLock::new(HashSet::new())),
             user_presences: Arc::new(RwLock::new(HashMap::new())),
             permission_cache: build_permission_cache(),
+            federation_service: None,
         };
 
         paracord_api::install_rate_limit_backend(db.clone());

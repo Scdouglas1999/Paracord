@@ -18,3 +18,5 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 futures-util = "0.3"
+moka = { workspace = true }
+dashmap = { workspace = true }

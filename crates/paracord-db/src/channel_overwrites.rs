@@ -16,7 +16,7 @@ pub async fn get_channel_overwrites(
     let rows = sqlx::query_as::<_, ChannelOverwriteRow>(
         "SELECT channel_id, target_id, target_type, allow_perms, deny_perms
          FROM channel_overwrites
-         WHERE channel_id = ?1",
+         WHERE channel_id = $1",
     )
     .bind(channel_id)
     .fetch_all(pool)
@@ -34,7 +34,7 @@ pub async fn upsert_channel_overwrite(
 ) -> Result<(), DbError> {
     sqlx::query(
         "INSERT INTO channel_overwrites (channel_id, target_id, target_type, allow_perms, deny_perms)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (channel_id, target_id) DO UPDATE
          SET target_type = EXCLUDED.target_type,
              allow_perms = EXCLUDED.allow_perms,
@@ -50,6 +50,32 @@ pub async fn upsert_channel_overwrite(
     Ok(())
 }
 
+pub async fn get_overwrites_for_channels(
+    pool: &DbPool,
+    channel_ids: &[i64],
+) -> Result<Vec<ChannelOverwriteRow>, DbError> {
+    if channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Build a dynamic IN clause since SQLx doesn't support binding arrays for all backends.
+    // Safe since values are i64, not user-supplied strings.
+    let placeholders: String = channel_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!(
+        "SELECT channel_id, target_id, target_type, allow_perms, deny_perms
+         FROM channel_overwrites
+         WHERE channel_id IN ({})",
+        placeholders
+    );
+    let rows = sqlx::query_as::<_, ChannelOverwriteRow>(&query)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
 pub async fn delete_channel_overwrite(
     pool: &DbPool,
     channel_id: i64,
@@ -57,7 +83,7 @@ pub async fn delete_channel_overwrite(
 ) -> Result<(), DbError> {
     sqlx::query(
         "DELETE FROM channel_overwrites
-         WHERE channel_id = ?1 AND target_id = ?2",
+         WHERE channel_id = $1 AND target_id = $2",
     )
     .bind(channel_id)
     .bind(target_id)

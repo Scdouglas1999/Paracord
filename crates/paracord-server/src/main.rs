@@ -20,6 +20,13 @@ struct AtRestRuntimeProfile {
     file_cryptor: Option<paracord_util::at_rest::FileCryptor>,
 }
 
+fn map_db_engine(engine: config::DatabaseEngine) -> paracord_db::DatabaseEngine {
+    match engine {
+        config::DatabaseEngine::Sqlite => paracord_db::DatabaseEngine::Sqlite,
+        config::DatabaseEngine::Postgres => paracord_db::DatabaseEngine::Postgres,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls crypto provider before any TLS operations
@@ -106,7 +113,7 @@ async fn main() -> Result<()> {
             "false"
         },
     );
-    if config.federation.enabled {
+    let federation_signing_key_hex: Option<String> = if config.federation.enabled {
         let key_path = config
             .federation
             .signing_key_path
@@ -114,12 +121,16 @@ async fn main() -> Result<()> {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or("./data/federation_signing_key.hex");
         let key_hex = ensure_federation_signing_key_file(key_path)?;
-        std::env::set_var("PARACORD_FEDERATION_SIGNING_KEY_HEX", key_hex);
+        // Still set the env var for backward compat with any code that reads it,
+        // but the primary path now goes through AppState.federation_service.
+        std::env::set_var("PARACORD_FEDERATION_SIGNING_KEY_HEX", &key_hex);
+        Some(key_hex)
     } else {
         std::env::remove_var("PARACORD_FEDERATION_SIGNING_KEY_HEX");
-    }
+        None
+    };
 
-    // Parse the server's bind port for UPnP
+    // Parse the server's bind port and choose the public signaling/media port.
     let bind_port: u16 = config
         .server
         .bind_address
@@ -127,6 +138,7 @@ async fn main() -> Result<()> {
         .next()
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
+    let tls_port = config.tls.port;
 
     let livekit_port: u16 = config
         .livekit
@@ -136,9 +148,13 @@ async fn main() -> Result<()> {
         .and_then(|s| s.trim_end_matches('/').parse().ok())
         .unwrap_or(7880);
     let tls_preferred = config.tls.enabled;
+    // In HTTPS mode the browser is redirected to tls_port, so expose WebRTC
+    // UDP/TURN on that same public port to avoid "WS upgrade succeeds but
+    // media join times out" failures when only HTTPS is reachable.
+    let public_signal_port = if tls_preferred { tls_port } else { bind_port };
 
     // UPnP auto port forwarding + public IP detection
-    let mut upnp_server_port = bind_port;
+    let mut upnp_server_port = public_signal_port;
     let mut upnp_livekit_port = livekit_port;
     let mut upnp_status = "Disabled".to_string();
     let mut needs_manual_forwarding = false;
@@ -150,7 +166,13 @@ async fn main() -> Result<()> {
     }
 
     if config.network.upnp && config.network.upnp_confirm_exposure {
-        match upnp::setup_upnp(bind_port, livekit_port, config.network.upnp_lease_seconds).await {
+        match upnp::setup_upnp(
+            public_signal_port,
+            livekit_port,
+            config.network.upnp_lease_seconds,
+        )
+        .await
+        {
             Ok(result) => {
                 upnp_server_port = result.server_port;
                 upnp_livekit_port = result.livekit_port;
@@ -197,8 +219,11 @@ async fn main() -> Result<()> {
     }
 
     // Forward HTTPS port via UPnP if TLS is enabled
-    let tls_port = config.tls.port;
-    if config.network.upnp && config.tls.enabled && detected_external_ip.is_some() {
+    if config.network.upnp
+        && config.tls.enabled
+        && detected_external_ip.is_some()
+        && upnp_server_port != tls_port
+    {
         upnp::forward_extra_port(tls_port, config.network.upnp_lease_seconds).await;
     }
 
@@ -241,7 +266,7 @@ async fn main() -> Result<()> {
             &config.livekit.api_key,
             &config.livekit.api_secret,
             livekit_port,
-            bind_port,
+            upnp_server_port,
             detected_external_ip.as_deref(),
             detected_local_ip.as_deref(),
         )
@@ -265,13 +290,35 @@ async fn main() -> Result<()> {
         livekit_reachable = true;
     }
 
-    let db = paracord_db::create_pool_with_sqlite_key(
+    let db_engine = map_db_engine(config.database.engine);
+    let pg_options = paracord_db::PgConnectOptions {
+        statement_timeout_secs: config.database.statement_timeout_secs,
+        idle_in_transaction_timeout_secs: config.database.idle_in_transaction_timeout_secs,
+    };
+    let db = paracord_db::create_pool_full(
         &config.database.url,
         config.database.max_connections,
+        Some(db_engine),
         at_rest_profile.sqlite_key_hex.clone(),
+        Some(pg_options),
     )
-    .await?;
-    paracord_db::run_migrations(&db).await?;
+    .await
+    .map_err(|e| {
+        if matches!(db_engine, paracord_db::DatabaseEngine::Postgres) {
+            anyhow::anyhow!(
+                "Failed to connect to PostgreSQL at '{}': {}. \
+                 Check that the server is running, credentials are correct, \
+                 and the database exists. For SSL connections, append ?sslmode=require to the URL.",
+                config.database.url,
+                e
+            )
+        } else {
+            anyhow::anyhow!("{}", e)
+        }
+    })?;
+    paracord_db::run_migrations_for_engine(&db, db_engine)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to run {} migrations: {}", db_engine.as_str(), e))?;
 
     // Clear stale voice states from the database. After a server restart no
     // client is actually connected to a LiveKit room, so any leftover rows
@@ -365,6 +412,31 @@ async fn main() -> Result<()> {
 
     let shutdown_notify = Arc::new(tokio::sync::Notify::new());
 
+    // Build a pre-initialized FederationService so routes don't re-parse
+    // environment variables on every request.
+    let federation_service = if config.federation.enabled {
+        let signing_key = federation_signing_key_hex
+            .as_deref()
+            .and_then(|hex| paracord_federation::signing::signing_key_from_hex(hex).ok());
+        let fed_domain = config
+            .federation
+            .domain
+            .clone()
+            .unwrap_or_else(|| config.server.server_name.clone());
+        Some(paracord_federation::FederationService::new(
+            paracord_federation::FederationConfig {
+                enabled: true,
+                server_name: config.server.server_name.clone(),
+                domain: fed_domain,
+                key_id: "ed25519:auto".to_string(),
+                signing_key,
+                allow_discovery: config.federation.allow_discovery,
+            },
+        ))
+    } else {
+        None
+    };
+
     let state = paracord_core::AppState {
         db,
         event_bus: paracord_core::events::EventBus::default(),
@@ -394,6 +466,12 @@ async fn main() -> Result<()> {
             file_cryptor: at_rest_profile.file_cryptor.clone(),
             backup_dir: config.backup.backup_dir.clone(),
             database_url: config.database.url.clone(),
+            federation_max_events_per_peer_per_minute: config
+                .federation
+                .max_events_per_peer_per_minute,
+            federation_max_user_creates_per_peer_per_hour: config
+                .federation
+                .max_user_creates_per_peer_per_hour,
         },
         voice,
         storage,
@@ -401,6 +479,7 @@ async fn main() -> Result<()> {
         online_users: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
         user_presences: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         permission_cache: paracord_core::build_permission_cache(),
+        federation_service,
     };
 
     paracord_api::install_rate_limit_backend(state.db.clone());
@@ -508,7 +587,7 @@ async fn main() -> Result<()> {
         tls_rustls_config.is_some(),
         tls_port,
         needs_manual_forwarding,
-        bind_port,
+        upnp_server_port,
     );
 
     // Graceful shutdown: clean up UPnP on ctrl-c or API-triggered restart
@@ -529,7 +608,7 @@ async fn main() -> Result<()> {
         }
         if upnp_enabled {
             upnp::cleanup_upnp(upnp_server_port, upnp_livekit_port).await;
-            if tls_enabled {
+            if tls_enabled && upnp_server_port != tls_port {
                 upnp::cleanup_extra_port(tls_port).await;
             }
         }
@@ -599,15 +678,17 @@ fn ensure_data_dirs(config: &config::Config) {
     }
 
     // Database parent directory
-    if let Some(db_path) = config
-        .database
-        .url
-        .strip_prefix("sqlite://")
-        .and_then(|s| s.split('?').next())
-    {
-        if let Some(parent) = std::path::Path::new(db_path).parent() {
-            if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
+    if matches!(config.database.engine, config::DatabaseEngine::Sqlite) {
+        if let Some(db_path) = config
+            .database
+            .url
+            .strip_prefix("sqlite://")
+            .and_then(|s| s.split('?').next())
+        {
+            if let Some(parent) = std::path::Path::new(db_path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
             }
         }
     }
@@ -886,7 +967,19 @@ fn build_at_rest_profile(config: &config::Config) -> Result<AtRestRuntimeProfile
     if !config.at_rest.enabled {
         return Ok(AtRestRuntimeProfile::default());
     }
-    if !config.at_rest.encrypt_sqlite && !config.at_rest.encrypt_files {
+    let sqlite_db = matches!(config.database.engine, config::DatabaseEngine::Sqlite);
+    let encrypt_sqlite = config.at_rest.encrypt_sqlite && sqlite_db;
+    if config.at_rest.encrypt_sqlite && !sqlite_db {
+        tracing::warn!(
+            "at_rest.encrypt_sqlite is enabled but database.engine={} - ignoring SQLite DB encryption setting",
+            match config.database.engine {
+                config::DatabaseEngine::Sqlite => "sqlite",
+                config::DatabaseEngine::Postgres => "postgres",
+            }
+        );
+    }
+
+    if !encrypt_sqlite && !config.at_rest.encrypt_files {
         tracing::warn!(
             "At-rest encryption profile is enabled, but no storage targets are selected"
         );
@@ -907,7 +1000,7 @@ fn build_at_rest_profile(config: &config::Config) -> Result<AtRestRuntimeProfile
     let master_key = paracord_util::at_rest::parse_master_key(&raw_master_key)
         .map_err(|err| anyhow::anyhow!("invalid at-rest key in {}: {}", key_env_name, err))?;
 
-    let sqlite_key_hex = if config.at_rest.encrypt_sqlite {
+    let sqlite_key_hex = if encrypt_sqlite {
         Some(paracord_util::at_rest::derive_sqlite_key_hex(&master_key))
     } else {
         None
@@ -923,7 +1016,7 @@ fn build_at_rest_profile(config: &config::Config) -> Result<AtRestRuntimeProfile
 
     tracing::info!(
         "At-rest encryption enabled (sqlite={}, files={}, allow_plaintext_file_reads={})",
-        config.at_rest.encrypt_sqlite,
+        encrypt_sqlite,
         config.at_rest.encrypt_files,
         config.at_rest.allow_plaintext_file_reads
     );
@@ -984,9 +1077,13 @@ fn spawn_federation_delivery_worker(
     state: paracord_core::AppState,
     shutdown: Arc<tokio::sync::Notify>,
 ) {
-    if !paracord_federation::is_enabled() {
+    let Some(ref service) = state.federation_service else {
+        return;
+    };
+    if !service.is_enabled() {
         return;
     }
+    let service = service.clone();
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -995,10 +1092,6 @@ fn spawn_federation_delivery_worker(
             tokio::select! {
                 _ = shutdown.notified() => break,
                 _ = interval.tick() => {
-                    let service = paracord_api::routes::federation::build_federation_service();
-                    if !service.is_enabled() {
-                        continue;
-                    }
                     service.process_outbound_queue_once(&state.db, 64).await;
                     paracord_api::routes::federation::run_federation_catchup_once(&state, 128, 64)
                         .await;
@@ -1293,17 +1386,25 @@ fn print_startup_banner(
         println!("  ╔══════════════════════════════════════════════════╗");
         println!("  ║  Port forwarding required for remote access     ║");
         println!("  ║                                                  ║");
-        println!(
-            "  ║  Forward port {:<5} (TCP + UDP) in router to  ║",
-            server_port
-        );
-        if tls_active {
+        if tls_active && server_port == tls_port {
+            println!(
+                "  ║  Forward port {:<5} (TCP + UDP) in router to  ║",
+                server_port
+            );
+            println!("  ║  this machine (HTTPS + voice media).           ║");
+        } else {
+            println!(
+                "  ║  Forward port {:<5} (TCP + UDP) in router to  ║",
+                server_port
+            );
+            println!("  ║  this machine. Most routers have this under:     ║");
+        }
+        if tls_active && server_port != tls_port {
             println!(
                 "  ║  and port {:<5} (TCP) for HTTPS.              ║",
                 tls_port
             );
         }
-        println!("  ║  this machine. Most routers have this under:     ║");
         println!("  ║  Settings > Firewall > Port Forwarding           ║");
         println!("  ║                                                  ║");
         println!("  ║  Tip: Enable UPnP in your router settings       ║");

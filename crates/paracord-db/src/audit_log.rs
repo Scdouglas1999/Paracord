@@ -1,7 +1,8 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_from_db_text, datetime_to_db_text, json_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct AuditLogEntryRow {
     pub id: i64,
     pub space_id: i64,
@@ -11,6 +12,23 @@ pub struct AuditLogEntryRow {
     pub reason: Option<String>,
     pub changes: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for AuditLogEntryRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        let changes_raw: Option<String> = row.try_get("changes")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            space_id: row.try_get("space_id")?,
+            user_id: row.try_get("user_id")?,
+            action_type: row.try_get("action_type")?,
+            target_id: row.try_get("target_id")?,
+            reason: row.try_get("reason")?,
+            changes: changes_raw.as_deref().map(json_from_db_text).transpose()?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
 }
 
 impl AuditLogEntryRow {
@@ -31,9 +49,13 @@ pub async fn create_entry(
     reason: Option<&str>,
     changes: Option<&serde_json::Value>,
 ) -> Result<AuditLogEntryRow, DbError> {
+    let changes = changes
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| DbError::Sqlx(sqlx::Error::Protocol(format!("invalid audit json: {e}"))))?;
     let row = sqlx::query_as::<_, AuditLogEntryRow>(
         "INSERT INTO audit_log_entries (id, space_id, user_id, action_type, target_id, reason, changes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id, space_id, user_id, action_type, target_id, reason, changes, created_at"
     )
     .bind(id)
@@ -72,8 +94,8 @@ pub async fn get_space_entries(
         (None, None, None) => {
             sqlx::query_as::<_, AuditLogEntryRow>(
                 "SELECT id, space_id, user_id, action_type, target_id, reason, changes, created_at
-                 FROM audit_log_entries WHERE space_id = ?1
-                 ORDER BY id DESC LIMIT ?2"
+                 FROM audit_log_entries WHERE space_id = $1
+                 ORDER BY id DESC LIMIT $2"
             )
             .bind(space_id)
             .bind(limit)
@@ -83,8 +105,8 @@ pub async fn get_space_entries(
         (Some(at), None, None) => {
             sqlx::query_as::<_, AuditLogEntryRow>(
                 "SELECT id, space_id, user_id, action_type, target_id, reason, changes, created_at
-                 FROM audit_log_entries WHERE space_id = ?1 AND action_type = ?2
-                 ORDER BY id DESC LIMIT ?3"
+                 FROM audit_log_entries WHERE space_id = $1 AND action_type = $2
+                 ORDER BY id DESC LIMIT $3"
             )
             .bind(space_id)
             .bind(at)
@@ -95,8 +117,8 @@ pub async fn get_space_entries(
         (None, Some(uid), None) => {
             sqlx::query_as::<_, AuditLogEntryRow>(
                 "SELECT id, space_id, user_id, action_type, target_id, reason, changes, created_at
-                 FROM audit_log_entries WHERE space_id = ?1 AND user_id = ?2
-                 ORDER BY id DESC LIMIT ?3"
+                 FROM audit_log_entries WHERE space_id = $1 AND user_id = $2
+                 ORDER BY id DESC LIMIT $3"
             )
             .bind(space_id)
             .bind(uid)
@@ -107,8 +129,8 @@ pub async fn get_space_entries(
         (None, None, Some(b)) => {
             sqlx::query_as::<_, AuditLogEntryRow>(
                 "SELECT id, space_id, user_id, action_type, target_id, reason, changes, created_at
-                 FROM audit_log_entries WHERE space_id = ?1 AND id < ?2
-                 ORDER BY id DESC LIMIT ?3"
+                 FROM audit_log_entries WHERE space_id = $1 AND id < $2
+                 ORDER BY id DESC LIMIT $3"
             )
             .bind(space_id)
             .bind(b)
@@ -119,8 +141,8 @@ pub async fn get_space_entries(
         (Some(at), Some(uid), None) => {
             sqlx::query_as::<_, AuditLogEntryRow>(
                 "SELECT id, space_id, user_id, action_type, target_id, reason, changes, created_at
-                 FROM audit_log_entries WHERE space_id = ?1 AND action_type = ?2 AND user_id = ?3
-                 ORDER BY id DESC LIMIT ?4"
+                 FROM audit_log_entries WHERE space_id = $1 AND action_type = $2 AND user_id = $3
+                 ORDER BY id DESC LIMIT $4"
             )
             .bind(space_id)
             .bind(at)
@@ -132,8 +154,8 @@ pub async fn get_space_entries(
         (Some(at), None, Some(b)) => {
             sqlx::query_as::<_, AuditLogEntryRow>(
                 "SELECT id, space_id, user_id, action_type, target_id, reason, changes, created_at
-                 FROM audit_log_entries WHERE space_id = ?1 AND action_type = ?2 AND id < ?3
-                 ORDER BY id DESC LIMIT ?4"
+                 FROM audit_log_entries WHERE space_id = $1 AND action_type = $2 AND id < $3
+                 ORDER BY id DESC LIMIT $4"
             )
             .bind(space_id)
             .bind(at)
@@ -145,8 +167,8 @@ pub async fn get_space_entries(
         (None, Some(uid), Some(b)) => {
             sqlx::query_as::<_, AuditLogEntryRow>(
                 "SELECT id, space_id, user_id, action_type, target_id, reason, changes, created_at
-                 FROM audit_log_entries WHERE space_id = ?1 AND user_id = ?2 AND id < ?3
-                 ORDER BY id DESC LIMIT ?4"
+                 FROM audit_log_entries WHERE space_id = $1 AND user_id = $2 AND id < $3
+                 ORDER BY id DESC LIMIT $4"
             )
             .bind(space_id)
             .bind(uid)
@@ -158,8 +180,8 @@ pub async fn get_space_entries(
         (Some(at), Some(uid), Some(b)) => {
             sqlx::query_as::<_, AuditLogEntryRow>(
                 "SELECT id, space_id, user_id, action_type, target_id, reason, changes, created_at
-                 FROM audit_log_entries WHERE space_id = ?1 AND action_type = ?2 AND user_id = ?3 AND id < ?4
-                 ORDER BY id DESC LIMIT ?5"
+                 FROM audit_log_entries WHERE space_id = $1 AND action_type = $2 AND user_id = $3 AND id < $4
+                 ORDER BY id DESC LIMIT $5"
             )
             .bind(space_id)
             .bind(at)
@@ -184,12 +206,12 @@ pub async fn purge_entries_older_than(
          WHERE id IN (
              SELECT id
              FROM audit_log_entries
-             WHERE created_at <= ?1
+             WHERE created_at <= $1
              ORDER BY created_at ASC
-             LIMIT ?2
+             LIMIT $2
          )",
     )
-    .bind(older_than)
+    .bind(datetime_to_db_text(older_than))
     .bind(limit)
     .execute(pool)
     .await?;

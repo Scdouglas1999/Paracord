@@ -1,7 +1,9 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use sqlx::Row;
+use std::collections::HashSet;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct SpaceRow {
     pub id: i64,
     pub name: String,
@@ -17,6 +19,26 @@ pub struct SpaceRow {
     pub created_at: DateTime<Utc>,
 }
 
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for SpaceRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            description: row.try_get("description")?,
+            icon_hash: row.try_get("icon_hash")?,
+            banner_hash: row.try_get("banner_hash")?,
+            owner_id: row.try_get("owner_id")?,
+            features: row.try_get("features")?,
+            system_channel_id: row.try_get("system_channel_id")?,
+            vanity_url_code: row.try_get("vanity_url_code")?,
+            visibility: row.try_get("visibility")?,
+            allowed_roles: row.try_get("allowed_roles")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
+}
+
 // Backward compat alias
 pub type GuildRow = SpaceRow;
 
@@ -29,7 +51,7 @@ pub async fn create_space(
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
         "INSERT INTO spaces (id, name, owner_id, icon_hash)
-         VALUES (?1, ?2, ?3, ?4)
+         VALUES ($1, $2, $3, $4)
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at"
     )
     .bind(id)
@@ -54,7 +76,7 @@ pub async fn create_guild(
 pub async fn get_space(pool: &DbPool, id: i64) -> Result<Option<SpaceRow>, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
         "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at
-         FROM spaces WHERE id = ?1"
+         FROM spaces WHERE id = $1"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -75,11 +97,11 @@ pub async fn update_space(
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
         "UPDATE spaces
-         SET name = COALESCE(?2, name),
-             description = COALESCE(?3, description),
-             icon_hash = COALESCE(?4, icon_hash),
+         SET name = COALESCE($2, name),
+             description = COALESCE($3, description),
+             icon_hash = COALESCE($4, icon_hash),
              updated_at = datetime('now')
-         WHERE id = ?1
+         WHERE id = $1
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at"
     )
     .bind(id)
@@ -109,10 +131,10 @@ pub async fn update_space_visibility(
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
         "UPDATE spaces
-         SET visibility = ?2,
-             allowed_roles = ?3,
+         SET visibility = $2,
+             allowed_roles = $3,
              updated_at = datetime('now')
-         WHERE id = ?1
+         WHERE id = $1
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at"
     )
     .bind(id)
@@ -124,7 +146,7 @@ pub async fn update_space_visibility(
 }
 
 pub async fn delete_space(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM spaces WHERE id = ?1")
+    sqlx::query("DELETE FROM spaces WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -152,28 +174,48 @@ pub async fn get_user_guilds(pool: &DbPool, user_id: i64) -> Result<Vec<SpaceRow
                 s.system_channel_id, s.vanity_url_code, s.visibility, s.allowed_roles, s.created_at
          FROM spaces s
          INNER JOIN members m ON m.guild_id = s.id
-         WHERE m.user_id = ?1
-           AND (
-                s.visibility != 'roles'
-                OR json_array_length(COALESCE(s.allowed_roles, '[]')) = 0
-                OR EXISTS (
-                    SELECT 1
-                    FROM member_roles mr
-                    INNER JOIN roles r ON r.id = mr.role_id
-                    WHERE mr.user_id = ?1
-                      AND r.space_id = s.id
-                      AND mr.role_id IN (
-                          SELECT CAST(value AS INTEGER)
-                          FROM json_each(COALESCE(s.allowed_roles, '[]'))
-                      )
-                )
-            )
+         WHERE m.user_id = $1
          ORDER BY s.created_at ASC",
     )
     .bind(user_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+
+    let mut visible = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.visibility != "roles" {
+            visible.push(row);
+            continue;
+        }
+
+        let allowed_roles = parse_allowed_role_ids(&row.allowed_roles);
+        if allowed_roles.is_empty() {
+            visible.push(row);
+            continue;
+        }
+
+        let member_role_rows: Vec<(i64,)> = sqlx::query_as(
+            "SELECT mr.role_id
+             FROM member_roles mr
+             INNER JOIN roles r ON r.id = mr.role_id
+             WHERE mr.user_id = $1
+               AND r.space_id = $2",
+        )
+        .bind(user_id)
+        .bind(row.id)
+        .fetch_all(pool)
+        .await?;
+
+        let user_roles: HashSet<i64> = member_role_rows.into_iter().map(|(id,)| id).collect();
+        if allowed_roles
+            .into_iter()
+            .any(|role_id| user_roles.contains(&role_id))
+        {
+            visible.push(row);
+        }
+    }
+
+    Ok(visible)
 }
 
 pub fn parse_allowed_role_ids(raw: &str) -> Vec<i64> {
@@ -201,8 +243,8 @@ pub async fn transfer_ownership(
     new_owner_id: i64,
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
-        "UPDATE spaces SET owner_id = ?2, updated_at = datetime('now')
-         WHERE id = ?1
+        "UPDATE spaces SET owner_id = $2, updated_at = datetime('now')
+         WHERE id = $1
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at"
     )
     .bind(space_id)

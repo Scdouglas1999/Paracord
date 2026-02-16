@@ -1,23 +1,46 @@
-use crate::{DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use paracord_models::permissions::Permissions;
+use sqlx::Row;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct MessageRow {
     pub id: i64,
     pub channel_id: i64,
     pub author_id: i64,
     pub content: Option<String>,
-    #[sqlx(default)]
     pub nonce: Option<String>,
     pub message_type: i16,
     pub flags: i32,
     pub edited_at: Option<DateTime<Utc>>,
     pub pinned: bool,
     pub reference_id: Option<i64>,
-    #[sqlx(default)]
     pub e2ee_header: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MessageRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let edited_at_raw: Option<String> = row.try_get("edited_at")?;
+        let created_at_raw: String = row.try_get("created_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            channel_id: row.try_get("channel_id")?,
+            author_id: row.try_get("author_id")?,
+            content: row.try_get("content")?,
+            nonce: row.try_get("nonce")?,
+            message_type: row.try_get("message_type")?,
+            flags: row.try_get("flags")?,
+            edited_at: edited_at_raw
+                .as_deref()
+                .map(datetime_from_db_text)
+                .transpose()?,
+            pinned: bool_from_any_row(row, "pinned")?,
+            reference_id: row.try_get("reference_id")?,
+            e2ee_header: row.try_get("e2ee_header")?,
+            created_at: datetime_from_db_text(&created_at_raw)?,
+        })
+    }
 }
 
 pub async fn create_message(
@@ -58,8 +81,8 @@ pub async fn create_message_with_meta(
 ) -> Result<MessageRow, DbError> {
     let row = sqlx::query_as::<_, MessageRow>(
         "INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags, reference_id, e2ee_header)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, e2ee_header, created_at",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at",
     )
     .bind(id)
     .bind(channel_id)
@@ -74,7 +97,7 @@ pub async fn create_message_with_meta(
     .await?;
 
     // Update last_message_id on the channel
-    let _ = sqlx::query("UPDATE channels SET last_message_id = ?1 WHERE id = ?2")
+    let _ = sqlx::query("UPDATE channels SET last_message_id = $1 WHERE id = $2")
         .bind(id)
         .bind(channel_id)
         .execute(pool)
@@ -85,8 +108,8 @@ pub async fn create_message_with_meta(
 
 pub async fn get_message(pool: &DbPool, id: i64) -> Result<Option<MessageRow>, DbError> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, created_at
-         FROM messages WHERE id = ?1",
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+         FROM messages WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -104,8 +127,8 @@ pub async fn get_channel_messages(
     let rows = match (before, after) {
         (Some(before_id), _) => {
             sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, created_at
-                 FROM messages WHERE channel_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3",
+                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+                 FROM messages WHERE channel_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3",
             )
             .bind(channel_id)
             .bind(before_id)
@@ -115,8 +138,8 @@ pub async fn get_channel_messages(
         }
         (None, Some(after_id)) => {
             sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, created_at
-                 FROM messages WHERE channel_id = ?1 AND id > ?2 ORDER BY id ASC LIMIT ?3",
+                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+                 FROM messages WHERE channel_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3",
             )
             .bind(channel_id)
             .bind(after_id)
@@ -126,8 +149,8 @@ pub async fn get_channel_messages(
         }
         (None, None) => {
             sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, created_at
-                 FROM messages WHERE channel_id = ?1 ORDER BY id DESC LIMIT ?2",
+                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+                 FROM messages WHERE channel_id = $1 ORDER BY id DESC LIMIT $2",
             )
             .bind(channel_id)
             .bind(limit)
@@ -140,9 +163,9 @@ pub async fn get_channel_messages(
 
 pub async fn update_message(pool: &DbPool, id: i64, content: &str) -> Result<MessageRow, DbError> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "UPDATE messages SET content = ?2, edited_at = datetime('now')
-         WHERE id = ?1
-         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, created_at",
+        "UPDATE messages SET content = $2, edited_at = datetime('now')
+         WHERE id = $1
+         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at",
     )
     .bind(id)
     .bind(content)
@@ -176,39 +199,39 @@ pub async fn update_message_authorized_with_meta(
         "WITH channel_ctx AS (
              SELECT space_id AS guild_id
              FROM channels
-             WHERE id = ?2
+             WHERE id = $2
          ),
          actor_can_manage AS (
              SELECT 1
              FROM channel_ctx ctx
              INNER JOIN spaces s ON s.id = ctx.guild_id
-             WHERE s.owner_id = ?3
+             WHERE s.owner_id = $3
 
              UNION
 
              SELECT 1
              FROM channel_ctx ctx
              INNER JOIN members m
-                ON m.user_id = ?3
+                ON m.user_id = $3
                AND m.guild_id = ctx.guild_id
              INNER JOIN roles r
                 ON r.space_id = ctx.guild_id
              LEFT JOIN member_roles mr
                 ON mr.role_id = r.id
-               AND mr.user_id = ?3
+               AND mr.user_id = $3
              WHERE (mr.user_id IS NOT NULL OR r.id = ctx.guild_id)
-               AND ((r.permissions & ?5) != 0 OR (r.permissions & ?6) != 0)
+               AND ((r.permissions & $5) != 0 OR (r.permissions & $6) != 0)
              LIMIT 1
          )
          UPDATE messages
-         SET content = ?4,
+         SET content = $4,
              edited_at = datetime('now'),
-             nonce = ?7,
-             flags = COALESCE(?8, flags)
-         WHERE id = ?1
-           AND channel_id = ?2
-           AND (author_id = ?3 OR EXISTS (SELECT 1 FROM actor_can_manage))
-         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, created_at",
+             nonce = $7,
+             flags = COALESCE($8, flags)
+         WHERE id = $1
+           AND channel_id = $2
+           AND (author_id = $3 OR EXISTS (SELECT 1 FROM actor_can_manage))
+         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at",
     )
     .bind(id)
     .bind(channel_id)
@@ -224,7 +247,7 @@ pub async fn update_message_authorized_with_meta(
 }
 
 pub async fn delete_message(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM messages WHERE id = ?1")
+    sqlx::query("DELETE FROM messages WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -243,34 +266,34 @@ pub async fn delete_message_authorized(
         "WITH channel_ctx AS (
              SELECT space_id AS guild_id
              FROM channels
-             WHERE id = ?2
+             WHERE id = $2
          ),
          actor_can_manage AS (
              SELECT 1
              FROM channel_ctx ctx
              INNER JOIN spaces s ON s.id = ctx.guild_id
-             WHERE s.owner_id = ?3
+             WHERE s.owner_id = $3
 
              UNION
 
              SELECT 1
              FROM channel_ctx ctx
              INNER JOIN members m
-                ON m.user_id = ?3
+                ON m.user_id = $3
                AND m.guild_id = ctx.guild_id
              INNER JOIN roles r
                 ON r.space_id = ctx.guild_id
              LEFT JOIN member_roles mr
                 ON mr.role_id = r.id
-               AND mr.user_id = ?3
+               AND mr.user_id = $3
              WHERE (mr.user_id IS NOT NULL OR r.id = ctx.guild_id)
-               AND ((r.permissions & ?4) != 0 OR (r.permissions & ?5) != 0)
+               AND ((r.permissions & $4) != 0 OR (r.permissions & $5) != 0)
              LIMIT 1
          )
          DELETE FROM messages
-         WHERE id = ?1
-           AND channel_id = ?2
-           AND (author_id = ?3 OR EXISTS (SELECT 1 FROM actor_can_manage))",
+         WHERE id = $1
+           AND channel_id = $2
+           AND (author_id = $3 OR EXISTS (SELECT 1 FROM actor_can_manage))",
     )
     .bind(id)
     .bind(channel_id)
@@ -287,8 +310,8 @@ pub async fn get_pinned_messages(
     channel_id: i64,
 ) -> Result<Vec<MessageRow>, DbError> {
     let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, created_at
-         FROM messages WHERE channel_id = ?1 AND pinned = TRUE ORDER BY id ASC",
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+         FROM messages WHERE channel_id = $1 AND pinned = TRUE ORDER BY id ASC",
     )
     .bind(channel_id)
     .fetch_all(pool)
@@ -297,7 +320,7 @@ pub async fn get_pinned_messages(
 }
 
 pub async fn pin_message(pool: &DbPool, id: i64, channel_id: i64) -> Result<bool, DbError> {
-    let result = sqlx::query("UPDATE messages SET pinned = TRUE WHERE id = ?1 AND channel_id = ?2")
+    let result = sqlx::query("UPDATE messages SET pinned = TRUE WHERE id = $1 AND channel_id = $2")
         .bind(id)
         .bind(channel_id)
         .execute(pool)
@@ -307,7 +330,7 @@ pub async fn pin_message(pool: &DbPool, id: i64, channel_id: i64) -> Result<bool
 
 pub async fn unpin_message(pool: &DbPool, id: i64, channel_id: i64) -> Result<bool, DbError> {
     let result =
-        sqlx::query("UPDATE messages SET pinned = FALSE WHERE id = ?1 AND channel_id = ?2")
+        sqlx::query("UPDATE messages SET pinned = FALSE WHERE id = $1 AND channel_id = $2")
             .bind(id)
             .bind(channel_id)
             .execute(pool)
@@ -329,10 +352,10 @@ pub async fn bulk_delete_messages(
             "too many message ids in bulk delete".to_string(),
         )));
     }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("${}", i)).collect();
     let channel_bind_index = ids.len() + 1;
     let sql = format!(
-        "DELETE FROM messages WHERE id IN ({}) AND channel_id = ?{}",
+        "DELETE FROM messages WHERE id IN ({}) AND channel_id = ${}",
         placeholders.join(", "),
         channel_bind_index
     );
@@ -365,13 +388,13 @@ pub async fn search_messages(
         .replace('_', "\\_");
     let pattern = format!("%{}%", escaped);
     let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, created_at
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
          FROM messages
-         WHERE channel_id = ?1
-           AND content LIKE ?2 ESCAPE '\\'
-           AND (flags & ?4) = 0
+         WHERE channel_id = $1
+           AND content LIKE $2 ESCAPE '\\'
+           AND (flags & $4) = 0
          ORDER BY id DESC
-         LIMIT ?3",
+         LIMIT $3",
     )
     .bind(channel_id)
     .bind(pattern)
@@ -390,11 +413,11 @@ pub async fn get_message_ids_older_than(
     let rows: Vec<(i64,)> = sqlx::query_as(
         "SELECT id
          FROM messages
-         WHERE created_at <= ?1
+         WHERE created_at <= $1
          ORDER BY created_at ASC
-         LIMIT ?2",
+         LIMIT $2",
     )
-    .bind(older_than)
+    .bind(datetime_to_db_text(older_than))
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -407,11 +430,11 @@ pub async fn list_messages_by_author(
     limit: i64,
 ) -> Result<Vec<MessageRow>, DbError> {
     let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, pinned, reference_id, created_at
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
          FROM messages
-         WHERE author_id = ?1
+         WHERE author_id = $1
          ORDER BY id DESC
-         LIMIT ?2",
+         LIMIT $2",
     )
     .bind(author_id)
     .bind(limit.clamp(1, 50_000))
@@ -430,7 +453,7 @@ pub async fn delete_messages_by_ids(pool: &DbPool, ids: &[i64]) -> Result<u64, D
             "too many message ids for delete".to_string(),
         )));
     }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("${}", i)).collect();
     let sql = format!(
         "DELETE FROM messages WHERE id IN ({})",
         placeholders.join(", ")

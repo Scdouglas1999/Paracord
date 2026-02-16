@@ -1,9 +1,9 @@
 ; Paracord Client Installer - Inno Setup Script
 ; Requires Inno Setup 6+
-; Build with: ISCC.exe /DAppVersion=0.5.0 paracord-client.iss
+; Build with: ISCC.exe /DAppVersion=0.6.0 paracord-client.iss
 
 #ifndef AppVersion
-  #define AppVersion "0.5.0"
+  #define AppVersion "0.6.0"
 #endif
 
 [Setup]
