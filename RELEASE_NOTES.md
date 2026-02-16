@@ -23,6 +23,7 @@ statement_timeout_secs = 30
 
 - **Connection timeout handling**: LiveKit room connections now have configurable timeouts instead of hanging indefinitely
 - **Multi-server voice routing**: Voice connections correctly resolve the LiveKit proxy URL from the active server entry, not just the stored default
+- **LiveKit proxy resilience**: WebRTC proxy now tracks connection sequences, gracefully handles mid-stream disconnects, and falls back to direct connections when the proxy is unavailable
 - **Heartbeat tracking**: WebSocket connections now track `lastHeartbeatSent`, `missedAcks`, and `connectionLatency` for better disconnect detection
 - **Pending message queue**: Messages sent during reconnection are buffered (up to 50) and replayed on reconnect
 
