@@ -618,7 +618,13 @@ async fn main() -> Result<()> {
         // Run HTTP redirect + HTTPS concurrently.
         // HTTPS listener injects X-Forwarded-Proto so downstream handlers
         // return secure URLs (wss://, HSTS, etc.).
-        let tls_addr: std::net::SocketAddr = format!("0.0.0.0:{}", tls_port).parse()?;
+        let bind_host = config
+            .server
+            .bind_address
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or("0.0.0.0");
+        let tls_addr: std::net::SocketAddr = format!("{}:{}", bind_host, tls_port).parse()?;
         let app_https = app
             .clone()
             .layer(axum::middleware::from_fn(inject_https_proto));
