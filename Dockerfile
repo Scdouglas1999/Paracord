@@ -15,7 +15,7 @@ COPY client/ ./
 RUN npm run build
 
 # ---------- Stage 2: Build the Rust server ----------
-FROM rust:1.85-bookworm AS server-builder
+FROM rust:1.91-bookworm AS server-builder
 WORKDIR /src
 
 # Copy workspace manifests first for dependency caching
