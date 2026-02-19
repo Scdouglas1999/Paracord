@@ -7,7 +7,7 @@ pub const OP_PRESENCE_UPDATE: u8 = 3;
 pub const OP_VOICE_STATE_UPDATE: u8 = 4;
 pub const OP_RESUME: u8 = 6;
 pub const OP_REQUEST_GUILD_MEMBERS: u8 = 8;
-pub const OP_TYPING_START: u8 = 9;
+pub const OP_TYPING_START: u8 = 12;
 
 // Server -> Client opcodes
 pub const OP_DISPATCH: u8 = 0;
