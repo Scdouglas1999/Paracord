@@ -1133,14 +1133,14 @@ async fn run_session(
                                         .and_then(|v| v.as_str())
                                         .and_then(|s| s.parse::<i64>().ok())
                                     {
-                                        let owner_id = paracord_db::guilds::get_guild(&state.db, gid)
+                                        if let Some(guild) = paracord_db::guilds::get_guild(&state.db, gid)
                                             .await
                                             .ok()
                                             .flatten()
-                                            .map(|g| g.owner_id)
-                                            .unwrap_or(0);
-                                        session.add_guild(gid, owner_id);
-                                        state.event_bus.add_session_guild(&session.session_id, gid);
+                                        {
+                                            session.add_guild(gid, guild.owner_id);
+                                            state.event_bus.add_session_guild(&session.session_id, gid);
+                                        }
                                     }
                                 }
                             }
