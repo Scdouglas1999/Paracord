@@ -169,69 +169,71 @@ export function AccountSetupPage() {
           </div>
         )}
 
-        <label className="mb-4 block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Username <span className="text-accent-danger">*</span>
-          </span>
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-            minLength={2}
-            maxLength={32}
-            className="input-field mt-1.5"
-            placeholder="Choose a username"
-            autoFocus
-          />
-        </label>
+        <div className="card-stack-roomy">
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              Username <span className="text-accent-danger">*</span>
+            </span>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              minLength={2}
+              maxLength={32}
+              className="input-field mt-2"
+              placeholder="Choose a username"
+              autoFocus
+            />
+          </label>
 
-        <label className="mb-4 block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Display Name</span>
-          <input
-            type="text"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            className="input-field mt-1.5"
-            placeholder="How others see you"
-          />
-        </label>
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Display Name</span>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="input-field mt-2"
+              placeholder="How others see you"
+            />
+          </label>
 
-        <label className="mb-4 block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            {isMigration ? 'New Encryption Password' : 'Password'} <span className="text-accent-danger">*</span>
-          </span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={MIN_PASSWORD_LENGTH}
-            className="input-field mt-1.5"
-            placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-          />
-          <p className="mt-1 text-xs text-text-muted">
-            {isMigration
-              ? 'This password encrypts your new account key on this device. It can be different from your server password.'
-              : 'This password encrypts your account key on this device.'}
-          </p>
-        </label>
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              {isMigration ? 'New Encryption Password' : 'Password'} <span className="text-accent-danger">*</span>
+            </span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={MIN_PASSWORD_LENGTH}
+              className="input-field mt-2"
+              placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+            />
+            <p className="mt-1.5 text-xs text-text-muted">
+              {isMigration
+                ? 'This password encrypts your new account key on this device. It can be different from your server password.'
+                : 'This password encrypts your account key on this device.'}
+            </p>
+          </label>
 
-        <label className="mb-6 block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Confirm Password <span className="text-accent-danger">*</span>
-          </span>
-          <input
-            type="password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            required
-            className="input-field mt-1.5"
-            placeholder="Type your password again"
-          />
-        </label>
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              Confirm Password <span className="text-accent-danger">*</span>
+            </span>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              className="input-field mt-2"
+              placeholder="Type your password again"
+            />
+          </label>
+        </div>
 
-        <button type="submit" disabled={loading} className="btn-primary w-full min-h-[2.9rem]">
+        <button type="submit" disabled={loading} className="btn-primary mt-8 w-full min-h-[2.9rem]">
           {loading ? 'Creating...' : isMigration ? 'Secure Account' : 'Create Identity'}
         </button>
 

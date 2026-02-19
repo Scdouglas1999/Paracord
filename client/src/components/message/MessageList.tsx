@@ -17,11 +17,15 @@ import { UserProfilePopup } from '../user/UserProfile';
 import { EmojiPicker } from '../ui/EmojiPicker';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { usePermissions } from '../../hooks/usePermissions';
-import { API_BASE_URL } from '../../lib/apiBaseUrl';
+import { resolveResourceUrl } from '../../lib/apiBaseUrl';
+import { getAccessToken } from '../../lib/authToken';
 import { SkeletonMessage } from '../ui/Skeleton';
 import { parseMarkdown } from '../../lib/markdown';
 import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
+import { confirm } from '../../stores/confirmStore';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from '../../lib/customEmoji';
+import { MessageEmbedCard, extractUrls } from './MessageEmbed';
+import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
 import { PollMessageCard } from './PollMessageCard';
 import { toast } from '../../stores/toastStore';
 
@@ -31,6 +35,22 @@ const MAX_REPLY_NEST_DEPTH = 6;
 const REPLY_INDENT_PX = 18;
 const THREAD_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const _threadHydratedAt = new Map<string, number>();
+const IMAGE_ATTACHMENT_EXTENSION_RE = /\.(png|jpe?g|gif|webp|avif|bmp|heic|heif)$/i;
+
+/**
+ * Resolve an attachment URL for use in `<img>` src and similar browser-native
+ * fetches.  Uses the dynamic API base and appends a token query parameter for
+ * cross-origin requests where cookies won't be sent.
+ */
+function resolveAttachmentUrl(url: string): string {
+  return resolveResourceUrl(url, getAccessToken());
+}
+
+function isImageAttachment(att: { content_type?: string; filename: string }): boolean {
+  const contentType = (att.content_type || '').toLowerCase();
+  if (contentType.startsWith('image/')) return true;
+  return IMAGE_ATTACHMENT_EXTENSION_RE.test(att.filename);
+}
 
 interface MessageListProps {
   channelId: string;
@@ -138,6 +158,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const pinMessage = useMessageStore((s) => s.pinMessage);
   const unpinMessage = useMessageStore((s) => s.unpinMessage);
   const setMessages = useMessageStore((s) => s.setMessages);
+  const decryptingIds = useMessageStore((s) => s.decryptingIds);
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
   const typingUsers = useTypingStore((s) => s.typingByChannel[channelId] ?? EMPTY_TYPING);
   const me = useAuthStore((s) => s.user?.id);
@@ -268,7 +289,6 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   // Build flat row list for virtualization
   const rows: VirtualRow[] = useMemo(() => {
     const result: VirtualRow[] = [];
-    result.push({ type: 'welcome' });
 
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
@@ -555,7 +575,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
   const executeBulkDelete = async () => {
     if (!selectedMessageIds.length || bulkDeleting) return;
-    if (!window.confirm(`Delete ${selectedMessageIds.length} selected messages?`)) return;
+    if (!(await confirm({ title: `Delete ${selectedMessageIds.length} selected messages?`, description: 'This action cannot be undone.', confirmLabel: 'Delete', variant: 'danger' }))) return;
     setBulkDeleting(true);
     try {
       await channelApi.bulkDeleteMessages(channelId, selectedMessageIds);
@@ -618,7 +638,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
   const deleteAttachment = async (messageId: string, attachmentId: string) => {
     if (attachmentBusyId) return;
-    if (!window.confirm('Delete this attachment?')) return;
+    if (!(await confirm({ title: 'Delete this attachment?', confirmLabel: 'Delete', variant: 'danger' }))) return;
     setAttachmentBusyId(attachmentId);
     try {
       await fileApi.delete(attachmentId);
@@ -864,9 +884,9 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         id={`msg-${msg.id}`}
         role="article"
         aria-label={`Message from ${msg.author.username}`}
-        className="group relative -mx-1.5 flex gap-2.5 rounded-xl px-2.5 py-0.5 transition-colors sm:-mx-2.5 sm:gap-4 sm:px-3"
+        className="group relative -mx-1.5 flex gap-3.5 rounded-2xl px-2.5 py-1.5 transition-colors sm:-mx-2.5 sm:gap-4 sm:px-3"
         style={{
-          marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.375rem' : '1.0625rem',
+          marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '1.35rem',
           paddingLeft: replyIndent > 0 ? `${replyIndent}px` : undefined,
           backgroundColor: hoveredMessageId === msg.id ? 'var(--bg-mod-subtle)' : 'transparent',
         }}
@@ -890,16 +910,16 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           </div>
         )}
         {isGrouped ? (
-          <div className="flex w-10 flex-shrink-0 items-start justify-center pt-0.5">
+          <div className="flex w-12 flex-shrink-0 items-start justify-center pt-0.5">
             <span
-              className="text-[11px] opacity-0 transition-opacity group-hover:opacity-100"
+              className="font-mono text-[11px] opacity-0 transition-opacity group-hover:opacity-100"
               style={{ color: 'var(--text-muted)' }}
             >
               {new Date(getTimestamp(msg)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
             </span>
           </div>
         ) : (
-          <div className="flex h-10 w-10 flex-shrink-0 cursor-pointer items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm"
+          <div className="flex h-12 w-12 flex-shrink-0 cursor-pointer items-center justify-center rounded-2xl text-sm font-semibold text-white shadow-sm"
             style={{ backgroundColor: 'var(--accent-primary)' }}
             onClick={(e) => openAuthorProfile(e, msg)}
           >
@@ -946,7 +966,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           {!isGrouped && (
             <div className="flex items-baseline gap-2">
               <span
-                className="font-medium text-sm cursor-pointer hover:underline"
+                className="cursor-pointer text-[15px] font-semibold hover:underline"
                 style={{ color: 'var(--text-primary)' }}
                 onClick={(e) => openAuthorProfile(e, msg)}
               >
@@ -1006,8 +1026,13 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             </div>
           ) : (
             <>
-              {!msg.poll && (
-                <div className="break-words text-[15px]" style={{ color: 'var(--text-secondary)', lineHeight: '1.48rem' }}>
+              {!msg.poll && decryptingIds.has(msg.id) ? (
+                <div className="flex flex-col gap-1.5 py-0.5" aria-label="Decrypting message">
+                  <div className="h-3.5 w-3/4 animate-pulse rounded bg-text-muted/10" />
+                  <div className="h-3.5 w-1/2 animate-pulse rounded bg-text-muted/10" />
+                </div>
+              ) : !msg.poll ? (
+                <div className="break-words text-[15px]" style={{ color: 'var(--text-primary)', lineHeight: '1.58rem' }}>
                   {parseMarkdown(msg.content || '', activeGuildId || undefined)}
                   {isGrouped && (msg.edited_timestamp || msg.edited_at) && (
                     <span className="ml-1 text-[11px]" style={{ color: 'var(--text-muted)' }} title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}>
@@ -1015,8 +1040,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                     </span>
                   )}
                 </div>
-              )}
-              {msg.poll && (
+              ) : (
                 <PollMessageCard
                   channelId={channelId}
                   poll={msg.poll}
@@ -1025,6 +1049,28 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               )}
             </>
           )}
+
+          {/* GitHub webhook embed */}
+          {isGitHubWebhookMessage(msg) && (
+            <GitHubEventEmbed content={msg.content || ''} />
+          )}
+
+          {/* URL Embeds — server-provided or client-extracted */}
+          {(() => {
+            const embeds = msg.embeds || [];
+            const contentUrls = embeds.length === 0 ? extractUrls(msg.content) : [];
+            const allEmbeds = embeds.length > 0
+              ? embeds
+              : contentUrls.slice(0, 3).map((url) => ({ url }));
+            if (allEmbeds.length === 0) return null;
+            return (
+              <div className="flex flex-col gap-1">
+                {allEmbeds.map((embed) => (
+                  <MessageEmbedCard key={embed.url} embed={embed} />
+                ))}
+              </div>
+            );
+          })()}
 
           {linkedThreads.length > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -1098,25 +1144,25 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           {msg.attachments && msg.attachments.length > 0 && (
             <div className="mt-1.5 flex flex-col gap-2">
               {msg.attachments.map((att) => {
-                // att.url from the server is already a full path like /api/v1/attachments/{id},
-                // so strip the /api/v1 prefix before prepending API_BASE_URL to avoid doubling it.
-                const resolveAttUrl = (url: string) =>
-                  url.startsWith('http') ? url : `${API_BASE_URL}${url.replace(/^\/api\/v1/, '')}`;
-                const src = resolveAttUrl(att.url);
-                if (att.content_type?.startsWith('image/')) {
-                  const imageAttachments = msg.attachments!.filter((a) => a.content_type?.startsWith('image/'));
-                  const imageIndex = imageAttachments.findIndex((a) => a.id === att.id);
-                  const lightboxImages: LightboxImage[] = imageAttachments.map((a) => ({
-                    src: resolveAttUrl(a.url),
-                    alt: a.filename,
-                    filename: a.filename,
-                  }));
+                const src = resolveAttachmentUrl(att.url);
+                const attachmentIsImage = isImageAttachment(att);
+                if (attachmentIsImage) {
+                  const imageAttachments = msg.attachments!.filter(isImageAttachment);
+                  const openImageLightbox = () => {
+                    const lightboxImages: LightboxImage[] = imageAttachments.map((imageAtt) => ({
+                      src: resolveAttachmentUrl(imageAtt.url),
+                      alt: imageAtt.filename,
+                      filename: imageAtt.filename,
+                    }));
+                    const imageIndex = imageAttachments.findIndex((a) => a.id === att.id);
+                    useLightboxStore.getState().open(lightboxImages, imageIndex >= 0 ? imageIndex : 0);
+                  };
                   return (
                     <div key={att.id} className="inline-flex max-w-fit flex-col gap-1.5">
                       <button
                         type="button"
                         className="inline-block max-w-fit cursor-pointer border-0 bg-transparent p-0 text-left"
-                        onClick={() => useLightboxStore.getState().open(lightboxImages, imageIndex)}
+                        onClick={() => void openImageLightbox()}
                       >
                         <img
                           src={src}
@@ -1126,6 +1172,13 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                         />
                       </button>
                       <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                          onClick={() => void openImageLightbox()}
+                        >
+                          Open
+                        </button>
                         <button
                           type="button"
                           className="rounded-md border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
@@ -1154,7 +1207,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                     className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm"
                     style={{ maxWidth: 'fit-content' }}
                   >
-                    <span style={{ color: 'var(--text-link)' }}>{att.filename}</span>
+                    <button
+                      type="button"
+                      className="max-w-[20rem] truncate text-left text-text-link transition-colors hover:underline"
+                      onClick={() => void downloadAttachment(att.id, att.filename)}
+                      disabled={attachmentBusyId === att.id}
+                    >
+                      {att.filename}
+                    </button>
                     {att.size && <span className="text-xs text-text-muted">({(att.size / 1024).toFixed(1)} KB)</span>}
                     <button
                       type="button"

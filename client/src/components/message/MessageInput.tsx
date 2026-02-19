@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle } from 'lucide-react';
 import { useMessageStore } from '../../stores/messageStore';
+import { useMemberStore } from '../../stores/memberStore';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useTyping } from '../../hooks/useTyping';
 import { MAX_MESSAGE_LENGTH } from '../../lib/constants';
@@ -28,12 +29,35 @@ const POLL_DURATION_OPTIONS = [
   { label: '14 days', minutes: 20160 },
 ];
 
+const DRAFT_KEY_PREFIX = 'paracord:draft:';
+
+function loadDraft(channelId: string): string {
+  try {
+    return localStorage.getItem(`${DRAFT_KEY_PREFIX}${channelId}`) || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveDraft(channelId: string, content: string) {
+  try {
+    if (content.trim()) {
+      localStorage.setItem(`${DRAFT_KEY_PREFIX}${channelId}`, content);
+    } else {
+      localStorage.removeItem(`${DRAFT_KEY_PREFIX}${channelId}`);
+    }
+  } catch {
+    // localStorage unavailable
+  }
+}
+
 export function MessageInput({ channelId, guildId, channelName, replyingTo, onCancelReply }: MessageInputProps) {
-  const [content, setContent] = useState('');
+  const [content, setContent] = useState(() => loadDraft(channelId));
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showFormattingTools, setShowFormattingTools] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
@@ -52,6 +76,32 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const activeChannelType = activeChannel?.channel_type ?? activeChannel?.type;
   const canCreatePoll = activeChannelType == null || (activeChannelType !== 2 && activeChannelType !== 4);
 
+  // @mention autocomplete
+  const allMembers = useMemberStore((s) => s.members);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const mentionResults = useMemo(() => {
+    if (mentionQuery === null || !guildId) return [];
+    const guildMembers = allMembers.get(guildId) || [];
+    const q = mentionQuery.toLowerCase();
+    return guildMembers
+      .filter((m) => {
+        const name = (m.nick || m.user.username).toLowerCase();
+        return name.includes(q);
+      })
+      .slice(0, 8);
+  }, [mentionQuery, guildId, allMembers]);
+
+  // Draft persistence: save on content change (debounced), restore on channel switch
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => saveDraft(channelId, content), 500);
+    return () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    };
+  }, [content, channelId]);
+
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -60,7 +110,11 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   }, [content]);
 
   useEffect(() => {
+    // Restore draft for this channel
+    setContent(loadDraft(channelId));
+    setMentionQuery(null);
     setShowPollComposer(false);
+    setShowFormattingTools(false);
     setPollQuestion('');
     setPollOptions(['', '']);
     setPollAllowMultiselect(false);
@@ -157,6 +211,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         attachmentIds,
       );
       setContent('');
+      saveDraft(channelId, '');
       setStagedFiles([]);
       onCancelReply?.();
       if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -165,7 +220,62 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     }
   };
 
+  /** Detect @mention query from cursor position */
+  const detectMentionQuery = useCallback((text: string, cursorPos: number) => {
+    const before = text.slice(0, cursorPos);
+    const match = before.match(/@(\w*)$/);
+    if (match) {
+      setMentionQuery(match[1]);
+      setMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+    }
+  }, []);
+
+  const insertMention = useCallback((username: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const before = content.slice(0, textarea.selectionStart);
+    const after = content.slice(textarea.selectionStart);
+    const mentionStart = before.lastIndexOf('@');
+    if (mentionStart === -1) return;
+    const newContent = before.slice(0, mentionStart) + `@${username} ` + after;
+    setContent(newContent);
+    setMentionQuery(null);
+    // Restore focus
+    requestAnimationFrame(() => {
+      const newPos = mentionStart + username.length + 2;
+      textarea.focus();
+      textarea.setSelectionRange(newPos, newPos);
+    });
+  }, [content]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Handle mention autocomplete navigation
+    if (mentionQuery !== null && mentionResults.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % mentionResults.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev - 1 + mentionResults.length) % mentionResults.length);
+        return;
+      }
+      if (e.key === 'Tab' || e.key === 'Enter') {
+        e.preventDefault();
+        const selected = mentionResults[mentionIndex];
+        if (selected) insertMention(selected.user.username);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
+
     const textarea = textareaRef.current;
     if (textarea) {
       const markdownShortcut = resolveMarkdownShortcut(e);
@@ -195,6 +305,23 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       setStagedFiles(prev => [...prev, ...files]);
     }
   };
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageFiles = items
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null);
+
+    if (imageFiles.length > 0) {
+      if (showPollComposer) {
+        setSubmitError('Disable poll composer before adding attachments.');
+        return;
+      }
+      e.preventDefault();
+      setStagedFiles((prev) => [...prev, ...imageFiles]);
+    }
+  }, [showPollComposer]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (showPollComposer) {
@@ -260,7 +387,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
   return (
     <div
-      className="relative px-4 pb-[calc(var(--safe-bottom)+0.75rem)] pt-2 sm:px-5 sm:pb-5"
+      className="relative px-4 pb-[calc(var(--safe-bottom)+0.75rem)] pt-2 sm:px-6 sm:pb-5"
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
@@ -419,107 +546,164 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       )}
 
       <div
-        className={`glass-panel flex min-h-[56px] flex-col gap-2 rounded-2xl border bg-bg-primary/75 px-3 py-3 shadow-md sm:min-h-[60px] sm:gap-2.5 sm:px-4 sm:py-3.5 ${
+        className={`architect-input-shell relative flex min-h-[58px] items-center gap-2 rounded-[999px] border px-3 py-2 shadow-sm sm:min-h-[62px] sm:px-3.5 sm:py-2.5 ${
           isDragOver ? 'border-2 border-dashed border-accent-primary/70' : 'border-border-subtle'
         }`}
         style={{
-          borderTopLeftRadius: (replyingTo || stagedFiles.length > 0 || showPollComposer) ? '0' : '1rem',
-          borderTopRightRadius: (replyingTo || stagedFiles.length > 0 || showPollComposer) ? '0' : '1rem',
+          borderTopLeftRadius: (replyingTo || stagedFiles.length > 0 || showPollComposer) ? '16px' : '9999px',
+          borderTopRightRadius: (replyingTo || stagedFiles.length > 0 || showPollComposer) ? '16px' : '9999px',
+          borderBottomLeftRadius: '9999px',
+          borderBottomRightRadius: '9999px',
         }}
       >
-        <div className="flex items-center justify-between gap-2 rounded-lg border border-border-subtle/60 bg-bg-mod-subtle/35 px-1.5 py-1">
-          <div className="min-w-0 flex-1 overflow-x-auto">
+        {showFormattingTools && (
+          <div className="absolute bottom-full left-3 right-3 z-10 mb-2 rounded-2xl border border-border-subtle bg-bg-primary/95 px-2 py-1.5 shadow-lg">
             <MarkdownToolbar textareaRef={textareaRef} onContentChange={setContent} />
           </div>
-          {canCreatePoll && (
-            <button
-              type="button"
-              onClick={togglePollComposer}
-              className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors ${
-                showPollComposer
-                  ? 'border-accent-primary/40 bg-accent-primary/12 text-accent-primary'
-                  : 'border-border-subtle text-text-muted hover:text-text-primary'
-              }`}
-              title={showPollComposer ? 'Poll composer enabled' : 'Create a poll'}
-            >
-              <BarChart3 size={12} />
-              <span className="hidden sm:inline">Poll</span>
-            </button>
+        )}
+
+        {/* @mention autocomplete */}
+        {mentionQuery !== null && mentionResults.length > 0 && (
+          <div className="absolute bottom-full left-3 right-3 z-20 mb-2 max-h-64 overflow-y-auto rounded-xl border border-border-subtle bg-bg-floating shadow-lg backdrop-blur-lg">
+            {mentionResults.map((member, i) => (
+              <button
+                key={member.user.id}
+                type="button"
+                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
+                  i === mentionIndex
+                    ? 'bg-accent-primary/15 text-text-primary'
+                    : 'text-text-secondary hover:bg-bg-mod-subtle'
+                }`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertMention(member.user.username);
+                }}
+                onMouseEnter={() => setMentionIndex(i)}
+              >
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-primary text-[11px] font-semibold text-white">
+                  {member.user.username.charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <span className="font-medium">{member.nick || member.user.username}</span>
+                  {member.nick && (
+                    <span className="ml-1.5 text-xs text-text-muted">@{member.user.username}</span>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <button
+          onClick={() => {
+            if (showPollComposer) {
+              setSubmitError('Disable poll composer before adding attachments.');
+              return;
+            }
+            fileInputRef.current?.click();
+          }}
+          className="command-icon-btn h-8 w-8 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={showPollComposer}
+          aria-label="Attach files"
+          title="Attach files"
+        >
+          <Plus size={18} />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowFormattingTools((prev) => !prev)}
+          className={`command-icon-btn h-8 w-8 flex-shrink-0 border transition-colors ${
+            showFormattingTools
+              ? 'border-accent-primary/45 bg-accent-primary/15 text-accent-primary'
+              : 'border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary'
+          }`}
+          aria-label="Formatting tools"
+          title="Formatting tools"
+        >
+          <FileText size={17} />
+        </button>
+
+        {canCreatePoll && (
+          <button
+            type="button"
+            onClick={togglePollComposer}
+            className={`command-icon-btn h-8 w-8 flex-shrink-0 border transition-colors ${
+              showPollComposer
+                ? 'border-accent-primary/45 bg-accent-primary/15 text-accent-primary'
+                : 'border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary'
+            }`}
+            aria-label={showPollComposer ? 'Poll composer enabled' : 'Create a poll'}
+            title={showPollComposer ? 'Poll composer enabled' : 'Create a poll'}
+          >
+            <BarChart3 size={16} />
+          </button>
+        )}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={handleFileSelect}
+        />
+
+        <textarea
+          ref={textareaRef}
+          value={content}
+          onChange={(e) => {
+            setContent(e.target.value);
+            detectMentionQuery(e.target.value, e.target.selectionStart);
+            triggerTyping();
+          }}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          placeholder={showPollComposer ? 'Poll question above will be sent as a poll message' : `Message ${channelName ? '#' + channelName : 'this channel'}`}
+          rows={1}
+          maxLength={MAX_MESSAGE_LENGTH}
+          disabled={showPollComposer}
+          className="flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-6 outline-none placeholder:text-text-muted disabled:cursor-not-allowed disabled:opacity-70"
+          style={{
+            color: 'var(--text-primary)',
+            maxHeight: '50vh',
+            lineHeight: '1.45rem',
+          }}
+        />
+
+        <div className="relative">
+          <button
+            className="command-icon-btn h-8 w-8 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            disabled={showPollComposer}
+            aria-label="Emoji"
+            title="Emoji"
+          >
+            <Smile size={18} />
+          </button>
+          {showEmojiPicker && (
+            <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
+              <EmojiPicker
+                onSelect={(emoji) => {
+                  setContent((prev) => `${prev}${emoji}`);
+                  triggerTyping();
+                  setShowEmojiPicker(false);
+                }}
+                onClose={() => setShowEmojiPicker(false)}
+                guildId={guildId}
+              />
+            </div>
           )}
         </div>
 
-        <div className="flex min-h-[42px] items-end gap-2">
-          <button
-            onClick={() => {
-              if (showPollComposer) {
-                setSubmitError('Disable poll composer before adding attachments.');
-                return;
-              }
-              fileInputRef.current?.click();
-            }}
-            className="command-icon-btn mb-0.5 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={showPollComposer}
-          >
-            <Plus size={20} />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={handleFileSelect}
-          />
-          <textarea
-            ref={textareaRef}
-            value={content}
-            onChange={(e) => {
-              setContent(e.target.value);
-              triggerTyping();
-            }}
-            onKeyDown={handleKeyDown}
-            placeholder={showPollComposer ? 'Poll question above will be sent as a poll message' : `Message ${channelName ? '#' + channelName : 'this channel'}`}
-            rows={1}
-            maxLength={MAX_MESSAGE_LENGTH}
-            disabled={showPollComposer}
-            className="flex-1 resize-none bg-transparent py-1 text-sm leading-6 outline-none placeholder:text-text-muted disabled:cursor-not-allowed disabled:opacity-70"
-            style={{
-              color: 'var(--text-primary)',
-              maxHeight: '50vh',
-              lineHeight: '1.45rem',
-            }}
-          />
-          <div className="relative">
-            <button
-              className="command-icon-btn mb-0.5 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
-              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              disabled={showPollComposer}
-            >
-              <Smile size={20} />
-            </button>
-            {showEmojiPicker && (
-              <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
-                <EmojiPicker
-                  onSelect={(emoji) => {
-                    setContent((prev) => `${prev}${emoji}`);
-                    triggerTyping();
-                    setShowEmojiPicker(false);
-                  }}
-                  onClose={() => setShowEmojiPicker(false)}
-                  guildId={guildId}
-                />
-              </div>
-            )}
-          </div>
-          {(showPollComposer || content.trim() || stagedFiles.length > 0) && (
-            <button
-              onClick={() => void handleSubmit()}
-              disabled={uploading || creatingPoll}
-              className="command-icon-btn mb-0.5 flex-shrink-0 border border-accent-primary/45 bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25 disabled:border-border-subtle disabled:bg-transparent disabled:text-text-muted"
-            >
-              <Send size={18} />
-            </button>
-          )}
-        </div>
+        <button
+          onClick={() => void handleSubmit()}
+          disabled={uploading || creatingPoll || (!showPollComposer && !content.trim() && stagedFiles.length === 0)}
+          className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="Send message"
+          title="Send message"
+        >
+          <Send size={17} />
+        </button>
       </div>
 
       {isDragOver && (

@@ -62,64 +62,66 @@ export function AccountRecoverPage() {
           </div>
         )}
 
-        <label className="mb-4 block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Recovery Phrase <span className="text-accent-danger">*</span>
-          </span>
-          <textarea
-            value={phrase}
-            onChange={(e) => setPhrase(e.target.value)}
-            required
-            rows={4}
-            className="input-field mt-1.5 resize-none"
-            placeholder="Enter your 24 words separated by spaces"
-          />
-        </label>
+        <div className="card-stack-roomy">
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              Recovery Phrase <span className="text-accent-danger">*</span>
+            </span>
+            <textarea
+              value={phrase}
+              onChange={(e) => setPhrase(e.target.value)}
+              required
+              rows={4}
+              className="input-field mt-2 resize-none"
+              placeholder="Enter your 24 words separated by spaces"
+            />
+          </label>
 
-        <label className="mb-4 block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Username <span className="text-accent-danger">*</span>
-          </span>
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-            className="input-field mt-1.5"
-            placeholder="Choose a username"
-          />
-        </label>
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              Username <span className="text-accent-danger">*</span>
+            </span>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              className="input-field mt-2"
+              placeholder="Choose a username"
+            />
+          </label>
 
-        <label className="mb-4 block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            New Password <span className="text-accent-danger">*</span>
-          </span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={MIN_PASSWORD_LENGTH}
-            className="input-field mt-1.5"
-            placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-          />
-        </label>
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              New Password <span className="text-accent-danger">*</span>
+            </span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={MIN_PASSWORD_LENGTH}
+              className="input-field mt-2"
+              placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+            />
+          </label>
 
-        <label className="mb-6 block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Confirm Password <span className="text-accent-danger">*</span>
-          </span>
-          <input
-            type="password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            required
-            className="input-field mt-1.5"
-            placeholder="Type your password again"
-          />
-        </label>
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              Confirm Password <span className="text-accent-danger">*</span>
+            </span>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              className="input-field mt-2"
+              placeholder="Type your password again"
+            />
+          </label>
+        </div>
 
-        <button type="submit" disabled={loading} className="btn-primary w-full min-h-[2.9rem]">
+        <button type="submit" disabled={loading} className="btn-primary mt-8 w-full min-h-[2.9rem]">
           {loading ? 'Recovering...' : 'Recover Account'}
         </button>
 

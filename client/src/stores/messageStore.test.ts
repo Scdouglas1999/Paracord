@@ -51,7 +51,7 @@ vi.mock('./channelStore', () => ({
 
 vi.mock('../lib/dmE2ee', () => ({
   decryptDmMessage: vi.fn(),
-  encryptDmMessage: vi.fn(),
+  encryptDmMessageV2: vi.fn(),
 }));
 
 vi.mock('../lib/accountSession', () => ({
@@ -104,6 +104,7 @@ describe('messageStore', () => {
       hasMore: {},
       loading: {},
       pins: {},
+      decryptingIds: new Set<string>(),
     });
   });
 

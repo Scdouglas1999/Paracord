@@ -31,7 +31,38 @@ fn is_frontend_dev_proxy_host(host: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn env_bool(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|raw| matches!(raw.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn env_trimmed(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+}
+
+fn should_use_configured_livekit_url(fallback: &str) -> bool {
+    if env_bool("PARACORD_FORCE_LIVEKIT_PUBLIC_URL") {
+        return true;
+    }
+    // If the configured public URL is not using the reverse-proxy path,
+    // treat it as an explicit direct LiveKit endpoint and preserve it.
+    if let Ok(parsed) = url::Url::parse(fallback) {
+        let path = parsed.path().trim_end_matches('/');
+        return !path.is_empty() && path != "/livekit";
+    }
+    false
+}
+
 fn resolve_livekit_client_url(headers: &HeaderMap, fallback: &str) -> String {
+    if should_use_configured_livekit_url(fallback) {
+        return fallback.to_string();
+    }
+
     let host = first_forwarded_value(headers, "x-forwarded-host")
         .or_else(|| first_forwarded_value(headers, "host"));
     let forwarded_proto = first_forwarded_value(headers, "x-forwarded-proto")
@@ -57,6 +88,42 @@ fn resolve_livekit_client_url(headers: &HeaderMap, fallback: &str) -> String {
     }
 
     fallback.to_string()
+}
+
+fn push_unique_url(candidates: &mut Vec<String>, raw: String) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if candidates.iter().any(|existing| existing == trimmed) {
+        return;
+    }
+    candidates.push(trimmed.to_string());
+}
+
+fn livekit_url_candidates(headers: &HeaderMap, fallback: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    // Optional direct endpoint override, useful to bypass /livekit proxy for
+    // diagnostics or deployment topologies that expose LiveKit separately.
+    if let Some(direct) = env_trimmed("PARACORD_LIVEKIT_DIRECT_PUBLIC_URL") {
+        push_unique_url(&mut candidates, direct);
+    }
+
+    // Optional LAN candidate injected by the server process. Useful when
+    // clients are on the same network and the public WAN URL requires
+    // hairpin NAT that may be unstable or unsupported.
+    if let Some(local_candidate) = env_trimmed("PARACORD_LIVEKIT_LOCAL_CANDIDATE_URL") {
+        push_unique_url(&mut candidates, local_candidate);
+    }
+
+    push_unique_url(
+        &mut candidates,
+        resolve_livekit_client_url(headers, fallback),
+    );
+    push_unique_url(&mut candidates, fallback.to_string());
+
+    candidates
 }
 
 #[derive(Deserialize)]
@@ -181,9 +248,13 @@ pub async fn join_voice(
 
     // If the user was tracked in any other voice room, remove that stale
     // in-memory membership before joining the new channel.
+    // Room cleanup (LiveKit DeleteRoom API) is spawned in the background so
+    // it does not block the join response — the API call can take up to 10s
+    // and stacking multiple cleanup calls easily exceeds the client timeout.
     if let Ok(existing_states) =
         paracord_db::voice_states::get_all_user_voice_states(&state.db, auth.user_id).await
     {
+        let mut empty_channels = Vec::new();
         for existing in existing_states {
             if existing.channel_id == channel_id {
                 continue;
@@ -194,9 +265,17 @@ pub async fn join_voice(
                 .await
             {
                 if current.is_empty() {
-                    let _ = state.voice.cleanup_room(existing.channel_id).await;
+                    empty_channels.push(existing.channel_id);
                 }
             }
+        }
+        if !empty_channels.is_empty() {
+            let voice = state.voice.clone();
+            tokio::spawn(async move {
+                for ch_id in empty_channels {
+                    let _ = voice.cleanup_room(ch_id).await;
+                }
+            });
         }
     }
 
@@ -267,9 +346,21 @@ pub async fn join_voice(
                             channel_id,
                             peer.server_name
                         );
+                        let mut url_candidates = Vec::new();
+                        push_unique_url(&mut url_candidates, remote.url.clone());
+                        for candidate in
+                            livekit_url_candidates(&headers, &state.config.livekit_public_url)
+                        {
+                            push_unique_url(&mut url_candidates, candidate);
+                        }
+                        let livekit_url = url_candidates
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| state.config.livekit_public_url.clone());
                         return Ok(Json(json!({
                             "token": remote.token,
-                            "url": remote.url,
+                            "url": livekit_url,
+                            "url_candidates": url_candidates,
                             "room_name": remote.room_name,
                             "session_id": remote.session_id,
                         })));
@@ -344,7 +435,11 @@ pub async fn join_voice(
         channel.guild_id(),
     );
 
-    let livekit_url = resolve_livekit_client_url(&headers, &state.config.livekit_public_url);
+    let url_candidates = livekit_url_candidates(&headers, &state.config.livekit_public_url);
+    let livekit_url = url_candidates
+        .first()
+        .cloned()
+        .unwrap_or_else(|| resolve_livekit_client_url(&headers, &state.config.livekit_public_url));
     tracing::info!(
         "Voice join issued for user={} channel={}",
         auth.user_id,
@@ -354,6 +449,7 @@ pub async fn join_voice(
     Ok(Json(json!({
         "token": join_resp.token,
         "url": livekit_url,
+        "url_candidates": url_candidates,
         "room_name": join_resp.room_name,
         "session_id": session_id,
     })))
@@ -490,15 +586,23 @@ pub async fn start_stream(
                                 Some(guild_id),
                             );
 
-                            let livekit_url = remote.url.unwrap_or_else(|| {
-                                resolve_livekit_client_url(
-                                    &headers,
-                                    &state.config.livekit_public_url,
-                                )
-                            });
+                            let mut url_candidates = Vec::new();
+                            if let Some(remote_url) = remote.url.clone() {
+                                push_unique_url(&mut url_candidates, remote_url);
+                            }
+                            for candidate in
+                                livekit_url_candidates(&headers, &state.config.livekit_public_url)
+                            {
+                                push_unique_url(&mut url_candidates, candidate);
+                            }
+                            let livekit_url = url_candidates
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| state.config.livekit_public_url.clone());
                             return Ok(Json(json!({
                                 "token": token,
                                 "url": livekit_url,
+                                "url_candidates": url_candidates,
                                 "room_name": room_name,
                                 "quality_preset": requested_quality,
                             })));
@@ -577,11 +681,16 @@ pub async fn start_stream(
         Some(guild_id),
     );
 
-    let livekit_url = resolve_livekit_client_url(&headers, &state.config.livekit_public_url);
+    let url_candidates = livekit_url_candidates(&headers, &state.config.livekit_public_url);
+    let livekit_url = url_candidates
+        .first()
+        .cloned()
+        .unwrap_or_else(|| resolve_livekit_client_url(&headers, &state.config.livekit_public_url));
 
     Ok(Json(json!({
         "token": stream_resp.token,
         "url": livekit_url,
+        "url_candidates": url_candidates,
         "room_name": stream_resp.room_name,
         "quality_preset": requested_quality,
     })))

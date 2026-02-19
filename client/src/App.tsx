@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -10,21 +10,23 @@ import { AppLayout } from './pages/AppLayout';
 import { GuildPage } from './pages/GuildPage';
 import { DMPage } from './pages/DMPage';
 import { FriendsPage } from './pages/FriendsPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { GuildSettingsPage } from './pages/GuildSettingsPage';
-import { AdminPage } from './pages/AdminPage';
+import { HomePage } from './pages/HomePage';
 import { InvitePage } from './pages/InvitePage';
 import { TermsPage } from './pages/TermsPage';
 import { PrivacyPage } from './pages/PrivacyPage';
-import { DiscoveryPage } from './pages/DiscoveryPage';
-import { DeveloperPage } from './pages/DeveloperPage';
 import { BotAuthorizePage } from './pages/BotAuthorizePage';
+
+// Lazy-loaded pages (heavy, visited infrequently)
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
+const GuildSettingsPage = lazy(() => import('./pages/GuildSettingsPage').then(m => ({ default: m.GuildSettingsPage })));
+const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
+const DiscoveryPage = lazy(() => import('./pages/DiscoveryPage').then(m => ({ default: m.DiscoveryPage })));
+const DeveloperPage = lazy(() => import('./pages/DeveloperPage').then(m => ({ default: m.DeveloperPage })));
 import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
 import { useAuthStore } from './stores/authStore';
 import { hasAccount } from './lib/account';
 import { getStoredServerUrl } from './lib/apiBaseUrl';
-import { connectionManager } from './lib/connectionManager';
 
 /**
  * Checks whether we need a server URL configured before proceeding.
@@ -89,27 +91,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }, [token, hasFetchedSettings, fetchSettings]);
 
   if (!sessionBootstrapComplete) {
-    return (
-      <div className="auth-shell">
-        <p className="text-text-muted">Restoring session...</p>
-      </div>
-    );
+    return <AuthLoadingSpinner label="Restoring session..." />;
   }
 
   if (serverStatus === 'loading') {
-    return (
-      <div className="auth-shell">
-        <p className="text-text-muted">Connecting...</p>
-      </div>
-    );
+    return <AuthLoadingSpinner label="Connecting..." />;
   }
 
   if (token && !hasFetchedSettings) {
-    return (
-      <div className="auth-shell">
-        <p className="text-text-muted">Loading account settings...</p>
-      </div>
-    );
+    return <AuthLoadingSpinner label="Loading account settings..." />;
   }
 
   // Optional crypto-auth mode (server-controlled, default false).
@@ -149,19 +139,11 @@ function AuthRoute({ children }: { children: React.ReactNode }) {
   const sessionBootstrapComplete = useAuthStore((s) => s.sessionBootstrapComplete);
 
   if (!sessionBootstrapComplete) {
-    return (
-      <div className="auth-shell">
-        <p className="text-text-muted">Restoring session...</p>
-      </div>
-    );
+    return <AuthLoadingSpinner label="Restoring session..." />;
   }
 
   if (serverStatus === 'loading') {
-    return (
-      <div className="auth-shell">
-        <p className="text-text-muted">Connecting...</p>
-      </div>
-    );
+    return <AuthLoadingSpinner label="Connecting..." />;
   }
 
   if (serverStatus === 'needed') {
@@ -171,28 +153,26 @@ function AuthRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/**
- * Hook to auto-connect to all servers when account is unlocked.
- */
-function useAutoConnect() {
-  const isUnlocked = useAccountStore((s) => s.isUnlocked);
-  const cryptoAuthEnabled = useAuthStore((s) => s.settings?.crypto_auth_enabled === true);
-  const servers = useServerListStore((s) => s.servers);
+function AuthLoadingSpinner({ label }: { label: string }) {
+  return (
+    <div className="auth-shell">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-7 w-7 animate-spin rounded-full border-2 border-accent-primary border-t-transparent" />
+        <p className="text-sm font-medium text-text-muted">{label}</p>
+      </div>
+    </div>
+  );
+}
 
-  useEffect(() => {
-    if (!cryptoAuthEnabled || !isUnlocked || servers.length === 0) return;
-    connectionManager.connectAll().catch(() => {
-      // Individual server connection errors are handled per-server.
-    });
-    return () => {
-      connectionManager.disconnectAll();
-    };
-  }, [cryptoAuthEnabled, isUnlocked, servers.length]);
+function LazyFallback() {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent-primary border-t-transparent" />
+    </div>
+  );
 }
 
 export default function App() {
-  useAutoConnect();
-
   return (
     <Routes>
       {/* Optional device crypto identity */}
@@ -214,17 +194,17 @@ export default function App() {
 
       {/* Main app */}
       <Route path="/app" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-        <Route index element={<FriendsPage />} />
+        <Route index element={<HomePage />} />
         <Route path="guilds/:guildId/channels/:channelId" element={<GuildPage />} />
         <Route path="dms" element={<DMPage />} />
         <Route path="dms/:channelId" element={<DMPage />} />
         <Route path="friends" element={<FriendsPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="admin" element={<AdminPage />} />
-        <Route path="discovery" element={<DiscoveryPage />} />
+        <Route path="settings" element={<Suspense fallback={<LazyFallback />}><SettingsPage /></Suspense>} />
+        <Route path="admin" element={<Suspense fallback={<LazyFallback />}><AdminPage /></Suspense>} />
+        <Route path="discovery" element={<Suspense fallback={<LazyFallback />}><DiscoveryPage /></Suspense>} />
         <Route path="oauth2/authorize" element={<BotAuthorizePage />} />
-        <Route path="guilds/:guildId/settings" element={<GuildSettingsPage />} />
-        <Route path="developers" element={<DeveloperPage />} />
+        <Route path="guilds/:guildId/settings" element={<Suspense fallback={<LazyFallback />}><GuildSettingsPage /></Suspense>} />
+        <Route path="developers" element={<Suspense fallback={<LazyFallback />}><DeveloperPage /></Suspense>} />
       </Route>
 
       {/* Default: send to app (which handles auth redirects) */}

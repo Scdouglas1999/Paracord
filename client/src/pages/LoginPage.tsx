@@ -146,9 +146,9 @@ export function LoginPage() {
           </div>
         )}
 
-        <div className="space-y-7">
+        <div className="card-stack-roomy">
           <label className="block">
-            <span className="mb-3 block text-xs font-semibold uppercase tracking-wide text-text-secondary">
+            <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
               {identifierMode.label} <span className="text-accent-danger">*</span>
             </span>
             <input
@@ -156,13 +156,13 @@ export function LoginPage() {
               value={identifier}
               onChange={(e) => setIdentifier(e.target.value)}
               required
-              className="input-field"
+              className="input-field mt-2"
               placeholder={identifierMode.placeholder}
             />
           </label>
 
           <label className="block">
-            <span className="mb-3 block text-xs font-semibold uppercase tracking-wide text-text-secondary">
+            <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
               Password <span className="text-accent-danger">*</span>
             </span>
             <input
@@ -170,7 +170,7 @@ export function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="input-field"
+              className="input-field mt-2"
               placeholder="Enter your password"
             />
           </label>

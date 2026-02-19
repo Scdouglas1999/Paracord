@@ -1,3 +1,4 @@
+use crate::observability;
 use dashmap::DashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -47,7 +48,7 @@ impl EventBus {
         user_id: i64,
         guild_ids: &[i64],
     ) -> broadcast::Receiver<ServerEvent> {
-        let (sender, receiver) = broadcast::channel(self.capacity.max(64));
+        let (sender, receiver) = broadcast::channel(self.capacity.max(256));
         let sid = session_id.into();
         let subscription = SessionSubscription {
             user_id,
@@ -149,6 +150,32 @@ impl EventBus {
                 .map(|entry| entry.key().clone())
                 .collect()
         };
+
+        if observability::wire_trace_enabled() {
+            let payload_bytes = event
+                .serialized_payload
+                .as_ref()
+                .map(|serialized| serialized.len())
+                .unwrap_or_else(|| serde_json::to_string(&*event.payload).map(|s| s.len()).unwrap_or(0));
+            let scope = if event.target_user_ids.is_some() {
+                "users"
+            } else if event.guild_id.is_some() {
+                "guild"
+            } else {
+                "global"
+            };
+            tracing::info!(
+                target: "wire",
+                kind = "event_bus_dispatch",
+                event_type = %event.event_type,
+                scope,
+                guild_id = ?event.guild_id,
+                target_user_count = event.target_user_ids.as_ref().map(|users| users.len()),
+                session_count = session_ids.len(),
+                payload_bytes,
+                "server_out"
+            );
+        }
 
         // Send to matching sessions
         for sid in session_ids {

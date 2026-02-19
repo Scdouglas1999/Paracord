@@ -54,6 +54,7 @@ export function VoiceControls() {
           <button
             onClick={toggleMute}
             className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+            aria-label={selfMute ? 'Unmute' : 'Mute'}
             title={selfMute ? 'Unmute' : 'Mute'}
             style={{
               backgroundColor: selfMute ? 'var(--accent-danger)' : 'transparent',
@@ -65,6 +66,7 @@ export function VoiceControls() {
           <button
             onClick={toggleDeaf}
             className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+            aria-label={selfDeaf ? 'Undeafen' : 'Deafen'}
             title={selfDeaf ? 'Undeafen' : 'Deafen'}
             style={{
               backgroundColor: selfDeaf ? 'var(--accent-danger)' : 'transparent',
@@ -76,6 +78,7 @@ export function VoiceControls() {
           <button
             onClick={toggleVideo}
             className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+            aria-label={selfVideo ? 'Turn Off Camera' : 'Turn On Camera'}
             title={selfVideo ? 'Turn Off Camera' : 'Turn On Camera'}
             style={{
               backgroundColor: selfVideo ? 'var(--accent-primary)' : 'transparent',
@@ -101,6 +104,7 @@ export function VoiceControls() {
             }}
             className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
             disabled={startingStream}
+            aria-label={selfStream ? 'Stop Sharing' : 'Share Screen'}
             title={selfStream ? 'Stop Sharing' : 'Share Screen'}
             style={{
               backgroundColor: selfStream ? 'var(--accent-primary)' : 'transparent',
@@ -117,6 +121,7 @@ export function VoiceControls() {
           <button
             className="flex h-10 w-10 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-accent-danger/20 hover:text-accent-danger"
             onClick={() => void leaveChannel()}
+            aria-label="Disconnect"
             title="Disconnect"
           >
             <PhoneOff size={18} />

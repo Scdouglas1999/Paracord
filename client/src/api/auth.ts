@@ -21,7 +21,11 @@ export const authApi = {
   options: () => apiClient.get<AuthOptions>('/auth/options'),
   login: (data: LoginRequest) => apiClient.post<LoginResponse>('/auth/login', data),
   register: (data: RegisterRequest) => apiClient.post<LoginResponse>('/auth/register', data),
-  refresh: () => apiClient.post<{ token: string }>('/auth/refresh'),
+  refresh: (refreshToken?: string) =>
+    apiClient.post<{ token: string; refresh_token?: string }>(
+      '/auth/refresh',
+      refreshToken ? { refresh_token: refreshToken } : undefined,
+    ),
   logout: () => apiClient.post('/auth/logout'),
   listSessions: () => apiClient.get<AuthSession[]>('/auth/sessions'),
   revokeSession: (sessionId: string) => apiClient.delete(`/auth/sessions/${sessionId}`),

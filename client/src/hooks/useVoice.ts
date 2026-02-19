@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useVoiceStore } from '../stores/voiceStore';
-import { gateway } from '../gateway/connection';
+import { gateway } from '../gateway/manager';
 
 export function useVoice() {
   const connected = useVoiceStore((s) => s.connected);
@@ -36,7 +36,7 @@ export function useVoice() {
         // mute/deafen state immediately after connecting.
         const state = useVoiceStore.getState();
         if (state.selfMute || state.selfDeaf) {
-          gateway.updateVoiceState(
+          gateway.updateVoiceStateAll(
             targetGuildId || state.guildId,
             targetChannelId,
             state.selfMute,
@@ -60,7 +60,7 @@ export function useVoice() {
     // server always reflects the actual mute outcome (the store reverts
     // selfMute if the mic enable fails).
     const state = useVoiceStore.getState();
-    gateway.updateVoiceState(
+    gateway.updateVoiceStateAll(
       state.guildId,
       state.channelId,
       state.selfMute,
@@ -71,7 +71,7 @@ export function useVoice() {
   const toggleDeaf = useCallback(async () => {
     await useVoiceStore.getState().toggleDeaf();
     const state = useVoiceStore.getState();
-    gateway.updateVoiceState(
+    gateway.updateVoiceStateAll(
       state.guildId,
       state.channelId,
       state.selfMute,
@@ -122,3 +122,5 @@ export function useVoice() {
     clearConnectionError,
   };
 }
+
+

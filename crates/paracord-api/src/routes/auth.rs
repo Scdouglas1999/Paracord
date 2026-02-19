@@ -23,6 +23,8 @@ use crate::routes::security;
 
 const REFRESH_COOKIE_NAME: &str = "paracord_refresh";
 const REFRESH_COOKIE_PATH: &str = "/api/v1/auth";
+const ACCESS_COOKIE_NAME: &str = "paracord_access";
+const ACCESS_COOKIE_PATH: &str = "/api/v1";
 const CHALLENGE_STORE_MAX_ENTRIES: usize = 10_000;
 const MAX_DISPLAY_NAME_LEN: usize = 64;
 const AUTH_GUARD_TTL_SECONDS: i64 = 3600;
@@ -483,7 +485,7 @@ fn build_refresh_cookie(token: &str, ttl_days: i64, secure: bool) -> String {
     let max_age = ttl_days.saturating_mul(24 * 60 * 60);
     let secure_attr = if secure { "; Secure" } else { "" };
     format!(
-        "{name}={value}; HttpOnly; Path={path}; SameSite=Strict; Max-Age={max_age}{secure}",
+        "{name}={value}; HttpOnly; Path={path}; SameSite=Lax; Max-Age={max_age}{secure}",
         name = REFRESH_COOKIE_NAME,
         value = token,
         path = REFRESH_COOKIE_PATH,
@@ -492,12 +494,35 @@ fn build_refresh_cookie(token: &str, ttl_days: i64, secure: bool) -> String {
     )
 }
 
+fn build_access_cookie(token: &str, ttl_seconds: u64, secure: bool) -> String {
+    let max_age = ttl_seconds;
+    let secure_attr = if secure { "; Secure" } else { "" };
+    format!(
+        "{name}={value}; HttpOnly; Path={path}; SameSite=Lax; Max-Age={max_age}{secure}",
+        name = ACCESS_COOKIE_NAME,
+        value = token,
+        path = ACCESS_COOKIE_PATH,
+        max_age = max_age,
+        secure = secure_attr,
+    )
+}
+
 fn build_refresh_cookie_clear(secure: bool) -> String {
     let secure_attr = if secure { "; Secure" } else { "" };
     format!(
-        "{name}=; HttpOnly; Path={path}; SameSite=Strict; Max-Age=0{secure}",
+        "{name}=; HttpOnly; Path={path}; SameSite=Lax; Max-Age=0{secure}",
         name = REFRESH_COOKIE_NAME,
         path = REFRESH_COOKIE_PATH,
+        secure = secure_attr,
+    )
+}
+
+fn build_access_cookie_clear(secure: bool) -> String {
+    let secure_attr = if secure { "; Secure" } else { "" };
+    format!(
+        "{name}=; HttpOnly; Path={path}; SameSite=Lax; Max-Age=0{secure}",
+        name = ACCESS_COOKIE_NAME,
+        path = ACCESS_COOKIE_PATH,
         secure = secure_attr,
     )
 }
@@ -562,13 +587,15 @@ fn request_metadata(
     (device_id, user_agent, ip_address)
 }
 
+/// Result of issuing a new auth session:
+/// (access_token, access_cookie, refresh_cookie, session_id, raw_refresh_token)
 async fn issue_auth_session(
     state: &AppState,
     user_id: i64,
     public_key: Option<&str>,
     headers: &HeaderMap,
     peer_ip: Option<&str>,
-) -> Result<(String, String, String), ApiError> {
+) -> Result<(String, String, String, String, String), ApiError> {
     let session_id = Uuid::new_v4().to_string();
     let jti = Uuid::new_v4().to_string();
     let refresh_token = random_token_hex(48);
@@ -603,15 +630,17 @@ async fn issue_auth_session(
     )
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let refresh_cookie =
-        build_refresh_cookie(&refresh_token, ttl_days, should_use_secure_cookie(state));
-    Ok((access_token, refresh_cookie, session_id))
+    let secure = should_use_secure_cookie(state);
+    let access_cookie = build_access_cookie(&access_token, state.config.jwt_expiry_seconds, secure);
+    let refresh_cookie = build_refresh_cookie(&refresh_token, ttl_days, secure);
+    Ok((access_token, access_cookie, refresh_cookie, session_id, refresh_token))
 }
 
+/// Result: (access_token, access_cookie, refresh_cookie, session_id, raw_new_refresh_token)
 async fn rotate_auth_session(
     state: &AppState,
     refresh_token: &str,
-) -> Result<(String, String, String), ApiError> {
+) -> Result<(String, String, String, String, String), ApiError> {
     let refresh_hash = sha256_hex(refresh_token);
     let now = Utc::now();
     let session = paracord_db::sessions::get_session_by_refresh_hash(&state.db, &refresh_hash)
@@ -651,9 +680,10 @@ async fn rotate_auth_session(
         &new_jti,
     )
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let refresh_cookie =
-        build_refresh_cookie(&new_refresh, ttl_days, should_use_secure_cookie(state));
-    Ok((access_token, refresh_cookie, session.id))
+    let secure = should_use_secure_cookie(state);
+    let access_cookie = build_access_cookie(&access_token, state.config.jwt_expiry_seconds, secure);
+    let refresh_cookie = build_refresh_cookie(&new_refresh, ttl_days, secure);
+    Ok((access_token, access_cookie, refresh_cookie, session.id, new_refresh))
 }
 
 fn user_json(user: &paracord_db::users::UserRow) -> Value {
@@ -722,6 +752,10 @@ pub struct LoginRequest {
 pub struct AuthResponse {
     pub token: String,
     pub user: Value,
+    /// Refresh token returned in the body for cross-origin clients that cannot
+    /// use `HttpOnly` cookies (e.g. Vite dev proxy, Tauri, mobile).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -893,7 +927,7 @@ pub async fn register(
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
 
-    let (token, refresh_cookie, session_id) = issue_auth_session(
+    let (token, access_cookie, refresh_cookie, session_id, raw_refresh) = issue_auth_session(
         &state,
         user.id,
         user.public_key.as_deref(),
@@ -921,10 +955,14 @@ pub async fn register(
 
     Ok((
         StatusCode::CREATED,
-        AppendHeaders([(header::SET_COOKIE, header_value(&refresh_cookie)?)]),
+        AppendHeaders([
+            (header::SET_COOKIE, header_value(&access_cookie)?),
+            (header::SET_COOKIE, header_value(&refresh_cookie)?),
+        ]),
         Json(AuthResponse {
             token,
             user: user_json(&user),
+            refresh_token: Some(raw_refresh),
         }),
     ))
 }
@@ -1031,7 +1069,7 @@ pub async fn login(
         return Err(ApiError::Unauthorized);
     }
 
-    let (token, refresh_cookie, session_id) = issue_auth_session(
+    let (token, access_cookie, refresh_cookie, session_id, raw_refresh) = issue_auth_session(
         &state,
         user.id,
         user.public_key.as_deref(),
@@ -1058,10 +1096,14 @@ pub async fn login(
     .await;
 
     Ok((
-        AppendHeaders([(header::SET_COOKIE, header_value(&refresh_cookie)?)]),
+        AppendHeaders([
+            (header::SET_COOKIE, header_value(&access_cookie)?),
+            (header::SET_COOKIE, header_value(&refresh_cookie)?),
+        ]),
         Json(AuthResponse {
             token,
             user: user_auth_json(&user),
+            refresh_token: Some(raw_refresh),
         }),
     ))
 }
@@ -1069,10 +1111,20 @@ pub async fn login(
 pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
+    body: Option<Json<serde_json::Value>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let refresh_token =
-        get_cookie_value(&headers, REFRESH_COOKIE_NAME).ok_or(ApiError::Unauthorized)?;
-    let (token, refresh_cookie, session_id) = rotate_auth_session(&state, &refresh_token).await?;
+    // Accept refresh token from cookie OR request body (for cross-origin clients).
+    let refresh_token = get_cookie_value(&headers, REFRESH_COOKIE_NAME)
+        .or_else(|| {
+            body.as_ref()
+                .and_then(|b| b.get("refresh_token"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .ok_or(ApiError::Unauthorized)?;
+    let (token, access_cookie, refresh_cookie, session_id, new_raw_refresh) =
+        rotate_auth_session(&state, &refresh_token).await?;
     security::log_security_event(
         &state,
         "auth.refresh",
@@ -1084,8 +1136,11 @@ pub async fn refresh(
     )
     .await;
     Ok((
-        AppendHeaders([(header::SET_COOKIE, header_value(&refresh_cookie)?)]),
-        Json(json!({ "token": token })),
+        AppendHeaders([
+            (header::SET_COOKIE, header_value(&access_cookie)?),
+            (header::SET_COOKIE, header_value(&refresh_cookie)?),
+        ]),
+        Json(json!({ "token": token, "refresh_token": new_raw_refresh })),
     ))
 }
 
@@ -1137,10 +1192,15 @@ pub async fn logout(
     )
     .await;
 
-    let clear_cookie = build_refresh_cookie_clear(should_use_secure_cookie(&state));
+    let secure = should_use_secure_cookie(&state);
+    let clear_access_cookie = build_access_cookie_clear(secure);
+    let clear_refresh_cookie = build_refresh_cookie_clear(secure);
     Ok((
         StatusCode::NO_CONTENT,
-        AppendHeaders([(header::SET_COOKIE, header_value(&clear_cookie)?)]),
+        AppendHeaders([
+            (header::SET_COOKIE, header_value(&clear_access_cookie)?),
+            (header::SET_COOKIE, header_value(&clear_refresh_cookie)?),
+        ]),
     ))
 }
 
@@ -1202,10 +1262,15 @@ pub async fn revoke_session(
 
     let should_clear_cookie = auth.session_id.as_deref() == Some(session_id.as_str());
     if should_clear_cookie {
-        let clear_cookie = build_refresh_cookie_clear(should_use_secure_cookie(&state));
+        let secure = should_use_secure_cookie(&state);
+        let clear_access_cookie = build_access_cookie_clear(secure);
+        let clear_refresh_cookie = build_refresh_cookie_clear(secure);
         Ok((
             StatusCode::NO_CONTENT,
-            AppendHeaders([(header::SET_COOKIE, header_value(&clear_cookie)?)]),
+            AppendHeaders([
+                (header::SET_COOKIE, header_value(&clear_access_cookie)?),
+                (header::SET_COOKIE, header_value(&clear_refresh_cookie)?),
+            ]),
         )
             .into_response())
     } else {
@@ -1265,7 +1330,7 @@ pub async fn attach_public_key(
     )
     .await;
 
-    let (token, refresh_cookie, session_id) = issue_auth_session(
+    let (token, access_cookie, refresh_cookie, session_id, raw_refresh) = issue_auth_session(
         &state,
         user.id,
         user.public_key.as_deref(),
@@ -1285,10 +1350,14 @@ pub async fn attach_public_key(
     .await;
 
     Ok((
-        AppendHeaders([(header::SET_COOKIE, header_value(&refresh_cookie)?)]),
+        AppendHeaders([
+            (header::SET_COOKIE, header_value(&access_cookie)?),
+            (header::SET_COOKIE, header_value(&refresh_cookie)?),
+        ]),
         Json(AuthResponse {
             token,
             user: user_json(&user),
+            refresh_token: Some(raw_refresh),
         }),
     ))
 }
@@ -1501,7 +1570,7 @@ pub async fn verify(
         }
     };
 
-    let (token, refresh_cookie, session_id) = issue_auth_session(
+    let (token, access_cookie, refresh_cookie, session_id, raw_refresh) = issue_auth_session(
         &state,
         user.id,
         user.public_key.as_deref(),
@@ -1528,10 +1597,14 @@ pub async fn verify(
     .await;
 
     Ok((
-        AppendHeaders([(header::SET_COOKIE, header_value(&refresh_cookie)?)]),
+        AppendHeaders([
+            (header::SET_COOKIE, header_value(&access_cookie)?),
+            (header::SET_COOKIE, header_value(&refresh_cookie)?),
+        ]),
         Json(AuthResponse {
             token,
             user: user_json(&user),
+            refresh_token: Some(raw_refresh),
         }),
     ))
 }

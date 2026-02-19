@@ -2,39 +2,37 @@
 import { createApiClient } from '../api/client';
 import { useServerListStore, type ServerEntry } from '../stores/serverListStore';
 import { useAccountStore } from '../stores/accountStore';
-import { useGuildStore } from '../stores/guildStore';
-import { useChannelStore } from '../stores/channelStore';
-import { useMemberStore } from '../stores/memberStore';
-import { usePresenceStore } from '../stores/presenceStore';
-import { useVoiceStore } from '../stores/voiceStore';
-import { useTypingStore } from '../stores/typingStore';
-import { useRelationshipStore } from '../stores/relationshipStore';
 import { useUIStore } from '../stores/uiStore';
-import { useMessageStore } from '../stores/messageStore';
-import { usePollStore } from '../stores/pollStore';
 import { useAuthStore } from '../stores/authStore';
 import {
   hasUnlockedPrivateKey,
   signServerChallengeWithUnlockedKey,
 } from './accountSession';
 import { setAccessToken } from './authToken';
+import { getCurrentOriginServerUrl, getStoredServerUrl } from './apiBaseUrl';
 import type { Activity, GatewayPayload } from '../types';
 import { GatewayEvents } from '../gateway/events';
-import { sendNotification, isEnabled as notificationsEnabled } from './notifications';
+import { dispatchGatewayEvent } from '../gateway/dispatch';
+
+export const LOCAL_SERVER_ID = '__local__';
 
 export interface ServerConnection {
   serverId: string;
   serverUrl: string;
   apiClient: AxiosInstance;
   ws: WebSocket | null;
+  eventSource: EventSource | null;
+  streamUrl: string | null;
   heartbeatTimer: ReturnType<typeof setInterval> | null;
   heartbeatInterval: number | null;
   sequence: number | null;
   sessionId: string | null;
+  realtimeCursor: number | null;
   reconnectAttempts: number;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   allowReconnect: boolean;
   connected: boolean;
+  connecting: boolean;
   lastHeartbeatSent: number;
   missedAcks: number;
   connectionLatency: number;
@@ -44,7 +42,28 @@ export interface ServerConnection {
 class ConnectionManager {
   private connections = new Map<string, ServerConnection>();
   private connecting = new Map<string, Promise<void>>();
-  private static readonly MAX_PENDING_MESSAGES = 50;
+  private static readonly MAX_PENDING_MESSAGES = 200;
+  private readonly useRealtimeV2 =
+    import.meta.env.VITE_RT_V2 !== '0' && import.meta.env.VITE_RT_V2 !== 'false';
+  private offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => {
+        this.offline = false;
+        void this.connectAll();
+      });
+      window.addEventListener('offline', () => {
+        this.offline = true;
+        this.syncUiConnectionStatus();
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          void this.connectAll();
+        }
+      });
+    }
+  }
 
   private isCurrentConnection(conn: ServerConnection): boolean {
     return this.connections.get(conn.serverId) === conn;
@@ -57,13 +76,24 @@ class ConnectionManager {
       useUIStore.getState().setConnectionStatus('disconnected');
       return;
     }
+    if (this.offline) {
+      useUIStore.getState().setConnectionStatus('disconnected');
+      return;
+    }
 
     if (all.some((conn) => conn.connected)) {
       useUIStore.getState().setConnectionStatus('connected');
       return;
     }
 
-    if (all.some((conn) => conn.ws?.readyState === WebSocket.CONNECTING)) {
+    if (
+      all.some(
+        (conn) =>
+          conn.ws?.readyState === WebSocket.CONNECTING ||
+          conn.connecting ||
+          conn.eventSource !== null
+      )
+    ) {
       useUIStore.getState().setConnectionStatus('connecting');
       return;
     }
@@ -89,8 +119,10 @@ class ConnectionManager {
   /** Get the API client for the currently active server */
   getActiveApiClient(): AxiosInstance | undefined {
     const activeId = useServerListStore.getState().activeServerId;
-    if (!activeId) return undefined;
-    return this.connections.get(activeId)?.apiClient;
+    if (activeId) {
+      return this.connections.get(activeId)?.apiClient;
+    }
+    return this.connections.get(LOCAL_SERVER_ID)?.apiClient;
   }
 
   /** Authenticate with a server using challenge-response, then connect gateway */
@@ -113,11 +145,97 @@ class ConnectionManager {
     }
   }
 
+  async connectLocal(): Promise<void> {
+    const inFlight = this.connecting.get(LOCAL_SERVER_ID);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+
+    const connectTask = this.connectLocalInternal();
+    this.connecting.set(LOCAL_SERVER_ID, connectTask);
+    try {
+      await connectTask;
+    } finally {
+      const current = this.connecting.get(LOCAL_SERVER_ID);
+      if (current === connectTask) {
+        this.connecting.delete(LOCAL_SERVER_ID);
+      }
+    }
+  }
+
+  private resolveLocalServerUrl(): string {
+    const stored = getStoredServerUrl();
+    if (stored) return stored;
+
+    const currentOrigin = getCurrentOriginServerUrl();
+    if (currentOrigin) return currentOrigin;
+
+    if (typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol) && window.location.host) {
+      return `${window.location.protocol}//${window.location.host}`;
+    }
+
+    return 'http://localhost:8080';
+  }
+
+  private async connectLocalInternal(): Promise<void> {
+    const token = useAuthStore.getState().token;
+    if (!token) return;
+
+    const existing = this.connections.get(LOCAL_SERVER_ID);
+    if (existing) {
+      existing.allowReconnect = true;
+      this.connectRealtime(existing);
+      return;
+    }
+
+    const serverUrl = this.resolveLocalServerUrl();
+    const apiBaseUrl = `${serverUrl.replace(/\/+$/, '')}/api/v1`;
+    const client = createApiClient(
+      apiBaseUrl,
+      () => useAuthStore.getState().token,
+      (nextToken) => {
+        setAccessToken(nextToken);
+        useAuthStore.setState({ token: nextToken });
+      },
+      () => {
+        setAccessToken(null);
+        useAuthStore.setState({ token: null, user: null });
+        this.disconnectServer(LOCAL_SERVER_ID);
+      },
+    );
+
+    const conn: ServerConnection = {
+      serverId: LOCAL_SERVER_ID,
+      serverUrl,
+      apiClient: client,
+      ws: null,
+      eventSource: null,
+      streamUrl: null,
+      heartbeatTimer: null,
+      heartbeatInterval: null,
+      sequence: null,
+      sessionId: null,
+      realtimeCursor: null,
+      reconnectAttempts: 0,
+      reconnectTimer: null,
+      allowReconnect: true,
+      connected: false,
+      connecting: false,
+      lastHeartbeatSent: 0,
+      missedAcks: 0,
+      connectionLatency: 0,
+      pendingMessages: [],
+    };
+    this.connections.set(LOCAL_SERVER_ID, conn);
+    this.connectRealtime(conn);
+  }
+
   private async connectServerInternal(serverId: string): Promise<void> {
     const existing = this.connections.get(serverId);
     if (existing) {
       existing.allowReconnect = true;
-      this.connectGateway(existing);
+      this.connectRealtime(existing);
       return;
     }
 
@@ -132,7 +250,8 @@ class ConnectionManager {
       hasUnlockedPrivateKey();
 
     // Create API client for this server
-    const apiBaseUrl = `${server.url.replace(/\/+$/, '')}/api/v1`;
+    const effectiveUrl = server.url;
+    const apiBaseUrl = `${effectiveUrl.replace(/\/+$/, '')}/api/v1`;
     const client = createApiClient(
       apiBaseUrl,
       () => useServerListStore.getState().getServer(serverId)?.token || null,
@@ -158,17 +277,21 @@ class ConnectionManager {
 
     const conn: ServerConnection = {
       serverId,
-      serverUrl: server.url,
+      serverUrl: effectiveUrl,
       apiClient: client,
       ws: null,
+      eventSource: null,
+      streamUrl: null,
       heartbeatTimer: null,
       heartbeatInterval: null,
       sequence: null,
       sessionId: null,
+      realtimeCursor: null,
       reconnectAttempts: 0,
       reconnectTimer: null,
       allowReconnect: true,
       connected: false,
+      connecting: false,
       lastHeartbeatSent: 0,
       missedAcks: 0,
       connectionLatency: 0,
@@ -177,7 +300,7 @@ class ConnectionManager {
     this.connections.set(serverId, conn);
 
     // Connect WebSocket gateway
-    this.connectGateway(conn);
+    this.connectRealtime(conn);
   }
 
   /** Perform Ed25519 challenge-response authentication */
@@ -251,10 +374,139 @@ class ConnectionManager {
     return authResponse.token;
   }
 
+  private tokenForConnection(conn: ServerConnection): string | null {
+    if (conn.serverId === LOCAL_SERVER_ID) {
+      return useAuthStore.getState().token;
+    }
+    return useServerListStore.getState().getServer(conn.serverId)?.token || null;
+  }
+
+  private connectRealtime(conn: ServerConnection): void {
+    if (this.useRealtimeV2) {
+      if (conn.ws) {
+        conn.ws.close();
+        conn.ws = null;
+      }
+      this.connectRealtimeSse(conn);
+      return;
+    }
+    if (conn.eventSource) {
+      conn.eventSource.close();
+      conn.eventSource = null;
+    }
+    this.connectGateway(conn);
+  }
+
+  private connectRealtimeSse(conn: ServerConnection): void {
+    if (!this.isCurrentConnection(conn)) return;
+    if (conn.connecting || conn.eventSource) return;
+    const token = this.tokenForConnection(conn);
+    if (!token) return;
+
+    if (conn.reconnectTimer) {
+      clearTimeout(conn.reconnectTimer);
+      conn.reconnectTimer = null;
+    }
+    if (conn.eventSource) {
+      return;
+    }
+    conn.connecting = true;
+    conn.allowReconnect = true;
+    this.syncUiConnectionStatus();
+    void (async () => {
+      try {
+        const sessionResp = await conn.apiClient.post<{
+          session_id?: string;
+          cursor?: number;
+        }>(`${conn.serverUrl.replace(/\/+$/, '')}/api/v2/rt/session`, undefined, {
+          timeout: 10_000,
+        });
+        if (!this.isCurrentConnection(conn) || !conn.allowReconnect) return;
+        if (sessionResp.data?.session_id) {
+          conn.sessionId = sessionResp.data.session_id;
+        }
+        if (typeof sessionResp.data?.cursor === 'number' && conn.realtimeCursor == null) {
+          conn.realtimeCursor = sessionResp.data.cursor;
+        }
+
+        const base = conn.serverUrl.replace(/\/+$/, '');
+        const params = new URLSearchParams();
+        params.set('token', token);
+        if (conn.sessionId) params.set('session_id', conn.sessionId);
+        if (conn.realtimeCursor != null) params.set('cursor', String(conn.realtimeCursor));
+        const streamUrl = `${base}/api/v2/rt/events?${params.toString()}`;
+        conn.streamUrl = streamUrl;
+
+        const es = new EventSource(streamUrl, { withCredentials: true });
+        conn.eventSource = es;
+
+        es.onopen = () => {
+          if (!this.isCurrentConnection(conn) || conn.eventSource !== es) {
+            es.close();
+            return;
+          }
+          conn.connecting = false;
+          conn.connected = true;
+          conn.reconnectAttempts = 0;
+          if (conn.serverId !== LOCAL_SERVER_ID) {
+            useServerListStore.getState().setConnected(conn.serverId, true);
+          }
+          this.syncUiConnectionStatus();
+        };
+
+        const handleRealtimeEvent = (rawData: string) => {
+          if (!this.isCurrentConnection(conn) || conn.eventSource !== es) return;
+          try {
+            const payload: GatewayPayload & { event_id?: number } = JSON.parse(rawData);
+            if (typeof payload.event_id === 'number') {
+              conn.realtimeCursor = payload.event_id;
+            }
+            this.handlePayload(conn, payload);
+          } catch {
+            // ignore malformed payloads
+          }
+        };
+        es.onmessage = (evt) => {
+          handleRealtimeEvent(evt.data);
+        };
+        es.addEventListener('gateway', (evt) => {
+          const msg = evt as MessageEvent<string>;
+          handleRealtimeEvent(msg.data);
+        });
+
+        es.onerror = () => {
+          if (!this.isCurrentConnection(conn) || conn.eventSource !== es) return;
+          conn.connecting = false;
+          conn.connected = false;
+          conn.eventSource = null;
+          es.close();
+          if (conn.serverId !== LOCAL_SERVER_ID) {
+            useServerListStore.getState().setConnected(conn.serverId, false);
+          }
+          this.cleanupConnection(conn);
+          if (conn.allowReconnect) {
+            this.reconnectGateway(conn);
+          } else {
+            this.syncUiConnectionStatus();
+          }
+        };
+      } catch {
+        if (!this.isCurrentConnection(conn)) return;
+        conn.connecting = false;
+        conn.connected = false;
+        if (conn.allowReconnect) {
+          this.reconnectGateway(conn);
+        } else {
+          this.syncUiConnectionStatus();
+        }
+      }
+    })();
+  }
+
   /** Connect WebSocket gateway for a server */
   private connectGateway(conn: ServerConnection): void {
     if (!this.isCurrentConnection(conn)) return;
-    const token = useServerListStore.getState().getServer(conn.serverId)?.token;
+    const token = this.tokenForConnection(conn);
     if (!token) return;
 
     if (conn.reconnectTimer) {
@@ -271,6 +523,7 @@ class ConnectionManager {
     const wsBase = conn.serverUrl.replace(/\/+$/, '').replace(/^http/, 'ws');
     const wsUrl = `${wsBase}/gateway`;
 
+    conn.connecting = true;
     conn.ws = new WebSocket(wsUrl);
     this.syncUiConnectionStatus();
     conn.allowReconnect = true;
@@ -281,12 +534,15 @@ class ConnectionManager {
         activeWs.close();
         return;
       }
+      conn.connecting = false;
       conn.connected = true;
       if (conn.reconnectTimer) {
         clearTimeout(conn.reconnectTimer);
         conn.reconnectTimer = null;
       }
-      useServerListStore.getState().setConnected(conn.serverId, true);
+      if (conn.serverId !== LOCAL_SERVER_ID) {
+        useServerListStore.getState().setConnected(conn.serverId, true);
+      }
       this.syncUiConnectionStatus();
     };
 
@@ -303,8 +559,11 @@ class ConnectionManager {
     activeWs.onclose = () => {
       if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
       conn.ws = null;
+      conn.connecting = false;
       conn.connected = false;
-      useServerListStore.getState().setConnected(conn.serverId, false);
+      if (conn.serverId !== LOCAL_SERVER_ID) {
+        useServerListStore.getState().setConnected(conn.serverId, false);
+      }
       this.cleanupConnection(conn);
       if (conn.allowReconnect) {
         this.reconnectGateway(conn);
@@ -315,6 +574,7 @@ class ConnectionManager {
 
     activeWs.onerror = () => {
       if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
+      conn.connecting = false;
       activeWs.close();
     };
   }
@@ -340,17 +600,33 @@ class ConnectionManager {
         this.handleDispatch(conn, payload.t!, payload.d);
         break;
       case 7: // RECONNECT
-        conn.ws?.close();
+        if (this.useRealtimeV2) {
+          conn.eventSource?.close();
+          conn.eventSource = null;
+          conn.connected = false;
+          conn.connecting = false;
+          this.reconnectGateway(conn);
+        } else {
+          conn.ws?.close();
+        }
         break;
       case 9: // INVALID_SESSION
         conn.sessionId = null;
-        setTimeout(() => this.identify(conn), 1000 + Math.random() * 4000);
+        if (this.useRealtimeV2) {
+          conn.eventSource?.close();
+          conn.eventSource = null;
+          conn.connected = false;
+          conn.connecting = false;
+          this.reconnectGateway(conn);
+        } else {
+          setTimeout(() => this.identify(conn), 1000 + Math.random() * 4000);
+        }
         break;
     }
   }
 
   private identify(conn: ServerConnection): void {
-    const token = useServerListStore.getState().getServer(conn.serverId)?.token;
+    const token = this.tokenForConnection(conn);
     if (!token) return;
 
     if (conn.sessionId) {
@@ -369,271 +645,37 @@ class ConnectionManager {
   private startHeartbeat(conn: ServerConnection): void {
     if (conn.heartbeatTimer) clearInterval(conn.heartbeatTimer);
     conn.heartbeatTimer = setInterval(() => {
-      conn.lastHeartbeatSent = Date.now();
-      conn.missedAcks++;
       if (conn.missedAcks >= 3) {
         conn.ws?.close();
         return;
       }
+      conn.lastHeartbeatSent = Date.now();
+      conn.missedAcks++;
       this.send(conn, { op: 1, d: conn.sequence });
     }, conn.heartbeatInterval!);
   }
 
-  /* eslint-disable @typescript-eslint/no-explicit-any */
-  private handleDispatch(conn: ServerConnection, event: string, data: any): void {
-    // Dispatch events are the same as before, but now they can come from any server.
-    // Since guild/channel/message IDs are unique snowflakes per server, the existing
-    // stores handle this naturally â€” data from different servers has different IDs.
-    switch (event) {
-      case GatewayEvents.READY:
-        conn.sessionId = data.session_id;
-        conn.reconnectAttempts = 0;
-        this.flushPendingMessages(conn);
-        this.syncUiConnectionStatus();
-        useUIStore.getState().setServerRestarting(false);
-
-        // Update server info with actual name
-        if (data.guilds?.length > 0) {
-          // Server name could come from guild or server info
-        }
-
-        // Update auth store for backward compat
-        if (data.user) {
-          useAuthStore.setState({ user: data.user });
-        }
-
-        data.guilds?.forEach((g: any) => {
-          useGuildStore.getState().addGuild({
-            ...g,
-            created_at: g.created_at ?? new Date().toISOString(),
-            member_count: g.member_count ?? 0,
-            features: g.features ?? [],
-            default_channel_id: g.channels?.find((c: any) => c.channel_type === 0)?.id ?? null,
-          });
-          g.channels?.forEach((c: any) => {
-            useChannelStore.getState().addChannel({
-              ...c,
-              guild_id: c.guild_id ?? g.id,
-              type: c.channel_type ?? c.type ?? 0,
-              channel_type: c.channel_type ?? c.type ?? 0,
-              nsfw: c.nsfw ?? false,
-              position: c.position ?? 0,
-              created_at: c.created_at ?? new Date().toISOString(),
-            });
-          });
-          useVoiceStore.getState().loadVoiceStates(g.id, g.voice_states ?? []);
-          if (g.presences?.length) {
-            for (const p of g.presences) {
-              usePresenceStore.getState().updatePresence(p, conn.serverId);
-            }
-          }
-          void useMemberStore.getState().fetchMembers(g.id);
-        });
-
-        // Set our own presence to online. The server dispatches PRESENCE_UPDATE
-        // before our session starts listening, so we never receive our own
-        // online event â€” set it locally from the READY user data.
-        if (data.user?.id) {
-          usePresenceStore.getState().updatePresence({
-            user_id: data.user.id,
-            status: 'online',
-            activities: [],
-          }, conn.serverId);
-        }
-        break;
-
-      case GatewayEvents.MESSAGE_CREATE:
-        useMessageStore.getState().addMessage(data.channel_id, data);
-        useChannelStore.getState().updateLastMessageId(data.channel_id, data.id);
-        // Desktop notification for messages not from self and not in focused channel
-        if (notificationsEnabled()) {
-          const currentUserId = useAuthStore.getState().user?.id;
-          const authorId = data.author?.id ?? data.user_id;
-          const focusedChannelId = useChannelStore.getState().selectedChannelId;
-          const isDocumentFocused = typeof document !== 'undefined' && document.hasFocus();
-          if (
-            authorId !== currentUserId &&
-            !(isDocumentFocused && focusedChannelId === data.channel_id)
-          ) {
-            const channelName = useChannelStore.getState().channels.find(
-              (c) => c.id === data.channel_id,
-            )?.name;
-            const authorName = data.author?.username ?? 'Someone';
-            const title = channelName ? `#${channelName}` : `DM from ${authorName}`;
-            const body = data.e2ee
-              ? '[Encrypted message]'
-              : (data.content || '').slice(0, 200) || '(attachment)';
-            void sendNotification(title, body);
-          }
-        }
-        break;
-      case GatewayEvents.MESSAGE_UPDATE:
-        useMessageStore.getState().updateMessage(data.channel_id, data);
-        break;
-      case GatewayEvents.MESSAGE_DELETE:
-        useMessageStore.getState().removeMessage(data.channel_id, data.id);
-        break;
-      case GatewayEvents.MESSAGE_DELETE_BULK:
-        if (data.ids?.length) {
-          useMessageStore.getState().removeMessages(data.channel_id, data.ids);
-        }
-        break;
-
-      case GatewayEvents.GUILD_CREATE:
-        useGuildStore.getState().addGuild(data);
-        break;
-      case GatewayEvents.GUILD_UPDATE:
-        useGuildStore.getState().updateGuildData(data.id, data);
-        break;
-      case GatewayEvents.GUILD_DELETE:
-        useGuildStore.getState().removeGuild(data.id);
-        break;
-
-      case GatewayEvents.CHANNEL_CREATE:
-        useChannelStore.getState().addChannel(data);
-        break;
-      case GatewayEvents.CHANNEL_UPDATE:
-        useChannelStore.getState().updateChannel(data);
-        break;
-      case GatewayEvents.CHANNEL_DELETE:
-        useChannelStore.getState().removeChannel(data.guild_id, data.id);
-        break;
-
-      case GatewayEvents.THREAD_CREATE:
-        useChannelStore.getState().addChannel({
-          ...data,
-          type: data.channel_type ?? data.type ?? 6,
-          channel_type: data.channel_type ?? data.type ?? 6,
-          nsfw: data.nsfw ?? false,
-          position: data.position ?? 0,
-          created_at: data.created_at ?? new Date().toISOString(),
-        });
-        break;
-      case GatewayEvents.THREAD_UPDATE:
-        useChannelStore.getState().updateChannel({
-          ...data,
-          type: data.channel_type ?? data.type ?? 6,
-          channel_type: data.channel_type ?? data.type ?? 6,
-          nsfw: data.nsfw ?? false,
-          position: data.position ?? 0,
-          created_at: data.created_at ?? new Date().toISOString(),
-        });
-        break;
-      case GatewayEvents.THREAD_DELETE: {
-        const channelsByGuild = useChannelStore.getState().channelsByGuild;
-        let fallbackGuildId = '';
-        for (const [gid, list] of Object.entries(channelsByGuild)) {
-          if (list.some((ch) => ch.id === data.id)) {
-            fallbackGuildId = gid;
-            break;
-          }
-        }
-        useChannelStore
-          .getState()
-          .removeChannel(data.guild_id || fallbackGuildId, data.id);
-        break;
-      }
-
-      case GatewayEvents.GUILD_MEMBER_ADD:
-        if (data.user) {
-          useMemberStore.getState().addMember(data.guild_id, data);
-        } else {
-          void useMemberStore.getState().fetchMembers(data.guild_id);
-        }
-        break;
-      case GatewayEvents.GUILD_MEMBER_REMOVE:
-        if (data.user?.id || data.user_id) {
-          useMemberStore.getState().removeMember(data.guild_id, data.user?.id ?? data.user_id);
-        } else {
-          void useMemberStore.getState().fetchMembers(data.guild_id);
-        }
-        break;
-      case GatewayEvents.GUILD_MEMBER_UPDATE:
-        if (data.user?.id) {
-          useMemberStore.getState().updateMember(data.guild_id, data);
-        } else {
-          void useMemberStore.getState().fetchMembers(data.guild_id);
-        }
-        break;
-
-      case GatewayEvents.PRESENCE_UPDATE:
-        usePresenceStore.getState().updatePresence(data, conn.serverId);
-        break;
-
-      case GatewayEvents.VOICE_STATE_UPDATE:
-        useVoiceStore.getState().handleVoiceStateUpdate(data);
-        break;
-
-      case GatewayEvents.MESSAGE_REACTION_ADD: {
-        const currentUserId = useAuthStore.getState().user?.id || '';
-        useMessageStore.getState().handleReactionAdd(
-          data.channel_id, data.message_id, data.emoji?.name || data.emoji, data.user_id, currentUserId
-        );
-        break;
-      }
-      case GatewayEvents.MESSAGE_REACTION_REMOVE: {
-        const currentUserId2 = useAuthStore.getState().user?.id || '';
-        useMessageStore.getState().handleReactionRemove(
-          data.channel_id, data.message_id, data.emoji?.name || data.emoji, data.user_id, currentUserId2
-        );
-        break;
-      }
-      case GatewayEvents.POLL_VOTE_ADD:
-      case GatewayEvents.POLL_VOTE_REMOVE:
-        if (data.poll) {
-          usePollStore.getState().upsertPoll(data.poll);
-        }
-        break;
-
-      case GatewayEvents.CHANNEL_PINS_UPDATE:
-        if (data.channel_id) {
-          useMessageStore.getState().fetchPins(data.channel_id);
-        }
-        break;
-
-      case GatewayEvents.TYPING_START:
-        if (data.channel_id && data.user_id) {
-          useTypingStore.getState().addTyping(data.channel_id, data.user_id);
-        }
-        break;
-
-      case GatewayEvents.USER_UPDATE:
-        useAuthStore.getState().fetchUser();
-        break;
-
-      case GatewayEvents.RELATIONSHIP_ADD:
-      case GatewayEvents.RELATIONSHIP_REMOVE:
-        void useRelationshipStore.getState().fetchRelationships();
-        break;
-
-      case GatewayEvents.GUILD_SCHEDULED_EVENT_CREATE:
-      case GatewayEvents.GUILD_SCHEDULED_EVENT_UPDATE:
-      case GatewayEvents.GUILD_SCHEDULED_EVENT_DELETE:
-      case GatewayEvents.GUILD_SCHEDULED_EVENT_USER_ADD:
-      case GatewayEvents.GUILD_SCHEDULED_EVENT_USER_REMOVE:
-        window.dispatchEvent(new CustomEvent('paracord:scheduled-events-changed', {
-          detail: { guild_id: data.guild_id },
-        }));
-        break;
-
-      case GatewayEvents.GUILD_EMOJIS_UPDATE:
-        window.dispatchEvent(new CustomEvent('paracord:emojis-changed', {
-          detail: { guild_id: data.guild_id },
-        }));
-        break;
-
-      case GatewayEvents.SERVER_RESTART:
-        useUIStore.getState().setServerRestarting(true);
-        break;
+  private handleDispatch(conn: ServerConnection, event: string, data: unknown): void {
+    if (event === GatewayEvents.READY) {
+      const ready = data as { session_id?: string };
+      conn.sessionId = ready.session_id ?? null;
+      conn.reconnectAttempts = 0;
+      this.flushPendingMessages(conn);
+      this.syncUiConnectionStatus();
     }
+    dispatchGatewayEvent(conn.serverId, event, data);
   }
-  /* eslint-enable @typescript-eslint/no-explicit-any */
 
   private send(conn: ServerConnection, data: unknown): void {
     if (conn.ws?.readyState === WebSocket.OPEN) {
       conn.ws.send(JSON.stringify(data));
-    } else if (conn.allowReconnect && conn.pendingMessages.length < ConnectionManager.MAX_PENDING_MESSAGES) {
+    } else if (
+      conn.allowReconnect &&
+      conn.pendingMessages.length < ConnectionManager.MAX_PENDING_MESSAGES
+    ) {
       conn.pendingMessages.push(data);
+    } else if (conn.allowReconnect) {
+      console.warn('[gateway] outbound queue full, dropping message');
     }
   }
 
@@ -642,6 +684,24 @@ class ConnectionManager {
     for (const msg of messages) {
       this.send(conn, msg);
     }
+  }
+
+  private async postRealtimeCommand(
+    conn: ServerConnection,
+    commandType: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const url = `${conn.serverUrl.replace(/\/+$/, '')}/api/v2/rt/commands`;
+    const commandId = `${commandType}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    await conn.apiClient.post(
+      url,
+      {
+        command_id: commandId,
+        type: commandType,
+        payload,
+      },
+      { timeout: 10_000 },
+    );
   }
 
   /** Send a presence update on a specific server */
@@ -653,6 +713,14 @@ class ConnectionManager {
   ): void {
     const conn = this.connections.get(serverId);
     if (!conn) return;
+    if (this.useRealtimeV2) {
+      void this.postRealtimeCommand(conn, 'presence_update', {
+        status,
+        activities,
+        custom_status: customStatus,
+      }).catch(() => {});
+      return;
+    }
     this.send(conn, {
       op: 3,
       d: {
@@ -674,22 +742,56 @@ class ConnectionManager {
   ): void {
     const conn = this.connections.get(serverId);
     if (!conn) return;
+    if (this.useRealtimeV2) {
+      void this.postRealtimeCommand(conn, 'voice_state_update', {
+        guild_id: guildId,
+        channel_id: channelId,
+        self_mute: selfMute,
+        self_deaf: selfDeaf,
+      }).catch(() => {});
+      return;
+    }
     this.send(conn, {
       op: 4,
       d: { guild_id: guildId, channel_id: channelId, self_mute: selfMute, self_deaf: selfDeaf },
     });
   }
 
+  updatePresenceAll(
+    status: string,
+    activities: Activity[] = [],
+    customStatus: string | null = null,
+  ): void {
+    for (const conn of this.getAllConnections()) {
+      this.updatePresence(conn.serverId, status, activities, customStatus);
+    }
+  }
+
+  updateVoiceStateAll(
+    guildId: string | null,
+    channelId: string | null,
+    selfMute: boolean,
+    selfDeaf: boolean,
+  ): void {
+    for (const conn of this.getAllConnections()) {
+      this.updateVoiceState(conn.serverId, guildId, channelId, selfMute, selfDeaf);
+    }
+  }
+
   private reconnectGateway(conn: ServerConnection): void {
     if (!conn.allowReconnect || conn.reconnectTimer) return;
     if (!this.isCurrentConnection(conn)) return;
+    if (this.offline) {
+      this.syncUiConnectionStatus();
+      return;
+    }
     const delay = Math.min(1000 * Math.pow(2, Math.min(conn.reconnectAttempts, 5)), 30000);
     conn.reconnectAttempts++;
     conn.reconnectTimer = setTimeout(() => {
       conn.reconnectTimer = null;
       if (!conn.allowReconnect) return;
       if (!this.isCurrentConnection(conn)) return;
-      this.connectGateway(conn);
+      this.connectRealtime(conn);
     }, delay);
     this.syncUiConnectionStatus();
   }
@@ -707,25 +809,55 @@ class ConnectionManager {
     if (!conn) return;
     conn.allowReconnect = false;
     conn.pendingMessages = [];
+    conn.connecting = false;
     if (conn.reconnectTimer) {
       clearTimeout(conn.reconnectTimer);
       conn.reconnectTimer = null;
     }
     this.cleanupConnection(conn);
     conn.ws?.close();
+    conn.eventSource?.close();
+    conn.eventSource = null;
     conn.ws = null;
     conn.connected = false;
-    useServerListStore.getState().setConnected(serverId, false);
+    if (serverId !== LOCAL_SERVER_ID) {
+      useServerListStore.getState().setConnected(serverId, false);
+    }
     this.connections.delete(serverId);
     this.syncUiConnectionStatus();
   }
 
   /** Connect to all saved servers */
   async connectAll(): Promise<void> {
+    if (this.offline) {
+      this.syncUiConnectionStatus();
+      return;
+    }
     const servers = useServerListStore.getState().servers;
-    await Promise.allSettled(
-      servers.map((s) => this.connectServer(s.id))
-    );
+    const keepIds = new Set<string>();
+    if (servers.length === 0) {
+      keepIds.add(LOCAL_SERVER_ID);
+      await this.connectLocal();
+    } else {
+      await Promise.allSettled(servers.map((s) => this.connectServer(s.id)));
+      for (const server of servers) {
+        keepIds.add(server.id);
+      }
+      if (this.connections.has(LOCAL_SERVER_ID)) {
+        this.disconnectServer(LOCAL_SERVER_ID);
+      }
+    }
+
+    for (const serverId of Array.from(this.connections.keys())) {
+      if (!keepIds.has(serverId)) {
+        this.disconnectServer(serverId);
+      }
+    }
+  }
+
+  /** Reconcile current runtime connections with the latest server list state. */
+  async syncServers(): Promise<void> {
+    await this.connectAll();
   }
 
   /** Disconnect from all servers */

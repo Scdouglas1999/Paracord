@@ -76,6 +76,8 @@ fn federation_service() -> FederationService {
 const MAX_CONTENT_SIZE_BYTES: usize = 1_048_576;
 /// Maximum JSON nesting depth for inbound federation event content.
 const MAX_CONTENT_DEPTH: usize = 32;
+/// Maximum number of elements/keys allowed in a single JSON collection.
+const MAX_COLLECTION_LENGTH: usize = 10_000;
 
 fn validate_federation_content(content: &Value) -> Result<(), ApiError> {
     let serialized = serde_json::to_vec(content).unwrap_or_default();
@@ -85,20 +87,42 @@ fn validate_federation_content(content: &Value) -> Result<(), ApiError> {
             MAX_CONTENT_SIZE_BYTES
         )));
     }
-    if json_depth(content) > MAX_CONTENT_DEPTH {
-        return Err(ApiError::BadRequest(format!(
-            "federation event content exceeds maximum nesting depth of {}",
-            MAX_CONTENT_DEPTH
-        )));
+    match validate_json_structure(content) {
+        Err(reason) => return Err(ApiError::BadRequest(reason.to_string())),
+        Ok(depth) if depth > MAX_CONTENT_DEPTH => {
+            return Err(ApiError::BadRequest(format!(
+                "federation event content exceeds maximum nesting depth of {}",
+                MAX_CONTENT_DEPTH
+            )));
+        }
+        _ => {}
     }
     Ok(())
 }
 
-fn json_depth(value: &Value) -> usize {
+fn validate_json_structure(value: &Value) -> Result<usize, &'static str> {
     match value {
-        Value::Array(arr) => 1 + arr.iter().map(json_depth).max().unwrap_or(0),
-        Value::Object(obj) => 1 + obj.values().map(json_depth).max().unwrap_or(0),
-        _ => 0,
+        Value::Array(arr) => {
+            if arr.len() > MAX_COLLECTION_LENGTH {
+                return Err("federation event content array exceeds maximum element count");
+            }
+            let mut max_child = 0;
+            for child in arr {
+                max_child = max_child.max(validate_json_structure(child)?);
+            }
+            Ok(1 + max_child)
+        }
+        Value::Object(obj) => {
+            if obj.len() > MAX_COLLECTION_LENGTH {
+                return Err("federation event content object exceeds maximum key count");
+            }
+            let mut max_child = 0;
+            for child in obj.values() {
+                max_child = max_child.max(validate_json_structure(child)?);
+            }
+            Ok(1 + max_child)
+        }
+        _ => Ok(0),
     }
 }
 
@@ -2610,5 +2634,25 @@ mod tests {
         assert!(ensure_federation_guild_allowed(20).is_ok());
         assert!(ensure_federation_guild_allowed(99).is_err());
         std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
+    }
+
+    #[test]
+    fn federation_content_rejects_oversized_collection() {
+        let oversized = Value::Array(
+            (0..(MAX_COLLECTION_LENGTH + 1))
+                .map(|idx| Value::Number(idx.into()))
+                .collect(),
+        );
+        assert!(validate_federation_content(&oversized).is_err());
+    }
+
+    #[test]
+    fn federation_content_accepts_reasonable_collection() {
+        let ok = Value::Array(
+            (0..5_000)
+                .map(|idx| Value::Number(idx.into()))
+                .collect(),
+        );
+        assert!(validate_federation_content(&ok).is_ok());
     }
 }

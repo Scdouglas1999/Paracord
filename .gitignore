@@ -85,6 +85,10 @@ client/ui_dump.html
 client/ui_mock_dump.html
 client/ui_mock_screenshot.png
 
+# Local logs & release staging
+/logs/
+/release-staging/
+
 # Local security docs (private working notes)
 SECURITY_AUDIT*.md
 SECURITY_REMEDIATION_TRACKER.md

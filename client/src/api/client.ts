@@ -1,6 +1,7 @@
 import axios, { type AxiosError, type AxiosInstance } from 'axios';
 import { resolveApiBaseUrl } from '../lib/apiBaseUrl';
-import { clearLegacyPersistedAuth, getAccessToken, setAccessToken } from '../lib/authToken';
+import { clearLegacyPersistedAuth, getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from '../lib/authToken';
+import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { toast } from '../stores/toastStore';
 
@@ -107,22 +108,30 @@ apiClient.interceptors.response.use(
     ) {
       original._retry = true;
       try {
-        const refresh = await apiClient.post<{ token: string }>('/auth/refresh');
+        const refreshToken = getRefreshToken();
+        const refresh = await apiClient.post<{ token: string; refresh_token?: string }>(
+          '/auth/refresh',
+          refreshToken ? { refresh_token: refreshToken } : undefined,
+        );
         const nextToken = refresh.data.token;
         setAccessToken(nextToken);
+        if (refresh.data.refresh_token) setRefreshToken(refresh.data.refresh_token);
         original.headers = original.headers ?? {};
         original.headers.Authorization = `Bearer ${nextToken}`;
         return apiClient.request(original);
       } catch {
         clearPersistedAuth();
-        window.location.href = '/login';
+        // Clear auth state so ProtectedRoute redirects to /login via React
+        // Router.  A hard `window.location.href` navigation would kill all
+        // active WebSocket connections (voice, gateway) mid-call.
+        useAuthStore.setState({ token: null, user: null });
         return Promise.reject(err);
       }
     }
 
     if (err.response?.status === 401 && original?.url !== '/auth/refresh') {
       clearPersistedAuth();
-      window.location.href = '/login';
+      useAuthStore.setState({ token: null, user: null });
     }
     return Promise.reject(err);
   }

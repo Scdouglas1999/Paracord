@@ -23,6 +23,9 @@ vi.mock('../api/client', () => ({
     return 'An unexpected error occurred';
   }),
 }));
+vi.mock('../lib/apiBaseUrl', () => ({
+  resolveApiBaseUrl: () => 'http://localhost:8090/api/v1',
+}));
 
 import { useGuildStore } from './guildStore';
 
@@ -66,7 +69,9 @@ describe('guildStore', () => {
 
       await useGuildStore.getState().fetchGuilds();
       const state = useGuildStore.getState();
-      expect(state.guilds).toEqual(guilds);
+      expect(state.guilds).toEqual(
+        guilds.map((g) => ({ ...g, server_url: 'http://localhost:8090/api/v1' }))
+      );
       expect(state.isLoading).toBe(false);
     });
 
@@ -112,7 +117,7 @@ describe('guildStore', () => {
       mockGuildApi.create.mockResolvedValue({ data: newGuild });
 
       const result = await useGuildStore.getState().createGuild('New Server');
-      expect(result).toEqual(newGuild);
+      expect(result).toEqual({ ...newGuild, server_url: 'http://localhost:8090/api/v1' });
       expect(useGuildStore.getState().guilds).toHaveLength(1);
       expect(useGuildStore.getState().guilds[0].name).toBe('New Server');
     });

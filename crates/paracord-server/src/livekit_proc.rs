@@ -206,6 +206,36 @@ pub async fn start_livekit(
     let binary = match find_livekit_binary() {
         Some(path) => {
             tracing::info!("Found LiveKit binary at: {}", path.display());
+            // Capture runtime binary version to quickly diagnose client/server
+            // signaling compatibility issues.
+            let version_output = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                Command::new(&path)
+                    .arg("--version")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output(),
+            )
+            .await;
+            match version_output {
+                Ok(Ok(output)) => {
+                    let mut version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if version.is_empty() {
+                        version = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    }
+                    if version.is_empty() {
+                        tracing::warn!("LiveKit version check returned empty output");
+                    } else {
+                        tracing::info!("LiveKit binary version: {}", version);
+                    }
+                }
+                Ok(Err(err)) => {
+                    tracing::warn!("Failed to query LiveKit version: {}", err);
+                }
+                Err(_) => {
+                    tracing::warn!("LiveKit version check timed out");
+                }
+            }
             path
         }
         None => {

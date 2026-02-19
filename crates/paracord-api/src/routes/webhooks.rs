@@ -1,6 +1,7 @@
 use axum::{
+    body::Bytes,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use paracord_core::AppState;
@@ -231,28 +232,189 @@ pub struct ExecuteWebhookRequest {
     pub avatar_url: Option<String>,
 }
 
+fn format_github_event(event_type: &str, payload: &Value) -> String {
+    match event_type {
+        "push" => {
+            let pusher = payload["pusher"]["name"].as_str().unwrap_or("someone");
+            let ref_name = payload["ref"].as_str().unwrap_or("unknown");
+            let branch = ref_name.strip_prefix("refs/heads/").unwrap_or(ref_name);
+            let repo = payload["repository"]["full_name"]
+                .as_str()
+                .unwrap_or("unknown/repo");
+            let commits = payload["commits"].as_array();
+            let commit_count = commits.map(|c| c.len()).unwrap_or(0);
+            let mut msg = format!(
+                "**{}** pushed {} commit{} to `{}` in **{}**",
+                pusher,
+                commit_count,
+                if commit_count == 1 { "" } else { "s" },
+                branch,
+                repo
+            );
+            if let Some(commits) = commits {
+                for commit in commits.iter().take(5) {
+                    let sha = commit["id"]
+                        .as_str()
+                        .unwrap_or("")
+                        .get(..7)
+                        .unwrap_or("");
+                    let message = commit["message"]
+                        .as_str()
+                        .unwrap_or("")
+                        .lines()
+                        .next()
+                        .unwrap_or("");
+                    let url = commit["url"].as_str().unwrap_or("");
+                    msg.push_str(&format!("\n> [`{}`]({}) {}", sha, url, message));
+                }
+                if commits.len() > 5 {
+                    msg.push_str(&format!(
+                        "\n> ... and {} more commits",
+                        commits.len() - 5
+                    ));
+                }
+            }
+            msg
+        }
+        "pull_request" => {
+            let action = payload["action"].as_str().unwrap_or("updated");
+            let pr = &payload["pull_request"];
+            let user = payload["sender"]["login"].as_str().unwrap_or("someone");
+            let title = pr["title"].as_str().unwrap_or("Untitled");
+            let number = pr["number"].as_u64().unwrap_or(0);
+            let url = pr["html_url"].as_str().unwrap_or("");
+            let repo = payload["repository"]["full_name"]
+                .as_str()
+                .unwrap_or("unknown/repo");
+            let merged = pr["merged"].as_bool().unwrap_or(false);
+            let effective_action = if action == "closed" && merged {
+                "merged"
+            } else {
+                action
+            };
+            format!(
+                "**{}** {} PR [#{}]({}) in **{}**: {}",
+                user, effective_action, number, url, repo, title
+            )
+        }
+        "issues" => {
+            let action = payload["action"].as_str().unwrap_or("updated");
+            let issue = &payload["issue"];
+            let user = payload["sender"]["login"].as_str().unwrap_or("someone");
+            let title = issue["title"].as_str().unwrap_or("Untitled");
+            let number = issue["number"].as_u64().unwrap_or(0);
+            let url = issue["html_url"].as_str().unwrap_or("");
+            let repo = payload["repository"]["full_name"]
+                .as_str()
+                .unwrap_or("unknown/repo");
+            format!(
+                "**{}** {} issue [#{}]({}) in **{}**: {}",
+                user, action, number, url, repo, title
+            )
+        }
+        "issue_comment" => {
+            let user = payload["sender"]["login"].as_str().unwrap_or("someone");
+            let issue = &payload["issue"];
+            let number = issue["number"].as_u64().unwrap_or(0);
+            let url = payload["comment"]["html_url"].as_str().unwrap_or("");
+            let repo = payload["repository"]["full_name"]
+                .as_str()
+                .unwrap_or("unknown/repo");
+            let body = payload["comment"]["body"].as_str().unwrap_or("");
+            let preview = if body.len() > 200 {
+                format!("{}...", &body[..200])
+            } else {
+                body.to_string()
+            };
+            format!(
+                "**{}** commented on [#{}]({}) in **{}**\n> {}",
+                user, number, url, repo, preview
+            )
+        }
+        "create" => {
+            let user = payload["sender"]["login"].as_str().unwrap_or("someone");
+            let ref_type = payload["ref_type"].as_str().unwrap_or("reference");
+            let ref_name = payload["ref"].as_str().unwrap_or("unknown");
+            let repo = payload["repository"]["full_name"]
+                .as_str()
+                .unwrap_or("unknown/repo");
+            format!(
+                "**{}** created {} `{}` in **{}**",
+                user, ref_type, ref_name, repo
+            )
+        }
+        "delete" => {
+            let user = payload["sender"]["login"].as_str().unwrap_or("someone");
+            let ref_type = payload["ref_type"].as_str().unwrap_or("reference");
+            let ref_name = payload["ref"].as_str().unwrap_or("unknown");
+            let repo = payload["repository"]["full_name"]
+                .as_str()
+                .unwrap_or("unknown/repo");
+            format!(
+                "**{}** deleted {} `{}` in **{}**",
+                user, ref_type, ref_name, repo
+            )
+        }
+        "star" => {
+            let action = payload["action"].as_str().unwrap_or("starred");
+            let user = payload["sender"]["login"].as_str().unwrap_or("someone");
+            let repo = payload["repository"]["full_name"]
+                .as_str()
+                .unwrap_or("unknown/repo");
+            let stars = payload["repository"]["stargazers_count"]
+                .as_u64()
+                .unwrap_or(0);
+            if action == "created" {
+                format!("**{}** starred **{}** (now {} stars)", user, repo, stars)
+            } else {
+                format!("**{}** unstarred **{}** ({} stars)", user, repo, stars)
+            }
+        }
+        _ => {
+            let repo = payload["repository"]["full_name"]
+                .as_str()
+                .unwrap_or("unknown/repo");
+            let user = payload["sender"]["login"].as_str().unwrap_or("someone");
+            format!("**{}**: `{}` event in **{}**", user, event_type, repo)
+        }
+    }
+}
+
 /// Execute a webhook - no auth required, uses token in path.
 pub async fn execute_webhook(
     State(state): State<AppState>,
     Path((webhook_id, token)): Path<(i64, String)>,
-    Json(body): Json<ExecuteWebhookRequest>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let webhook = paracord_db::webhooks::get_webhook_by_id_and_token(&state.db, webhook_id, &token)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    let content = body.content.trim();
-    if content.is_empty() {
-        return Err(ApiError::BadRequest("Content must not be empty".into()));
-    }
-    if content.len() > 2000 {
-        return Err(ApiError::BadRequest(
-            "Content must be 2000 characters or fewer".into(),
-        ));
-    }
-
-    let display_name = body.username.as_deref().unwrap_or(&webhook.name);
+    // Check for GitHub webhook
+    let (content, display_name) = if let Some(github_event) = headers.get("X-GitHub-Event") {
+        let event_type = github_event.to_str().unwrap_or("unknown");
+        let payload: Value = serde_json::from_slice(&body)
+            .map_err(|_| ApiError::BadRequest("Invalid JSON payload".into()))?;
+        let content = format_github_event(event_type, &payload);
+        (content, "GitHub".to_string())
+    } else {
+        // Normal webhook execution
+        let req: ExecuteWebhookRequest = serde_json::from_slice(&body)
+            .map_err(|_| ApiError::BadRequest("Invalid JSON payload".into()))?;
+        let content = req.content.trim().to_string();
+        if content.is_empty() {
+            return Err(ApiError::BadRequest("Content must not be empty".into()));
+        }
+        if content.len() > 2000 {
+            return Err(ApiError::BadRequest(
+                "Content must be 2000 characters or fewer".into(),
+            ));
+        }
+        let name = req.username.unwrap_or_else(|| webhook.name.clone());
+        (content, name)
+    };
 
     // Create the message using the webhook creator as the author
     let msg_id = paracord_util::snowflake::generate(1);
@@ -263,7 +425,7 @@ pub async fn execute_webhook(
         msg_id,
         webhook.channel_id,
         author_id,
-        content,
+        &content,
         0, // message_type: 0 = default
         None,
     )

@@ -79,7 +79,8 @@ pub async fn create_message_with_meta(
     nonce: Option<&str>,
     e2ee_header: Option<&str>,
 ) -> Result<MessageRow, DbError> {
-    let row = sqlx::query_as::<_, MessageRow>(
+    let normalized_nonce = nonce.map(str::trim).filter(|value| !value.is_empty());
+    let row = match sqlx::query_as::<_, MessageRow>(
         "INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags, reference_id, e2ee_header)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at",
@@ -88,21 +89,72 @@ pub async fn create_message_with_meta(
     .bind(channel_id)
     .bind(author_id)
     .bind(content)
-    .bind(nonce)
+    .bind(normalized_nonce)
     .bind(message_type)
     .bind(flags)
     .bind(reference_id)
     .bind(e2ee_header)
     .fetch_one(pool)
-    .await?;
+    .await
+    {
+        Ok(row) => row,
+        Err(err) if normalized_nonce.is_some() && is_nonce_dedup_unique_violation(&err) => {
+            let existing =
+                get_message_by_channel_author_nonce(pool, channel_id, author_id, normalized_nonce.unwrap())
+                    .await?;
+            if let Some(existing) = existing {
+                return Ok(existing);
+            }
+            return Err(DbError::Sqlx(err));
+        }
+        Err(err) => return Err(DbError::Sqlx(err)),
+    };
 
     // Update last_message_id on the channel
     let _ = sqlx::query("UPDATE channels SET last_message_id = $1 WHERE id = $2")
-        .bind(id)
+        .bind(row.id)
         .bind(channel_id)
         .execute(pool)
         .await;
 
+    Ok(row)
+}
+
+fn is_nonce_dedup_unique_violation(err: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(db_err) = err else {
+        return false;
+    };
+
+    let code_binding = db_err.code();
+    let code = code_binding.as_deref().unwrap_or_default();
+    if code == "23505" || code == "2067" || code == "1555" {
+        return true;
+    }
+
+    let message = db_err.message().to_ascii_lowercase();
+    message.contains("idx_messages_nonce_dedup_unique")
+}
+
+async fn get_message_by_channel_author_nonce(
+    pool: &DbPool,
+    channel_id: i64,
+    author_id: i64,
+    nonce: &str,
+) -> Result<Option<MessageRow>, DbError> {
+    let row = sqlx::query_as::<_, MessageRow>(
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+         FROM messages
+         WHERE channel_id = $1
+           AND author_id = $2
+           AND nonce = $3
+         ORDER BY created_at ASC, id ASC
+         LIMIT 1",
+    )
+    .bind(channel_id)
+    .bind(author_id)
+    .bind(nonce)
+    .fetch_optional(pool)
+    .await?;
     Ok(row)
 }
 
@@ -781,6 +833,43 @@ mod tests {
         .unwrap();
         assert_eq!(msg.flags, 4);
         assert_eq!(msg.nonce.as_deref(), Some("nonce-1"));
+    }
+
+    #[tokio::test]
+    async fn test_create_message_with_meta_dedupes_by_nonce() {
+        let pool = test_pool().await;
+        let (user_id, _, channel_id) = setup_channel(&pool).await;
+        let first = create_message_with_meta(
+            &pool,
+            13010,
+            channel_id,
+            user_id,
+            "first",
+            0,
+            None,
+            0,
+            Some("same-nonce"),
+            None,
+        )
+        .await
+        .unwrap();
+        let second = create_message_with_meta(
+            &pool,
+            13011,
+            channel_id,
+            user_id,
+            "second",
+            0,
+            None,
+            0,
+            Some("same-nonce"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.content.as_deref(), Some("first"));
     }
 
     #[tokio::test]

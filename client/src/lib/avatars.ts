@@ -1,4 +1,5 @@
-import { API_BASE_URL } from './apiBaseUrl';
+import { resolveResourceUrl } from './apiBaseUrl';
+import { getAccessToken } from './authToken';
 
 // Discord-like default avatar colors
 const DEFAULT_AVATAR_COLORS = [
@@ -18,7 +19,7 @@ export function getUserAvatarUrl(
   avatarHash?: string | null
 ): string | null {
   if (!avatarHash) return null;
-  return `${API_BASE_URL}/users/${userId}/avatars/${avatarHash}`;
+  return resolveResourceUrl(`/api/v1/users/${userId}/avatars/${avatarHash}`, getAccessToken());
 }
 
 /**
@@ -30,7 +31,7 @@ export function getGuildIconUrl(
   iconHash?: string | null
 ): string | null {
   if (!iconHash) return null;
-  return `${API_BASE_URL}/guilds/${guildId}/icons/${iconHash}`;
+  return resolveResourceUrl(`/api/v1/guilds/${guildId}/icons/${iconHash}`, getAccessToken());
 }
 
 /**

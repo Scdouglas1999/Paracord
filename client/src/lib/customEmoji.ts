@@ -1,4 +1,4 @@
-import { API_BASE_URL } from './apiBaseUrl';
+import { resolveApiBaseUrl } from './apiBaseUrl';
 
 const CUSTOM_EMOJI_TOKEN_PATTERN = /^<(a?):([A-Za-z0-9_]{1,32}):([0-9]+)>$/;
 
@@ -10,7 +10,7 @@ export interface ParsedCustomEmojiToken {
 }
 
 function normalizedApiBase(): string {
-  return API_BASE_URL.replace(/\/+$/, '');
+  return resolveApiBaseUrl().replace(/\/+$/, '');
 }
 
 export function parseCustomEmojiToken(value: string): ParsedCustomEmojiToken | null {

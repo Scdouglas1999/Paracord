@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
-import { gateway } from '../gateway/connection';
-import { connectionManager } from '../lib/connectionManager';
+import { gateway, LOCAL_SERVER_ID } from '../gateway/manager';
 import { isTauri } from '../lib/tauriEnv';
 import {
   formatActivityLabel,
@@ -49,11 +48,12 @@ function buildActivity(app: ForegroundApplication, startedAt: string, appId: str
 }
 
 function publishPresence(status: Presence['status'], activities: Activity[]): void {
-  const activeConnections = connectionManager.getAllConnections().filter((conn) => conn.connected);
+  const activeConnections = gateway.getAllConnections().filter((conn) => conn.connected);
   if (activeConnections.length > 0) {
+    gateway.updatePresenceAll(status, activities);
     for (const conn of activeConnections) {
-      connectionManager.updatePresence(conn.serverId, status, activities);
-      const localServerUserId = useServerListStore.getState().getServer(conn.serverId)?.userId;
+      const localServerUserId = useServerListStore.getState().getServer(conn.serverId)?.userId
+        ?? (conn.serverId === LOCAL_SERVER_ID ? useAuthStore.getState().user?.id : null);
       if (localServerUserId) {
         usePresenceStore.getState().updatePresence({
           user_id: localServerUserId,
@@ -63,14 +63,7 @@ function publishPresence(status: Presence['status'], activities: Activity[]): vo
       }
     }
   } else {
-    gateway.updatePresence(status, activities);
-    const localUserId = useAuthStore.getState().user?.id;
-    if (!localUserId) return;
-    usePresenceStore.getState().updatePresence({
-      user_id: localUserId,
-      status,
-      activities,
-    });
+    gateway.updatePresenceAll(status, activities);
   }
 }
 
@@ -163,3 +156,5 @@ export function useActivityPresence() {
     };
   }, [token]);
 }
+
+

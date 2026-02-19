@@ -114,10 +114,9 @@ export function resolveApiBaseUrl(): string {
   // 2. Env variable
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
 
-  // 3. Stored server URL from connect screen
+  // 3. Stored server URL from connect screen.
   const serverUrl = getStoredServerUrl();
   if (serverUrl) {
-    // Strip trailing slash and append /api/v1
     return `${serverUrl.replace(/\/+$/, '')}/api/v1`;
   }
 
@@ -125,4 +124,49 @@ export function resolveApiBaseUrl(): string {
   return '/api/v1';
 }
 
+/** @deprecated Use resolveApiBaseUrl() for dynamic resolution instead. */
 export const API_BASE_URL = resolveApiBaseUrl();
+
+/**
+ * Build an absolute resource URL suitable for `<img>` src and similar
+ * browser-native fetches that cannot carry an Authorization header.
+ * Appends `?token=<access_token>` when the URL is cross-origin so the
+ * server can authenticate the request via query parameter.
+ *
+ * @param path - relative path, absolute path, or full URL
+ * @param token - access token to append for cross-origin auth (caller provides to avoid circular imports)
+ */
+export function resolveResourceUrl(path: string, token?: string | null): string {
+  const base = resolveApiBaseUrl();
+  let url: string;
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    url = path;
+  } else if (path.startsWith('/')) {
+    // Absolute path — prefix with the API base origin if available.
+    if (base.startsWith('http')) {
+      try {
+        const parsed = new URL(base);
+        url = `${parsed.origin}${path}`;
+      } catch {
+        url = path;
+      }
+    } else {
+      url = path;
+    }
+  } else {
+    url = `${base}/${path}`;
+  }
+  // Append token for cross-origin requests where cookies won't work.
+  if (token && url.startsWith('http')) {
+    try {
+      const parsed = new URL(url);
+      if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
+        parsed.searchParams.set('token', token);
+        return parsed.toString();
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return url;
+}

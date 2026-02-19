@@ -5,7 +5,9 @@ import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const proxyTarget = env.VITE_DEV_PROXY_TARGET || "http://localhost:8080";
+  // Default to HTTPS because the backend redirects HTTP→HTTPS when TLS is
+  // enabled (the default).  `secure: false` accepts the self-signed cert.
+  const proxyTarget = env.VITE_DEV_PROXY_TARGET || "https://localhost:8443";
 
   return {
     plugins: [
@@ -67,20 +69,24 @@ export default defineConfig(({ mode }) => {
         "/health": {
           target: proxyTarget,
           changeOrigin: true,
+          secure: false,
         },
         "/api": {
           target: proxyTarget,
           changeOrigin: true,
+          secure: false,
         },
         "/gateway": {
           target: proxyTarget,
           ws: true,
           changeOrigin: true,
+          secure: false,
         },
         "/livekit": {
           target: proxyTarget,
           ws: true,
           changeOrigin: true,
+          secure: false,
         },
       },
     },

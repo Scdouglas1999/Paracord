@@ -8,6 +8,7 @@ import { Permissions, hasPermission } from '../../types';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
+import { confirm } from '../../stores/confirmStore';
 
 interface ScheduledEvent {
   id: string;
@@ -338,7 +339,7 @@ export function EventList({ guildId }: EventListProps) {
   };
 
   const deleteEvent = async (eventId: string) => {
-    if (!window.confirm('Delete this event?')) return;
+    if (!(await confirm({ title: 'Delete this event?', confirmLabel: 'Delete', variant: 'danger' }))) return;
     try {
       await apiClient.delete(`/guilds/${guildId}/events/${eventId}`);
       setEvents((prev) => prev.filter((event) => event.id !== eventId));

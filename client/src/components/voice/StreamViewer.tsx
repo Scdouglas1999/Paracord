@@ -73,9 +73,12 @@ export function StreamViewer({
 
   const displayName = streamerName ?? activeStreamerName ?? 'Someone';
 
-  // Sync volume to video element whenever it changes
+  // Sync volume to the dedicated stream audio element whenever it changes.
+  // The <video> element is muted (video-only); audio plays via a separate
+  // hidden <audio> element managed by screenShareAudioRef.
   useEffect(() => {
-    if (videoRef.current) videoRef.current.volume = volume;
+    const audioEl = screenShareAudioRef.current;
+    if (audioEl) audioEl.volume = volume;
   }, [volume]);
 
   // Stream audio plays on the default device. Process Loopback Exclusion
@@ -235,7 +238,10 @@ export function StreamViewer({
           if (!publication.isSubscribed) {
             publication.setSubscribed(true);
           }
-          if (publication.track) {
+          if (
+            publication.track &&
+            publication.track.mediaStreamTrack?.readyState !== 'ended'
+          ) {
             foundAudioTrack = publication.track.mediaStreamTrack;
             break;
           }
@@ -251,24 +257,19 @@ export function StreamViewer({
     }
 
     if (foundVideoTrack && !(watchingSelf && hideSelfPreview)) {
-      // Build a MediaStream with the video track, and include the audio
-      // track directly if available. Attaching audio to the same <video>
-      // element avoids WebView2 autoplay policy issues that can block a
-      // separate hidden <audio> element.
+      // Attach the video track to the <video> element.  Audio is handled
+      // separately via a dedicated hidden <audio> element below so that
+      // late-arriving audio tracks don't require a new play() call on the
+      // video element (which browsers can reject due to autoplay policy
+      // when the original user gesture has been consumed).
       const currentStream = videoEl.srcObject instanceof MediaStream ? videoEl.srcObject : null;
       const currentVideoTrack = currentStream?.getVideoTracks()[0] ?? null;
-      const currentAudioTrack = currentStream?.getAudioTracks()[0] ?? null;
-      const wantAudio = foundAudioTrack && !watchingSelf ? foundAudioTrack : null;
 
-      if (currentVideoTrack !== foundVideoTrack || currentAudioTrack !== wantAudio) {
-        const tracks: MediaStreamTrack[] = [foundVideoTrack];
-        if (wantAudio) tracks.push(wantAudio);
-        const stream = new MediaStream(tracks);
+      if (currentVideoTrack !== foundVideoTrack) {
+        const stream = new MediaStream([foundVideoTrack]);
         videoEl.srcObject = stream;
+        videoEl.muted = true; // video-only — audio plays via separate element
         videoEl.play().catch(() => {
-          // Autoplay with audio may be blocked by browser policy.
-          // Register a one-shot user-gesture listener to retry, matching
-          // the hidden <audio> fallback behavior below.
           const resumeOnGesture = () => {
             videoEl.play().catch(() => {});
             document.removeEventListener('click', resumeOnGesture);
@@ -282,9 +283,13 @@ export function StreamViewer({
       videoEl.srcObject = null;
     }
 
-    // Fallback hidden <audio> only when we have stream audio but no video
-    // track attached yet. Otherwise audio is carried by the <video> stream.
-    if (foundAudioTrack && !watchingSelf && !foundVideoTrack) {
+    // Always use a dedicated hidden <audio> element for stream audio.
+    // This decouples audio playback from the video element so that audio
+    // arriving after video (common due to subscription timing) doesn't
+    // require re-calling play() on the video — which browsers often block
+    // when the user gesture from clicking "LIVE" has already been consumed.
+    const wantAudio = foundAudioTrack && !watchingSelf ? foundAudioTrack : null;
+    if (wantAudio) {
       let audioEl = screenShareAudioRef.current;
       if (!audioEl) {
         audioEl = document.createElement('audio');
@@ -296,8 +301,8 @@ export function StreamViewer({
       }
       const currentAudioStream = audioEl.srcObject instanceof MediaStream ? audioEl.srcObject : null;
       const currentAudioTrack = currentAudioStream?.getAudioTracks()[0] ?? null;
-      if (currentAudioTrack !== foundAudioTrack) {
-        const audioStream = new MediaStream([foundAudioTrack]);
+      if (currentAudioTrack !== wantAudio) {
+        const audioStream = new MediaStream([wantAudio]);
         audioEl.srcObject = audioStream;
         audioEl.volume = volumeRef.current;
         audioEl.muted = false;
@@ -589,7 +594,7 @@ export function StreamViewer({
           className="h-full w-full object-contain"
           autoPlay
           playsInline
-          muted={false}
+          muted
           style={{
             backgroundColor: 'var(--bg-tertiary)',
             opacity: showVideo ? 1 : 0,

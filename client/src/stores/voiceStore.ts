@@ -27,7 +27,7 @@ import { useServerListStore } from './serverListStore';
 import { playVoiceJoinSound, playVoiceLeaveSound } from '../lib/voiceSounds';
 import { startNativeSystemAudio, stopNativeSystemAudio } from '../lib/systemAudioCapture';
 import { isTauri } from '../lib/tauriEnv';
-import { getStoredServerUrl } from '../lib/apiBaseUrl';
+import { getStoredServerUrl, resolveApiBaseUrl } from '../lib/apiBaseUrl';
 import { NoiseGateProcessor } from '../lib/noiseGate';
 
 const INTERNAL_LIVEKIT_HOSTS = new Set([
@@ -70,7 +70,41 @@ function resolveClientRtcHostname(): string {
   return host;
 }
 
+function getApiDerivedServerBaseUrl(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    const apiBaseUrl = resolveApiBaseUrl();
+    const parsed = new URL(apiBaseUrl, window.location.origin);
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return null;
+    }
+    // Vite's WS proxy cannot carry LiveKit signaling, so in dev mode point
+    // directly at the backend server (bypassing Vite).
+    if (!import.meta.env.PROD && /:(5173|1420)\b/.test(parsed.host)) {
+      return import.meta.env.VITE_DEV_PROXY_TARGET || 'https://localhost:8443';
+    }
+    let pathname = parsed.pathname.replace(/\/+$/, '');
+    if (
+      pathname === '/api' ||
+      pathname === '/api/v1' ||
+      pathname === '/health' ||
+      pathname === '/api/v1/health'
+    ) {
+      pathname = '';
+    }
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
+  } catch {
+    return null;
+  }
+}
+
 function getPreferredServerBaseUrl(): string | null {
+  const apiDerivedBase = getApiDerivedServerBaseUrl();
+  if (apiDerivedBase) {
+    return apiDerivedBase;
+  }
   const serverState = useServerListStore.getState();
   const activeServer = serverState.getActiveServer();
   if (activeServer?.url) {
@@ -97,22 +131,188 @@ function getWindowOriginLivekitUrl(): string | null {
   if (typeof window === 'undefined') {
     return null;
   }
-  const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.host;
   if (!host) {
     return null;
   }
+  // Skip the window-origin candidate when running on a Vite dev server.
+  // Vite's WebSocket proxy cannot handle LiveKit's signaling protocol,
+  // so attempting it always fails and just delays the real connection.
+  if (!import.meta.env.PROD && /:(5173|1420)\b/.test(host)) {
+    return null;
+  }
+  const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${wsScheme}//${host}/livekit`;
 }
 
-function buildLivekitConnectCandidates(serverReturnedUrl: string): string[] {
+function getEnvDirectLivekitUrl(): string | null {
+  const raw = import.meta.env.VITE_LIVEKIT_DIRECT_URL;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function allowDirectLivekitFallback(): boolean {
+  const raw = import.meta.env.VITE_ENABLE_LIVEKIT_DIRECT_FALLBACK;
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw !== 'string') return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function isLivekitProxyPath(pathname: string): boolean {
+  const normalized = pathname.trim().replace(/\/+$/, '');
+  return normalized === '/livekit' || normalized.startsWith('/livekit/');
+}
+
+function parseUrlSafe(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function isPrivateIpv4Hostname(hostname: string): boolean {
+  const parts = hostname.trim().split('.');
+  if (parts.length !== 4) return false;
+  const octets = parts.map((part) => Number.parseInt(part, 10));
+  if (octets.some((value) => Number.isNaN(value) || value < 0 || value > 255)) return false;
+  const [a, b] = octets;
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  // Carrier-grade NAT range, often used by residential gateways.
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return (
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::1' ||
+    normalized === '[::1]' ||
+    normalized.endsWith('.localhost')
+  );
+}
+
+function allowLoopbackLivekitFallback(): boolean {
+  const raw = import.meta.env.VITE_ENABLE_LIVEKIT_LOOPBACK_FALLBACK;
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+      return true;
+    }
+    if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+      return false;
+    }
+  }
+  // Default to desktop runtime only. Browser dev on localhost often proxies
+  // to a remote backend, where rewriting candidates to localhost breaks voice.
+  return isTauri();
+}
+
+function buildLoopbackLivekitProxyVariants(candidate: string): string[] {
+  if (typeof window === 'undefined') return [];
+  if (!allowLoopbackLivekitFallback()) return [];
+  if (!isLoopbackHostname(window.location.hostname)) return [];
+  const parsed = parseUrlSafe(candidate);
+  if (!parsed) return [];
+  if (!isLivekitProxyPath(parsed.pathname)) return [];
+  if (isLoopbackHostname(parsed.hostname)) return [];
+
+  const port = parsed.port ? `:${parsed.port}` : '';
+  const suffix = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  return [`${parsed.protocol}//localhost${port}${suffix}`, `${parsed.protocol}//127.0.0.1${port}${suffix}`];
+}
+
+function expandLivekitCandidateVariants(candidate: string): string[] {
+  const normalized = normalizeLivekitUrlFromServerValue(candidate);
+  // When the client runs on loopback (desktop app/local dev), trying the
+  // same /livekit endpoint on localhost first avoids unstable hairpin NAT
+  // paths through the host's public IP.
+  return [...buildLoopbackLivekitProxyVariants(normalized), normalized];
+}
+
+function preferDirectLivekitCandidates(candidates: string[]): string[] {
+  const direct: string[] = [];
+  const proxied: string[] = [];
+  const unknown: string[] = [];
+  for (const candidate of candidates) {
+    const parsed = parseUrlSafe(candidate);
+    if (!parsed) {
+      unknown.push(candidate);
+      continue;
+    }
+    if (isLivekitProxyPath(parsed.pathname)) {
+      proxied.push(candidate);
+    } else {
+      direct.push(candidate);
+    }
+  }
+
+  const runningOnLoopbackClient =
+    typeof window !== 'undefined' && isLoopbackHostname(window.location.hostname);
+  if (runningOnLoopbackClient) {
+    const proxiedLoopback: string[] = [];
+    const proxiedPrivateLan: string[] = [];
+    const proxiedPublic: string[] = [];
+    for (const candidate of proxied) {
+      const parsed = parseUrlSafe(candidate);
+      if (!parsed) {
+        proxiedPublic.push(candidate);
+        continue;
+      }
+      if (isLoopbackHostname(parsed.hostname)) {
+        proxiedLoopback.push(candidate);
+      } else if (isPrivateIpv4Hostname(parsed.hostname)) {
+        proxiedPrivateLan.push(candidate);
+      } else {
+        proxiedPublic.push(candidate);
+      }
+    }
+    return [...proxiedLoopback, ...proxiedPrivateLan, ...proxiedPublic, ...direct, ...unknown];
+  }
+
+  // In production, /livekit proxy is the safest default. Direct endpoints
+  // are optional fallbacks for deployments that explicitly expose LiveKit.
+  return [...proxied, ...direct, ...unknown];
+}
+
+function buildLivekitConnectCandidates(
+  serverReturnedUrl: string,
+  serverProvidedCandidates?: string[]
+): string[] {
   const preferredBase = getPreferredServerBaseUrl();
   const preferredUrl = preferredBase ? toLivekitProxyUrlFromHttpBase(preferredBase) : null;
-  const serverNormalized = normalizeLivekitUrlFromServerValue(serverReturnedUrl);
-  const candidates = [getWindowOriginLivekitUrl(), preferredUrl, serverNormalized].filter(
-    (value): value is string => Boolean(value)
-  );
-  return Array.from(new Set(candidates));
+  const envDirectUrl = getEnvDirectLivekitUrl();
+  const provided = Array.isArray(serverProvidedCandidates)
+    ? serverProvidedCandidates.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  const expandedCandidates = [
+    ...provided,
+    envDirectUrl,
+    getWindowOriginLivekitUrl(),
+    preferredUrl,
+    serverReturnedUrl,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .flatMap((value) => expandLivekitCandidateVariants(value));
+
+  const deduped = Array.from(new Set(expandedCandidates));
+  const ordered = preferDirectLivekitCandidates(deduped);
+  if (allowDirectLivekitFallback()) {
+    return ordered;
+  }
+
+  const proxiedOnly = ordered.filter((candidate) => {
+    const parsed = parseUrlSafe(candidate);
+    return parsed ? isLivekitProxyPath(parsed.pathname) : false;
+  });
+  return proxiedOnly.length > 0 ? proxiedOnly : ordered;
 }
 
 /**
@@ -125,8 +325,8 @@ function buildLivekitConnectCandidates(serverReturnedUrl: string): string[] {
  *   - Correct host:port (same as what the client is connected to)
  *   - The /livekit proxy path
  */
-function normalizeLivekitUrl(serverReturnedUrl: string): string {
-  const candidates = buildLivekitConnectCandidates(serverReturnedUrl);
+function normalizeLivekitUrl(serverReturnedUrl: string, serverProvidedCandidates?: string[]): string {
+  const candidates = buildLivekitConnectCandidates(serverReturnedUrl, serverProvidedCandidates);
   return candidates[0] ?? normalizeLivekitUrlFromServerValue(serverReturnedUrl);
 }
 
@@ -158,6 +358,9 @@ function normalizeLivekitUrlFromServerValue(serverReturnedUrl: string): string {
 function isTransientVoiceConnectError(message: string): boolean {
   const normalized = message.toLowerCase();
   return (
+    normalized.includes('interrupted while the page was loading') ||
+    normalized.includes('operation was aborted') ||
+    normalized.includes('aborted') ||
     normalized.includes('signal connection') ||
     normalized.includes('websocket') ||
     normalized.includes('timed out') ||
@@ -192,6 +395,11 @@ let activeRoomListenerCleanup: (() => void) | null = null;
 let voiceSuppressedForStream = false;
 let joinAttemptSeq = 0;
 let activeJoinAttempt = 0;
+// Tracks the Room object being constructed inside joinChannel() before it is
+// stored in Zustand state.  A subsequent join/leave can disconnect this room
+// to prevent two Room.connect() calls from racing against the same LiveKit
+// signaling endpoint.
+let inFlightJoinRoom: Room | null = null;
 // Tracks the in-flight Room.disconnect() promise so joinChannel can await it
 // before opening a new connection. Without this, the old WebSocket teardown
 // can block the new connection if they target the same host.
@@ -205,9 +413,95 @@ const LIVEKIT_CONNECT_OPTIONS = {
   websocketTimeout: 45_000,
   peerConnectionTimeout: 50_000,
 } as const;
-const LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE = 1;
+const LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE = 2;
+const LIVEKIT_CONNECT_RETRY_BASE_DELAY_MS = 400;
 type MicUplinkState = 'idle' | 'sending' | 'stalled' | 'recovering' | 'muted' | 'no_track';
 let livekitLogConfigured = false;
+let livekitHeartbeatLogged = false;
+let livekitHeartbeatPatchLogged = false;
+let livekitHeartbeatClientMissingLogged = false;
+
+type LivekitSignalClientInternals = {
+  pingTimeoutDuration?: number;
+  pingIntervalDuration?: number;
+  startPingInterval?: () => void;
+  __paracordHeartbeatGuardPatched?: boolean;
+  __paracordHeartbeatGuardOriginalStartPingInterval?: () => void;
+};
+
+function ensureSafeLivekitPingTimeout(
+  signalClient: LivekitSignalClientInternals,
+  context: string
+): boolean {
+  const pingTimeout = signalClient.pingTimeoutDuration;
+  const pingInterval = signalClient.pingIntervalDuration;
+  if (
+    !livekitHeartbeatLogged &&
+    typeof pingTimeout === 'number' &&
+    typeof pingInterval === 'number'
+  ) {
+    livekitHeartbeatLogged = true;
+    console.info('[voice] LiveKit signal heartbeat config:', {
+      context,
+      pingTimeoutSeconds: pingTimeout,
+      pingIntervalSeconds: pingInterval,
+    });
+  }
+
+  if (typeof pingTimeout !== 'number' || typeof pingInterval !== 'number') return false;
+  // Guard against overly aggressive timeout settings that can race with the
+  // next ping tick and cause false disconnects under minor timer jitter.
+  if (pingTimeout > pingInterval + 1) return false;
+
+  const adjustedTimeout = Math.max(pingTimeout, pingInterval * 3, 15);
+  if (adjustedTimeout <= pingTimeout) return false;
+
+  signalClient.pingTimeoutDuration = adjustedTimeout;
+  console.warn('[voice] Adjusted LiveKit signal ping timeout for stability:', {
+    context,
+    oldTimeoutSeconds: pingTimeout,
+    intervalSeconds: pingInterval,
+    newTimeoutSeconds: adjustedTimeout,
+  });
+  return true;
+}
+
+function tuneLivekitSignalHeartbeat(room: Room): void {
+  const engine = (room as unknown as { engine?: { client?: LivekitSignalClientInternals } }).engine;
+  const signalClient = engine?.client;
+  if (!signalClient) {
+    if (!livekitHeartbeatClientMissingLogged) {
+      livekitHeartbeatClientMissingLogged = true;
+      console.warn('[voice] Unable to locate LiveKit signal client for heartbeat tuning.');
+    }
+    return;
+  }
+
+  if (!signalClient.__paracordHeartbeatGuardPatched) {
+    const originalStartPingInterval = signalClient.startPingInterval?.bind(signalClient);
+    if (originalStartPingInterval) {
+      signalClient.__paracordHeartbeatGuardOriginalStartPingInterval = originalStartPingInterval;
+      signalClient.startPingInterval = () => {
+        ensureSafeLivekitPingTimeout(signalClient, 'startPingInterval');
+        originalStartPingInterval();
+      };
+      signalClient.__paracordHeartbeatGuardPatched = true;
+      if (!livekitHeartbeatPatchLogged) {
+        livekitHeartbeatPatchLogged = true;
+        console.info('[voice] Installed LiveKit signal heartbeat guard patch.');
+      }
+    }
+  }
+
+  const adjusted = ensureSafeLivekitPingTimeout(signalClient, 'connect-or-reconnect');
+  if (adjusted) {
+    if (signalClient.__paracordHeartbeatGuardOriginalStartPingInterval) {
+      signalClient.__paracordHeartbeatGuardOriginalStartPingInterval();
+    } else if (typeof signalClient.startPingInterval === 'function') {
+      signalClient.startPingInterval();
+    }
+  }
+}
 
 function configureLivekitLogging(): void {
   if (livekitLogConfigured) return;
@@ -1797,6 +2091,7 @@ function registerRoomListeners(
 
   const onReconnected = () => {
     console.info('[voice] LiveKit reconnected successfully');
+    tuneLivekitSignalHeartbeat(room);
     if (!isRoomConnected(room)) {
       console.warn('[voice] Reconnected event fired but room state is not Connected; skipping mic restore.');
       return;
@@ -1976,6 +2271,16 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   joinChannel: async (channelId, guildId, internalRetryAttempt = 0) => {
     configureLivekitLogging();
     const currentState = get();
+    if (
+      currentState.connected &&
+      currentState.channelId === channelId &&
+      currentState.room &&
+      currentState.room.state !== ConnectionState.Disconnected
+    ) {
+      // Idempotent join: avoid tearing down and recreating the same room
+      // connection when duplicate click handlers fire.
+      return;
+    }
     if (currentState.joining && currentState.joiningChannelId === channelId) {
       // Keep join single-flight for a channel; overlapping joins can race the
       // signaling engine and produce spurious websocket close errors.
@@ -1986,6 +2291,14 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     const previousSelfMute = get().selfMute;
     const previousSelfDeaf = get().selfDeaf;
     const shouldMuteOnJoin = previousSelfMute || previousSelfDeaf;
+    // Disconnect any in-flight Room from a concurrent join that hasn't
+    // stored its room in state yet.  Without this, two Room.connect()
+    // calls can race against the same LiveKit signaling endpoint.
+    if (inFlightJoinRoom) {
+      const staleRoom = inFlightJoinRoom;
+      inFlightJoinRoom = null;
+      startPendingDisconnect(staleRoom.disconnect());
+    }
     const existingRoom = get().room;
     if (existingRoom) {
       clearActiveRoomListeners();
@@ -2021,6 +2334,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     detachAllAttachedRemoteAudio();
     let room: Room | null = null;
     let joinedServer = false;
+    // Bail early if this join was superseded during the quiet period.
+    if (activeJoinAttempt !== joinAttempt) {
+      return;
+    }
     set({
       joining: true,
       joiningChannelId: channelId,
@@ -2031,6 +2348,14 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     });
     try {
       const { data } = await voiceApi.joinChannel(channelId);
+      // Bail if superseded during the API call — avoids creating a Room
+      // and starting a LiveKit connect that will just be torn down.
+      if (activeJoinAttempt !== joinAttempt) {
+        // Roll back the server join so the voice state stays clean.
+        voiceApi.leaveChannel(channelId).catch(() => {});
+        set({ joining: false, joiningChannelId: null });
+        return;
+      }
       joinedServer = true;
       room = new Room({
         // Audio capture defaults: read user's voice settings for noise
@@ -2062,8 +2387,18 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         adaptiveStream: false,
         // Pause video layers no subscriber is watching.
         dynacast: true,
-        // Clean up when the browser tab closes / navigates away.
-        disconnectOnPageLeave: true,
+        // livekit-client v2.17 defaults to single-PC mode. In this deployment
+        // we observe periodic signal disconnect loops with that mode enabled.
+        // Force dual-PC mode for stability unless/until upstream behavior changes.
+        singlePeerConnection: false,
+        // Let the LiveKit reconnect policy handle transient disconnects
+        // instead of proactively tearing down on page lifecycle events.
+        // With disconnectOnPageLeave enabled, HMR reloads, service worker
+        // updates, and browser power-saving pagehide events all cause
+        // spurious disconnects while the user is idle in a voice call.
+        // LiveKit's participant_left webhook handles server-side cleanup
+        // when the WebRTC peer connection truly goes away.
+        disconnectOnPageLeave: false,
         // Be generous with reconnection so transient signal drops
         // (e.g. hairpin NAT, brief proxy hiccups) don't kick the user.
         reconnectPolicy: {
@@ -2075,7 +2410,11 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           },
         },
       });
-      const connectCandidates = buildLivekitConnectCandidates(data.url);
+      // Track this Room so a concurrent joinChannel/leaveChannel can disconnect
+      // it before it lands in Zustand state.
+      inFlightJoinRoom = room;
+
+      const connectCandidates = buildLivekitConnectCandidates(data.url, data.url_candidates);
       const normalizedUrl = connectCandidates[0] ?? normalizeLivekitUrlFromServerValue(data.url);
 
       // Read saved audio device preferences from user settings.
@@ -2148,9 +2487,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       // Use LiveKit's native connection timeout/retry logic for initial join.
       console.log('[voice] Connecting to LiveKit at:', normalizedUrl);
       console.log('[voice] Server returned URL:', data.url, 'â†’ normalized:', normalizedUrl);
-      if (connectCandidates.length > 1) {
-        console.log('[voice] LiveKit fallback URL candidates:', connectCandidates.slice(1));
-      }
+      console.log('[voice] LiveKit candidate order:', connectCandidates);
       let connected = false;
       let lastConnectError: unknown = null;
       const totalAttempts = connectCandidates.length * LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE;
@@ -2158,6 +2495,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       outer: for (let i = 0; i < connectCandidates.length; i += 1) {
         const candidate = connectCandidates[i]!;
         for (let retry = 0; retry < LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE; retry += 1) {
+          if (activeJoinAttempt !== joinAttempt) {
+            lastConnectError = new Error('Voice join superseded by a newer attempt');
+            break outer;
+          }
           attemptCounter += 1;
           const retryLabel =
             LIVEKIT_CONNECT_ATTEMPTS_PER_CANDIDATE > 1
@@ -2168,6 +2509,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           );
           try {
             await room.connect(candidate, data.token, LIVEKIT_CONNECT_OPTIONS);
+            tuneLivekitSignalHeartbeat(room);
             connected = true;
             if (attemptCounter > 1) {
               console.info('[voice] LiveKit connected after retry.');
@@ -2175,17 +2517,33 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
             break outer;
           } catch (connectErr) {
             lastConnectError = connectErr;
-            console.warn(
-              `[voice] LiveKit connect attempt ${attemptCounter}/${totalAttempts} failed:`,
-              connectErr
-            );
+            const remainingAttempts = totalAttempts - attemptCounter;
+            const connectMessage =
+              connectErr instanceof Error
+                ? connectErr.message
+                : typeof connectErr === 'string'
+                  ? connectErr
+                  : '';
+            const retryable = remainingAttempts > 0 && isTransientVoiceConnectError(connectMessage);
+            if (retryable) {
+              console.info(
+                `[voice] LiveKit connect attempt ${attemptCounter}/${totalAttempts} failed; retrying:`,
+                connectErr
+              );
+            } else {
+              console.warn(
+                `[voice] LiveKit connect attempt ${attemptCounter}/${totalAttempts} failed:`,
+                connectErr
+              );
+            }
             try {
               await room.disconnect();
             } catch {
               // ignore disconnect errors between attempts
             }
-            if (attemptCounter < totalAttempts) {
-              await delay(300);
+            if (remainingAttempts > 0) {
+              const retryDelayMs = LIVEKIT_CONNECT_RETRY_BASE_DELAY_MS * (retry + 1);
+              await delay(retryDelayMs);
             }
           }
         }
@@ -2232,6 +2590,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         false
       );
       if (activeJoinAttempt !== joinAttempt) {
+        inFlightJoinRoom = null;
         clearActiveRoomListeners();
         stopLocalMicAnalyser();
         stopLocalAudioUplinkMonitor();
@@ -2240,6 +2599,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         detachAllAttachedRemoteAudio();
         return;
       }
+      // Room is about to be stored in state — stop tracking it as in-flight.
+      inFlightJoinRoom = null;
       set((prev) => {
         const channelParticipants = new Map(prev.channelParticipants);
         const participants = new Map(prev.participants);
@@ -2271,6 +2632,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       });
       syncLivekitRoomPresence(room);
     } catch (error) {
+      inFlightJoinRoom = null;
       const isLatestJoinAttempt = activeJoinAttempt === joinAttempt;
       const message =
         error instanceof Error && error.message
@@ -2350,6 +2712,13 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     activeJoinAttempt = ++joinAttemptSeq;
     const { channelId } = get();
     const authUser = useAuthStore.getState().user;
+    // Disconnect any in-flight Room from a concurrent join that hasn't
+    // stored its room in state yet.
+    if (inFlightJoinRoom) {
+      const staleRoom = inFlightJoinRoom;
+      inFlightJoinRoom = null;
+      startPendingDisconnect(staleRoom.disconnect());
+    }
     // Disconnect room and update UI FIRST so the user gets instant feedback.
     const currentRoom = get().room;
     if (currentRoom) {
@@ -2496,7 +2865,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
 
       // Keep the existing LiveKit session and publish screen share in-place.
       // Join tokens already allow screen-share sources for speakers.
-      const normalizedUrl = normalizeLivekitUrl(data.url);
+      const normalizedUrl = normalizeLivekitUrl(data.url, data.url_candidates);
 
       const streamNotif = (useAuthStore.getState().settings?.notifications ?? {}) as Record<string, unknown>;
       const streamOutputId = normalizeDeviceId(
@@ -3083,3 +3452,15 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       previewStreamerId: userId,
     }),
 }));
+
+// Cleanly disconnect the LiveKit room before the page unloads so the
+// browser doesn't tear down the WebSocket mid-flight, which causes
+// unhandled promise rejections inside livekit-client.
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    const room = useVoiceStore.getState().room;
+    if (room) {
+      room.disconnect().catch(() => {});
+    }
+  });
+}

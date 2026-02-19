@@ -558,9 +558,38 @@ pub async fn download_file(
         .map_err(|_| ApiError::NotFound)?;
     let data = if let Some(cryptor) = state.config.file_cryptor.as_ref() {
         let aad = attachment_aad(attachment.id);
-        cryptor
-            .decrypt_with_aad(&stored_data, aad.as_bytes())
-            .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?
+        match cryptor.decrypt_with_aad(&stored_data, aad.as_bytes()) {
+            Ok(decrypted) => decrypted,
+            Err(paracord_util::at_rest::FileCryptoError::PlaintextReadDisabled)
+                if !paracord_util::at_rest::FileCryptor::payload_is_encrypted(&stored_data) =>
+            {
+                tracing::warn!(
+                    "Serving legacy plaintext attachment {} while file encryption is enabled; re-encrypting in place",
+                    attachment.id
+                );
+                match cryptor.encrypt_with_aad(&stored_data, aad.as_bytes()) {
+                    Ok(reencrypted) => {
+                        if let Err(err) = state.storage_backend.store(&storage_key, &reencrypted).await
+                        {
+                            tracing::warn!(
+                                "Failed to re-encrypt attachment {} in storage: {}",
+                                attachment.id,
+                                err
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to encrypt legacy plaintext attachment {}: {}",
+                            attachment.id,
+                            err
+                        );
+                    }
+                }
+                stored_data
+            }
+            Err(err) => return Err(ApiError::Internal(anyhow::anyhow!(err.to_string()))),
+        }
     } else {
         stored_data
     };

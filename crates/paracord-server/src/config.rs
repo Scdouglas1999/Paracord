@@ -555,6 +555,7 @@ fn looks_like_placeholder_secret(raw: &str) -> bool {
     }
     normalized.contains("change_me")
         || normalized.contains("replace_me")
+        || normalized.contains("replace_with")
         || normalized.starts_with("example")
         || normalized == "devkey"
         || normalized == "devsecret"

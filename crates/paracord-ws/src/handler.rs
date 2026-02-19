@@ -5,8 +5,10 @@ use paracord_models::gateway::*;
 use paracord_models::permissions::Permissions;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::OnceLock;
+use tokio::sync::Semaphore;
 use tokio::time::{Duration, Instant};
 
 use crate::session::Session;
@@ -114,6 +116,126 @@ fn ws_limits() -> WsLimits {
             SESSION_CACHE_MAX_ENTRIES_DEFAULT,
         ),
     })
+}
+
+fn wire_log_ws_in(
+    user_id: Option<i64>,
+    session_id: Option<&str>,
+    opcode: u8,
+    payload: &str,
+    frame_type: &str,
+) {
+    if !observability::wire_trace_enabled() {
+        return;
+    }
+    let payload_preview = observability::wire_trace_payload_preview(payload);
+    tracing::info!(
+        target: "wire",
+        transport = "gateway_ws",
+        direction = "in",
+        frame_type,
+        user_id = ?user_id,
+        session_id = ?session_id,
+        opcode,
+        bytes = payload.len(),
+        payload_preview = ?payload_preview,
+        "server_in"
+    );
+}
+
+fn wire_log_ws_out(
+    user_id: Option<i64>,
+    session_id: Option<&str>,
+    opcode: Option<u8>,
+    payload: &str,
+    frame_type: &str,
+    event_type: Option<&str>,
+    sequence: Option<u64>,
+) {
+    if !observability::wire_trace_enabled() {
+        return;
+    }
+    let payload_preview = observability::wire_trace_payload_preview(payload);
+    tracing::info!(
+        target: "wire",
+        transport = "gateway_ws",
+        direction = "out",
+        frame_type,
+        user_id = ?user_id,
+        session_id = ?session_id,
+        opcode = ?opcode,
+        event_type = ?event_type,
+        sequence = ?sequence,
+        bytes = payload.len(),
+        payload_preview = ?payload_preview,
+        "server_out"
+    );
+}
+
+fn wire_log_ws_close(
+    user_id: Option<i64>,
+    session_id: Option<&str>,
+    code: u16,
+    reason: &str,
+    frame_type: &str,
+) {
+    if !observability::wire_trace_enabled() {
+        return;
+    }
+    tracing::info!(
+        target: "wire",
+        transport = "gateway_ws",
+        direction = "out",
+        frame_type,
+        user_id = ?user_id,
+        session_id = ?session_id,
+        code,
+        reason,
+        "server_out"
+    );
+}
+
+async fn send_ws_text_logged(
+    sender: &mut (impl SinkExt<Message> + Unpin),
+    payload: String,
+    user_id: Option<i64>,
+    session_id: Option<&str>,
+    frame_type: &str,
+    opcode: Option<u8>,
+    event_type: Option<&str>,
+    sequence: Option<u64>,
+) -> Result<(), ()> {
+    wire_log_ws_out(
+        user_id,
+        session_id,
+        opcode,
+        &payload,
+        frame_type,
+        event_type,
+        sequence,
+    );
+    sender
+        .send(Message::Text(payload.into()))
+        .await
+        .map_err(|_| ())
+}
+
+async fn send_ws_close_logged(
+    sender: &mut (impl SinkExt<Message> + Unpin),
+    code: u16,
+    reason: &str,
+    user_id: Option<i64>,
+    session_id: Option<&str>,
+    frame_type: &str,
+) -> Result<(), ()> {
+    wire_log_ws_close(user_id, session_id, code, reason, frame_type);
+    sender
+        .send(Message::Close(Some(CloseFrame {
+            code,
+            reason: reason.to_string().into(),
+        })))
+        .await
+        .map_err(|_| ())
 }
 
 struct ConnectionGuard {
@@ -411,12 +533,15 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
     let mut connection_guard = ConnectionGuard::new();
     if !try_acquire_global_connection_slot() {
         let (mut sender, _) = socket.split();
-        let _ = sender
-            .send(Message::Close(Some(CloseFrame {
-                code: 1013,
-                reason: "Gateway is at connection capacity".into(),
-            })))
-            .await;
+        let _ = send_ws_close_logged(
+            &mut sender,
+            1013,
+            "Gateway is at connection capacity",
+            None,
+            None,
+            "capacity_close",
+        )
+        .await;
         return;
     }
     connection_guard.global_acquired = true;
@@ -429,7 +554,19 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
         "{}{}{}",
         HELLO_MSG_PREFIX, HEARTBEAT_INTERVAL_MS, HELLO_MSG_SUFFIX
     );
-    if sender.send(Message::Text(hello_msg.into())).await.is_err() {
+    if send_ws_text_logged(
+        &mut sender,
+        hello_msg,
+        None,
+        None,
+        "hello",
+        Some(OP_HELLO),
+        None,
+        None,
+    )
+    .await
+    .is_err()
+    {
         return;
     }
 
@@ -443,24 +580,31 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
     {
         Ok(Some(result)) => result,
         _ => {
-            let _ = sender
-                .send(Message::Text(
-                    json!({"op": OP_INVALID_SESSION, "d": false})
-                        .to_string()
-                        .into(),
-                ))
-                .await;
+            let _ = send_ws_text_logged(
+                &mut sender,
+                json!({"op": OP_INVALID_SESSION, "d": false}).to_string(),
+                None,
+                None,
+                "invalid_session",
+                Some(OP_INVALID_SESSION),
+                None,
+                None,
+            )
+            .await;
             return;
         }
     };
 
     if !try_acquire_user_connection_slot(session.user_id) {
-        let _ = sender
-            .send(Message::Close(Some(CloseFrame {
-                code: 1008,
-                reason: "Too many concurrent sessions for this user".into(),
-            })))
-            .await;
+        let _ = send_ws_close_logged(
+            &mut sender,
+            1008,
+            "Too many concurrent sessions for this user",
+            Some(session.user_id),
+            Some(session.session_id.as_str()),
+            "user_capacity_close",
+        )
+        .await;
         return;
     }
     connection_guard.user_id = Some(session.user_id);
@@ -472,10 +616,18 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
             "s": session.sequence,
             "d": { "session_id": &session.session_id }
         });
-        if sender
-            .send(Message::Text(resumed_payload.to_string().into()))
-            .await
-            .is_err()
+        if send_ws_text_logged(
+            &mut sender,
+            resumed_payload.to_string(),
+            Some(session.user_id),
+            Some(session.session_id.as_str()),
+            "resumed",
+            Some(OP_DISPATCH),
+            Some(EVENT_RESUMED),
+            Some(session.sequence),
+        )
+        .await
+        .is_err()
         {
             return;
         }
@@ -528,16 +680,18 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
         let online_snapshot = state.online_users.read().await.clone();
         let presence_snapshot = state.user_presences.read().await.clone();
 
-        // Fetch guild data for READY (parallel)
+        // Fetch guild data for READY with bounded concurrency.
+        let sem = Arc::new(Semaphore::new(10));
         let guild_futures: Vec<_> = session
             .guild_ids
             .iter()
             .map(|&gid| {
                 let state = state.clone();
+                let sem = sem.clone();
                 let online_snapshot = online_snapshot.clone();
                 let presence_snapshot = presence_snapshot.clone();
-                let user_id = session.user_id;
                 async move {
+                    let _permit = sem.acquire_owned().await.ok()?;
                     let guild = paracord_db::guilds::get_guild(&state.db, gid)
                         .await
                         .ok()
@@ -546,16 +700,14 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                         return None;
                     };
 
-                    // Three independent queries in parallel
-                    let (voice_states, member_ids, channels) = tokio::join!(
+                    // Two independent queries in parallel
+                    let (voice_states, member_ids) = tokio::join!(
                         paracord_db::voice_states::get_guild_voice_states(&state.db, gid),
                         paracord_db::members::get_guild_member_user_ids(&state.db, gid),
-                        paracord_db::channels::get_guild_channels(&state.db, gid),
                     );
 
                     let voice_states = voice_states.unwrap_or_default();
                     let member_ids = member_ids.unwrap_or_default();
-                    let channels = channels.unwrap_or_default();
 
                     // Build voice_states JSON
                     let voice_states_json: Vec<Value> = voice_states
@@ -595,47 +747,16 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                         })
                         .collect();
 
-                    // Batch permission check
-                    let channel_perms =
-                        paracord_core::permissions::compute_all_channel_permissions(
-                            &state.db, gid, &channels, g.owner_id, user_id,
-                        )
-                        .await
-                        .unwrap_or_default();
-
-                    let mut channels_json: Vec<Value> = Vec::with_capacity(channels.len());
-                    for c in &channels {
-                        let perms = channel_perms
-                            .get(&c.id)
-                            .copied()
-                            .unwrap_or_else(|| paracord_models::permissions::Permissions::empty());
-                        if !perms.contains(paracord_models::permissions::Permissions::VIEW_CHANNEL)
-                        {
-                            continue;
-                        }
-                        let required_role_ids: Vec<String> =
-                            paracord_db::channels::parse_required_role_ids(&c.required_role_ids)
-                                .into_iter()
-                                .map(|id| id.to_string())
-                                .collect();
-                        channels_json.push(json!({
-                            "id": c.id.to_string(),
-                            "name": c.name,
-                            "channel_type": c.channel_type,
-                            "position": c.position,
-                            "guild_id": c.guild_id().map(|id| id.to_string()),
-                            "parent_id": c.parent_id.map(|id| id.to_string()),
-                            "required_role_ids": required_role_ids,
-                        }));
-                    }
-
                     Some(json!({
                         "id": g.id.to_string(),
                         "name": g.name,
                         "owner_id": g.owner_id.to_string(),
-                        "channels": channels_json,
+                        "icon_hash": g.icon_hash,
+                        "member_count": member_ids.len(),
+                        "channels": [],
                         "voice_states": voice_states_json,
                         "presences": presences_json,
+                        "lazy": true,
                     }))
                 }
             })
@@ -654,10 +775,18 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                 "session_id": &session.session_id,
             }
         });
-        if sender
-            .send(Message::Text(ready.to_string().into()))
-            .await
-            .is_err()
+        if send_ws_text_logged(
+            &mut sender,
+            ready.to_string(),
+            Some(session.user_id),
+            Some(session.session_id.as_str()),
+            "ready",
+            Some(OP_DISPATCH),
+            Some(EVENT_READY),
+            Some(session.sequence.max(1)),
+        )
+        .await
+        .is_err()
         {
             return;
         }
@@ -831,6 +960,12 @@ async fn wait_for_identify_or_resume(
     while let Some(Ok(msg)) = receiver.next().await {
         if let Message::Text(text) = msg {
             if let Ok(payload) = serde_json::from_str::<Value>(&text) {
+                let op = payload.get("op").and_then(|v| v.as_u64()).unwrap_or(255) as u8;
+                wire_log_ws_in(None, None, op, &text, "identify_or_resume");
+            } else {
+                wire_log_ws_in(None, None, 255, &text, "identify_or_resume");
+            }
+            if let Ok(payload) = serde_json::from_str::<Value>(&text) {
                 if let Some(d) = payload.get("d") {
                     if let Some(token) = d.get("token").and_then(|v| v.as_str()) {
                         let claims =
@@ -910,6 +1045,8 @@ async fn run_session(
     );
     let heartbeat_timeout = Duration::from_millis(HEARTBEAT_TIMEOUT_MS);
     let mut rate_limiter = WsMessageRateLimiter::new();
+    let mut ws_ping_interval = tokio::time::interval(Duration::from_secs(20));
+    ws_ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let heartbeat_sleep = tokio::time::sleep(heartbeat_timeout);
     tokio::pin!(heartbeat_sleep);
 
@@ -924,11 +1061,23 @@ async fn run_session(
                             .ok()
                             .and_then(|payload| payload.get("op").and_then(|v| v.as_u64()))
                             .unwrap_or(255) as u8;
+                        wire_log_ws_in(
+                            Some(session.user_id),
+                            Some(session.session_id.as_str()),
+                            opcode,
+                            &text,
+                            "client_message",
+                        );
                         if !rate_limiter.allow(opcode) {
-                            let _ = sender.send(Message::Close(Some(CloseFrame {
-                                code: 1008,
-                                reason: "Gateway rate limit exceeded".into(),
-                            }))).await;
+                            let _ = send_ws_close_logged(
+                                &mut sender,
+                                1008,
+                                "Gateway rate limit exceeded",
+                                Some(session.user_id),
+                                Some(session.session_id.as_str()),
+                                "rate_limit_close",
+                            )
+                            .await;
                             break ("client exceeded websocket rate limits".to_string(), false);
                         }
                         if let Ok(payload) = parsed_payload {
@@ -1033,7 +1182,19 @@ async fn run_session(
                             });
                             dispatch.to_string()
                         };
-                        if sender.send(Message::Text(dispatch_str.into())).await.is_err() {
+                        if send_ws_text_logged(
+                            &mut sender,
+                            dispatch_str,
+                            Some(session.user_id),
+                            Some(session.session_id.as_str()),
+                            "dispatch",
+                            Some(OP_DISPATCH),
+                            Some(event.event_type.as_str()),
+                            Some(seq),
+                        )
+                        .await
+                        .is_err()
+                        {
                             break ("websocket send error".to_string(), false);
                         }
                         observability::ws_event_dispatched(&event.event_type);
@@ -1044,12 +1205,15 @@ async fn run_session(
                             session.user_id,
                             skipped
                         );
-                        let _ = sender
-                            .send(Message::Close(Some(CloseFrame {
-                                code: 1013,
-                                reason: "Gateway fell behind; reconnect required".into(),
-                            })))
-                            .await;
+                        let _ = send_ws_close_logged(
+                            &mut sender,
+                            1013,
+                            "Gateway fell behind; reconnect required",
+                            Some(session.user_id),
+                            Some(session.session_id.as_str()),
+                            "lagged_close",
+                        )
+                        .await;
                         break (format!("event stream lagged by {skipped} events"), false);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -1062,6 +1226,11 @@ async fn run_session(
                     format!("heartbeat timeout after {}ms", HEARTBEAT_TIMEOUT_MS),
                     true,
                 );
+            }
+            _ = ws_ping_interval.tick() => {
+                if sender.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break ("websocket ping send error".to_string(), false);
+                }
             }
         }
     };
@@ -1103,7 +1272,17 @@ async fn handle_client_message(
 
     match op {
         OP_HEARTBEAT => {
-            let _ = sender.send(Message::Text(HEARTBEAT_ACK_MSG.into())).await;
+            let _ = send_ws_text_logged(
+                sender,
+                HEARTBEAT_ACK_MSG.to_string(),
+                Some(session.user_id),
+                Some(session.session_id.as_str()),
+                "heartbeat_ack",
+                Some(OP_HEARTBEAT_ACK),
+                None,
+                None,
+            )
+            .await;
         }
         OP_PRESENCE_UPDATE => {
             if let Some(d) = payload.get("d") {

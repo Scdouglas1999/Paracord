@@ -14,7 +14,7 @@ rtc:
   #     credential: CHANGE_ME
 
 keys:
-  paracord_key: paracord_secret
+  paracord_key: paracord_secret_key_at_least_32chars!
 
 logging:
   level: info
