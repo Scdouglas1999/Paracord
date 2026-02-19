@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, EyeOff, LayoutList, Monitor, MonitorOff, PanelLeft, PhoneOff, PictureInPicture2, Users } from 'lucide-react';
+import { AlertTriangle, EyeOff, Headphones, HeadphoneOff, LayoutList, MicOff, Monitor, MonitorOff, PanelLeft, PhoneOff, PictureInPicture2, Users, Video } from 'lucide-react';
 import { RoomEvent, Track } from 'livekit-client';
 import { TopBar } from '../components/layout/TopBar';
 import { MessageList } from '../components/message/MessageList';
@@ -13,6 +13,7 @@ import { SplitPane } from '../components/voice/SplitPane';
 import type { PaneSource } from '../components/voice/SplitPaneSourcePicker';
 import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
+import { useMemberStore } from '../stores/memberStore';
 import { useUIStore } from '../stores/uiStore';
 import { useVoice } from '../hooks/useVoice';
 import { useStream } from '../hooks/useStream';
@@ -21,6 +22,8 @@ import { useScreenShareSubscriptions } from '../hooks/useScreenShareSubscription
 import { useVoiceStore } from '../stores/voiceStore';
 import { useAuthStore } from '../stores/authStore';
 import { SearchPanel } from '../components/message/SearchPanel';
+import { ConnectionStatusBar } from '../components/layout/ConnectionStatusBar';
+import { GuildWelcomeScreen } from '../components/guild/GuildWelcomeScreen';
 import { channelApi } from '../api/channels';
 import type { Message } from '../types';
 
@@ -63,7 +66,10 @@ export function GuildPage() {
   const selectGuild = useGuildStore((s) => s.selectGuild);
   const channels = useChannelStore((s) => s.channels);
   const fetchChannels = useChannelStore((s) => s.fetchChannels);
-  const isLoading = useChannelStore((s) => s.isLoading);
+  const fetchMembers = useMemberStore((s) => s.fetchMembers);
+  const isLoading = useChannelStore((s) =>
+    guildId ? (s.isLoading && !s.guildChannelsLoaded[guildId]) : false
+  );
   const selectChannel = useChannelStore((s) => s.selectChannel);
   const channel = channels.find(c => c.id === channelId);
   const {
@@ -82,6 +88,7 @@ export function GuildPage() {
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const searchPanelOpen = useUIStore((s) => s.searchPanelOpen);
   const watchedStreamerId = useVoiceStore((s) => s.watchedStreamerId);
+  const channelParticipants = useVoiceStore((s) => s.channelParticipants);
   const setWatchedStreamer = useVoiceStore((s) => s.setWatchedStreamer);
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -97,6 +104,21 @@ export function GuildPage() {
   const room = useVoiceStore((s) => s.room);
   const previewStreamerId = useVoiceStore((s) => s.previewStreamerId);
   const streamAudioWarning = useVoiceStore((s) => s.streamAudioWarning);
+
+  // Welcome screen state
+  const guilds = useGuildStore((s) => s.guilds);
+  const currentGuild = guilds.find(g => g.id === guildId);
+  const [showWelcome, setShowWelcome] = useState(() => {
+    if (!guildId) return false;
+    return !localStorage.getItem(`paracord:guild-welcomed:${guildId}`);
+  });
+
+  const dismissWelcome = () => {
+    if (guildId) {
+      localStorage.setItem(`paracord:guild-welcomed:${guildId}`, '1');
+    }
+    setShowWelcome(false);
+  };
 
   // Split-pane state for Side mode
   const [splitState, setSplitState] = useState<{ left: PaneSource; right: PaneSource }>({
@@ -131,9 +153,16 @@ export function GuildPage() {
     if (guildId) {
       selectGuild(guildId);
       useChannelStore.getState().selectGuild(guildId);
-      fetchChannels(guildId);
+      if (!useChannelStore.getState().guildChannelsLoaded[guildId]) {
+        fetchChannels(guildId);
+      }
+      if (!useMemberStore.getState().membersLoaded[guildId]) {
+        void fetchMembers(guildId);
+      }
     }
-  }, [guildId, fetchChannels, selectGuild]);
+    // Only re-run when guildId changes, not when loaded-state objects change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guildId]);
 
   useEffect(() => {
     if (channelId) {
@@ -371,6 +400,18 @@ export function GuildPage() {
 
   useScreenShareSubscriptions(splitSubscribedIds);
 
+  // Listen for custom event to re-show welcome screen from sidebar menu
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.guildId === guildId) {
+        setShowWelcome(true);
+      }
+    };
+    window.addEventListener('paracord:show-welcome', handler);
+    return () => window.removeEventListener('paracord:show-welcome', handler);
+  }, [guildId]);
+
   // Participant name map for source picker display
   const participantNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -427,6 +468,14 @@ export function GuildPage() {
         isVoice={isVoice}
         isForum={isForum}
       />
+      <ConnectionStatusBar />
+      {showWelcome && currentGuild && (
+        <GuildWelcomeScreen
+          guild={currentGuild}
+          channels={channels}
+          onDismiss={dismissWelcome}
+        />
+      )}
       {isVoice ? (
         <div className="flex min-h-0 flex-1 flex-col gap-2 p-2.5 text-text-muted sm:gap-3 sm:p-4 md:gap-4 md:p-5">
           <div className="glass-panel rounded-2xl border p-3 sm:p-4 md:p-5">
@@ -524,25 +573,81 @@ export function GuildPage() {
                   )}
                 </div>
               ) : (
-                <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-2.5">
-                  <div className="w-full rounded-xl border border-border-subtle bg-bg-mod-subtle px-3.5 py-2.5 text-sm font-medium text-text-secondary sm:w-auto">
-                    {voiceJoinPending
-                      ? 'Connecting to voice...'
-                      : voiceJoinError
-                        ? `Voice join failed: ${voiceJoinError}`
-                        : 'Join from the channel rail to start speaking or screen sharing.'}
+                <div className="flex w-full flex-col gap-3">
+                  {/* Join / error / pending controls */}
+                  <div className="flex w-full flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-2.5">
+                    {voiceJoinError ? (
+                      <>
+                        <div className="w-full rounded-xl border border-accent-danger/40 bg-accent-danger/10 px-3.5 py-2.5 text-sm font-medium text-accent-danger sm:w-auto">
+                          Voice join failed: {voiceJoinError}
+                        </div>
+                        {channelId && guildId && (
+                          <button
+                            className="control-pill-btn w-full justify-center sm:w-auto"
+                            onClick={() => {
+                              clearConnectionError();
+                              void joinChannel(channelId, guildId);
+                            }}
+                          >
+                            Retry Join
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <button
+                        className="control-pill-btn w-full justify-center border-accent-primary/50 bg-accent-primary/15 text-text-primary hover:bg-accent-primary/25 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                        disabled={voiceJoinPending || !channelId || !guildId}
+                        onClick={() => {
+                          if (channelId && guildId) {
+                            void joinChannel(channelId, guildId);
+                          }
+                        }}
+                      >
+                        {voiceJoinPending ? (
+                          <>
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            Connecting...
+                          </>
+                        ) : (
+                          <>
+                            <Headphones size={16} />
+                            Join Voice
+                          </>
+                        )}
+                      </button>
+                    )}
                   </div>
-                  {voiceJoinError && channelId && guildId && (
-                    <button
-                      className="control-pill-btn w-full justify-center sm:w-auto"
-                      onClick={() => {
-                        clearConnectionError();
-                        void joinChannel(channelId, guildId);
-                      }}
-                    >
-                      Retry Join
-                    </button>
-                  )}
+
+                  {/* Lobby: show who's already in the channel */}
+                  {(() => {
+                    const lobbyParticipants = channelId ? (channelParticipants.get(channelId) || []) : [];
+                    if (lobbyParticipants.length === 0) return null;
+                    return (
+                      <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-4 py-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
+                          In Channel — {lobbyParticipants.length}
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          {lobbyParticipants.map((p) => (
+                            <div key={p.user_id} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
+                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-xs font-semibold text-text-secondary">
+                                {(p.username || '?')[0].toUpperCase()}
+                              </div>
+                              <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+                                {p.username || p.user_id}
+                              </span>
+                              <div className="flex items-center gap-1.5 text-text-muted">
+                                {p.self_mute && <span title="Muted"><MicOff size={13} className="text-accent-danger" /></span>}
+                                {p.self_deaf && <span title="Deafened"><HeadphoneOff size={13} className="text-accent-danger" /></span>}
+                                {p.self_video && <span title="Camera on"><Video size={13} className="text-accent-primary" /></span>}
+                                {p.self_stream && <span title="Streaming"><Monitor size={13} className="text-accent-primary" /></span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>

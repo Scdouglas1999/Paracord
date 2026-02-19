@@ -5,108 +5,142 @@ import { sanitizeCustomCss } from '../lib/security';
 
 type ThemeName = 'dark' | 'light' | 'amoled';
 
+const ACCENT_PRESETS = {
+  red: '#eb4d4b',
+  blue: '#4f7cff',
+  emerald: '#22b07d',
+  amber: '#d1972f',
+  rose: '#d95d7a',
+  violet: '#7a6cff',
+  cyan: '#21a9b7',
+  lime: '#7ba72a',
+  orange: '#d86d36',
+  slate: '#7a879f',
+} as const;
+
+function shadeHex(hex: string, amount: number): string {
+  const normalized = hex.replace('#', '');
+  if (normalized.length !== 6) return hex;
+  const num = Number.parseInt(normalized, 16);
+  if (Number.isNaN(num)) return hex;
+  const clamp = (value: number) => Math.max(0, Math.min(255, value));
+  const adjust = (channel: number) => clamp(channel + Math.round((255 - channel) * amount));
+  const r = adjust((num >> 16) & 0xff);
+  const g = adjust((num >> 8) & 0xff);
+  const b = adjust(num & 0xff);
+  return `#${[r, g, b].map((part) => part.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function hexToRgbString(hex: string): string {
+  const normalized = hex.replace('#', '');
+  if (normalized.length !== 6) return '235, 77, 75';
+  const num = Number.parseInt(normalized, 16);
+  if (Number.isNaN(num)) return '235, 77, 75';
+  return `${(num >> 16) & 0xff}, ${(num >> 8) & 0xff}, ${num & 0xff}`;
+}
+
 const THEME_VARIABLES: Record<ThemeName, Record<string, string>> = {
   dark: {
-    'color-bg-primary': '#0b1018',
-    'color-bg-secondary': '#0f1420',
-    'color-bg-tertiary': '#060a12',
-    'color-bg-accent': '#151d2c',
-    'color-bg-floating': 'rgba(7, 11, 18, 0.93)',
-    'color-bg-mod-subtle': 'rgba(255, 255, 255, 0.04)',
-    'color-bg-mod-strong': 'rgba(255, 255, 255, 0.1)',
-    'color-text-primary': '#edf3ff',
-    'color-text-secondary': '#aab8d1',
-    'color-text-muted': '#7786a1',
-    'color-text-link': '#7dc3ff',
-    'color-accent-primary': '#6782ff',
-    'color-accent-primary-hover': '#7e97ff',
+    'color-bg-primary': '#121212',
+    'color-bg-secondary': '#1e1e1e',
+    'color-bg-tertiary': '#141414',
+    'color-bg-accent': '#27272a',
+    'color-bg-floating': 'rgba(30, 30, 30, 0.92)',
+    'color-bg-mod-subtle': 'rgba(255, 255, 255, 0.06)',
+    'color-bg-mod-strong': 'rgba(255, 255, 255, 0.12)',
+    'color-text-primary': '#f2f2f2',
+    'color-text-secondary': '#a0a0a0',
+    'color-text-muted': '#71717a',
+    'color-text-link': '#eb4d4b',
+    'color-accent-primary': '#eb4d4b',
+    'color-accent-primary-hover': '#f06462',
     'color-accent-success': '#35c18f',
     'color-accent-danger': '#ff5d72',
     'color-accent-warning': '#ffce62',
-    'color-border-subtle': 'rgba(157, 180, 223, 0.14)',
-    'color-border-strong': 'rgba(176, 200, 244, 0.24)',
-    'color-scrollbar-track': 'rgba(7, 10, 16, 0.46)',
-    'color-scrollbar-thumb': 'rgba(126, 156, 214, 0.34)',
-    'color-channel-icon': '#8897b5',
-    'color-interactive-normal': '#a4b2cb',
-    'color-interactive-hover': '#e3ecff',
-    'color-interactive-active': '#f3f7ff',
-    'color-interactive-muted': '#4b586f',
+    'color-border-subtle': 'rgba(255, 255, 255, 0.1)',
+    'color-border-strong': 'rgba(255, 255, 255, 0.2)',
+    'color-scrollbar-track': 'rgba(255, 255, 255, 0.04)',
+    'color-scrollbar-thumb': 'rgba(255, 255, 255, 0.2)',
+    'color-channel-icon': '#9ca3af',
+    'color-interactive-normal': '#a3a3a3',
+    'color-interactive-hover': '#f2f2f2',
+    'color-interactive-active': '#ffffff',
+    'color-interactive-muted': '#52525b',
     'color-status-online': '#35c18f',
     'color-status-idle': '#ffce62',
     'color-status-dnd': '#ff5d72',
-    'color-status-offline': '#6e7991',
+    'color-status-offline': '#6b7280',
     'color-status-streaming': '#8b6fff',
-    'app-bg-layer-one': 'radial-gradient(130% 90% at 0% 0%, rgba(103, 130, 255, 0.1) 0%, rgba(103, 130, 255, 0) 52%)',
-    'app-bg-layer-two': 'radial-gradient(120% 90% at 100% 0%, rgba(53, 193, 143, 0.07) 0%, rgba(53, 193, 143, 0) 44%)',
-    'app-bg-base': 'linear-gradient(180deg, #05080f 0%, #04070d 100%)',
-    'overlay-backdrop': 'rgba(1, 4, 10, 0.72)',
-    'glass-rail-fill-top': 'rgba(255, 255, 255, 0.04)',
-    'glass-rail-fill-bottom': 'rgba(255, 255, 255, 0.012)',
-    'glass-panel-fill-top': 'rgba(255, 255, 255, 0.036)',
+    'app-bg-layer-one': 'none',
+    'app-bg-layer-two': 'none',
+    'app-bg-base': '#121212',
+    'overlay-backdrop': 'rgba(0, 0, 0, 0.72)',
+    'glass-rail-fill-top': 'rgba(255, 255, 255, 0.03)',
+    'glass-rail-fill-bottom': 'rgba(255, 255, 255, 0.01)',
+    'glass-panel-fill-top': 'rgba(255, 255, 255, 0.03)',
     'glass-panel-fill-bottom': 'rgba(255, 255, 255, 0.01)',
-    'glass-modal-fill-top': 'rgba(11, 16, 26, 0.95)',
-    'glass-modal-fill-bottom': 'rgba(7, 11, 18, 0.94)',
+    'glass-modal-fill-top': 'rgba(34, 34, 34, 0.95)',
+    'glass-modal-fill-bottom': 'rgba(26, 26, 26, 0.94)',
     'panel-divider-glint': 'rgba(255, 255, 255, 0.02)',
-    'scrollbar-auto-thumb-hover': 'rgba(126, 156, 214, 0.5)',
-    'sidebar-bg': 'rgba(6, 10, 16, 0.76)',
+    'scrollbar-auto-thumb-hover': 'rgba(255, 255, 255, 0.36)',
+    'sidebar-bg': 'rgba(0, 0, 0, 0.9)',
     'sidebar-border': 'rgba(255, 255, 255, 0.07)',
     'sidebar-active-indicator': 'var(--color-accent-primary)',
-    'ambient-glow-primary': 'rgba(103, 130, 255, 0.15)',
+    'ambient-glow-primary': 'rgba(235, 77, 75, 0.12)',
     'ambient-glow-success': 'rgba(53, 193, 143, 0.09)',
     'ambient-glow-danger': 'rgba(255, 93, 114, 0.06)',
-    'accent-primary-rgb': '103, 130, 255',
+    'accent-primary-rgb': '235, 77, 75',
   },
   light: {
-    'color-bg-primary': '#f4f7ff',
-    'color-bg-secondary': '#e7ecf8',
-    'color-bg-tertiary': '#dae2f2',
-    'color-bg-accent': '#dde6fb',
-    'color-bg-floating': 'rgba(249, 251, 255, 0.9)',
-    'color-bg-mod-subtle': 'rgba(10, 28, 58, 0.07)',
-    'color-bg-mod-strong': 'rgba(10, 28, 58, 0.13)',
-    'color-text-primary': '#0f1b2d',
-    'color-text-secondary': '#34435f',
-    'color-text-muted': '#5a6984',
-    'color-text-link': '#1f6dff',
-    'color-accent-primary': '#476fff',
-    'color-accent-primary-hover': '#345fee',
+    'color-bg-primary': '#e8e8e6',
+    'color-bg-secondary': '#fdfdfd',
+    'color-bg-tertiary': '#f4f4f2',
+    'color-bg-accent': '#ececeb',
+    'color-bg-floating': 'rgba(253, 253, 253, 0.9)',
+    'color-bg-mod-subtle': 'rgba(0, 0, 0, 0.04)',
+    'color-bg-mod-strong': 'rgba(0, 0, 0, 0.08)',
+    'color-text-primary': '#1c1c1e',
+    'color-text-secondary': '#636366',
+    'color-text-muted': '#a1a1aa',
+    'color-text-link': '#eb4d4b',
+    'color-accent-primary': '#eb4d4b',
+    'color-accent-primary-hover': '#f06462',
     'color-accent-success': '#1c9d71',
-    'color-accent-danger': '#d73b61',
+    'color-accent-danger': '#d64560',
     'color-accent-warning': '#cc8b1f',
-    'color-border-subtle': 'rgba(42, 66, 104, 0.18)',
-    'color-border-strong': 'rgba(35, 58, 95, 0.3)',
-    'color-scrollbar-track': 'rgba(52, 67, 95, 0.12)',
-    'color-scrollbar-thumb': 'rgba(52, 67, 95, 0.32)',
-    'color-channel-icon': '#4f5f7e',
-    'color-interactive-normal': '#3f5070',
-    'color-interactive-hover': '#21314f',
-    'color-interactive-active': '#101f3a',
-    'color-interactive-muted': '#95a3be',
+    'color-border-subtle': 'rgba(0, 0, 0, 0.08)',
+    'color-border-strong': 'rgba(0, 0, 0, 0.16)',
+    'color-scrollbar-track': 'rgba(0, 0, 0, 0.06)',
+    'color-scrollbar-thumb': 'rgba(0, 0, 0, 0.2)',
+    'color-channel-icon': '#737373',
+    'color-interactive-normal': '#525252',
+    'color-interactive-hover': '#1f2937',
+    'color-interactive-active': '#111827',
+    'color-interactive-muted': '#a1a1aa',
     'color-status-online': '#1c9d71',
     'color-status-idle': '#cc8b1f',
     'color-status-dnd': '#d73b61',
-    'color-status-offline': '#8d9ab4',
+    'color-status-offline': '#9ca3af',
     'color-status-streaming': '#6a4dce',
-    'app-bg-layer-one': 'radial-gradient(120% 90% at 0% 0%, rgba(80, 103, 241, 0.2) 0%, rgba(80, 103, 241, 0) 54%)',
-    'app-bg-layer-two': 'radial-gradient(115% 90% at 100% 0%, rgba(31, 159, 114, 0.15) 0%, rgba(31, 159, 114, 0) 48%)',
-    'app-bg-base': 'linear-gradient(180deg, #edf2fb 0%, #e3eaf7 100%)',
-    'overlay-backdrop': 'rgba(18, 26, 40, 0.4)',
-    'glass-rail-fill-top': 'rgba(255, 255, 255, 0.78)',
-    'glass-rail-fill-bottom': 'rgba(223, 232, 248, 0.64)',
-    'glass-panel-fill-top': 'rgba(255, 255, 255, 0.72)',
-    'glass-panel-fill-bottom': 'rgba(227, 236, 248, 0.58)',
-    'glass-modal-fill-top': 'rgba(253, 255, 255, 0.94)',
-    'glass-modal-fill-bottom': 'rgba(236, 243, 252, 0.94)',
-    'panel-divider-glint': 'rgba(20, 44, 82, 0.08)',
-    'scrollbar-auto-thumb-hover': 'rgba(88, 110, 150, 0.45)',
-    'sidebar-bg': 'rgba(248, 251, 255, 0.74)',
-    'sidebar-border': 'rgba(36, 58, 92, 0.14)',
+    'app-bg-layer-one': 'none',
+    'app-bg-layer-two': 'none',
+    'app-bg-base': '#e8e8e6',
+    'overlay-backdrop': 'rgba(17, 24, 39, 0.35)',
+    'glass-rail-fill-top': 'rgba(255, 255, 255, 0.85)',
+    'glass-rail-fill-bottom': 'rgba(245, 245, 244, 0.8)',
+    'glass-panel-fill-top': 'rgba(255, 255, 255, 0.86)',
+    'glass-panel-fill-bottom': 'rgba(245, 245, 244, 0.8)',
+    'glass-modal-fill-top': 'rgba(255, 255, 255, 0.95)',
+    'glass-modal-fill-bottom': 'rgba(245, 245, 244, 0.94)',
+    'panel-divider-glint': 'rgba(0, 0, 0, 0.04)',
+    'scrollbar-auto-thumb-hover': 'rgba(0, 0, 0, 0.3)',
+    'sidebar-bg': 'rgba(28, 28, 30, 0.92)',
+    'sidebar-border': 'rgba(255, 255, 255, 0.06)',
     'sidebar-active-indicator': 'var(--color-accent-primary)',
-    'ambient-glow-primary': 'rgba(80, 103, 241, 0.19)',
+    'ambient-glow-primary': 'rgba(235, 77, 75, 0.14)',
     'ambient-glow-success': 'rgba(31, 159, 114, 0.14)',
     'ambient-glow-danger': 'rgba(215, 59, 97, 0.08)',
-    'accent-primary-rgb': '71, 111, 255',
+    'accent-primary-rgb': '235, 77, 75',
   },
   amoled: {
     'color-bg-primary': '#000000',
@@ -120,8 +154,8 @@ const THEME_VARIABLES: Record<ThemeName, Record<string, string>> = {
     'color-text-secondary': '#aebad2',
     'color-text-muted': '#6f7d96',
     'color-text-link': '#8dc2ff',
-    'color-accent-primary': '#748dff',
-    'color-accent-primary-hover': '#8da3ff',
+    'color-accent-primary': '#eb4d4b',
+    'color-accent-primary-hover': '#f06462',
     'color-accent-success': '#3bcf98',
     'color-accent-danger': '#ff5f7f',
     'color-accent-warning': '#ffd271',
@@ -157,7 +191,7 @@ const THEME_VARIABLES: Record<ThemeName, Record<string, string>> = {
     'ambient-glow-primary': 'transparent',
     'ambient-glow-success': 'transparent',
     'ambient-glow-danger': 'transparent',
-    'accent-primary-rgb': '116, 141, 255',
+    'accent-primary-rgb': '235, 77, 75',
   },
 };
 
@@ -198,6 +232,7 @@ const LEGACY_ALIASES: Record<string, string> = {
 
 export function useTheme() {
   const theme = useUIStore((s) => s.theme);
+  const accentPreset = useUIStore((s) => s.accentPreset);
   const setTheme = useUIStore((s) => s.setTheme);
   const compactMode = useUIStore((s) => s.compactMode);
   const customCss = useUIStore((s) => s.customCss);
@@ -238,9 +273,19 @@ export function useTheme() {
         root.style.setProperty(`--${legacyName}`, value);
       }
     }
+    const accentBase = ACCENT_PRESETS[accentPreset] || ACCENT_PRESETS.red;
+    const accentHover = shadeHex(accentBase, 0.18);
+    root.style.setProperty('--color-accent-primary', accentBase);
+    root.style.setProperty('--color-accent-primary-hover', accentHover);
+    root.style.setProperty('--accent-primary', accentBase);
+    root.style.setProperty('--accent-primary-hover', accentHover);
+    root.style.setProperty('--accent', accentBase);
+    root.style.setProperty('--text-link', accentBase);
+    root.style.setProperty('--accent-primary-rgb', hexToRgbString(accentBase));
+    root.style.setProperty('--sidebar-active-indicator', accentBase);
     root.setAttribute('data-theme', activeTheme);
     root.style.colorScheme = activeTheme === 'light' ? 'light' : 'dark';
-  }, [activeTheme]);
+  }, [activeTheme, accentPreset]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-density', densityMode);

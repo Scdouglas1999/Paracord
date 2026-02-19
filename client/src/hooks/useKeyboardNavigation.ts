@@ -5,7 +5,7 @@ import { useGuildStore } from '../stores/guildStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
-import { gateway } from '../gateway/connection';
+import { gateway } from '../gateway/manager';
 
 const DEFAULT_KEYBINDS: Record<string, string> = {
   toggleMute: 'Ctrl+Shift+M',
@@ -43,6 +43,7 @@ function matchesKeybind(e: KeyboardEvent, keybind: string | undefined): boolean 
 /**
  * Global keyboard shortcuts for the app shell:
  * - Alt+Up / Alt+Down: navigate to previous/next channel
+ * - Ctrl+B: toggle server dock
  * - Escape: close open panels (command palette)
  * - Configurable voice keybinds (default: Ctrl+Shift+M = mute, Ctrl+Shift+D = deafen)
  */
@@ -73,11 +74,6 @@ export function useKeyboardNavigation() {
           e.preventDefault();
           return;
         }
-        if (ui.memberSidebarOpen) {
-          ui.toggleMemberSidebar();
-          e.preventDefault();
-          return;
-        }
         if (ui.memberPanelOpen) {
           ui.setMemberPanelOpen(false);
           e.preventDefault();
@@ -93,6 +89,13 @@ export function useKeyboardNavigation() {
           return;
         }
         // Don't override escape in UserSettings (it has its own handler)
+        return;
+      }
+
+      // -- Ctrl+B: toggle dock --
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toUpperCase() === 'B') {
+        e.preventDefault();
+        useUIStore.getState().toggleDockPinned();
         return;
       }
 
@@ -145,7 +148,7 @@ export function useKeyboardNavigation() {
         if (voiceState.connected) {
           void voiceState.toggleMute().then(() => {
             const s = useVoiceStore.getState();
-            gateway.updateVoiceState(s.guildId, s.channelId, s.selfMute, s.selfDeaf);
+            gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf);
           });
         }
         return;
@@ -158,7 +161,7 @@ export function useKeyboardNavigation() {
         if (voiceState.connected) {
           void voiceState.toggleDeaf().then(() => {
             const s = useVoiceStore.getState();
-            gateway.updateVoiceState(s.guildId, s.channelId, s.selfMute, s.selfDeaf);
+            gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf);
           });
         }
         return;
@@ -169,3 +172,5 @@ export function useKeyboardNavigation() {
     return () => window.removeEventListener('keydown', handler);
   }, [navigate, guildId]);
 }
+
+

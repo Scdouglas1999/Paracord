@@ -86,7 +86,7 @@ impl TestContext {
             federation_service: None,
         };
 
-        paracord_api::install_rate_limit_backend(db.clone());
+        paracord_api::install_http_rate_limiter();
         let app = paracord_api::build_router().with_state(state);
         let token = create_authenticated_user_token(&db, &jwt_secret).await?;
 
@@ -364,6 +364,82 @@ async fn message_crud_routes_work() -> anyhow::Result<()> {
     assert!(!list_after_delete
         .iter()
         .any(|m| m.get("id").and_then(Value::as_str) == Some(message_id.as_str())));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_routes_work() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Thread Routes Guild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "thread-parent").await?;
+
+    let (status, created_thread) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/threads"),
+            Some(json!({
+                "name": "first-thread",
+                "auto_archive_duration": 1440
+            })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "unexpected thread payload: {created_thread}");
+    let thread_id = created_thread["id"]
+        .as_str()
+        .context("thread id should be a string")?
+        .to_string();
+    assert_eq!(created_thread["parent_id"], channel_id);
+    assert!(created_thread["owner_id"].is_string());
+
+    let (status, threads) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/threads"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    let active_threads = threads
+        .as_array()
+        .context("threads response should be an array")?;
+    assert!(active_threads
+        .iter()
+        .any(|thread| thread.get("id").and_then(Value::as_str) == Some(thread_id.as_str())));
+
+    let (status, archived) = ctx
+        .request_json(
+            Method::PATCH,
+            &format!("/api/v1/channels/{channel_id}/threads/{thread_id}"),
+            Some(json!({ "archived": true })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "unexpected archived payload: {archived}");
+    assert_eq!(archived["id"], thread_id);
+
+    let (status, archived_threads) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/threads/archived"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    let archived_list = archived_threads
+        .as_array()
+        .context("archived threads response should be an array")?;
+    assert!(archived_list
+        .iter()
+        .any(|thread| thread.get("id").and_then(Value::as_str) == Some(thread_id.as_str())));
+
+    let (status, _) = ctx
+        .request_json(
+            Method::DELETE,
+            &format!("/api/v1/channels/{channel_id}/threads/{thread_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 
     Ok(())
 }

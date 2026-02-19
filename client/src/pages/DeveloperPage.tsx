@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Bot, RefreshCw, Trash2, Copy, Check, Key, ChevronDown, ChevronRight } from 'lucide-react';
 import { botApi, type BotApplication, type BotGuildInstall } from '../api/bots';
 import { cn } from '../lib/utils';
+import { confirm } from '../stores/confirmStore';
 
 export function DeveloperPage() {
   const [apps, setApps] = useState<BotApplication[]>([]);
@@ -84,7 +85,7 @@ export function DeveloperPage() {
   };
 
   const deleteApp = async (appId: string) => {
-    if (!window.confirm('Delete this bot application? This cannot be undone.')) return;
+    if (!(await confirm({ title: 'Delete bot application?', description: 'This cannot be undone.', confirmLabel: 'Delete', variant: 'danger' }))) return;
     setError(null);
     try {
       await botApi.delete(appId);
@@ -100,7 +101,7 @@ export function DeveloperPage() {
   };
 
   const regenerateToken = async (appId: string) => {
-    if (!window.confirm('Regenerate token? The old token will stop working immediately.')) return;
+    if (!(await confirm({ title: 'Regenerate token?', description: 'The old token will stop working immediately.', confirmLabel: 'Regenerate' }))) return;
     setError(null);
     try {
       const { data } = await botApi.regenerateToken(appId);
@@ -184,7 +185,8 @@ export function DeveloperPage() {
   };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-bg-primary p-6 md:p-10">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
       <div className="mx-auto w-full max-w-3xl space-y-8">
         <div className="flex items-center gap-3">
           <Bot size={24} className="text-accent-primary" />
@@ -443,6 +445,7 @@ export function DeveloperPage() {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

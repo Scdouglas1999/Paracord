@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use axum::response::IntoResponse;
 use clap::Parser;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -27,6 +28,17 @@ fn map_db_engine(engine: config::DatabaseEngine) -> paracord_db::DatabaseEngine 
     }
 }
 
+fn parse_env_bool(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls crypto provider before any TLS operations
@@ -34,10 +46,22 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
+    let ansi_default = if cfg!(windows) {
+        false
+    } else {
+        std::io::stderr().is_terminal()
+    };
+    let use_ansi = parse_env_bool("PARACORD_LOG_ANSI", ansi_default);
+    let default_log_filter =
+        "paracord=info,paracord_api=info,paracord_server=info,paracord_core=info,tower_http=info,axum=warn,hyper=warn";
+
     tracing_subscriber::fmt()
+        .compact()
+        .with_target(false)
+        .with_ansi(use_ansi)
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("paracord=info,tower_http=debug")),
+                .unwrap_or_else(|_| EnvFilter::new(default_log_filter)),
         )
         .init();
 
@@ -406,6 +430,21 @@ async fn main() -> Result<()> {
         format!("{ws_scheme}://{}/livekit", bind_for_clients)
     });
 
+    // Optional LAN candidate for clients on the same network. This avoids
+    // hairpin-NAT signaling paths when the configured public URL points to
+    // the server's WAN address.
+    if let Some(local_ip) = detected_local_ip.as_deref() {
+        let ws_scheme = if tls_preferred { "wss" } else { "ws" };
+        let proxy_port = if tls_preferred {
+            config.tls.port
+        } else {
+            upnp_server_port
+        };
+        let local_candidate_url = format!("{ws_scheme}://{local_ip}:{proxy_port}/livekit");
+        std::env::set_var("PARACORD_LIVEKIT_LOCAL_CANDIDATE_URL", &local_candidate_url);
+        tracing::info!("LiveKit local candidate URL: {}", local_candidate_url);
+    }
+
     if let Some(public_url) = &config.server.public_url {
         std::env::set_var("PARACORD_PUBLIC_URL", public_url);
     }
@@ -482,7 +521,8 @@ async fn main() -> Result<()> {
         federation_service,
     };
 
-    paracord_api::install_rate_limit_backend(state.db.clone());
+    paracord_api::install_http_rate_limiter();
+    paracord_api::spawn_http_rate_limiter_cleanup(shutdown_notify.clone());
 
     spawn_pending_attachment_cleanup(
         state.db.clone(),

@@ -10,7 +10,9 @@ import {
   Volume2,
   MessageSquare,
   X,
+  PanelLeftClose,
   PanelLeftOpen,
+  Wifi,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -37,14 +39,16 @@ interface TopBarProps {
 export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, recipientName }: TopBarProps) {
   const { channelId } = useParams();
   const navigate = useNavigate();
-  const toggleMemberSidebar = useUIStore((s) => s.toggleMemberSidebar);
   const toggleMemberPanel = useUIStore((s) => s.toggleMemberPanel);
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const setSidebarCollapsed = useUIStore((s) => s.setSidebarCollapsed);
-  const memberSidebarOpen = useUIStore((s) => s.memberSidebarOpen);
   const memberPanelOpen = useUIStore((s) => s.memberPanelOpen);
   const setCommandPaletteOpen = useUIStore((s) => s.setCommandPaletteOpen);
   const toggleSearchPanel = useUIStore((s) => s.toggleSearchPanel);
   const searchPanelOpen = useUIStore((s) => s.searchPanelOpen);
+  const connectionStatus = useUIStore((s) => s.connectionStatus);
+  const connectionLatency = useUIStore((s) => s.connectionLatency);
   const unpinMessage = useMessageStore((s) => s.unpinMessage);
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
   const systemAudioCaptureActive = useVoiceStore((s) => s.systemAudioCaptureActive);
@@ -253,8 +257,8 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
           onClick={onClick}
           disabled={disabled}
           className={cn(
-            'relative flex h-9 w-9 items-center justify-center rounded-lg text-text-muted transition-all hover:bg-bg-mod-subtle hover:text-text-primary sm:h-8 sm:w-8',
-            active && 'bg-bg-mod-subtle text-text-primary',
+            'architect-top-icon relative',
+            active && 'architect-top-icon-active',
             disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-text-muted'
           )}
         >
@@ -270,13 +274,32 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
   );
 
   return (
-    <div className="z-10 flex h-[var(--spacing-header-height)] w-full shrink-0 items-center justify-between border-b border-border-subtle/50 bg-gradient-to-r from-transparent to-transparent px-4 sm:px-4 md:px-5">
+    <div className="z-10 flex min-h-[80px] w-full shrink-0 items-start justify-between border-b border-border-subtle/50 px-4 pb-3 pt-4 sm:px-5 sm:pb-3.5 sm:pt-4.5 md:px-6">
       {/* Left: channel info */}
-      <div className="mr-2 flex min-w-0 flex-1 items-center overflow-hidden sm:mr-3">
+      <div className="mr-2 flex min-w-0 flex-1 items-start overflow-hidden sm:mr-3">
+        {!isMobile && (
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className={cn(
+              'mr-3.5 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors',
+              sidebarOpen
+                ? 'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary'
+                : 'border-border-subtle/80 bg-bg-mod-subtle/40 text-text-muted hover:bg-bg-mod-subtle hover:text-text-primary'
+            )}
+            title={sidebarOpen ? 'Collapse channel sidebar' : 'Expand channel sidebar'}
+            aria-label={sidebarOpen ? 'Collapse channel sidebar' : 'Expand channel sidebar'}
+          >
+            {sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+          </button>
+        )}
         {isMobile && (
           <button
             type="button"
-            onClick={() => setSidebarCollapsed(false)}
+            onClick={() => {
+              if (!sidebarOpen) toggleSidebar();
+              setSidebarCollapsed(false);
+            }}
             className="mr-2.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border-subtle/70 bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
             title="Open sidebar"
             aria-label="Open sidebar"
@@ -285,40 +308,40 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
           </button>
         )}
         {isDM ? (
-          <div className="flex min-w-0 items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-primary/80 text-xs font-semibold text-white md:h-10 md:w-10">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-bg-mod-strong text-sm font-semibold text-text-primary">
               {recipientName?.charAt(0).toUpperCase() || '?'}
             </div>
             <div className="min-w-0">
-              <span className="block truncate text-[15px] font-semibold text-text-primary">
+              <span className="block truncate text-[17px] font-semibold leading-tight text-text-primary">
                 {recipientName || 'Direct Message'}
               </span>
+              <span className="mt-1 block truncate text-xs text-text-muted">Direct conversation</span>
             </div>
           </div>
         ) : (
-          <div className="flex min-w-0 items-center gap-2">
-            {isVoice ? (
-              <Volume2 size={16} className="shrink-0 text-accent-primary/70" />
-            ) : isForum ? (
-              <MessageSquare size={16} className="shrink-0 text-text-muted" />
-            ) : (
-              <Hash size={16} className="shrink-0 text-text-muted" />
-            )}
-            <span className="truncate text-[15px] font-semibold text-text-primary">
-              {channelName || 'channel'}
+          <div className="flex min-w-0 flex-col pt-0.5">
+            <div className="flex min-w-0 items-center gap-2">
+              {isVoice ? (
+                <Volume2 size={15} className="shrink-0 text-text-muted" />
+              ) : isForum ? (
+                <MessageSquare size={15} className="shrink-0 text-text-muted" />
+              ) : (
+                <Hash size={15} className="shrink-0 text-text-muted" />
+              )}
+              <span className="truncate text-[17px] font-semibold leading-tight text-text-primary">
+                {`# ${channelName || 'channel'}`}
+              </span>
+            </div>
+            <span className="mt-1 block max-w-[54ch] truncate text-xs text-text-muted">
+              {channelTopic || 'Conversation and collaboration'}
             </span>
-            {channelTopic && (
-              <>
-                <div className="mx-2 hidden h-4 w-px shrink-0 bg-border-subtle/80 md:block" />
-                <span className="hidden max-w-md truncate text-[13px] text-text-muted md:block">{channelTopic}</span>
-              </>
-            )}
           </div>
         )}
       </div>
 
       {/* Right: action buttons */}
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
         {systemAudioCaptureActive && (
           <TopBarIcon
             icon={AlertTriangle}
@@ -345,13 +368,38 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
         {!isDM && (
           <TopBarIcon
             icon={Users}
-            onClick={() => { toggleMemberSidebar(); toggleMemberPanel(); }}
-            active={memberSidebarOpen || memberPanelOpen}
+            onClick={() => toggleMemberPanel()}
+            active={memberPanelOpen}
             tooltip="Member List"
           />
         )}
         <TopBarIcon icon={Inbox} onClick={() => void openInbox()} tooltip="Inbox" badge={unreadItems.length} />
         <TopBarIcon className="hidden md:block" icon={HelpCircle} onClick={() => setShowHelp(true)} tooltip="Shortcuts" />
+
+        {/* Connection latency indicator */}
+        {connectionStatus === 'connected' && (
+          <Tooltip content={`Latency: ${connectionLatency}ms`} side="bottom">
+            <div className="hidden items-center gap-1 rounded-lg border border-border-subtle/60 px-2 py-1 md:flex">
+              <Wifi size={12} className={cn(
+                connectionLatency < 100
+                  ? 'text-accent-success'
+                  : connectionLatency < 300
+                    ? 'text-accent-warning'
+                    : 'text-accent-danger'
+              )} />
+              <span className={cn(
+                'font-mono text-[10px] font-semibold tabular-nums',
+                connectionLatency < 100
+                  ? 'text-accent-success'
+                  : connectionLatency < 300
+                    ? 'text-accent-warning'
+                    : 'text-accent-danger'
+              )}>
+                {connectionLatency}ms
+              </span>
+            </div>
+          </Tooltip>
+        )}
       </div>
 
       {/* Search overlay */}

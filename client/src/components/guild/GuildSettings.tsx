@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { X, Upload, GripVertical, Shield, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Trash2, Smile, Calendar, Bot } from 'lucide-react';
+import { X, Upload, GripVertical, Shield, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Trash2, Smile, Calendar, Bot, ArrowLeft } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { guildApi } from '../../api/guilds';
 import { inviteApi } from '../../api/invites';
-import { channelApi } from '../../api/channels';
 import { webhookApi } from '../../api/webhooks';
 import { botApi, type BotApplication, type GuildBotEntry } from '../../api/bots';
 import { emojiApi } from '../../api/emojis';
@@ -15,10 +14,12 @@ import { Permissions, hasPermission } from '../../types';
 import type { AuditLogEntry, Ban, Channel, Guild, GuildEmoji, Invite, Member, Role } from '../../types';
 import type { Webhook } from '../../types';
 import { isAllowedImageMimeType, isSafeImageDataUrl } from '../../lib/security';
-import { API_BASE_URL } from '../../lib/apiBaseUrl';
+import { resolveApiBaseUrl } from '../../lib/apiBaseUrl';
 import { cn } from '../../lib/utils';
+import { confirm } from '../../stores/confirmStore';
 import { buildGuildEmojiImageUrl } from '../../lib/customEmoji';
 import { EventList } from './EventList';
+import { ChannelManager } from './ChannelManager';
 
 interface GuildSettingsProps {
   guildId: string;
@@ -77,11 +78,6 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
   const [editingRoleColor, setEditingRoleColor] = useState('#99aab5');
   const [editingRoleHoist, setEditingRoleHoist] = useState(false);
   const [editingRoleMentionable, setEditingRoleMentionable] = useState(false);
-  const [newChannelName, setNewChannelName] = useState('');
-  const [newChannelType, setNewChannelType] = useState<'text' | 'voice' | 'forum'>('text');
-  const [newChannelRequiredRoleIds, setNewChannelRequiredRoleIds] = useState<string[]>([]);
-  const [editingChannelRoleIds, setEditingChannelRoleIds] = useState<Record<string, string[]>>({});
-  const [editingChannelAccessId, setEditingChannelAccessId] = useState<string | null>(null);
   const [newWebhookName, setNewWebhookName] = useState('');
   const [newWebhookChannelId, setNewWebhookChannelId] = useState('');
   const [webhookFilterChannelId, setWebhookFilterChannelId] = useState<'all' | string>('all');
@@ -174,11 +170,6 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
         required_role_ids: channel.required_role_ids ?? [],
       }));
       setChannels(normalizedChannels);
-      setEditingChannelRoleIds(
-        Object.fromEntries(
-          normalizedChannels.map((channel) => [channel.id, channel.required_role_ids ?? []])
-        )
-      );
       setInvites(invitesRes.data);
       setEmojis(emojiRes.data);
       setWebhooks(webhookRes.data);
@@ -402,36 +393,6 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
     }, 'Failed to update member roles');
   };
 
-  const updateChannelRequiredRoles = async (channelId: string) => {
-    if (!canManageRoleSettings) return;
-    const requiredRoleIds = editingChannelRoleIds[channelId] || [];
-    await runAction(async () => {
-      await channelApi.update(channelId, { required_role_ids: requiredRoleIds });
-      await refreshAll();
-    }, 'Failed to update channel access roles');
-  };
-
-  const createChannel = async () => {
-    if (!newChannelName.trim()) return;
-    await runAction(async () => {
-      await guildApi.createChannel(guildId, {
-        name: newChannelName.trim(),
-        channel_type: newChannelType === 'voice' ? 2 : newChannelType === 'forum' ? 7 : 0,
-        parent_id: null,
-        ...(canManageRoleSettings ? { required_role_ids: newChannelRequiredRoleIds } : {}),
-      });
-      setNewChannelName('');
-      setNewChannelRequiredRoleIds([]);
-      await refreshAll();
-    }, 'Failed to create channel');
-  };
-
-  const deleteChannel = async (channelId: string) => {
-    await runAction(async () => {
-      await channelApi.delete(channelId);
-      await refreshAll();
-    }, 'Failed to delete channel');
-  };
 
   const kickMember = async (userId: string) => {
     await runAction(async () => {
@@ -510,8 +471,9 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
   };
 
   const webhookBase = (() => {
-    if (API_BASE_URL.startsWith('http://') || API_BASE_URL.startsWith('https://')) {
-      return API_BASE_URL.replace(/\/api\/v1\/?$/, '');
+    const base = resolveApiBaseUrl();
+    if (base.startsWith('http://') || base.startsWith('https://')) {
+      return base.replace(/\/api\/v1\/?$/, '');
     }
     if (typeof window !== 'undefined') {
       return window.location.origin;
@@ -631,7 +593,7 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
     if (!ownershipTargetUserId) return;
     const targetMember = members.find((member) => member.user.id === ownershipTargetUserId);
     const targetName = targetMember?.nick || targetMember?.user.username || ownershipTargetUserId;
-    if (!window.confirm(`Transfer server ownership to ${targetName}?`)) return;
+    if (!(await confirm({ title: 'Transfer ownership?', description: `Transfer server ownership to ${targetName}? This cannot be undone.`, confirmLabel: 'Transfer', variant: 'danger' }))) return;
     setTransferringOwnership(true);
     try {
       await runAction(async () => {
@@ -651,7 +613,7 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
   };
 
   const handleLeaveGuild = async () => {
-    if (!window.confirm('Leave this server?')) return;
+    if (!(await confirm({ title: 'Leave this server?', description: 'You will need a new invite to rejoin.', confirmLabel: 'Leave', variant: 'danger' }))) return;
     await runAction(async () => {
       await leaveGuild(guildId);
       onClose();
@@ -662,7 +624,7 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
   return (
     <div
       className={cn(
-        'fixed inset-0 z-50 bg-bg-tertiary/95 backdrop-blur-sm',
+        'relative h-full min-h-0 overflow-hidden rounded-[1.5rem] border border-border-subtle/70 bg-bg-primary/90 backdrop-blur-sm',
         isMobile ? 'flex flex-col' : 'flex'
       )}
       onKeyDown={handleKeyDown}
@@ -702,6 +664,13 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
       ) : (
         <div className="relative z-10 w-72 shrink-0 overflow-y-auto border-r border-border-subtle/70 bg-bg-secondary/65 px-5 py-10">
           <div className="ml-auto w-full max-w-[236px]">
+            <button
+              onClick={onClose}
+              className="group mb-3 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+            >
+              <ArrowLeft size={14} className="transition-transform group-hover:-translate-x-0.5" />
+              Back
+            </button>
             <div className="px-2 pb-4 text-xs font-semibold uppercase tracking-wide text-text-muted">
               {guild?.name || guildName}
             </div>
@@ -710,7 +679,7 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
                 <button
                   key={item.id}
                   onClick={() => setActiveSection(item.id)}
-                  className={`settings-nav-item p-6 ${activeSection === item.id ? 'active' : ''}`}
+                  className={`settings-nav-item ${activeSection === item.id ? 'active' : ''}`}
                 >
                   {item.icon}
                   {item.label}
@@ -721,10 +690,10 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
         </div>
       )}
 
-      <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-6 pb-[calc(var(--safe-bottom)+1rem)] pt-6' : 'px-12 py-10')}>
-        <div className="w-full max-w-[740px] space-y-10">
+      <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-6 pb-[calc(var(--safe-bottom)+1rem)] pt-6' : 'px-10 py-8')}>
+        <div className="w-full max-w-[740px] space-y-8">
         {!isMobile && (
-          <div className="fixed right-6 top-5 z-20 flex flex-col items-center gap-1">
+          <div className="sticky top-2 z-20 ml-auto mb-4 flex w-fit flex-col items-center gap-1 md:top-3">
             <button onClick={onClose} className="command-icon-btn rounded-full border border-border-strong bg-bg-secondary/75">
               <X size={18} />
             </button>
@@ -732,6 +701,17 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
           </div>
         )}
 
+        {!isMobile && (
+          <nav className="mb-4 flex items-center gap-1.5 text-xs text-text-muted" aria-label="Breadcrumb">
+            <span className="font-medium">{guild?.name || guildName}</span>
+            <span aria-hidden>/</span>
+            <span className="font-medium">Settings</span>
+            <span aria-hidden>/</span>
+            <span className="font-semibold text-text-secondary">
+              {NAV_ITEMS.find(i => i.id === activeSection)?.label ?? activeSection}
+            </span>
+          </nav>
+        )}
         {error && (
           <div className="rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-4 py-2.5 text-sm font-medium text-accent-danger">{error}</div>
         )}
@@ -1160,143 +1140,13 @@ export function GuildSettings({ guildId, guildName, onClose }: GuildSettingsProp
         )}
 
         {activeSection === 'channels' && (
-          <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6 card-stack">
-            <h2 className="settings-section-title !mb-0">Channels</h2>
-            {!canManageRoleSettings && (
-              <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-4 py-3 text-sm text-text-secondary">
-                Channel role requirements can only be changed by server admins.
-              </div>
-            )}
-            <div className="card-stack">
-              {channels.sort((a, b) => a.position - b.position).map((channel) => {
-                const requiredRoleIds = editingChannelRoleIds[channel.id] ?? channel.required_role_ids ?? [];
-                const isEditingAccess = editingChannelAccessId === channel.id;
-                return (
-                  <div key={channel.id}>
-                    <div className="card-surface flex flex-wrap items-center gap-2.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-3.5 py-3">
-                      <Hash size={16} />
-                      <span className="flex-1 text-sm" style={{ color: 'var(--text-primary)' }}>{channel.name || 'unnamed'}</span>
-                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{channel.type === 2 ? 'voice' : 'text'}</span>
-                      <span className="rounded-lg border border-border-subtle px-2 py-1 text-[11px] font-semibold text-text-secondary">
-                        Access: Member{requiredRoleIds.length > 0 ? ` + ${requiredRoleIds.length}` : ''}
-                      </span>
-                      {canManageRoleSettings && (
-                        <button
-                          className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-                          onClick={() => setEditingChannelAccessId((prev) => (prev === channel.id ? null : channel.id))}
-                        >
-                          {isEditingAccess ? 'Close Access' : 'Access Roles'}
-                        </button>
-                      )}
-                      <button className="icon-btn" onClick={() => void deleteChannel(channel.id)}><Trash2 size={14} /></button>
-                    </div>
-                    {canManageRoleSettings && isEditingAccess && (
-                      <div className="card-surface ml-10 mt-2 rounded-xl border border-border-subtle bg-bg-primary/60 p-3 space-y-3">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                          Require Additional Roles
-                        </div>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          {assignableRoles.map((role) => {
-                            const checked = requiredRoleIds.includes(role.id);
-                            return (
-                              <label
-                                key={role.id}
-                                className="card-surface flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle/60 px-2.5 py-2 text-sm text-text-secondary"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() =>
-                                    setEditingChannelRoleIds((prev) => ({
-                                      ...prev,
-                                      [channel.id]: toggleRoleId(prev[channel.id] ?? [], role.id),
-                                    }))
-                                  }
-                                  className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
-                                />
-                                <span
-                                  className="inline-block h-2.5 w-2.5 rounded-full"
-                                  style={{ backgroundColor: roleColorHex(role) }}
-                                />
-                                <span className="truncate">{role.name}</span>
-                              </label>
-                            );
-                          })}
-                          {assignableRoles.length === 0 && (
-                            <p className="text-sm text-text-muted">Create roles to limit channel access.</p>
-                          )}
-                        </div>
-                        <div className="settings-action-row">
-                          <button
-                            className="btn-primary"
-                            onClick={() => void updateChannelRequiredRoles(channel.id)}
-                          >
-                            Save Access
-                          </button>
-                          <button
-                            className="rounded-lg px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-                            onClick={() => {
-                              setEditingChannelRoleIds((prev) => ({
-                                ...prev,
-                                [channel.id]: channel.required_role_ids ?? [],
-                              }));
-                              setEditingChannelAccessId(null);
-                            }}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              <div className="settings-action-row">
-                <input className="input-field flex-1" placeholder="New channel name" value={newChannelName} onChange={(e) => setNewChannelName(e.target.value)} />
-                <select className="select-field min-w-[8.75rem]" value={newChannelType} onChange={(e) => setNewChannelType(e.target.value as 'text' | 'voice' | 'forum')}>
-                  <option value="text">Text</option>
-                  <option value="voice">Voice</option>
-                  <option value="forum">Forum</option>
-                </select>
-                <button className="btn-primary" onClick={() => void createChannel()}>Create</button>
-              </div>
-              {canManageRoleSettings && (
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-3.5 py-3 space-y-2.5">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                    New Channel: Additional Required Roles
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {assignableRoles.map((role) => {
-                      const checked = newChannelRequiredRoleIds.includes(role.id);
-                      return (
-                        <label
-                          key={role.id}
-                          className="card-surface flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-primary/50 px-2.5 py-2 text-sm text-text-secondary"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() =>
-                              setNewChannelRequiredRoleIds((prev) => toggleRoleId(prev, role.id))
-                            }
-                            className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
-                          />
-                          <span
-                            className="inline-block h-2.5 w-2.5 rounded-full"
-                            style={{ backgroundColor: roleColorHex(role) }}
-                          />
-                          <span className="truncate">{role.name}</span>
-                        </label>
-                      );
-                    })}
-                    {assignableRoles.length === 0 && (
-                      <p className="text-sm text-text-muted">No extra roles available yet.</p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          <ChannelManager
+            guildId={guildId}
+            channels={channels}
+            roles={roles}
+            canManageRoles={canManageRoleSettings}
+            onRefresh={refreshAll}
+          />
         )}
 
         {activeSection === 'invites' && (

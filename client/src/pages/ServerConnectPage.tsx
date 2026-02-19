@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useServerListStore } from '../stores/serverListStore';
-import { connectionManager } from '../lib/connectionManager';
+import { gateway } from '../gateway/manager';
 import { setStoredServerUrl } from '../lib/apiBaseUrl';
 import { isPortableLink, decodePortableLink } from '../lib/portableLinks';
+import { confirm } from '../stores/confirmStore';
+import { OnboardingWizard, hasCompletedOnboarding } from '../components/onboarding/OnboardingWizard';
 
 /**
  * Normalise a raw server address into a full URL with protocol.
@@ -105,8 +107,14 @@ export function ServerConnectPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
+  const [showOnboarding, setShowOnboarding] = useState(() => !hasCompletedOnboarding());
   const navigate = useNavigate();
   const servers = useServerListStore((s) => s.servers);
+
+  // Show onboarding wizard for first-time users with no servers
+  if (showOnboarding && servers.length === 0) {
+    return <OnboardingWizard onComplete={() => setShowOnboarding(false)} />;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -125,9 +133,12 @@ export function ServerConnectPage() {
       const { serverUrl, inviteCode } = parseInput(input);
       const parsedUrl = new URL(serverUrl);
       if (parsedUrl.protocol === 'http:' && !isLocalhostHost(parsedUrl.hostname)) {
-        const proceed = window.confirm(
-          'This server uses unencrypted HTTP. Credentials and tokens can be intercepted. Continue anyway?'
-        );
+        const proceed = await confirm({
+          title: 'Insecure connection',
+          description: 'This server uses unencrypted HTTP. Credentials and tokens can be intercepted. Continue anyway?',
+          confirmLabel: 'Continue',
+          variant: 'danger',
+        });
         if (!proceed) {
           setLoading(false);
           return;
@@ -148,7 +159,7 @@ export function ServerConnectPage() {
 
       // Connect and authenticate via challenge-response
       try {
-        await connectionManager.connectServer(serverId);
+        await gateway.connectServer(serverId);
       } catch (authErr) {
         // If challenge-response fails, the server might not support it yet.
         // Keep the server in the list but without a token — user can try legacy login.
@@ -175,7 +186,7 @@ export function ServerConnectPage() {
   };
 
   const handleRemoveServer = (serverId: string) => {
-    connectionManager.disconnectServer(serverId);
+    gateway.disconnectServer(serverId);
     useServerListStore.getState().removeServer(serverId);
   };
 
@@ -196,9 +207,9 @@ export function ServerConnectPage() {
             </div>
           )}
 
-          <div className="space-y-7">
+          <div className="card-stack-roomy">
             <label className="block">
-              <span className="mb-3 block text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
                 Server URL or Invite Link <span className="text-accent-danger">*</span>
               </span>
               <input
@@ -206,7 +217,7 @@ export function ServerConnectPage() {
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 required
-                className="input-field"
+                className="input-field mt-2"
                 placeholder="paracord://invite/... or 73.45.123.99:8080"
                 autoFocus
               />
@@ -237,11 +248,11 @@ export function ServerConnectPage() {
 
         {/* Existing servers */}
         {servers.length > 0 && (
-          <div className="auth-card">
+          <div className="auth-card mt-2">
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-text-secondary">
               Your Servers
             </h2>
-            <div className="space-y-3">
+            <div className="space-y-4">
               {servers.map((server) => (
                 <div
                   key={server.id}
@@ -289,3 +300,5 @@ export function ServerConnectPage() {
     </div>
   );
 }
+
+

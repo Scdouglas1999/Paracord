@@ -1,3 +1,21 @@
+// ============ Guild Icon Colors ============
+
+/** Shared guild icon color palette. Used in Sidebar and HomePage. */
+export const GUILD_COLORS = [
+  '#5865f2', '#57f287', '#fee75c', '#eb459e', '#ed4245',
+  '#3ba55c', '#faa61a', '#e67e22', '#e91e63', '#1abc9c',
+];
+
+/** Deterministic color for a guild icon based on its ID. */
+export function getGuildColor(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = ((hash << 5) - hash) + id.charCodeAt(i);
+    hash |= 0;
+  }
+  return GUILD_COLORS[Math.abs(hash) % GUILD_COLORS.length];
+}
+
 // ============ Role Color Utilities ============
 
 /**

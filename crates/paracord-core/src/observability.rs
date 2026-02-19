@@ -9,6 +9,9 @@ const MAX_EVENT_TYPE_KEYS: usize = 128;
 static WS_CONNECTIONS_ACTIVE: AtomicU64 = AtomicU64::new(0);
 static WS_EVENTS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WS_EVENTS_BY_TYPE: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+static WIRE_TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
+static WIRE_TRACE_PAYLOADS_ENABLED: OnceLock<bool> = OnceLock::new();
+static WIRE_TRACE_PAYLOAD_MAX_BYTES: OnceLock<usize> = OnceLock::new();
 
 fn ws_events_by_type() -> &'static Mutex<HashMap<String, u64>> {
     WS_EVENTS_BY_TYPE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -33,6 +36,59 @@ fn normalize_event_type(raw: &str) -> String {
         return EVENT_TYPE_FALLBACK.to_string();
     }
     trimmed.to_string()
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+pub fn wire_trace_enabled() -> bool {
+    *WIRE_TRACE_ENABLED.get_or_init(|| env_bool("PARACORD_WIRE_TRACE", false))
+}
+
+pub fn wire_trace_payloads_enabled() -> bool {
+    *WIRE_TRACE_PAYLOADS_ENABLED
+        .get_or_init(|| env_bool("PARACORD_WIRE_TRACE_PAYLOADS", false))
+}
+
+fn wire_trace_payload_max_bytes() -> usize {
+    *WIRE_TRACE_PAYLOAD_MAX_BYTES.get_or_init(|| {
+        env_usize("PARACORD_WIRE_TRACE_PAYLOAD_MAX_BYTES", 1024).min(16 * 1024)
+    })
+}
+
+pub fn wire_trace_payload_preview(raw: &str) -> Option<String> {
+    if !wire_trace_payloads_enabled() {
+        return None;
+    }
+    let max = wire_trace_payload_max_bytes();
+    let bytes = raw.as_bytes();
+    let (slice, truncated) = if bytes.len() > max {
+        (&bytes[..max], true)
+    } else {
+        (bytes, false)
+    };
+    let mut preview = String::from_utf8_lossy(slice).into_owned();
+    if truncated {
+        preview.push_str("...");
+    }
+    let escaped: String = preview.chars().flat_map(char::escape_default).collect();
+    Some(escaped)
 }
 
 pub fn ws_connection_open() {

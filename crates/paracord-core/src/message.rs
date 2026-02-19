@@ -6,20 +6,45 @@ use paracord_models::permissions::Permissions;
 
 const MAX_DM_E2EE_NONCE_LEN: usize = 128;
 const MAX_DM_E2EE_CIPHERTEXT_LEN: usize = 16_384;
+const MAX_DM_E2EE_HEADER_LEN: usize = 2_048;
 
 #[derive(Debug, Clone)]
 pub struct DmE2eePayload {
     pub version: u8,
     pub nonce: String,
     pub ciphertext: String,
+    /// Signal protocol header (JSON), present for v2 messages.
+    pub header: Option<String>,
 }
 
 impl DmE2eePayload {
     fn validate(&self) -> Result<(), CoreError> {
-        if self.version != 1 {
-            return Err(CoreError::BadRequest(
-                "Unsupported DM E2EE payload version".into(),
-            ));
+        match self.version {
+            1 => {
+                // v1: no header allowed
+                if self.header.is_some() {
+                    return Err(CoreError::BadRequest(
+                        "v1 DM E2EE payloads must not include a header".into(),
+                    ));
+                }
+            }
+            2 => {
+                // v2: header is required and must be valid JSON
+                let header = self.header.as_deref().ok_or_else(|| {
+                    CoreError::BadRequest("v2 DM E2EE payloads require a header".into())
+                })?;
+                if header.is_empty() || header.len() > MAX_DM_E2EE_HEADER_LEN {
+                    return Err(CoreError::BadRequest("Invalid DM E2EE header length".into()));
+                }
+                if serde_json::from_str::<serde_json::Value>(header).is_err() {
+                    return Err(CoreError::BadRequest("DM E2EE header must be valid JSON".into()));
+                }
+            }
+            _ => {
+                return Err(CoreError::BadRequest(
+                    "Unsupported DM E2EE payload version".into(),
+                ));
+            }
         }
         if self.nonce.is_empty() || self.nonce.len() > MAX_DM_E2EE_NONCE_LEN {
             return Err(CoreError::BadRequest("Invalid DM E2EE nonce".into()));
@@ -46,6 +71,7 @@ pub struct CreateMessageOptions {
     pub reference_id: Option<i64>,
     pub allow_empty_content: bool,
     pub dm_e2ee: Option<DmE2eePayload>,
+    pub nonce: Option<String>,
 }
 
 impl Default for CreateMessageOptions {
@@ -55,6 +81,7 @@ impl Default for CreateMessageOptions {
             reference_id: None,
             allow_empty_content: false,
             dm_e2ee: None,
+            nonce: None,
         }
     }
 }
@@ -79,6 +106,7 @@ pub async fn create_message(
             reference_id,
             allow_empty_content: false,
             dm_e2ee: None,
+            nonce: None,
         },
     )
     .await
@@ -105,6 +133,7 @@ pub async fn create_message_with_type(
             reference_id,
             allow_empty_content: false,
             dm_e2ee: None,
+            nonce: None,
         },
     )
     .await
@@ -121,7 +150,17 @@ pub async fn create_message_with_options(
 ) -> Result<paracord_db::messages::MessageRow, CoreError> {
     let mut stored_content = content.to_string();
     let mut flags = 0_i32;
-    let mut nonce: Option<String> = None;
+    let mut nonce = options
+        .nonce
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if let Some(candidate) = nonce.as_ref() {
+        if candidate.len() > 64 {
+            return Err(CoreError::BadRequest("Invalid message nonce".into()));
+        }
+    }
 
     let channel = paracord_db::channels::get_channel(pool, channel_id)
         .await?
@@ -209,6 +248,11 @@ pub async fn create_message_with_options(
         }
     }
 
+    let e2ee_header = options
+        .dm_e2ee
+        .as_ref()
+        .and_then(|p| p.header.clone());
+
     let msg = paracord_db::messages::create_message_with_meta(
         pool,
         msg_id,
@@ -219,7 +263,7 @@ pub async fn create_message_with_options(
         options.reference_id,
         flags,
         nonce.as_deref(),
-        None,
+        e2ee_header.as_deref(),
     )
     .await?;
 

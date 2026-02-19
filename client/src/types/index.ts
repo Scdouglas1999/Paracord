@@ -43,6 +43,8 @@ export interface Guild {
   rules_channel_id?: string;
   default_channel_id?: string | null;
   created_at: string;
+  /** Base URL of the server this guild was fetched from (client-side tag). */
+  server_url?: string;
 }
 
 export enum ChannelType {
@@ -107,6 +109,17 @@ export enum MessageType {
   Poll = 20,
 }
 
+export interface MessageEmbed {
+  url: string;
+  title?: string;
+  description?: string;
+  site_name?: string;
+  thumbnail?: string;
+  image?: string;
+  color?: string;
+  type?: 'link' | 'image' | 'video' | 'rich';
+}
+
 export interface Message {
   id: string;
   channel_id: string;
@@ -127,6 +140,7 @@ export interface Message {
   reactions: Reaction[] | unknown[];
   poll?: Poll;
   referenced_message?: Message;
+  embeds?: MessageEmbed[];
 }
 
 export interface MessageAuthor {
@@ -144,6 +158,7 @@ export interface MessageE2eePayload {
   version: number;
   nonce: string;
   ciphertext: string;
+  header?: string;
 }
 
 export interface ForumTag {
@@ -404,6 +419,7 @@ export interface LoginRequest {
 export interface LoginResponse {
   token: string;
   user: User;
+  refresh_token?: string;
 }
 
 export interface RegisterRequest {
@@ -435,6 +451,7 @@ export interface SendMessageRequest {
   referenced_message_id?: string;
   attachment_ids?: string[];
   e2ee?: MessageE2eePayload;
+  nonce?: string;
 }
 
 export interface EditMessageRequest {

@@ -7,11 +7,13 @@ use axum::{
     routing::{any, delete, get, patch, post, put},
     Json, Router,
 };
-use paracord_core::AppState;
+use dashmap::DashMap;
+use paracord_core::{observability, AppState};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 
 pub mod error;
 pub mod middleware;
@@ -28,6 +30,10 @@ pub fn build_router() -> Router<AppState> {
         .route("/api/v1/health", get(health))
         .route("/metrics", get(metrics))
         .route("/api/v1/metrics", get(metrics))
+        // Realtime v2 (SSE + HTTP command bus)
+        .route("/api/v2/rt/session", post(routes::realtime::create_session))
+        .route("/api/v2/rt/events", get(routes::realtime::stream_events))
+        .route("/api/v2/rt/commands", post(routes::realtime::post_command))
         // Federation discovery and transport
         .route(
             "/.well-known/paracord/server",
@@ -376,6 +382,19 @@ pub fn build_router() -> Router<AppState> {
             "/api/v1/oauth2/authorize",
             post(routes::bots::oauth2_authorize),
         )
+        // Signal prekey management
+        .route(
+            "/api/v1/users/@me/keys",
+            put(routes::keys::upload_keys),
+        )
+        .route(
+            "/api/v1/users/@me/keys/count",
+            get(routes::keys::get_key_count),
+        )
+        .route(
+            "/api/v1/users/{user_id}/keys",
+            get(routes::keys::get_keys),
+        )
         // Voice
         .route(
             "/api/v1/voice/{channel_id}/join",
@@ -396,6 +415,22 @@ pub fn build_router() -> Router<AppState> {
         .route(
             "/api/v1/voice/livekit/webhook",
             post(routes::voice::livekit_webhook),
+        )
+        .route(
+            "/api/v2/voice/{channel_id}/join",
+            post(routes::voice_v2::join_voice_v2),
+        )
+        .route(
+            "/api/v2/voice/{channel_id}/leave",
+            post(routes::voice_v2::leave_voice_v2),
+        )
+        .route(
+            "/api/v2/voice/state",
+            post(routes::voice_v2::update_voice_state_v2),
+        )
+        .route(
+            "/api/v2/voice/recover",
+            post(routes::voice_v2::recover_voice_v2),
         )
         // Files
         .route(
@@ -456,11 +491,81 @@ pub fn build_router() -> Router<AppState> {
         )
         // Middleware layers
         .layer(DefaultBodyLimit::max(DEFAULT_REQUEST_BODY_LIMIT_BYTES))
-        .layer(cors)
         .layer(from_fn(metrics_middleware))
         .layer(from_fn(rate_limit_middleware))
         .layer(from_fn(security_headers_middleware))
-        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(cors)
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(|request: &Request| {
+                    let req_id = HTTP_TRACE_REQUEST_ID
+                        .fetch_add(1, Ordering::Relaxed)
+                        .saturating_add(1);
+                    let matched_path = request
+                        .extensions()
+                        .get::<axum::extract::MatchedPath>()
+                        .map(axum::extract::MatchedPath::as_str)
+                        .unwrap_or_else(|| request.uri().path());
+                    tracing::info_span!(
+                        "http",
+                        req_id,
+                        method = %request.method(),
+                        path = %matched_path
+                    )
+                })
+                .on_request(|request: &Request, _span: &tracing::Span| {
+                    if observability::wire_trace_enabled() {
+                        let request_bytes = request
+                            .headers()
+                            .get(header::CONTENT_LENGTH)
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.parse::<u64>().ok());
+                        let content_type = request
+                            .headers()
+                            .get(header::CONTENT_TYPE)
+                            .and_then(|v| v.to_str().ok());
+                        tracing::info!(
+                            target: "wire",
+                            kind = "http_request_in",
+                            request_bytes,
+                            content_type,
+                            query = request.uri().query(),
+                            "server_in"
+                        );
+                    }
+                })
+                .on_response(|response: &Response, latency: Duration, _span: &tracing::Span| {
+                    let status = response.status();
+                    let latency_ms = latency.as_millis();
+                    let response_bytes = response
+                        .headers()
+                        .get(header::CONTENT_LENGTH)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok());
+                    let response_content_type = response
+                        .headers()
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok());
+                    if observability::wire_trace_enabled() {
+                        tracing::info!(
+                            target: "wire",
+                            kind = "http_response_out",
+                            status = %status.as_u16(),
+                            latency_ms,
+                            response_bytes,
+                            response_content_type,
+                            "server_out"
+                        );
+                    }
+                    if status.is_server_error() {
+                        tracing::error!(status = %status.as_u16(), latency_ms, "request");
+                    } else if status.is_client_error() {
+                        tracing::warn!(status = %status.as_u16(), latency_ms, "request");
+                    } else {
+                        tracing::info!(status = %status.as_u16(), latency_ms, "request");
+                    }
+                }),
+        )
 }
 
 fn build_cors_layer() -> tower_http::cors::CorsLayer {
@@ -497,6 +602,7 @@ fn build_cors_layer() -> tower_http::cors::CorsLayer {
             Method::PUT,
             Method::PATCH,
             Method::DELETE,
+            Method::OPTIONS,
         ])
         .allow_headers([
             header::AUTHORIZATION,
@@ -639,10 +745,58 @@ async fn metrics(headers: HeaderMap) -> impl IntoResponse {
     )
 }
 
-static RATE_LIMIT_DB_POOL: OnceLock<paracord_db::DbPool> = OnceLock::new();
+struct RateBucket {
+    count: u32,
+    window_start: i64,
+}
+
+pub struct HttpRateLimiter {
+    buckets: DashMap<String, Mutex<RateBucket>>,
+}
+
+impl HttpRateLimiter {
+    fn new() -> Self {
+        Self {
+            buckets: DashMap::new(),
+        }
+    }
+
+    fn check_rate_limit(&self, key: &str, window_seconds: i64, max_count: u32) -> bool {
+        let now = chrono::Utc::now().timestamp();
+        let bucket = self.buckets.entry(key.to_string()).or_insert_with(|| {
+            Mutex::new(RateBucket {
+                count: 0,
+                window_start: now,
+            })
+        });
+        let mut guard = match bucket.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if now.saturating_sub(guard.window_start) >= window_seconds {
+            guard.window_start = now;
+            guard.count = 0;
+        }
+        guard.count = guard.count.saturating_add(1);
+        guard.count <= max_count
+    }
+
+    fn cleanup_stale(&self, max_age_seconds: i64) {
+        let now = chrono::Utc::now().timestamp();
+        self.buckets.retain(|_, bucket| {
+            let guard = match bucket.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            now.saturating_sub(guard.window_start) <= max_age_seconds
+        });
+    }
+}
+
+static HTTP_RATE_LIMITER: OnceLock<HttpRateLimiter> = OnceLock::new();
+static HTTP_TRACE_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 static REQUEST_COUNT: AtomicU64 = AtomicU64::new(0);
 static RATE_LIMITED_COUNT: AtomicU64 = AtomicU64::new(0);
-static RATE_LIMIT_DB_ERRORS: AtomicU64 = AtomicU64::new(0);
 
 // ── Observability: request duration histogram buckets ──────────────────────
 // We track durations in discrete buckets (in milliseconds) using atomics.
@@ -721,23 +875,34 @@ fn record_status_code(status: u16) {
     }
 }
 
-pub fn install_rate_limit_backend(pool: paracord_db::DbPool) {
-    let _ = RATE_LIMIT_DB_POOL.set(pool);
+pub fn install_http_rate_limiter() {
+    let _ = HTTP_RATE_LIMITER.set(HttpRateLimiter::new());
 }
 
-fn rate_limit_fail_open_enabled() -> bool {
-    std::env::var("PARACORD_RATE_LIMIT_FAIL_OPEN")
-        .ok()
-        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(false)
+pub fn spawn_http_rate_limiter_cleanup(shutdown: Arc<Notify>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = ticker.tick() => {
+                    if let Some(limiter) = HTTP_RATE_LIMITER.get() {
+                        limiter.cleanup_stale(600);
+                    }
+                }
+            }
+        }
+    });
 }
 
 async fn rate_limit_middleware(req: Request, next: Next) -> Response {
     const GLOBAL_LIMIT_PER_SECOND: u32 = 120;
-    const AUTH_LIMIT_PER_MINUTE: u32 = 20;
+    const AUTH_LIMIT_PER_MINUTE: u32 = 60;
     const BOT_LIMIT_PER_MINUTE: u32 = 300;
-    const COUNTER_TTL_SECONDS: i64 = 600;
-    const COUNTER_CLEANUP_LIMIT: i64 = 1024;
+
+    if req.method() == Method::OPTIONS {
+        return next.run(req).await;
+    }
 
     let path = req.uri().path().to_string();
     if path == "/livekit" || path.starts_with("/livekit/") {
@@ -747,10 +912,7 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
         return next.run(req).await;
     }
 
-    let request_index = REQUEST_COUNT
-        .fetch_add(1, Ordering::Relaxed)
-        .saturating_add(1);
-    let now = chrono::Utc::now().timestamp();
+    REQUEST_COUNT.fetch_add(1, Ordering::Relaxed);
     let is_auth_path = path.starts_with("/api/v1/auth/");
     let trust_proxy = std::env::var("PARACORD_TRUST_PROXY")
         .ok()
@@ -793,26 +955,9 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
         peer_ip.unwrap_or_else(|| "unknown".to_string())
     };
 
-    if let Some(pool) = RATE_LIMIT_DB_POOL.get() {
+    if let Some(limiter) = HTTP_RATE_LIMITER.get() {
         let global_key = format!("http:global:{key}");
-        let global_count =
-            paracord_db::rate_limits::increment_window_counter(pool, &global_key, now, 1).await;
-        let global_count = match global_count {
-            Ok(count) => count,
-            Err(err) => {
-                RATE_LIMIT_DB_ERRORS.fetch_add(1, Ordering::Relaxed);
-                tracing::warn!("rate-limit backend failure (global counter): {}", err);
-                if rate_limit_fail_open_enabled() || !is_auth_path {
-                    return next.run(req).await;
-                }
-                return crate::error::ApiError::ServiceUnavailable(
-                    "Rate limit backend unavailable".to_string(),
-                )
-                .into_response();
-            }
-        };
-
-        if global_count > GLOBAL_LIMIT_PER_SECOND as i64 {
+        if !limiter.check_rate_limit(&global_key, 1, GLOBAL_LIMIT_PER_SECOND) {
             RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
             return crate::error::ApiError::RateLimited.into_response();
         }
@@ -825,69 +970,19 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
             .map(str::trim)
             .filter(|token| !token.is_empty())
         {
-            let minute = now / 60;
             let token_hash = paracord_db::bot_applications::hash_token(bot_token);
             let bot_key = format!("http:bot:{}", &token_hash[..24]);
-            let bot_count =
-                paracord_db::rate_limits::increment_window_counter(pool, &bot_key, minute, 60)
-                    .await;
-            let bot_count = match bot_count {
-                Ok(count) => count,
-                Err(err) => {
-                    RATE_LIMIT_DB_ERRORS.fetch_add(1, Ordering::Relaxed);
-                    tracing::warn!("rate-limit backend failure (bot counter): {}", err);
-                    if rate_limit_fail_open_enabled() || !is_auth_path {
-                        return next.run(req).await;
-                    }
-                    return crate::error::ApiError::ServiceUnavailable(
-                        "Rate limit backend unavailable".to_string(),
-                    )
-                    .into_response();
-                }
-            };
-            if bot_count > BOT_LIMIT_PER_MINUTE as i64 {
+            if !limiter.check_rate_limit(&bot_key, 60, BOT_LIMIT_PER_MINUTE) {
                 RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
                 return crate::error::ApiError::RateLimited.into_response();
             }
         }
 
         if is_auth_path {
-            let minute = now / 60;
             let auth_key = format!("http:auth:{key}");
-            let auth_count =
-                paracord_db::rate_limits::increment_window_counter(pool, &auth_key, minute, 60)
-                    .await;
-            let auth_count = match auth_count {
-                Ok(count) => count,
-                Err(err) => {
-                    RATE_LIMIT_DB_ERRORS.fetch_add(1, Ordering::Relaxed);
-                    tracing::warn!("rate-limit backend failure (auth counter): {}", err);
-                    if rate_limit_fail_open_enabled() || !is_auth_path {
-                        return next.run(req).await;
-                    }
-                    return crate::error::ApiError::ServiceUnavailable(
-                        "Rate limit backend unavailable".to_string(),
-                    )
-                    .into_response();
-                }
-            };
-            if auth_count > AUTH_LIMIT_PER_MINUTE as i64 {
+            if !limiter.check_rate_limit(&auth_key, 60, AUTH_LIMIT_PER_MINUTE) {
                 RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
                 return crate::error::ApiError::RateLimited.into_response();
-            }
-        }
-
-        if request_index % 128 == 0 {
-            let cutoff = now.saturating_sub(COUNTER_TTL_SECONDS);
-            if let Err(err) = paracord_db::rate_limits::purge_window_counters_older_than(
-                pool,
-                cutoff,
-                COUNTER_CLEANUP_LIMIT,
-            )
-            .await
-            {
-                RATE_LIMIT_DB_ERRORS.fetch_add(1, Ordering::Relaxed);
-                tracing::warn!("rate-limit backend cleanup failure: {}", err);
             }
         }
     }

@@ -18,6 +18,7 @@ const MAX_POLL_QUESTION_LEN: usize = 300;
 const MAX_POLL_OPTION_LEN: usize = 100;
 const MAX_POLL_OPTIONS: usize = 10;
 const MAX_POLL_DURATION_MINUTES: i64 = 60 * 24 * 14; // 14 days
+const MAX_MESSAGE_NONCE_LEN: usize = 64;
 
 fn contains_dangerous_markup(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
@@ -61,6 +62,7 @@ pub struct DmE2eePayloadRequest {
     pub version: u8,
     pub nonce: String,
     pub ciphertext: String,
+    pub header: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +72,7 @@ pub struct SendMessageRequest {
     #[serde(default)]
     pub attachment_ids: Vec<String>,
     pub e2ee: Option<DmE2eePayloadRequest>,
+    pub nonce: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -316,11 +319,16 @@ async fn message_to_json(
             .as_ref()
             .zip(msg.content.as_ref())
             .map(|(nonce, ciphertext)| {
-                json!({
-                    "version": 1,
+                let version = if msg.e2ee_header.is_some() { 2 } else { 1 };
+                let mut payload = json!({
+                    "version": version,
                     "nonce": nonce,
                     "ciphertext": ciphertext,
-                })
+                });
+                if let Some(header) = &msg.e2ee_header {
+                    payload["header"] = json!(header);
+                }
+                payload
             })
     } else {
         None
@@ -678,6 +686,18 @@ pub async fn send_message(
     Path(channel_id): Path<i64>,
     Json(body): Json<SendMessageRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let nonce = body
+        .nonce
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if let Some(candidate) = nonce.as_ref() {
+        if candidate.len() > MAX_MESSAGE_NONCE_LEN {
+            return Err(ApiError::BadRequest("Message nonce must be 1-64 characters".into()));
+        }
+    }
+
     if body.content.trim().is_empty() && body.attachment_ids.is_empty() && body.e2ee.is_none() {
         return Err(ApiError::BadRequest(
             "Message must include content or attachments".into(),
@@ -717,7 +737,7 @@ pub async fn send_message(
         None => None,
     };
 
-    let mut attachment_ids = Vec::with_capacity(body.attachment_ids.len());
+    let mut attachments = Vec::with_capacity(body.attachment_ids.len());
     let now = chrono::Utc::now();
     for attachment_id in &body.attachment_ids {
         let id = attachment_id
@@ -727,9 +747,6 @@ pub async fn send_message(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
             .ok_or(ApiError::BadRequest("Attachment does not exist".into()))?;
-        if attachment.message_id.is_some() {
-            return Err(ApiError::BadRequest("Attachment is already linked".into()));
-        }
         if attachment.uploader_id != Some(auth.user_id) {
             return Err(ApiError::Forbidden);
         }
@@ -746,7 +763,7 @@ pub async fn send_message(
                 "Attachment upload has expired; re-upload the file".into(),
             ));
         }
-        attachment_ids.push(id);
+        attachments.push(attachment);
     }
 
     let msg_id = paracord_util::snowflake::generate(1);
@@ -757,6 +774,7 @@ pub async fn send_message(
             version: payload.version,
             nonce: payload.nonce,
             ciphertext: payload.ciphertext,
+            header: payload.header,
         });
 
     let msg = paracord_core::message::create_message_with_options(
@@ -770,13 +788,21 @@ pub async fn send_message(
             reference_id: referenced_message_id,
             allow_empty_content: !body.attachment_ids.is_empty(),
             dm_e2ee,
+            nonce,
         },
     )
     .await?;
-    for id in &attachment_ids {
+    let created_new = msg.id == msg_id;
+    for attachment in &attachments {
+        if attachment.message_id == Some(msg.id) {
+            continue;
+        }
+        if attachment.message_id.is_some() {
+            return Err(ApiError::BadRequest("Attachment is already linked".into()));
+        }
         let attached = paracord_db::attachments::attach_to_message(
             &state.db,
-            *id,
+            attachment.id,
             msg.id,
             auth.user_id,
             channel_id,
@@ -785,6 +811,16 @@ pub async fn send_message(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
         if !attached {
+            let current_attachment =
+                paracord_db::attachments::get_attachment(&state.db, attachment.id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            if current_attachment
+                .as_ref()
+                .is_some_and(|current| current.message_id == Some(msg.id))
+            {
+                continue;
+            }
             return Err(ApiError::BadRequest(
                 "Attachment is missing or already linked".into(),
             ));
@@ -792,51 +828,60 @@ pub async fn send_message(
     }
 
     // Increment thread message count if the channel is a thread
-    if channel.channel_type == 6 {
+    if created_new && channel.channel_type == 6 {
         let _ = paracord_db::channels::increment_thread_message_count(&state.db, channel_id).await;
     }
 
     let guild_id = channel.guild_id();
     let msg_json = message_to_json(&state, &msg, auth.user_id).await;
 
-    if guild_id.is_none() {
-        // DM channel: deliver only to participants, not all connected users
-        let recipient_ids = paracord_db::dms::get_dm_recipient_ids(&state.db, channel_id)
-            .await
-            .unwrap_or_default();
-        state
-            .event_bus
-            .dispatch_to_users("MESSAGE_CREATE", msg_json.clone(), recipient_ids);
-    } else {
-        state
-            .event_bus
-            .dispatch("MESSAGE_CREATE", msg_json.clone(), guild_id);
-    }
+    if created_new {
+        if guild_id.is_none() {
+            // DM channel: deliver only to participants, not all connected users
+            let recipient_ids = paracord_db::dms::get_dm_recipient_ids(&state.db, channel_id)
+                .await
+                .unwrap_or_default();
+            state
+                .event_bus
+                .dispatch_to_users("MESSAGE_CREATE", msg_json.clone(), recipient_ids);
+        } else {
+            state
+                .event_bus
+                .dispatch("MESSAGE_CREATE", msg_json.clone(), guild_id);
+        }
 
-    // Federation: forward message to peer servers (non-blocking)
-    if let Some(gid) = guild_id {
-        if paracord_federation::is_enabled() {
-            let fed_state = state.clone();
-            let fed_content = json!(body.content);
-            let fed_msg_id = msg.id;
-            let fed_author = auth.user_id;
-            let fed_ts = msg.created_at.timestamp_millis();
-            tokio::spawn(async move {
-                federation_forward_message(
-                    &fed_state,
-                    fed_msg_id,
-                    channel_id,
-                    gid,
-                    fed_author,
-                    &fed_content,
-                    fed_ts,
-                )
-                .await;
-            });
+        // Federation: forward message to peer servers (non-blocking)
+        if let Some(gid) = guild_id {
+            if paracord_federation::is_enabled() {
+                let fed_state = state.clone();
+                let fed_content = json!(body.content);
+                let fed_msg_id = msg.id;
+                let fed_author = auth.user_id;
+                let fed_ts = msg.created_at.timestamp_millis();
+                tokio::spawn(async move {
+                    federation_forward_message(
+                        &fed_state,
+                        fed_msg_id,
+                        channel_id,
+                        gid,
+                        fed_author,
+                        &fed_content,
+                        fed_ts,
+                    )
+                    .await;
+                });
+            }
         }
     }
 
-    Ok((StatusCode::CREATED, Json(msg_json)))
+    Ok((
+        if created_new {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(msg_json),
+    ))
 }
 
 pub async fn create_poll(
@@ -1126,6 +1171,7 @@ pub async fn edit_message(
             version: payload.version,
             nonce: payload.nonce,
             ciphertext: payload.ciphertext,
+            header: payload.header,
         });
     let updated = paracord_core::message::edit_message_with_options(
         &state.db,

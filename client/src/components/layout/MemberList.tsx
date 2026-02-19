@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown } from 'lucide-react';
 import type { Role } from '../../types/index';
 import { UserProfilePopup } from '../user/UserProfile';
@@ -26,6 +27,7 @@ interface MemberWithUser {
 interface MemberListProps {
   members?: MemberWithUser[];
   roles?: Role[];
+  compact?: boolean;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -45,7 +47,7 @@ export function resolveMemberStatus(
   return 'offline';
 }
 
-export function MemberList({ members: propMembers, roles = [] }: MemberListProps) {
+export function MemberList({ members: propMembers, roles = [], compact = false }: MemberListProps) {
   const selectedGuildId = useGuildStore(s => s.selectedGuildId);
   const activeServerId = useServerListStore(s => s.activeServerId);
   const activeServer = useServerListStore((s) =>
@@ -126,6 +128,80 @@ export function MemberList({ members: propMembers, roles = [] }: MemberListProps
   };
 
   const getStatusColor = (status?: string) => STATUS_COLORS[status || 'offline'];
+  const isMemberListLoading = !propMembers && !storeMembers && !!selectedGuildId;
+
+  if (compact) {
+    const compactMembers = [...members].sort((a, b) => {
+      const leftOnline = a.status !== 'offline' ? 1 : 0;
+      const rightOnline = b.status !== 'offline' ? 1 : 0;
+      return rightOnline - leftOnline;
+    });
+
+    return (
+      <div
+        className="flex h-full flex-col items-center overflow-y-auto px-2 py-5 scrollbar-thin"
+        role="complementary"
+        aria-label="Member list"
+      >
+        <div className="mb-4 text-center">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Members</div>
+          <div className="mt-1 text-sm font-semibold text-text-primary">{members.length}</div>
+        </div>
+
+        <div className="flex w-full flex-1 flex-col items-center gap-2">
+          {isMemberListLoading ? (
+            Array.from({ length: 7 }, (_, i) => (
+              <div
+                key={i}
+                className="h-10 w-10 animate-pulse rounded-xl border border-border-subtle bg-bg-mod-subtle"
+              />
+            ))
+          ) : compactMembers.length > 0 ? (
+            compactMembers.map((member) => (
+              <button
+                key={member.user_id}
+                title={member.nick || member.username}
+                className="group relative flex h-10 w-10 items-center justify-center rounded-xl border border-transparent bg-bg-mod-subtle/65 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:border-border-subtle hover:bg-bg-mod-strong"
+                style={{ opacity: member.status === 'offline' ? 0.45 : 1 }}
+                onClick={(e) => handleMemberClick(e, member)}
+              >
+                {(member.nick || member.username).charAt(0).toUpperCase()}
+                <span
+                  className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2"
+                  style={{
+                    backgroundColor: getStatusColor(member.status),
+                    borderColor: 'var(--bg-secondary)',
+                  }}
+                />
+              </button>
+            ))
+          ) : (
+            <div className="pt-2 text-center text-[11px] text-text-muted">No members</div>
+          )}
+        </div>
+
+        {selectedMember && createPortal(
+          <UserProfilePopup
+            user={{
+              id: selectedMember.user_id,
+              username: selectedMember.username,
+              discriminator: '0000',
+              avatar_hash: selectedMember.avatar_hash,
+              display_name: selectedMember.nick,
+              bot: selectedMember.bot ?? false,
+              system: false,
+              flags: 0,
+              created_at: '',
+            }}
+            roles={roles.filter((role) => selectedMember.roles.includes(role.id))}
+            position={popupPos}
+            onClose={() => setSelectedMember(null)}
+          />,
+          document.body
+        )}
+      </div>
+    );
+  }
 
   const renderMember = (member: MemberWithUser) => (
     <button
@@ -174,10 +250,69 @@ export function MemberList({ members: propMembers, roles = [] }: MemberListProps
     </button>
   );
 
-  const isMemberListLoading = !propMembers && !storeMembers && !!selectedGuildId;
+  // Flatten all sections into a single virtual row list for virtualization
+  type VirtualRow =
+    | { type: 'stats' }
+    | { type: 'header'; label: string; count: number }
+    | { type: 'member'; member: MemberWithUser }
+    | { type: 'offlineToggle'; count: number }
+    | { type: 'empty' };
+
+  const virtualRows = useMemo<VirtualRow[]>(() => {
+    if (isMemberListLoading) return [];
+    const rows: VirtualRow[] = [];
+    rows.push({ type: 'stats' });
+
+    for (const [roleId, groupMembers] of roleGroups.entries()) {
+      const role = roles.find(r => r.id === roleId);
+      rows.push({ type: 'header', label: role?.name || 'Members', count: groupMembers.length });
+      for (const m of groupMembers) rows.push({ type: 'member', member: m });
+    }
+
+    if (noRoleGroup.length > 0) {
+      rows.push({ type: 'header', label: 'Online', count: noRoleGroup.length });
+      for (const m of noRoleGroup) rows.push({ type: 'member', member: m });
+    }
+
+    if (offlineMems.length > 0) {
+      rows.push({ type: 'offlineToggle', count: offlineMems.length });
+      if (showOffline) {
+        for (const m of offlineMems) rows.push({ type: 'member', member: m });
+      }
+    }
+
+    if (members.length === 0) {
+      rows.push({ type: 'empty' });
+    }
+
+    return rows;
+  }, [roleGroups, noRoleGroup, offlineMems, showOffline, members.length, roles, isMemberListLoading]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const estimateSize = useCallback((index: number) => {
+    const row = virtualRows[index];
+    if (!row) return 52;
+    switch (row.type) {
+      case 'stats': return 76;
+      case 'header': return 38;
+      case 'offlineToggle': return 42;
+      case 'empty': return 80;
+      case 'member': return 52;
+      default: return 52;
+    }
+  }, [virtualRows]);
+
+  const virtualizer = useVirtualizer({
+    count: virtualRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize,
+    overscan: 10,
+  });
 
   return (
     <div
+      ref={scrollRef}
       className="flex flex-col overflow-y-auto scrollbar-thin"
       role="complementary"
       aria-label="Member list"
@@ -186,73 +321,64 @@ export function MemberList({ members: propMembers, roles = [] }: MemberListProps
         minWidth: 'var(--member-list-width)',
       }}
     >
-      <div className="px-3 pt-4.5">
-        {isMemberListLoading ? (
-          <div aria-label="Loading members">
-            {Array.from({ length: 7 }, (_, i) => (
-              <SkeletonMember key={i} />
-            ))}
-          </div>
-        ) : (
-        <>
-        <div className="mb-6 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-3.5 py-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">Members</div>
-          <div className="mt-0.5 text-base font-semibold text-text-primary">{members.length}</div>
+      {isMemberListLoading ? (
+        <div className="px-3 pt-4.5" aria-label="Loading members">
+          {Array.from({ length: 7 }, (_, i) => (
+            <SkeletonMember key={i} />
+          ))}
         </div>
-        {Array.from(roleGroups.entries()).map(([roleId, groupMembers]) => {
-          const role = roles.find(r => r.id === roleId);
-          return (
-            <div key={roleId} className="mt-6 mb-3">
-              <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-text-muted">
-                {role?.name || 'Members'} — {groupMembers.length}
+      ) : (
+        <div
+          className="relative px-3 pt-4.5"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {virtualizer.getVirtualItems().map((virtualItem) => {
+            const row = virtualRows[virtualItem.index];
+            if (!row) return null;
+            return (
+              <div
+                key={virtualItem.index}
+                className="absolute left-0 right-0 px-3"
+                style={{
+                  top: virtualItem.start,
+                  height: virtualItem.size,
+                }}
+              >
+                {row.type === 'stats' && (
+                  <div className="mb-6 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-3.5 py-3">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">Members</div>
+                    <div className="mt-0.5 text-base font-semibold text-text-primary">{members.length}</div>
+                  </div>
+                )}
+                {row.type === 'header' && (
+                  <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-text-muted">
+                    {row.label} — {row.count}
+                  </div>
+                )}
+                {row.type === 'member' && renderMember(row.member)}
+                {row.type === 'offlineToggle' && (
+                  <button
+                    className="category-header w-full rounded-lg px-3 py-2 hover:bg-bg-mod-subtle"
+                    onClick={() => setShowOffline(!showOffline)}
+                  >
+                    <ChevronDown
+                      size={12}
+                      className="transition-transform"
+                      style={{ transform: showOffline ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+                    />
+                    Offline — {row.count}
+                  </button>
+                )}
+                {row.type === 'empty' && (
+                  <div className="flex flex-col items-center justify-center py-8 px-4">
+                    <p className="text-xs text-center text-text-muted">No members to display</p>
+                  </div>
+                )}
               </div>
-              <div className="space-y-1.5">
-                {groupMembers.map(renderMember)}
-              </div>
-            </div>
-          );
-        })}
-
-        {noRoleGroup.length > 0 && (
-          <div className="mt-6 mb-3">
-            <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-text-muted">
-              Online — {noRoleGroup.length}
-            </div>
-            <div className="space-y-1.5">
-              {noRoleGroup.map(renderMember)}
-            </div>
-          </div>
-        )}
-
-        {offlineMems.length > 0 && (
-          <div className="mt-8 mb-3">
-            <button
-              className="category-header w-full rounded-lg px-3 py-2 hover:bg-bg-mod-subtle"
-              onClick={() => setShowOffline(!showOffline)}
-            >
-              <ChevronDown
-                size={12}
-                className="transition-transform"
-                style={{ transform: showOffline ? 'rotate(0deg)' : 'rotate(-90deg)' }}
-              />
-              Offline — {offlineMems.length}
-            </button>
-            {showOffline && (
-              <div className="space-y-1.5">
-                {offlineMems.map(renderMember)}
-              </div>
-            )}
-          </div>
-        )}
-
-        {members.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-8 px-4">
-            <p className="text-xs text-center text-text-muted">No members to display</p>
-          </div>
-        )}
-        </>
-        )}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {selectedMember && createPortal(
         <UserProfilePopup

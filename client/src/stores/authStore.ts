@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { User, UserSettings } from '../types';
 import { authApi } from '../api/auth';
 import { extractApiError } from '../api/client';
-import { clearLegacyPersistedAuth, setAccessToken } from '../lib/authToken';
+import { clearLegacyPersistedAuth, getRefreshToken, setAccessToken, setRefreshToken } from '../lib/authToken';
 import { toast } from './toastStore';
 
 interface AuthState {
@@ -28,6 +28,7 @@ interface AuthState {
 
 function clearAuthState(set: (partial: Partial<AuthState>) => void): void {
   setAccessToken(null);
+  setRefreshToken(null);
   clearLegacyPersistedAuth();
   set({
     token: null,
@@ -56,6 +57,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
         password,
       });
       setAccessToken(data.token);
+      if (data.refresh_token) setRefreshToken(data.refresh_token);
       set({ token: data.token, user: data.user, isLoading: false });
     } catch (err: unknown) {
       const message =
@@ -76,6 +78,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
         display_name: displayName || undefined,
       });
       setAccessToken(data.token);
+      if (data.refresh_token) setRefreshToken(data.refresh_token);
       set({ token: data.token, user: data.user, isLoading: false });
     } catch (err: unknown) {
       const message =
@@ -89,8 +92,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
   initializeSession: async () => {
     clearLegacyPersistedAuth();
     try {
-      const { data } = await authApi.refresh();
+      const refreshToken = getRefreshToken();
+      const { data } = await authApi.refresh(refreshToken || undefined);
       setAccessToken(data.token);
+      if (data.refresh_token) setRefreshToken(data.refresh_token);
       set({ token: data.token, sessionBootstrapComplete: true });
     } catch {
       setAccessToken(null);

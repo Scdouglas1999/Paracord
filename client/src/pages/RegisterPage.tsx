@@ -108,9 +108,9 @@ export function RegisterPage() {
             </div>
           )}
 
-          <div className="space-y-7">
+          <div className="card-stack-roomy">
             <label className="block">
-              <span className="mb-3 block text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
                 Email {requireEmail && <span className="text-accent-danger">*</span>}
               </span>
               <input
@@ -118,24 +118,24 @@ export function RegisterPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required={requireEmail}
-                className="input-field"
+                className="input-field mt-2"
                 placeholder={requireEmail ? 'you@example.com' : 'Optional'}
               />
             </label>
 
             <label className="block">
-              <span className="mb-3 block text-xs font-semibold uppercase tracking-wide text-text-secondary">Display Name</span>
+              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">Display Name</span>
               <input
                 type="text"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                className="input-field"
+                className="input-field mt-2"
                 placeholder="How people see you"
               />
             </label>
 
             <label className="block">
-              <span className="mb-3 block text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
                 Username <span className="text-accent-danger">*</span>
               </span>
               <input
@@ -143,13 +143,13 @@ export function RegisterPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
-                className="input-field"
+                className="input-field mt-2"
                 placeholder="Unique account handle"
               />
             </label>
 
             <label className="block">
-              <span className="mb-3 block text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
                 Password <span className="text-accent-danger">*</span>
               </span>
               <input
@@ -158,7 +158,7 @@ export function RegisterPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={MIN_PASSWORD_LENGTH}
-                className="input-field"
+                className="input-field mt-2"
                 placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
               />
             </label>

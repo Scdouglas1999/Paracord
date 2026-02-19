@@ -555,6 +555,7 @@ fn looks_like_placeholder_secret(raw: &str) -> bool {
     }
     normalized.contains("change_me")
         || normalized.contains("replace_me")
+        || normalized.contains("replace_with")
         || normalized.starts_with("example")
         || normalized == "devkey"
         || normalized == "devsecret"
@@ -949,6 +950,11 @@ impl Config {
         if let Ok(value) = std::env::var("PARACORD_WINDOWS_FIREWALL_AUTO_ALLOW") {
             if let Ok(parsed) = value.parse::<bool>() {
                 config.network.windows_firewall_auto_allow = parsed;
+            }
+        }
+        if let Ok(value) = std::env::var("PARACORD_TLS_ENABLED") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                config.tls.enabled = parsed;
             }
         }
         if let Ok(value) = std::env::var("PARACORD_TLS_ACME_ENABLED") {

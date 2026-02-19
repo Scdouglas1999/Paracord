@@ -1,5 +1,6 @@
 import { createElement, type ReactNode } from 'react';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from './customEmoji';
+import CodeBlock from '../components/message/CodeBlock';
 
 interface Token {
   type:
@@ -22,17 +23,6 @@ interface Token {
   language?: string;
 }
 
-const KEYWORDS_BY_LANGUAGE: Record<string, Set<string>> = {
-  javascript: new Set(['const', 'let', 'var', 'function', 'return', 'if', 'else', 'class', 'new', 'for', 'while', 'try', 'catch', 'import', 'from', 'export', 'async', 'await']),
-  typescript: new Set(['const', 'let', 'var', 'function', 'return', 'if', 'else', 'class', 'new', 'for', 'while', 'try', 'catch', 'import', 'from', 'export', 'async', 'await', 'interface', 'type', 'extends', 'implements']),
-  ts: new Set(['const', 'let', 'var', 'function', 'return', 'if', 'else', 'class', 'new', 'for', 'while', 'try', 'catch', 'import', 'from', 'export', 'async', 'await', 'interface', 'type', 'extends', 'implements']),
-  js: new Set(['const', 'let', 'var', 'function', 'return', 'if', 'else', 'class', 'new', 'for', 'while', 'try', 'catch', 'import', 'from', 'export', 'async', 'await']),
-  rust: new Set(['fn', 'let', 'mut', 'pub', 'impl', 'struct', 'enum', 'trait', 'async', 'await', 'match', 'if', 'else', 'loop', 'while', 'for', 'return', 'use']),
-  rs: new Set(['fn', 'let', 'mut', 'pub', 'impl', 'struct', 'enum', 'trait', 'async', 'await', 'match', 'if', 'else', 'loop', 'while', 'for', 'return', 'use']),
-  json: new Set([]),
-  bash: new Set(['if', 'then', 'fi', 'for', 'in', 'do', 'done', 'case', 'esac', 'function']),
-  sh: new Set(['if', 'then', 'fi', 'for', 'in', 'do', 'done', 'case', 'esac', 'function']),
-};
 
 function tokenizeInline(text: string): Token[] {
   const tokens: Token[] = [];
@@ -146,28 +136,6 @@ function tokenizeInline(text: string): Token[] {
   return tokens;
 }
 
-function renderHighlightedCode(content: string, language: string | undefined): ReactNode {
-  const normalizedLanguage = (language || '').toLowerCase();
-  const keywords = KEYWORDS_BY_LANGUAGE[normalizedLanguage];
-  if (!keywords) return content;
-
-  return content
-    .split(/(\s+|[()[\]{}.,;:+\-*/=<>!&|]+)/g)
-    .map((part, index) => {
-      if (!part) return null;
-      if (/^\s+$/.test(part) || /^[()[\]{}.,;:+\-*/=<>!&|]+$/.test(part)) return part;
-      if (/^["'`].*["'`]$/.test(part)) {
-        return createElement('span', { key: `string-${index}`, style: { color: '#b5cea8' } }, part);
-      }
-      if (/^\d+(\.\d+)?$/.test(part)) {
-        return createElement('span', { key: `number-${index}`, style: { color: '#d19a66' } }, part);
-      }
-      if (keywords.has(part)) {
-        return createElement('span', { key: `keyword-${index}`, style: { color: 'var(--accent-primary)' } }, part);
-      }
-      return part;
-    });
-}
 
 function renderInline(text: string, guildId?: string): ReactNode[] {
   const tokens = tokenizeInline(text);
@@ -193,49 +161,7 @@ function renderInline(text: string, guildId?: string): ReactNode[] {
           token.content,
         );
       case 'codeblock':
-        return createElement(
-          'div',
-          {
-            key: i,
-            style: {
-              margin: '6px 0',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: '8px',
-              overflow: 'hidden',
-              backgroundColor: 'var(--bg-code)',
-            },
-          },
-          token.language
-            ? createElement(
-              'div',
-              {
-                style: {
-                  padding: '4px 8px',
-                  borderBottom: '1px solid var(--border-subtle)',
-                  fontSize: '11px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  color: 'var(--text-muted)',
-                },
-              },
-              token.language,
-            )
-            : null,
-          createElement(
-            'pre',
-            {
-              style: {
-                padding: '8px 10px',
-                margin: 0,
-                overflowX: 'auto',
-                fontSize: '0.875em',
-                lineHeight: '1.2rem',
-                fontFamily: 'monospace',
-              },
-            },
-            createElement('code', null, renderHighlightedCode(token.content, token.language)),
-          ),
-        );
+        return createElement(CodeBlock, { key: i, code: token.content, language: token.language });
       case 'strikethrough':
         return createElement('s', { key: i }, token.content);
       case 'underline':
@@ -370,49 +296,7 @@ export function parseMarkdown(text: string, guildId?: string): ReactNode[] {
       if (index < lines.length) index += 1;
       const content = codeLines.join('\n');
       nodes.push(
-        createElement(
-          'div',
-          {
-            key: `code-${index}`,
-            style: {
-              margin: '6px 0',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: '8px',
-              overflow: 'hidden',
-              backgroundColor: 'var(--bg-code)',
-            },
-          },
-          language
-            ? createElement(
-              'div',
-              {
-                style: {
-                  padding: '4px 8px',
-                  borderBottom: '1px solid var(--border-subtle)',
-                  fontSize: '11px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  color: 'var(--text-muted)',
-                },
-              },
-              language,
-            )
-            : null,
-          createElement(
-            'pre',
-            {
-              style: {
-                margin: 0,
-                padding: '8px 10px',
-                overflowX: 'auto',
-                fontSize: '0.875em',
-                lineHeight: '1.2rem',
-                fontFamily: 'monospace',
-              },
-            },
-            createElement('code', null, renderHighlightedCode(content, language)),
-          ),
-        ),
+        createElement(CodeBlock, { key: 'code-' + index, code: content, language: language }),
       );
       continue;
     }

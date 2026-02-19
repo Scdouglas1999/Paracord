@@ -23,6 +23,7 @@ interface ChannelState {
   channelsByGuild: Record<string, Channel[]>;
   // Flat accessor for the currently viewed guild (kept for backward compat)
   channels: Channel[];
+  guildChannelsLoaded: Record<string, boolean>;
   selectedChannelId: string | null;
   selectedGuildId: string | null;
   isLoading: boolean;
@@ -35,6 +36,7 @@ interface ChannelState {
   createChannel: (guildId: string, data: Parameters<typeof guildApi.createChannel>[1]) => Promise<Channel>;
   updateChannelData: (channelId: string, data: Partial<Channel>) => Promise<void>;
   deleteChannel: (channelId: string) => Promise<void>;
+  reorderChannels: (guildId: string, positions: { id: string; position: number; parent_id?: string | null }[]) => Promise<void>;
 
   // Gateway event handlers
   addChannel: (channel: Channel) => void;
@@ -44,10 +46,13 @@ interface ChannelState {
 }
 
 const _fetchInFlight = new Set<string>();
+const MAX_FETCH_RETRIES = 2;
+const RETRY_BASE_DELAY_MS = 1500;
 
-export const useChannelStore = create<ChannelState>()((set, _get) => ({
+export const useChannelStore = create<ChannelState>()((set, get) => ({
   channelsByGuild: {},
   channels: [],
+  guildChannelsLoaded: {},
   selectedChannelId: null,
   selectedGuildId: null,
   isLoading: false,
@@ -56,20 +61,29 @@ export const useChannelStore = create<ChannelState>()((set, _get) => ({
     if (_fetchInFlight.has(guildId)) return;
     _fetchInFlight.add(guildId);
     set({ isLoading: true });
-    try {
-      const { data } = await guildApi.getChannels(guildId);
-      const sorted = data.map(normalizeChannel).sort((a, b) => a.position - b.position);
-      set((state) => {
-        const channelsByGuild = { ...state.channelsByGuild, [guildId]: sorted };
-        const channels = state.selectedGuildId === guildId ? sorted : state.channels;
-        return { channelsByGuild, channels, isLoading: false };
-      });
-    } catch (err) {
-      set({ isLoading: false });
-      toast.error(`Failed to load channels: ${extractApiError(err)}`);
-    } finally {
-      _fetchInFlight.delete(guildId);
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, RETRY_BASE_DELAY_MS * attempt));
+        }
+        const { data } = await guildApi.getChannels(guildId);
+        const sorted = data.map(normalizeChannel).sort((a, b) => a.position - b.position);
+        set((state) => {
+          const channelsByGuild = { ...state.channelsByGuild, [guildId]: sorted };
+          const channels = state.selectedGuildId === guildId ? sorted : state.channels;
+          const guildChannelsLoaded = { ...state.guildChannelsLoaded, [guildId]: true };
+          return { channelsByGuild, channels, isLoading: false, guildChannelsLoaded };
+        });
+        _fetchInFlight.delete(guildId);
+        return;
+      } catch (err) {
+        lastErr = err;
+      }
     }
+    set({ isLoading: false });
+    toast.error(`Failed to load channels: ${extractApiError(lastErr)}`);
+    _fetchInFlight.delete(guildId);
   },
 
   selectChannel: (channelId) => set({ selectedChannelId: channelId }),
@@ -122,6 +136,43 @@ export const useChannelStore = create<ChannelState>()((set, _get) => ({
       const channels = state.channels.filter((c) => c.id !== channelId);
       return { channelsByGuild: newByGuild, channels };
     });
+  },
+
+  reorderChannels: async (guildId, positions) => {
+    // Snapshot for rollback
+    const prev = get().channelsByGuild[guildId] || [];
+
+    // Optimistic update
+    set((state) => {
+      const existing = state.channelsByGuild[guildId] || [];
+      const posMap = new Map(positions.map((p) => [p.id, p]));
+      const updated = existing
+        .map((ch) => {
+          const patch = posMap.get(ch.id);
+          if (!patch) return ch;
+          return {
+            ...ch,
+            position: patch.position,
+            parent_id: patch.parent_id !== undefined ? patch.parent_id : ch.parent_id,
+          };
+        })
+        .sort((a, b) => a.position - b.position);
+      const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
+      const channels = state.selectedGuildId === guildId ? updated : state.channels;
+      return { channelsByGuild, channels };
+    });
+
+    try {
+      await channelApi.updatePositions(guildId, positions);
+    } catch (err) {
+      // Rollback on failure
+      set((state) => {
+        const channelsByGuild = { ...state.channelsByGuild, [guildId]: prev };
+        const channels = state.selectedGuildId === guildId ? prev : state.channels;
+        return { channelsByGuild, channels };
+      });
+      toast.error(`Failed to reorder channels: ${extractApiError(err)}`);
+    }
   },
 
   addChannel: (channel) =>

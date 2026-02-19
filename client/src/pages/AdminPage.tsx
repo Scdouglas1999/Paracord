@@ -14,20 +14,23 @@ export function AdminPage() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0 gap-3">
       {/* Sidebar nav */}
-      <div className="flex w-60 min-w-[15rem] flex-col border-r border-border-subtle bg-bg-secondary/50">
-        <div className="flex items-center gap-4 border-b border-border-subtle px-4 py-4">
+      <aside className="panel-surface flex w-64 min-w-[16rem] flex-col overflow-hidden">
+        <div className="panel-divider flex items-center gap-3 border-b px-4 py-4">
           <button
             onClick={() => navigate(-1)}
-            className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+            className="command-icon-btn"
           >
             <ArrowLeft size={18} />
           </button>
-          <h1 className="text-lg font-semibold text-text-primary">Admin Dashboard</h1>
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Control Plane</div>
+            <h1 className="text-lg font-semibold text-text-primary">Admin</h1>
+          </div>
         </div>
 
-        <nav className="flex flex-col gap-3 p-6">
+        <nav className="flex-1 overflow-y-auto p-4">
           {([
             { id: 'overview' as Tab, label: 'Overview', icon: BarChart3 },
             { id: 'users' as Tab, label: 'Users', icon: Users },
@@ -39,28 +42,30 @@ export function AdminPage() {
             <button
               key={id}
               onClick={() => setActiveTab(id)}
-              className={`flex items-center gap-4 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              className={`settings-nav-item ${
                 activeTab === id
-                  ? 'bg-accent-primary/15 text-accent-primary'
-                  : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
+                  ? 'active'
+                  : ''
               }`}
             >
-              <Icon size={18} />
+              <Icon size={16} />
               {label}
             </button>
           ))}
         </nav>
-      </div>
+      </aside>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-8 lg:p-10">
-        {activeTab === 'overview' && <OverviewPanel />}
-        {activeTab === 'users' && <UsersPanel />}
-        {activeTab === 'guilds' && <GuildsPanel />}
-        {activeTab === 'settings' && <SettingsPanel />}
-        {activeTab === 'security' && <SecurityPanel />}
-        {activeTab === 'backups' && <BackupsPanel />}
-      </div>
+      <main className="panel-surface min-w-0 flex-1 overflow-hidden">
+        <div className="h-full overflow-y-auto p-6 md:p-8">
+          {activeTab === 'overview' && <OverviewPanel />}
+          {activeTab === 'users' && <UsersPanel />}
+          {activeTab === 'guilds' && <GuildsPanel />}
+          {activeTab === 'settings' && <SettingsPanel />}
+          {activeTab === 'security' && <SecurityPanel />}
+          {activeTab === 'backups' && <BackupsPanel />}
+        </div>
+      </main>
     </div>
   );
 }
@@ -188,18 +193,19 @@ function UsersPanel() {
       </h2>
 
       {/* Search / filter */}
-      <div className="mb-6">
+      <div className="mb-6 max-w-md">
         <input
           type="text"
           placeholder="Search users by name or email..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="h-14 w-full max-w-sm rounded-lg border border-border-subtle bg-bg-secondary px-6 py-2.5 text-sm text-text-primary placeholder-text-muted outline-none transition-colors focus:border-accent-primary"
+          className="input-field"
         />
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border-subtle">
-        <table className="w-full text-left text-sm">
+      <div className="card-surface overflow-hidden rounded-xl border border-border-subtle bg-bg-mod-subtle/40">
+        <div className="overflow-x-auto">
+        <table className="min-w-[760px] w-full text-left text-sm">
           <thead>
             <tr className="border-b border-border-subtle bg-bg-secondary/60">
               <th className="px-6 py-5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Username</th>
@@ -265,6 +271,7 @@ function UsersPanel() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {total > limit && (
@@ -272,17 +279,17 @@ function UsersPanel() {
           <button
             onClick={() => setOffset(Math.max(0, offset - limit))}
             disabled={offset === 0}
-            className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle disabled:opacity-40"
+            className="control-pill-btn h-10 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           >
             Previous
           </button>
           <span className="text-sm text-text-muted">
-            {offset + 1}–{Math.min(offset + limit, total)} of {total}
+            {offset + 1} - {Math.min(offset + limit, total)} of {total}
           </span>
           <button
             onClick={() => setOffset(offset + limit)}
             disabled={offset + limit >= total}
-            className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle disabled:opacity-40"
+            className="control-pill-btn h-10 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           >
             Next
           </button>
@@ -373,8 +380,9 @@ function GuildsPanel() {
         Guilds <span className="text-sm font-normal text-text-muted">({guilds.length})</span>
       </h2>
 
-      <div className="overflow-hidden rounded-xl border border-border-subtle">
-        <table className="w-full text-left text-sm">
+      <div className="card-surface overflow-hidden rounded-xl border border-border-subtle bg-bg-mod-subtle/40">
+        <div className="overflow-x-auto">
+        <table className="min-w-[720px] w-full text-left text-sm">
           <thead>
             <tr className="border-b border-border-subtle bg-bg-secondary/60">
               <th className="px-6 py-5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Name</th>
@@ -422,15 +430,20 @@ function GuildsPanel() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {editingGuild && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeEdit}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'var(--overlay-backdrop)' }}
+          onClick={closeEdit}
+        >
           <div
-            className="w-full max-w-md rounded-xl border border-border-subtle bg-bg-primary p-8 shadow-xl"
+            className="glass-modal w-full max-w-md rounded-2xl p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="mb-6 text-lg font-semibold text-text-primary">Edit Guild</h3>
+            <h3 className="mb-5 text-lg font-semibold text-text-primary">Edit Guild</h3>
             <div className="space-y-6">
               <div>
                 <label className="mb-3 block text-sm font-medium text-text-secondary">Name</label>
@@ -438,7 +451,7 @@ function GuildsPanel() {
                   type="text"
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
-                  className="h-14 w-full rounded-lg border border-border-subtle bg-bg-secondary px-6 py-3 text-text-primary outline-none transition-colors focus:border-accent-primary"
+                  className="input-field"
                 />
               </div>
               <div>
@@ -447,21 +460,21 @@ function GuildsPanel() {
                   value={editDescription}
                   onChange={(e) => setEditDescription(e.target.value)}
                   rows={3}
-                  className="w-full rounded-lg border border-border-subtle bg-bg-secondary px-6 py-3 text-text-primary outline-none transition-colors focus:border-accent-primary"
+                  className="input-field resize-none"
                 />
               </div>
             </div>
-            <div className="mt-8 flex justify-end gap-4">
+            <div className="mt-6 flex justify-end gap-3">
               <button
                 onClick={closeEdit}
-                className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle"
+                className="btn-ghost"
               >
                 Cancel
               </button>
               <button
                 onClick={saveGuild}
                 disabled={saving}
-                className="rounded-lg bg-accent-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-primary/80 disabled:opacity-50"
+                className="btn-primary"
               >
                 {saving ? 'Saving...' : 'Save'}
               </button>
@@ -516,7 +529,7 @@ function SecurityPanel() {
         </div>
         <button
           onClick={() => void fetchEvents()}
-          className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle"
+          className="control-pill-btn h-10 px-4 text-sm"
         >
           Refresh
         </button>
@@ -528,25 +541,28 @@ function SecurityPanel() {
           value={actionFilter}
           onChange={(e) => setActionFilter(e.target.value)}
           placeholder="Filter by action (e.g. auth.login)"
-          className="h-12 w-full max-w-md rounded-lg border border-border-subtle bg-bg-secondary px-4 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+          className="input-field max-w-md"
         />
         <button
           onClick={() => void fetchEvents()}
-          className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle"
+          className="control-pill-btn h-10 px-4 text-sm"
         >
           Apply
         </button>
       </div>
 
       {loading ? (
-        <p className="text-text-muted">Loading security events...</p>
+        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-6 text-sm text-text-muted">
+          Loading security events...
+        </div>
       ) : events.length === 0 ? (
-        <div className="rounded-xl border border-border-subtle bg-bg-secondary/60 px-6 py-10 text-center text-text-muted">
+        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-10 text-center text-text-muted">
           No security events found.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border-subtle">
-          <table className="w-full text-left text-sm">
+        <div className="card-surface overflow-hidden rounded-xl border border-border-subtle bg-bg-mod-subtle/40">
+          <div className="overflow-x-auto">
+          <table className="min-w-[880px] w-full text-left text-sm">
             <thead>
               <tr className="border-b border-border-subtle bg-bg-secondary/60">
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Time</th>
@@ -570,6 +586,7 @@ function SecurityPanel() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -613,7 +630,7 @@ function SettingsPanel() {
     <div>
       <h2 className="mb-6 text-xl font-semibold text-text-primary">Server Settings</h2>
 
-      <div className="max-w-xl space-y-8">
+      <div className="card-stack-roomy max-w-xl">
         {/* Server Name */}
         <div>
           <label className="mb-3 block text-sm font-medium text-text-secondary">
@@ -623,7 +640,7 @@ function SettingsPanel() {
             type="text"
             value={settings.server_name || ''}
             onChange={(e) => update('server_name', e.target.value)}
-            className="h-14 w-full rounded-lg border border-border-subtle bg-bg-secondary px-6 py-3 text-text-primary outline-none transition-colors focus:border-accent-primary"
+            className="input-field"
           />
         </div>
 
@@ -636,12 +653,12 @@ function SettingsPanel() {
             value={settings.server_description || ''}
             onChange={(e) => update('server_description', e.target.value)}
             rows={3}
-            className="w-full rounded-lg border border-border-subtle bg-bg-secondary px-6 py-3 text-text-primary outline-none transition-colors focus:border-accent-primary"
+            className="input-field resize-none"
           />
         </div>
 
         {/* Registration Toggle */}
-        <div className="card-surface flex items-center justify-between rounded-lg border border-border-subtle bg-bg-secondary/60 px-6 py-6">
+        <div className="card-surface flex items-center justify-between rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
           <div>
             <p className="font-medium text-text-primary">Open Registration</p>
             <p className="text-sm text-text-muted">Allow new users to register accounts</p>
@@ -673,7 +690,7 @@ function SettingsPanel() {
             type="number"
             value={settings.max_guilds_per_user || '100'}
             onChange={(e) => update('max_guilds_per_user', e.target.value)}
-            className="h-14 w-full rounded-lg border border-border-subtle bg-bg-secondary px-6 py-3 text-text-primary outline-none transition-colors focus:border-accent-primary"
+            className="input-field"
           />
         </div>
 
@@ -686,7 +703,7 @@ function SettingsPanel() {
             type="number"
             value={settings.max_members_per_guild || '1000'}
             onChange={(e) => update('max_members_per_guild', e.target.value)}
-            className="h-14 w-full rounded-lg border border-border-subtle bg-bg-secondary px-6 py-3 text-text-primary outline-none transition-colors focus:border-accent-primary"
+            className="input-field"
           />
         </div>
 
@@ -826,7 +843,7 @@ function BackupsPanel() {
       <h2 className="mb-6 text-xl font-semibold text-text-primary">Backups</h2>
 
       {/* Create backup controls */}
-      <div className="mb-8 flex flex-wrap items-center gap-6">
+      <div className="mb-8 flex flex-wrap items-center gap-5">
         <button
           onClick={handleCreate}
           disabled={creating}
@@ -840,7 +857,7 @@ function BackupsPanel() {
           {creating ? 'Creating Backup...' : 'Create Backup'}
         </button>
 
-        <label className="flex items-center gap-2 text-sm text-text-secondary">
+        <label className="card-surface inline-flex items-center gap-2 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-4 py-3 text-sm text-text-secondary">
           <input
             type="checkbox"
             checked={includeMedia}
@@ -853,14 +870,17 @@ function BackupsPanel() {
 
       {/* Backups list */}
       {loading ? (
-        <p className="text-text-muted">Loading backups...</p>
+        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-6 text-sm text-text-muted">
+          Loading backups...
+        </div>
       ) : backups.length === 0 ? (
-        <div className="rounded-xl border border-border-subtle bg-bg-secondary/60 px-6 py-10 text-center text-text-muted">
+        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-10 text-center text-text-muted">
           No backups yet. Create your first backup above.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border-subtle">
-          <table className="w-full text-left text-sm">
+        <div className="card-surface overflow-hidden rounded-xl border border-border-subtle bg-bg-mod-subtle/40">
+          <div className="overflow-x-auto">
+          <table className="min-w-[760px] w-full text-left text-sm">
             <thead>
               <tr className="border-b border-border-subtle bg-bg-secondary/60">
                 <th className="px-6 py-5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Filename</th>
@@ -930,8 +950,10 @@ function BackupsPanel() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
   );
 }
+

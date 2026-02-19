@@ -6,6 +6,7 @@ import type { Message } from '../../types';
 import { useChannelStore } from '../../stores/channelStore';
 import { channelApi } from '../../api/channels';
 import { toast } from '../../stores/toastStore';
+import { confirm } from '../../stores/confirmStore';
 
 interface ThreadPanelProps {
   guildId: string;
@@ -46,7 +47,7 @@ export function ThreadPanel({
 
   const deleteThread = async () => {
     if (!threadChannel?.parent_id || deleting) return;
-    if (!window.confirm('Delete this thread? This cannot be undone.')) return;
+    if (!(await confirm({ title: 'Delete this thread?', description: 'This cannot be undone.', confirmLabel: 'Delete', variant: 'danger' }))) return;
     setDeleting(true);
     try {
       await channelApi.deleteThread(threadChannel.parent_id, threadChannelId);

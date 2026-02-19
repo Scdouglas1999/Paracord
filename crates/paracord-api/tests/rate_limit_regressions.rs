@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use axum::{
     body::Body,
@@ -14,11 +14,6 @@ use tempfile::TempDir;
 use tokio::sync::{Notify, RwLock};
 use tower::ServiceExt;
 
-fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
 struct TestHarness {
     app: Router,
     _storage_dir: TempDir,
@@ -29,7 +24,7 @@ struct TestHarness {
 impl TestHarness {
     async fn new_without_migrations() -> anyhow::Result<Self> {
         let db = paracord_db::create_pool("sqlite::memory:", 1).await?;
-        paracord_api::install_rate_limit_backend(db.clone());
+        paracord_api::install_http_rate_limiter();
 
         let storage_dir = tempfile::tempdir()?;
         let media_dir = tempfile::tempdir()?;
@@ -95,9 +90,7 @@ impl TestHarness {
 }
 
 #[tokio::test]
-async fn rate_limit_backend_failure_fails_closed_unless_explicit_fail_open() -> anyhow::Result<()> {
-    let _guard = env_lock().lock().expect("env lock");
-    std::env::remove_var("PARACORD_RATE_LIMIT_FAIL_OPEN");
+async fn auth_refresh_without_migrations_still_reaches_handler() -> anyhow::Result<()> {
     let harness = TestHarness::new_without_migrations().await?;
 
     let request = Request::builder()
@@ -105,16 +98,7 @@ async fn rate_limit_backend_failure_fails_closed_unless_explicit_fail_open() -> 
         .uri("/api/v1/auth/refresh")
         .body(Body::empty())?;
     let response = harness.app.clone().oneshot(request).await?;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-
-    std::env::set_var("PARACORD_RATE_LIMIT_FAIL_OPEN", "true");
-    let request = Request::builder()
-        .method("POST")
-        .uri("/api/v1/auth/refresh")
-        .body(Body::empty())?;
-    let response = harness.app.clone().oneshot(request).await?;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    std::env::remove_var("PARACORD_RATE_LIMIT_FAIL_OPEN");
 
     Ok(())
 }

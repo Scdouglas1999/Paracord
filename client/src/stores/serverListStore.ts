@@ -15,6 +15,7 @@ export interface ServerEntry {
 
 interface ServerListState {
   hydrated: boolean;
+  tokensHydrated: boolean;
   servers: ServerEntry[];
   activeServerId: string | null;
 
@@ -80,6 +81,7 @@ export const useServerListStore = create<ServerListState>()(
   persist(
     (set, get) => ({
       hydrated: false,
+      tokensHydrated: false,
       servers: [],
       activeServerId: null,
 
@@ -173,20 +175,25 @@ export const useServerListStore = create<ServerListState>()(
       markHydrated: () => set({ hydrated: true }),
 
       hydrateTokens: async () => {
-        const servers = get().servers;
-        const loaded = await Promise.all(
-          servers.map(async (server) => ({
-            id: server.id,
-            token: await secureGet(tokenStorageKey(server.id)),
-          }))
-        );
-        const tokenById = new Map(loaded.map((entry) => [entry.id, entry.token]));
-        set((state) => ({
-          servers: state.servers.map((server) => ({
-            ...server,
-            token: tokenById.get(server.id) ?? null,
-          })),
-        }));
+        set({ tokensHydrated: false });
+        try {
+          const servers = get().servers;
+          const loaded = await Promise.all(
+            servers.map(async (server) => ({
+              id: server.id,
+              token: await secureGet(tokenStorageKey(server.id)),
+            }))
+          );
+          const tokenById = new Map(loaded.map((entry) => [entry.id, entry.token]));
+          set((state) => ({
+            servers: state.servers.map((server) => ({
+              ...server,
+              token: tokenById.get(server.id) ?? null,
+            })),
+          }));
+        } finally {
+          set({ tokensHydrated: true });
+        }
       },
 
       getServer: (id) => get().servers.find((s) => s.id === id),

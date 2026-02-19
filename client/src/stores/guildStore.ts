@@ -3,6 +3,7 @@ import type { Guild } from '../types';
 import { guildApi } from '../api/guilds';
 import { extractApiError } from '../api/client';
 import { toast } from './toastStore';
+import { resolveApiBaseUrl } from '../lib/apiBaseUrl';
 
 interface GuildState {
   guilds: Guild[];
@@ -29,8 +30,10 @@ export const useGuildStore = create<GuildState>()((set, _get) => ({
   fetchGuilds: async () => {
     set({ isLoading: true });
     try {
+      const serverUrl = resolveApiBaseUrl();
       const { data } = await guildApi.getAll();
-      set({ guilds: data, isLoading: false });
+      const stamped = data.map((g) => ({ ...g, server_url: g.server_url || serverUrl }));
+      set({ guilds: stamped, isLoading: false });
     } catch (err) {
       set({ isLoading: false });
       toast.error(`Failed to load servers: ${extractApiError(err)}`);
@@ -42,9 +45,11 @@ export const useGuildStore = create<GuildState>()((set, _get) => ({
   setGuilds: (guilds) => set({ guilds }),
 
   createGuild: async (name, icon) => {
+    const serverUrl = resolveApiBaseUrl();
     const { data } = await guildApi.create({ name, icon });
-    set((state) => ({ guilds: [...state.guilds, data] }));
-    return data;
+    const stamped = { ...data, server_url: serverUrl };
+    set((state) => ({ guilds: [...state.guilds, stamped] }));
+    return stamped;
   },
 
   updateGuild: async (id, guildData) => {
@@ -74,6 +79,7 @@ export const useGuildStore = create<GuildState>()((set, _get) => ({
     set((state) => {
       const normalized = {
         ...guild,
+        server_url: guild.server_url || resolveApiBaseUrl(),
         created_at: guild.created_at ?? new Date().toISOString(),
         member_count: guild.member_count ?? 0,
         features: guild.features ?? [],

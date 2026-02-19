@@ -5,7 +5,7 @@ import { useServerListStore } from '../stores/serverListStore';
 import { useAuthStore } from '../stores/authStore';
 import { hasAccount } from '../lib/account';
 import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/apiBaseUrl';
-import { connectionManager } from '../lib/connectionManager';
+import { gateway } from '../gateway/manager';
 
 export function AccountUnlockPage() {
   const [password, setPassword] = useState('');
@@ -61,7 +61,7 @@ export function AccountUnlockPage() {
         const server = useServerListStore.getState().getServer(serverId);
         if (!server?.token) {
           try {
-            await connectionManager.connectServer(serverId);
+            await gateway.connectServer(serverId);
           } catch {
             // Non-fatal. User can still proceed and add/fix server details manually.
           }
@@ -155,3 +155,5 @@ export function AccountUnlockPage() {
     </div>
   );
 }
+
+

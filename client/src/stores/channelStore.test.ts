@@ -26,6 +26,7 @@ describe('channelStore', () => {
     useChannelStore.setState({
       channelsByGuild: {},
       channels: [],
+      guildChannelsLoaded: {},
       selectedChannelId: null,
       selectedGuildId: null,
       isLoading: false,
@@ -36,6 +37,7 @@ describe('channelStore', () => {
     const state = useChannelStore.getState();
     expect(state.channelsByGuild).toEqual({});
     expect(state.channels).toEqual([]);
+    expect(state.guildChannelsLoaded).toEqual({});
     expect(state.selectedChannelId).toBeNull();
     expect(state.selectedGuildId).toBeNull();
     expect(state.isLoading).toBe(false);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Monitor, Sun, Moon } from 'lucide-react';
+import { X, Monitor, Sun, Moon, ArrowLeft } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { useUIStore } from '../../stores/uiStore';
@@ -13,6 +13,7 @@ import { adminApi } from '../../api/admin';
 import { apiClient, extractApiError } from '../../api/client';
 import { authApi, type AuthSession } from '../../api/auth';
 import { cn } from '../../lib/utils';
+import { confirm } from '../../stores/confirmStore';
 import {
   isEnabled as isNotificationsEnabled,
   setEnabled as setNotificationsEnabled,
@@ -67,7 +68,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const accountPublicKey = useAccountStore((s) => s.publicKey);
   const accountUnlocked = useAccountStore((s) => s.isUnlocked);
   const setThemeUI = useUIStore((s) => s.setTheme);
+  const accentPresetUI = useUIStore((s) => s.accentPreset);
+  const setAccentPresetUI = useUIStore((s) => s.setAccentPreset);
   const [theme, setTheme] = useState<'dark' | 'light' | 'amoled'>('dark');
+  const [accentPreset, setAccentPreset] = useState(accentPresetUI);
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [locale, setLocale] = useState('en-US');
@@ -153,6 +157,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       );
 
       setTheme(settings.theme);
+      setAccentPreset(accentPresetUI);
       setLocale(settings.locale || 'en-US');
       setMessageCompact(settings.message_display_compact || false);
       setKnownActivityApps(known);
@@ -172,7 +177,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         selectAudioOutput(notif['audioOutputDeviceId'] as string);
       }
     }
-  }, [settings]);
+  }, [settings, accentPresetUI]);
 
   useEffect(() => {
     if (activeSection !== 'voice') return;
@@ -298,7 +303,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
   const revokeSession = async (sessionId: string) => {
     if (sessionBusyId) return;
-    if (!window.confirm('Sign out this session?')) return;
+    if (!(await confirm({ title: 'Sign out this session?', description: 'This will end the session immediately.', confirmLabel: 'Sign out', variant: 'danger' }))) return;
     setSessionBusyId(sessionId);
     try {
       await authApi.revokeSession(sessionId);
@@ -316,12 +321,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const submitPasswordChange = async () => {
     const current = passwordCurrentPassword.trim();
     const nextPassword = accountNewPassword.trim();
-    const confirm = accountConfirmPassword.trim();
+    const confirmPw = accountConfirmPassword.trim();
     if (!current || !nextPassword) {
       setStatusText('Current password and new password are required.');
       return;
     }
-    if (nextPassword !== confirm) {
+    if (nextPassword !== confirmPw) {
       setStatusText('New password confirmation does not match.');
       return;
     }
@@ -400,6 +405,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         keybinds: mergedKeybinds,
       });
       setThemeUI(theme);
+      setAccentPresetUI(accentPreset);
       setStatusText('Settings saved.');
     } catch {
       setStatusText('Failed to save settings.');
@@ -554,7 +560,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   return (
     <div
       className={cn(
-        'fixed inset-0 z-50 bg-bg-tertiary/95 backdrop-blur-sm',
+        'relative h-full min-h-0 overflow-hidden rounded-[1.5rem] border border-border-subtle/70 bg-bg-primary/90 backdrop-blur-sm',
         isMobile ? 'flex flex-col' : 'flex'
       )}
       onKeyDown={handleKeyDown}
@@ -597,6 +603,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       ) : (
         <div className="relative z-10 w-72 shrink-0 overflow-y-auto border-r border-border-subtle/70 bg-bg-secondary/65 px-4 py-10">
           <div className="ml-auto w-full max-w-[236px]">
+            <button
+              onClick={onClose}
+              className="group mb-3 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+            >
+              <ArrowLeft size={14} className="transition-transform group-hover:-translate-x-0.5" />
+              Back
+            </button>
             <div className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
               User Settings
             </div>
@@ -622,16 +635,25 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       )}
 
       {/* Content area */}
-      <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-3 pb-[calc(var(--safe-bottom)+1rem)] pt-3' : 'px-6 py-10')}>
+      <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-3 pb-[calc(var(--safe-bottom)+1rem)] pt-3' : 'px-6 py-8')}>
         <div className="w-full">
         {/* Close button */}
         {!isMobile && (
-          <div className="fixed right-6 top-5 z-20 flex flex-col items-center gap-1">
+          <div className="sticky top-2 z-20 ml-auto mb-4 flex w-fit flex-col items-center gap-1 md:top-3">
             <button onClick={onClose} className="command-icon-btn rounded-full border border-border-strong bg-bg-secondary/75">
               <X size={18} />
             </button>
             <span className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Esc</span>
           </div>
+        )}
+        {!isMobile && (
+          <nav className="mb-4 flex items-center gap-1.5 text-xs text-text-muted" aria-label="Breadcrumb">
+            <span className="font-medium">Settings</span>
+            <span aria-hidden>/</span>
+            <span className="font-semibold text-text-secondary">
+              {NAV_ITEMS.find(i => i.id === activeSection)?.label ?? activeSection}
+            </span>
+          </nav>
         )}
         {statusText && (
           <div
@@ -836,7 +858,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                                   )}
                                 </div>
                                 <div className="mt-0.5 text-xs text-text-muted">
-                                  {session.ip_address || 'No IP'} • Last seen {new Date(session.last_seen_at).toLocaleString()}
+                                  {session.ip_address || 'No IP'} - Last seen {new Date(session.last_seen_at).toLocaleString()}
                                 </div>
                               </div>
                               <button
@@ -959,6 +981,42 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     {t.icon}
                     <span className="text-sm font-medium">{t.label}</span>
                   </button>
+                ))}
+              </div>
+            </div>
+            <div className="mb-8">
+              <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Accent Color</div>
+              <div className="grid grid-cols-5 gap-2.5 sm:grid-cols-10">
+                {([
+                  ['red', '#eb4d4b'],
+                  ['blue', '#4f7cff'],
+                  ['emerald', '#22b07d'],
+                  ['amber', '#d1972f'],
+                  ['rose', '#d95d7a'],
+                  ['violet', '#7a6cff'],
+                  ['cyan', '#21a9b7'],
+                  ['lime', '#7ba72a'],
+                  ['orange', '#d86d36'],
+                  ['slate', '#7a879f'],
+                ] as const).map(([id, color]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => {
+                      setAccentPreset(id);
+                      setAccentPresetUI(id);
+                    }}
+                    className={cn(
+                      'h-9 w-full rounded-lg border transition-all',
+                      accentPreset === id ? 'scale-105 shadow-md' : 'opacity-90 hover:opacity-100'
+                    )}
+                    style={{
+                      backgroundColor: color,
+                      borderColor: accentPreset === id ? '#ffffff' : 'color-mix(in srgb, var(--border-subtle) 75%, transparent)',
+                    }}
+                    title={id.charAt(0).toUpperCase() + id.slice(1)}
+                    aria-label={`Set accent ${id}`}
+                  />
                 ))}
               </div>
             </div>

@@ -1,6 +1,6 @@
 use axum::{
     extract::FromRequestParts,
-    http::{header, request::Parts},
+    http::{header, request::Parts, Uri},
 };
 use chrono::Utc;
 use paracord_core::AppState;
@@ -12,6 +12,8 @@ pub struct AuthUser {
     pub session_id: Option<String>,
     pub token_jti: Option<String>,
 }
+
+const ACCESS_COOKIE_NAME: &str = "paracord_access";
 
 enum AuthScheme<'a> {
     Bearer(&'a str),
@@ -33,16 +35,42 @@ fn extract_auth_scheme(parts: &Parts) -> Option<AuthScheme<'_>> {
     None
 }
 
+fn get_cookie_value(parts: &Parts, cookie_name: &str) -> Option<String> {
+    let raw = parts.headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in raw.split(';') {
+        let trimmed = part.trim();
+        let Some((name, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if name == cookie_name {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Extract `token` query parameter from the request URI.
+fn get_query_token(uri: &Uri) -> Option<String> {
+    uri.query().and_then(|q| {
+        url::form_urlencoded::parse(q.as_bytes())
+            .find(|(key, _)| key == "token")
+            .map(|(_, value)| value.into_owned())
+            .filter(|v| !v.is_empty())
+    })
+}
+
 async fn validate_auth(
     parts: &Parts,
     state: &AppState,
 ) -> Result<paracord_core::auth::Claims, ApiError> {
     let token = match extract_auth_scheme(parts) {
-        Some(AuthScheme::Bearer(t)) => t,
-        _ => return Err(ApiError::Unauthorized),
+        Some(AuthScheme::Bearer(t)) => t.to_string(),
+        _ => get_cookie_value(parts, ACCESS_COOKIE_NAME)
+            .or_else(|| get_query_token(&parts.uri))
+            .ok_or(ApiError::Unauthorized)?,
     };
 
-    let claims = paracord_core::auth::validate_token(token, &state.config.jwt_secret)
+    let claims = paracord_core::auth::validate_token(&token, &state.config.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let (session_id, jti) = match (claims.sid.as_deref(), claims.jti.as_deref()) {

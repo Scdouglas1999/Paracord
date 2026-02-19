@@ -7,6 +7,7 @@ import { toast } from './toastStore';
 interface MemberState {
   // Members indexed by guild ID
   members: Map<string, Member[]>;
+  membersLoaded: Record<string, boolean>;
   isLoading: boolean;
 
   fetchMembers: (guildId: string) => Promise<void>;
@@ -18,22 +19,30 @@ interface MemberState {
   updateMember: (guildId: string, member: Partial<Member> & { user: { id: string } }) => void;
 }
 
+const _fetchInFlight = new Set<string>();
+
 export const useMemberStore = create<MemberState>()((set, get) => ({
   members: new Map(),
+  membersLoaded: {},
   isLoading: false,
 
   fetchMembers: async (guildId) => {
+    if (_fetchInFlight.has(guildId)) return;
+    _fetchInFlight.add(guildId);
     set({ isLoading: true });
     try {
       const { data } = await guildApi.getMembers(guildId);
       set((state) => {
         const members = new Map(state.members);
         members.set(guildId, data);
-        return { members, isLoading: false };
+        const membersLoaded = { ...state.membersLoaded, [guildId]: true };
+        return { members, membersLoaded, isLoading: false };
       });
     } catch (err) {
       set({ isLoading: false });
       toast.error(`Failed to load members: ${extractApiError(err)}`);
+    } finally {
+      _fetchInFlight.delete(guildId);
     }
   },
 

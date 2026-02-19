@@ -16,7 +16,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.88"
 license = "AGPL-3.0-or-later"
@@ -81,7 +81,7 @@ anyhow = "1"
 igd-next = { version = "0.15", features = ["aio_tokio"] }
 crab_nat = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-tokio-tungstenite = "0.26"
+tokio-tungstenite = "0.28"
 
 # Process management
 which = "7"

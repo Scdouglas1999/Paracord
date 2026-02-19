@@ -486,6 +486,22 @@ mod tests {
         .expect("create channel");
         assert_eq!(channel.id, channel_id);
 
+        let thread_id = user_id + 4;
+        let thread = crate::channels::create_thread(
+            &pool,
+            thread_id,
+            guild_id,
+            channel_id,
+            "pg-smoke-thread",
+            user_id,
+            1440,
+            None,
+        )
+        .await
+        .expect("create thread");
+        assert_eq!(thread.id, thread_id);
+        assert_eq!(thread.owner_id, Some(user_id));
+
         let message = crate::messages::create_message(
             &pool,
             message_id,

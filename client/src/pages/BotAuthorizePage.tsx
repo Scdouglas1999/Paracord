@@ -101,7 +101,8 @@ export function BotAuthorizePage() {
   };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-bg-primary p-6 md:p-10">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
       <div className="mx-auto w-full max-w-2xl space-y-5">
         <div className="rounded-2xl border border-border-subtle bg-bg-secondary/55 p-6">
           <div className="flex items-start gap-3">
@@ -204,7 +205,7 @@ export function BotAuthorizePage() {
           </div>
         )}
       </div>
+      </div>
     </div>
   );
 }
-
