@@ -86,6 +86,7 @@ impl TestHarness {
             user_presences: Arc::new(RwLock::new(HashMap::new())),
             permission_cache: build_permission_cache(),
             federation_service: None,
+            member_index: Arc::new(paracord_core::member_index::MemberIndex::empty()),
         };
 
         let app = paracord_api::build_router().with_state(state);

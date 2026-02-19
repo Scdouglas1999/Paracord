@@ -476,9 +476,10 @@ async fn main() -> Result<()> {
         None
     };
 
-    let member_index = paracord_core::member_index::MemberIndex::load_from_db(&db)
+    let memberships = paracord_db::members::get_all_memberships(&db)
         .await
-        .context("failed to load member index")?;
+        .context("failed to load memberships for member index")?;
+    let member_index = paracord_core::member_index::MemberIndex::from_memberships(memberships);
 
     let state = paracord_core::AppState {
         db,
