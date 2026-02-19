@@ -69,6 +69,7 @@ pub async fn ban_member(
     let reason = body.and_then(|b| b.0.reason);
     paracord_core::admin::ban_member(&state.db, guild_id, auth.user_id, user_id, reason.as_deref())
         .await?;
+    state.member_index.remove(user_id).await;
 
     state.event_bus.dispatch(
         "GUILD_BAN_ADD",

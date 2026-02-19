@@ -169,6 +169,14 @@ pub async fn set_member_timeout(
     Ok(row)
 }
 
+/// Return all member user IDs (lightweight, no JOIN).
+pub async fn get_all_member_ids(pool: &DbPool) -> Result<Vec<i64>, DbError> {
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT user_id FROM members")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
 pub async fn get_member_count(pool: &DbPool, _guild_id: i64) -> Result<i64, DbError> {
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM members")
         .fetch_one(pool)

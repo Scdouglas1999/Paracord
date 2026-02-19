@@ -91,6 +91,7 @@ pub async fn register(
     paracord_db::members::add_server_member(&state.db, user.id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    state.member_index.insert(user.id).await;
     if let Ok(spaces) = paracord_db::guilds::list_all_spaces(&state.db).await {
         for space in &spaces {
             // @everyone role ID == space ID
@@ -349,6 +350,7 @@ pub async fn verify(
             paracord_db::members::add_server_member(&state.db, new_user.id)
                 .await
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            state.member_index.insert(new_user.id).await;
 
             // Assign @everyone roles for all spaces
             if let Ok(spaces) = paracord_db::guilds::list_all_spaces(&state.db).await {

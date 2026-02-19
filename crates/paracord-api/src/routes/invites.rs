@@ -182,6 +182,7 @@ pub async fn accept_invite(
         paracord_db::members::add_server_member(&state.db, auth.user_id)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        state.member_index.insert(auth.user_id).await;
     }
 
     // Ensure default Member role assignment for this space.

@@ -256,6 +256,8 @@ async fn main() -> Result<()> {
             format!("ws://{}/livekit", bind_for_clients)
         });
 
+    let member_index = paracord_core::member_index::MemberIndex::load(&db).await;
+
     let shutdown_notify = Arc::new(tokio::sync::Notify::new());
 
     let state = paracord_core::AppState {
@@ -284,6 +286,7 @@ async fn main() -> Result<()> {
         storage,
         online_users: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
         user_presences: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        member_index,
     };
 
     // ── Orphaned attachment cleanup (background) ────────────────────────────

@@ -1,12 +1,13 @@
+pub mod admin;
 pub mod auth;
+pub mod channel;
 pub mod error;
 pub mod events;
-pub mod permissions;
 pub mod guild;
-pub mod channel;
+pub mod member_index;
 pub mod message;
+pub mod permissions;
 pub mod user;
-pub mod admin;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -56,6 +57,8 @@ pub struct AppState {
     pub online_users: Arc<RwLock<HashSet<i64>>>,
     /// Live presence payloads keyed by user ID.
     pub user_presences: Arc<RwLock<HashMap<i64, serde_json::Value>>>,
+    /// In-memory index of all server member IDs.
+    pub member_index: member_index::MemberIndex,
 }
 
 #[derive(Clone, Debug)]

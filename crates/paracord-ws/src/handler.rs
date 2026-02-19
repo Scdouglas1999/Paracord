@@ -223,6 +223,19 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
         let online_snapshot = state.online_users.read().await.clone();
         let presence_snapshot = state.user_presences.read().await.clone();
 
+        // Build presences once from the member index (server-wide, same for all guilds)
+        let all_members = state.member_index.all_member_ids().await;
+        let presences_json: Vec<Value> = all_members
+            .iter()
+            .filter(|uid| online_snapshot.contains(uid))
+            .map(|uid| {
+                presence_snapshot
+                    .get(uid)
+                    .cloned()
+                    .unwrap_or_else(|| default_presence_payload(*uid, "online"))
+            })
+            .collect();
+
         // Fetch guild data for READY
         let mut guilds_json = Vec::new();
         for &gid in &session.guild_ids {
@@ -252,21 +265,6 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                         "username": &vs.username,
                         "avatar_hash": &vs.avatar_hash,
                     })
-                })
-                .collect();
-
-            // Build initial presences: guild members who are currently online
-            let guild_members = paracord_db::members::get_guild_members(&state.db, gid, 10000, None)
-                .await
-                .unwrap_or_default();
-            let presences_json: Vec<Value> = guild_members
-                .iter()
-                .filter(|m| online_snapshot.contains(&m.user_id))
-                .map(|m| {
-                    presence_snapshot
-                        .get(&m.user_id)
-                        .cloned()
-                        .unwrap_or_else(|| default_presence_payload(m.user_id, "online"))
                 })
                 .collect();
 
@@ -311,7 +309,7 @@ pub async fn handle_connection(socket: WebSocket, state: AppState) {
                     "owner_id": g.owner_id.to_string(),
                     "channels": channels_json,
                     "voice_states": voice_states_json,
-                    "presences": presences_json,
+                    "presences": presences_json.clone(),
                 }));
             }
         }
