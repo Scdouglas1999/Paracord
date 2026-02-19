@@ -4,7 +4,7 @@ use paracord_core::{observability, AppState};
 use paracord_models::gateway::*;
 use paracord_models::permissions::Permissions;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Semaphore;
@@ -450,17 +450,11 @@ async fn collect_presence_recipient_ids(
     user_id: i64,
     guild_ids: &[i64],
 ) -> Vec<i64> {
-    let mut recipients: HashSet<i64> = HashSet::new();
+    // In-memory lookup: zero DB queries for guild members
+    let mut recipients = state.member_index.get_presence_recipients(user_id, guild_ids);
     recipients.insert(user_id);
 
-    for &guild_id in guild_ids {
-        if let Ok(member_ids) =
-            paracord_db::members::get_guild_member_user_ids(&state.db, guild_id).await
-        {
-            recipients.extend(member_ids);
-        }
-    }
-
+    // Friends still need a DB query (not tracked in the member index)
     if let Ok(friend_ids) =
         paracord_db::relationships::get_friend_user_ids(&state.db, user_id).await
     {

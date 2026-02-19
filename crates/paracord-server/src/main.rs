@@ -476,6 +476,10 @@ async fn main() -> Result<()> {
         None
     };
 
+    let member_index = paracord_core::member_index::MemberIndex::load_from_db(&db)
+        .await
+        .context("failed to load member index")?;
+
     let state = paracord_core::AppState {
         db,
         event_bus: paracord_core::events::EventBus::default(),
@@ -519,6 +523,7 @@ async fn main() -> Result<()> {
         user_presences: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         permission_cache: paracord_core::build_permission_cache(),
         federation_service,
+        member_index: Arc::new(member_index),
     };
 
     paracord_api::install_http_rate_limiter();

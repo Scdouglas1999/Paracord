@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 paracord-models = { workspace = true }
 paracord-db = { workspace = true }
+sqlx = { workspace = true }
 paracord-util = { workspace = true }
 paracord-media = { workspace = true }
 paracord-federation = { workspace = true }

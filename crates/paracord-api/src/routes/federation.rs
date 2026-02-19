@@ -1651,6 +1651,7 @@ async fn dispatch_federated_member_join(state: &AppState, payload: &FederationEv
         guild_id,
     )
     .await;
+    state.member_index.add_member(guild_id, local_user_id);
     state.event_bus.dispatch(
         "GUILD_MEMBER_ADD",
         json!({
@@ -1715,6 +1716,7 @@ async fn dispatch_federated_member_leave(state: &AppState, payload: &FederationE
         &identity.to_canonical(),
     )
     .await;
+    state.member_index.remove_member(guild_id, mapping.local_user_id);
     state.event_bus.dispatch(
         "GUILD_MEMBER_REMOVE",
         json!({
@@ -2135,6 +2137,7 @@ pub async fn join(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    state.member_index.add_member(guild_id, local_user_id);
     state.event_bus.dispatch(
         "GUILD_MEMBER_ADD",
         json!({
@@ -2205,6 +2208,7 @@ pub async fn leave(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
         removed = true;
+        state.member_index.remove_member(guild_id, mapping.local_user_id);
         state.event_bus.dispatch(
             "GUILD_MEMBER_REMOVE",
             json!({

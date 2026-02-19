@@ -337,6 +337,7 @@ pub async fn accept_invite(
 
     // Only dispatch GUILD_MEMBER_ADD for genuinely new members
     if !already_member {
+        state.member_index.add_member(guild.id, auth.user_id);
         state.event_bus.dispatch(
             "GUILD_MEMBER_ADD",
             json!({"guild_id": guild.id.to_string(), "user_id": auth.user_id.to_string()}),

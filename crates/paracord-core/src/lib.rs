@@ -6,6 +6,7 @@ pub mod error;
 pub mod events;
 pub mod guild;
 pub mod identity;
+pub mod member_index;
 pub mod message;
 pub mod observability;
 pub mod permissions;
@@ -86,6 +87,8 @@ pub struct AppState {
     pub permission_cache: moka::future::Cache<PermissionCacheKey, Permissions>,
     /// Pre-built federation service (avoids re-parsing env vars on every request).
     pub federation_service: Option<FederationService>,
+    /// In-memory guild→members index for zero-query presence dispatch.
+    pub member_index: Arc<member_index::MemberIndex>,
 }
 
 #[derive(Clone, Debug)]

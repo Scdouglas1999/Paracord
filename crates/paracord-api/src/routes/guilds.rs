@@ -73,6 +73,7 @@ pub async fn create_guild(
         "created_at": guild.created_at.to_rfc3339(),
     });
 
+    state.member_index.add_member(guild_id, auth.user_id);
     state
         .event_bus
         .dispatch("GUILD_CREATE", guild_json.clone(), Some(guild_id));
@@ -195,6 +196,7 @@ pub async fn delete_guild(
 ) -> Result<StatusCode, ApiError> {
     paracord_core::guild::delete_guild(&state.db, guild_id, auth.user_id).await?;
 
+    state.member_index.remove_guild(guild_id);
     state.event_bus.dispatch(
         "GUILD_DELETE",
         json!({"id": guild_id.to_string()}),

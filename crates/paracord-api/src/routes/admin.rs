@@ -444,6 +444,7 @@ pub async fn delete_guild(
 ) -> Result<StatusCode, ApiError> {
     paracord_core::admin::admin_delete_guild(&state.db, guild_id).await?;
 
+    state.member_index.remove_guild(guild_id);
     state.event_bus.dispatch(
         "GUILD_DELETE",
         json!({"id": guild_id.to_string()}),

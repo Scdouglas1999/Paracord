@@ -265,6 +265,7 @@ pub async fn kick_member(
 ) -> Result<StatusCode, ApiError> {
     paracord_core::admin::kick_member(&state.db, guild_id, auth.user_id, user_id).await?;
 
+    state.member_index.remove_member(guild_id, user_id);
     state.event_bus.dispatch(
         "GUILD_MEMBER_REMOVE",
         json!({
@@ -316,6 +317,7 @@ pub async fn leave_guild(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    state.member_index.remove_member(guild_id, auth.user_id);
     state.event_bus.dispatch(
         "GUILD_MEMBER_REMOVE",
         json!({

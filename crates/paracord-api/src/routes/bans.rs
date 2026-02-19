@@ -106,6 +106,7 @@ pub async fn ban_member(
         Some(guild_id),
     );
 
+    state.member_index.remove_member(guild_id, user_id);
     state.event_bus.dispatch(
         "GUILD_MEMBER_REMOVE",
         json!({
