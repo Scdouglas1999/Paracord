@@ -525,6 +525,7 @@ async fn main() -> Result<()> {
         permission_cache: paracord_core::build_permission_cache(),
         federation_service,
         member_index: Arc::new(member_index),
+        presence_manager: Arc::new(paracord_core::presence_manager::PresenceManager::new()),
     };
 
     paracord_api::install_http_rate_limiter();

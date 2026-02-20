@@ -1,15 +1,16 @@
+mod compression;
 mod handler;
 mod session;
 
 use axum::{
-    extract::{ws::WebSocketUpgrade, State},
+    extract::{ws::WebSocketUpgrade, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
     Router,
 };
 use paracord_core::AppState;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 pub fn gateway_router() -> Router<AppState> {
     Router::new().route("/gateway", get(ws_upgrade))
@@ -90,17 +91,23 @@ fn is_origin_allowed(headers: &HeaderMap, state: &AppState) -> bool {
 }
 
 async fn ws_upgrade(
-    ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
+    ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     if !is_origin_allowed(&headers, &state) {
         return StatusCode::FORBIDDEN.into_response();
     }
 
+    let compress = params
+        .get("compress")
+        .map(|v| v == "zlib-stream")
+        .unwrap_or(false);
+
     ws.max_message_size(32 * 1024)
         .max_frame_size(32 * 1024)
-        .on_upgrade(move |socket| handler::handle_connection(socket, state))
+        .on_upgrade(move |socket| handler::handle_connection(socket, state, compress))
         .into_response()
 }
 

@@ -10,6 +10,7 @@ pub mod member_index;
 pub mod message;
 pub mod observability;
 pub mod permissions;
+pub mod presence_manager;
 pub mod user;
 
 use paracord_db::DbPool;
@@ -89,6 +90,8 @@ pub struct AppState {
     pub federation_service: Option<FederationService>,
     /// In-memory guild→members index for zero-query presence dispatch.
     pub member_index: Arc<member_index::MemberIndex>,
+    /// Deferred offline presence manager to avoid disconnect/reconnect races.
+    pub presence_manager: Arc<presence_manager::PresenceManager>,
 }
 
 #[derive(Clone, Debug)]

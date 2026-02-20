@@ -9,6 +9,7 @@ client/dist/
 client/.vite/
 client/test-results/
 client/playwright-report/
+client/bun.lock
 
 # Tauri
 client/src-tauri/target/

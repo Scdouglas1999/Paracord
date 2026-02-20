@@ -21,3 +21,4 @@ futures-util = "0.3"
 moka = { workspace = true }
 dashmap = { workspace = true }
 governor = { workspace = true }
+flate2 = "1"

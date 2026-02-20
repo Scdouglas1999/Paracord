@@ -10,6 +10,7 @@ import {
 } from './accountSession';
 import { setAccessToken } from './authToken';
 import { getCurrentOriginServerUrl, getStoredServerUrl } from './apiBaseUrl';
+import { inflateSync } from 'fflate';
 import type { Activity, GatewayPayload } from '../types';
 import { GatewayEvents } from '../gateway/events';
 import { dispatchGatewayEvent } from '../gateway/dispatch';
@@ -521,10 +522,11 @@ class ConnectionManager {
     }
 
     const wsBase = conn.serverUrl.replace(/\/+$/, '').replace(/^http/, 'ws');
-    const wsUrl = `${wsBase}/gateway`;
+    const wsUrl = `${wsBase}/gateway?compress=zlib-stream`;
 
     conn.connecting = true;
     conn.ws = new WebSocket(wsUrl);
+    conn.ws.binaryType = 'arraybuffer';
     this.syncUiConnectionStatus();
     conn.allowReconnect = true;
     const activeWs = conn.ws;
@@ -549,7 +551,25 @@ class ConnectionManager {
     activeWs.onmessage = (event) => {
       if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
       try {
-        const payload: GatewayPayload = JSON.parse(event.data);
+        let text: string;
+        if (event.data instanceof ArrayBuffer) {
+          // Compressed binary frame — strip Z_SYNC_FLUSH suffix and inflate
+          const raw = new Uint8Array(event.data);
+          // Strip trailing 0x00 0x00 0xFF 0xFF (Z_SYNC_FLUSH marker)
+          const end = raw.length >= 4
+            && raw[raw.length - 4] === 0x00
+            && raw[raw.length - 3] === 0x00
+            && raw[raw.length - 2] === 0xFF
+            && raw[raw.length - 1] === 0xFF
+            ? raw.length - 4
+            : raw.length;
+          const decompressed = inflateSync(raw.subarray(0, end));
+          text = new TextDecoder().decode(decompressed);
+        } else {
+          // Uncompressed text frame (fallback)
+          text = event.data;
+        }
+        const payload: GatewayPayload = JSON.parse(text);
         this.handlePayload(conn, payload);
       } catch {
         /* ignore malformed payloads */
