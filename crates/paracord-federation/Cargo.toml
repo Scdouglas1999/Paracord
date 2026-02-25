@@ -19,3 +19,4 @@ reqwest = { workspace = true }
 chrono = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
+url = { workspace = true }
