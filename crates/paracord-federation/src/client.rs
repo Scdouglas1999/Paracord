@@ -10,7 +10,7 @@ use std::time::Duration;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RETRIES: u32 = 3;
 const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
-const MAX_REDIRECTS: usize = 3;
+const MAX_DOWNLOAD_REDIRECTS: usize = 3;
 
 #[derive(Debug, Clone)]
 struct TransportSigner {
@@ -47,7 +47,6 @@ impl FederationClient {
         let http = Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .user_agent("Paracord-Federation/0.4")
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
             .build()
             .map_err(|e| FederationError::Http(e.to_string()))?;
 
@@ -262,10 +261,47 @@ impl FederationClient {
         &self,
         download_url: &str,
     ) -> Result<(Vec<u8>, Option<String>, Option<String>), FederationError> {
-        // SSRF protection: validate URL before making the request
+        // SSRF protection: validate the initial URL and resolve DNS
         validate_ssrf_safe_url(download_url)?;
+        resolve_and_check_dns(download_url).await?;
 
-        let resp = self.get_with_retry(download_url).await?;
+        // Build a dedicated client for file downloads with a custom redirect
+        // policy that re-validates every redirect target against the SSRF
+        // blocklist. This prevents an attacker from passing initial validation
+        // with a public URL and then redirecting to an internal address.
+        let download_client = Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
+            .user_agent("Paracord-Federation/0.4")
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= MAX_DOWNLOAD_REDIRECTS {
+                    attempt.error(format!(
+                        "SSRF protection: too many redirects (max {})",
+                        MAX_DOWNLOAD_REDIRECTS
+                    ))
+                } else {
+                    match validate_ssrf_safe_url(attempt.url().as_str()) {
+                        Ok(()) => attempt.follow(),
+                        Err(e) => attempt.error(format!(
+                            "SSRF protection: redirect target blocked: {e}"
+                        )),
+                    }
+                }
+            }))
+            .build()
+            .map_err(|e| FederationError::Http(e.to_string()))?;
+
+        let resp = download_client
+            .get(download_url)
+            .send()
+            .await
+            .map_err(|e| FederationError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(FederationError::RemoteError(format!(
+                "download from {} returned {}",
+                download_url,
+                resp.status()
+            )));
+        }
         let content_type = resp
             .headers()
             .get("content-type")
@@ -577,14 +613,48 @@ pub fn validate_ssrf_safe_url(url_str: &str) -> Result<(), FederationError> {
         }
     }
 
-    // Port whitelist: only 443 (default HTTPS) and 80
+    // Port whitelist: only 443 (default HTTPS). Since the scheme is enforced
+    // to https://, allowing port 80 serves no legitimate purpose.
     let port = parsed.port().unwrap_or(443);
-    if port != 443 && port != 80 {
+    if port != 443 {
         return Err(FederationError::Http(format!(
             "SSRF protection: non-standard port {port} is not allowed"
         )));
     }
 
+    Ok(())
+}
+
+/// Resolves the hostname in the URL via DNS and checks that all returned IP
+/// addresses are public. This mitigates DNS rebinding attacks where an attacker
+/// controls a domain that resolves to an internal IP after initial validation.
+///
+/// Note: there is an inherent TOCTOU gap between this check and the actual TCP
+/// connection made by reqwest. DNS rebinding with very low TTL can still slip
+/// through. This is a known residual risk; a complete fix requires resolving
+/// and connecting in a single step (e.g. via a custom `reqwest::dns::Resolve`).
+async fn resolve_and_check_dns(url_str: &str) -> Result<(), FederationError> {
+    let parsed = url::Url::parse(url_str)
+        .map_err(|e| FederationError::Http(format!("DNS check: invalid URL: {e}")))?;
+
+    // Only domains need DNS resolution; raw IPs are already checked by validate_ssrf_safe_url
+    if let Some(url::Host::Domain(domain)) = parsed.host() {
+        let port = parsed.port().unwrap_or(443);
+        let lookup = format!("{domain}:{port}");
+        let addrs = tokio::net::lookup_host(&lookup)
+            .await
+            .map_err(|e| FederationError::Http(format!(
+                "SSRF protection: DNS resolution failed for '{domain}': {e}"
+            )))?;
+        for addr in addrs {
+            if is_private_ip(&addr.ip()) {
+                return Err(FederationError::Http(format!(
+                    "SSRF protection: domain '{domain}' resolves to private IP {}",
+                    addr.ip()
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -610,6 +680,10 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             || o[0] >= 240
         }
         IpAddr::V6(v6) => {
+            // IPv4-mapped IPv6 (::ffff:x.x.x.x) — check the embedded IPv4
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_private_ip(&IpAddr::V4(v4));
+            }
             // ::1 loopback
             v6.is_loopback()
             // fc00::/7 (unique local)
@@ -708,7 +782,13 @@ mod ssrf_tests {
     #[test]
     fn allows_standard_ports() {
         assert!(validate_ssrf_safe_url("https://cdn.example.com:443/file").is_ok());
-        assert!(validate_ssrf_safe_url("https://cdn.example.com:80/file").is_ok());
+    }
+
+    #[test]
+    fn blocks_port_80_on_https() {
+        // Port 80 is the HTTP port; since we enforce https:// scheme only,
+        // there is no legitimate reason to allow port 80.
+        assert!(validate_ssrf_safe_url("https://cdn.example.com:80/file").is_err());
     }
 
     #[test]
@@ -729,5 +809,34 @@ mod ssrf_tests {
         assert!(validate_ssrf_safe_url("https://172.15.0.1/file").is_ok());
         // 172.32.x.x is NOT in the 172.16-31 private range
         assert!(validate_ssrf_safe_url("https://172.32.0.1/file").is_ok());
+    }
+
+    #[test]
+    fn blocks_ipv4_mapped_ipv6_loopback() {
+        // ::ffff:127.0.0.1 is an IPv4-mapped IPv6 address for loopback
+        assert!(validate_ssrf_safe_url("https://[::ffff:127.0.0.1]/file").is_err());
+    }
+
+    #[test]
+    fn blocks_ipv4_mapped_ipv6_metadata() {
+        // ::ffff:169.254.169.254 targets the AWS metadata endpoint
+        assert!(validate_ssrf_safe_url("https://[::ffff:169.254.169.254]/file").is_err());
+    }
+
+    #[test]
+    fn blocks_ipv4_mapped_ipv6_private() {
+        assert!(validate_ssrf_safe_url("https://[::ffff:10.0.0.1]/file").is_err());
+        assert!(validate_ssrf_safe_url("https://[::ffff:192.168.1.1]/file").is_err());
+        assert!(validate_ssrf_safe_url("https://[::ffff:172.16.0.1]/file").is_err());
+    }
+
+    #[test]
+    fn allows_ipv4_mapped_ipv6_public() {
+        assert!(validate_ssrf_safe_url("https://[::ffff:8.8.8.8]/file").is_ok());
+    }
+
+    #[test]
+    fn blocks_ipv6_unspecified() {
+        assert!(validate_ssrf_safe_url("https://[::]/file").is_err());
     }
 }
