@@ -567,13 +567,17 @@ paracord/
 |   |-- paracord-federation/# Server-to-server federation (Ed25519 signed transport)
 |   |-- paracord-models/    # Shared types and data structures
 |   |-- paracord-media/     # File storage (local + optional object storage) + LiveKit voice/streaming
-|   `-- paracord-util/      # Snowflake IDs, validation, at-rest encryption
+|   |-- paracord-util/      # Snowflake IDs, validation, at-rest encryption
+|   |-- paracord-transport/ # QUIC/WebTransport media transport (native media path)
+|   |-- paracord-relay/     # Media room/participant routing, VAD, E2EE
+|   |-- paracord-codec/     # Opus/RNNoise audio + VP9 video encode/decode
+|   `-- paracord-media-dev/ # Standalone dev server for native media transport
 |-- client/                 # Tauri v2 + React client
 |   |-- src/                # React TypeScript frontend
 |   |   |-- components/     # UI (chat, voice, guilds, threads, polls, forums, bots)
-|   |   |-- stores/         # 17 Zustand state stores
+|   |   |-- stores/         # 20 Zustand state stores
 |   |   |-- gateway/        # WebSocket connection + event dispatch
-|   |   `-- pages/          # 20 route pages
+|   |   `-- pages/          # 23 route pages
 |   |-- src-tauri/          # Native Rust backend (system audio, TLS, signed updater support)
 |   `-- e2e/                # Playwright E2E tests
 |-- docs/                   # Design specs, security docs, API contracts

@@ -1,5 +1,19 @@
 ## What's New in v0.9.0
 
+### Release Candidate Overhaul
+
+Ahead of the public release candidate, the whole codebase went through a correctness, consistency, and test-hardening pass. No new runtime dependencies were added; the changes are refactors, real fixes, and coverage. Highlights:
+
+- **Honest SSE resume/replay**: The realtime `GET /api/v2/rt/events` endpoint now replays events emitted during a reconnect gap from the advertised cursor, in order. This replaces the previous cosmetic `"cursor": 0` behavior that silently dropped events that occurred while a client was disconnected. Covered end-to-end by a new integration test that reconnects across an event gap and asserts the missed events are actually delivered.
+- **Host-header injection fix for account emails**: Verification and password-reset links are now built only from a configured `public_url` or headers presented via a trusted proxy — never from a client-supplied `Host`/`X-Forwarded-Host` on an untrusted request. A poisoned `Host` header can no longer redirect a bearer/reset-token link to an attacker's origin. When no trusted origin is available the clickable link is omitted and the raw token is still included so the user can complete the reset manually.
+- **Gateway client consolidation**: Four overlapping legacy gateway modules (`client.ts`, `protocol.ts`, `queue.ts`, `transport.ts`) were removed in favor of a single `dispatch` + `manager` + `events` + `types` layout, now backed by real unit tests for event dispatch. Dead client utilities (`lib/avatars.ts`, `lib/fetchWithTimeout.ts`) were deleted.
+- **Centralized REST client resolution**: A single `getApi()` helper resolves the correct per-server axios instance at request time (falling back to the local-only client during login/registration bootstrap), and the API modules were updated to route through it instead of capturing a client at module load. This removes a class of "requests went to the wrong server after switching" bugs.
+- **Snowflake generator hardening**: The ID generator now carries a monotonic guard so a backwards clock step cannot regress timestamps or mint duplicate IDs, yields instead of spinning while waiting for the clock to advance, saturates rather than panicking on clock errors, and takes an injectable clock so the skew/sequence-exhaustion paths are unit-tested.
+- **Media E2EE crypto correctness**: The codec AES-GCM layer's nonce construction is now documented and guarded with a per-`(ssrc, epoch)` rollover counter, making every frame nonce unique within an epoch and tying epoch rotation to membership changes, with tests that exercise sequence-number wrap boundaries.
+- **Per-user reactions index**: A new `idx_reactions_user` index (added to both the SQLite and PostgreSQL migration tracks) prevents per-user reaction cleanup and `ON DELETE CASCADE` from `users` from sequentially scanning the reactions table.
+- **Internal refactors with coverage**: The permissions engine, the roles database layer, and the media storage backend were substantially cleaned up, and new Rust integration suites were added for role/member authorization, account/bot authorization, and channel message routes. Client-side additions include unit and accessibility tests for auth bootstrap, the message list, permission hooks, voice keybinds, sender-key exchange, typing state, and the active-client resolver.
+- **Docker onboarding**: A blank `.env.example` (with fail-fast, non-empty secret requirements) and a CI audit-exception checker (`scripts/check_audit_exceptions.py`) were added.
+
 ### Native QUIC Media Engine
 
 A custom media transport layer built on QUIC (via `quinn`) has been added alongside the existing LiveKit integration. LiveKit code is untouched and remains fully functional.
