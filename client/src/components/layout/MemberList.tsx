@@ -15,20 +15,8 @@ import { SkeletonMember } from '../ui/Skeleton';
 import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
 import { writeClipboardText } from '../../lib/clipboard';
+import { getHighestRoleColor } from '../../lib/colors';
 import { toast } from '../../stores/toastStore';
-
-function roleColorToHex(color: number): string | undefined {
-  if (!color) return undefined;
-  return `#${color.toString(16).padStart(6, '0')}`;
-}
-
-function getHighestRoleColor(memberRoles: string[], roles: Role[]): string | undefined {
-  const matchedRoles = roles
-    .filter((r) => memberRoles.includes(r.id) && r.color !== 0)
-    .sort((a, b) => b.position - a.position);
-  if (matchedRoles.length === 0) return undefined;
-  return roleColorToHex(matchedRoles[0].color);
-}
 
 interface MemberWithUser {
   user_id: string;

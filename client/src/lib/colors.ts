@@ -1,3 +1,5 @@
+import type { Role } from '../types';
+
 // ============ Guild Icon Colors ============
 
 /** Shared guild icon color palette. Used in Sidebar and HomePage. */
@@ -25,6 +27,22 @@ export function getGuildColor(id: string): string {
 export function roleColorToHex(color: number): string {
   if (color === 0) return 'var(--text-secondary)';
   return '#' + color.toString(16).padStart(6, '0');
+}
+
+/**
+ * Returns the hex color of the highest-positioned colored role a member holds,
+ * or `undefined` when the member has no role with an explicit color. A role
+ * color of 0 counts as "no color", so callers fall back to a default.
+ */
+export function getHighestRoleColor(
+  memberRoles: string[],
+  roles: Role[]
+): string | undefined {
+  const matched = roles
+    .filter((r) => memberRoles.includes(r.id) && r.color !== 0)
+    .sort((a, b) => b.position - a.position);
+  if (matched.length === 0) return undefined;
+  return roleColorToHex(matched[0].color);
 }
 
 /**

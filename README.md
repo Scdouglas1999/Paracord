@@ -17,7 +17,8 @@
 </p>
 
 <p align="center">
-  Current release candidate: <strong>v0.9.0</strong>
+  Current release candidate: <strong>v0.9.0</strong><br/>
+  <sub>The overhaul on <code>overhaul/v1.0-shippable</code> targets <strong>v1.0.0</strong> as the first public tag; version metadata is only bumped at tag time.</sub>
 </p>
 
 ---

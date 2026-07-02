@@ -1,5 +1,9 @@
 ## What's New in v0.9.0
 
+> Version framing: `v0.9.0` is the release-candidate line. The overhaul on
+> `overhaul/v1.0-shippable` targets **v1.0.0** as the first public tag; the
+> version metadata across Cargo, npm, and Tauri is only bumped at tag time.
+
 ### Release Candidate Overhaul
 
 Ahead of the public release candidate, the whole codebase went through a correctness, consistency, and test-hardening pass. No new runtime dependencies were added; the changes are refactors, real fixes, and coverage. Highlights:

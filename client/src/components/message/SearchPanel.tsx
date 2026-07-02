@@ -5,25 +5,8 @@ import { channelApi } from '../../api/channels';
 import { useUIStore } from '../../stores/uiStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
+import { formatTimestamp } from '../../lib/formatters';
 import type { Message } from '../../types';
-
-function formatSearchTimestamp(iso: string): string {
-  try {
-    const date = new Date(iso);
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const isYesterday = date.toDateString() === yesterday.toDateString();
-
-    const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    if (isToday) return `Today at ${time}`;
-    if (isYesterday) return `Yesterday at ${time}`;
-    return `${date.toLocaleDateString()} ${time}`;
-  } catch {
-    return iso;
-  }
-}
 
 export function SearchPanel() {
   const { channelId } = useParams();
@@ -253,7 +236,7 @@ export function SearchPanel() {
                     {msg.author.username}
                   </span>
                   <span className="shrink-0 text-[10px] text-text-muted">
-                    {formatSearchTimestamp(msg.created_at || msg.timestamp || '')}
+                    {formatTimestamp(msg.created_at || msg.timestamp || '')}
                   </span>
                 </div>
                 <p className="line-clamp-2 text-xs text-text-secondary">

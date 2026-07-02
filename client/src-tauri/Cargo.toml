@@ -46,6 +46,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Cryptography",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
 ] }

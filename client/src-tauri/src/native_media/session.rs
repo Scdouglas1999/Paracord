@@ -199,7 +199,7 @@ impl NativeMediaSession {
             .map_err(|e| format!("token claims parse failed: {e}"))
     }
 
-    async fn resolve_endpoint_addr(endpoint_addr: &str) -> Result<SocketAddr, String> {
+    pub async fn resolve_endpoint_addr(endpoint_addr: &str) -> Result<SocketAddr, String> {
         if let Ok(addr) = endpoint_addr.parse::<SocketAddr>() {
             return Ok(addr);
         }

@@ -6,6 +6,7 @@ use paracord_transport::control::{ControlMessage, StreamFrame, StreamFrameCodec}
 use paracord_transport::endpoint::MediaEndpoint;
 
 use super::commands::FileTransferResult;
+use super::session::NativeMediaSession;
 
 const CHUNK_SIZE: usize = 256 * 1024; // 256 KiB
 
@@ -25,9 +26,7 @@ pub async fn upload_file(
         .map_err(|e| format!("bad bind addr: {e}"))?;
     let endpoint = MediaEndpoint::client(bind_addr).map_err(|e| format!("endpoint: {e}"))?;
 
-    let remote_addr: std::net::SocketAddr = endpoint_addr
-        .parse()
-        .map_err(|e| format!("bad endpoint addr: {e}"))?;
+    let remote_addr = NativeMediaSession::resolve_endpoint_addr(endpoint_addr).await?;
 
     let connecting = endpoint
         .connect(remote_addr, "paracord")
@@ -187,9 +186,7 @@ pub async fn download_file(
         .map_err(|e| format!("bad bind addr: {e}"))?;
     let endpoint = MediaEndpoint::client(bind_addr).map_err(|e| format!("endpoint: {e}"))?;
 
-    let remote_addr: std::net::SocketAddr = endpoint_addr
-        .parse()
-        .map_err(|e| format!("bad endpoint addr: {e}"))?;
+    let remote_addr = NativeMediaSession::resolve_endpoint_addr(endpoint_addr).await?;
 
     let connecting = endpoint
         .connect(remote_addr, "paracord")

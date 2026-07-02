@@ -144,11 +144,133 @@ fn secure_store_fallback_key_path(app: &tauri::AppHandle) -> Result<std::path::P
     Ok(dir.join(SECURE_STORE_FALLBACK_KEY_FILE))
 }
 
+/// Copy a DPAPI output blob into an owned `Vec`, then overwrite the original
+/// (DPAPI-allocated) buffer with zeros.
+///
+/// The original buffer is allocated by DPAPI via `LocalAlloc` and would normally
+/// be released with `LocalFree`. `LocalFree`'s generated binding has changed its
+/// signature across `windows` crate releases, so to keep this Windows-only path
+/// robust we deliberately leak the (small, allocated at most once per secure-store
+/// operation) buffer instead. Zeroizing first guarantees no key material lingers
+/// in the leaked allocation.
+///
+/// # Safety
+/// `blob.pbData` must either be null or point to `blob.cbData` valid, writable
+/// bytes that this function has exclusive access to.
+#[cfg(windows)]
+unsafe fn take_and_zeroize_dpapi_blob(
+    blob: &windows::Win32::Security::Cryptography::CRYPT_INTEGER_BLOB,
+) -> Vec<u8> {
+    let len = blob.cbData as usize;
+    if blob.pbData.is_null() || len == 0 {
+        return Vec::new();
+    }
+    let out = std::slice::from_raw_parts(blob.pbData, len).to_vec();
+    std::ptr::write_bytes(blob.pbData, 0, len);
+    out
+}
+
+/// Protect bytes at rest with Windows DPAPI (`CryptProtectData`) scoped to the
+/// current user.
+///
+/// NOTE: this provides current-user at-rest obfuscation, not keychain-grade
+/// protection — any code running as the same Windows user can unprotect the
+/// blob. It is used only as a fallback when the OS keychain (Credential Manager)
+/// is unavailable.
+#[cfg(windows)]
+fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Security::Cryptography::{
+        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    let in_blob = CRYPT_INTEGER_BLOB {
+        cbData: plaintext.len() as u32,
+        pbData: plaintext.as_ptr() as *mut u8,
+    };
+    let mut out_blob = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+
+    // SAFETY: `in_blob` borrows `plaintext` for the duration of the call. On
+    // success DPAPI writes a freshly allocated buffer into `out_blob`, which we
+    // copy out and zeroize in `take_and_zeroize_dpapi_blob`.
+    unsafe {
+        CryptProtectData(
+            &in_blob,
+            PCWSTR::null(),
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut out_blob,
+        )
+        .map_err(|e| format!("DPAPI protect failed: {e}"))?;
+        Ok(take_and_zeroize_dpapi_blob(&out_blob))
+    }
+}
+
+/// Reverse [`dpapi_protect`]: unprotect a DPAPI blob produced for the current user.
+#[cfg(windows)]
+fn dpapi_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::Security::Cryptography::{
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    let in_blob = CRYPT_INTEGER_BLOB {
+        cbData: ciphertext.len() as u32,
+        pbData: ciphertext.as_ptr() as *mut u8,
+    };
+    let mut out_blob = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+
+    // SAFETY: `in_blob` borrows `ciphertext`; on success DPAPI writes a freshly
+    // allocated plaintext buffer into `out_blob`, which we copy out and zeroize
+    // in `take_and_zeroize_dpapi_blob`.
+    unsafe {
+        CryptUnprotectData(
+            &in_blob,
+            None,
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut out_blob,
+        )
+        .map_err(|e| format!("DPAPI unprotect failed: {e}"))?;
+        Ok(take_and_zeroize_dpapi_blob(&out_blob))
+    }
+}
+
+/// Load (or lazily create) the 32-byte AES key that guards secure-store data
+/// when the OS keychain is unavailable.
+///
+/// At-rest protection of the key file is best-effort and platform-dependent:
+/// on unix the file is written with `0600` permissions; on Windows it is wrapped
+/// with DPAPI (`CryptProtectData`) so it is bound to the current user account.
+/// Neither provides keychain-grade protection — this is at-rest obfuscation for
+/// the fallback path only.
 fn load_or_create_secure_store_fallback_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
     let path = secure_store_fallback_key_path(app)?;
     if path.is_file() {
-        let existing =
+        let stored =
             std::fs::read(&path).map_err(|e| format!("failed to read fallback key: {e}"))?;
+
+        // On Windows the key file is DPAPI-protected. A file that is exactly 32
+        // bytes long is an un-protected legacy key (DPAPI output is always
+        // larger), so accept it as-is for backward compatibility.
+        #[cfg(windows)]
+        let existing = if stored.len() == 32 {
+            stored
+        } else {
+            dpapi_unprotect(&stored)?
+        };
+        #[cfg(not(windows))]
+        let existing = stored;
+
         if existing.len() != 32 {
             return Err("fallback key has invalid length".into());
         }
@@ -159,12 +281,23 @@ fn load_or_create_secure_store_fallback_key(app: &tauri::AppHandle) -> Result<[u
 
     let mut key = [0_u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut key);
+
+    // Compute the on-disk representation before creating the file so a failure
+    // here does not leave an empty key file behind (`create_new` would then
+    // refuse to re-create it on the next run).
+    #[cfg(windows)]
+    let payload = dpapi_protect(&key)?;
+
     {
         let mut file = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&path)
             .map_err(|e| format!("failed to create fallback key: {e}"))?;
+        #[cfg(windows)]
+        std::io::Write::write_all(&mut file, &payload)
+            .map_err(|e| format!("failed to write fallback key: {e}"))?;
+        #[cfg(not(windows))]
         std::io::Write::write_all(&mut file, &key)
             .map_err(|e| format!("failed to write fallback key: {e}"))?;
         let _ = file.sync_all();

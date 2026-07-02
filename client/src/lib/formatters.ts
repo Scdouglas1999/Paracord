@@ -37,6 +37,49 @@ export function formatMessageTimestamp(dateStr: string): string {
 }
 
 /**
+ * Formats a timestamp for display next to a message using the browser locale.
+ * "Today at 3:45 PM", "Yesterday at 10:00 AM", or "1/15/2025 3:45 PM".
+ *
+ * Unlike {@link formatMessageTimestamp}, this uses locale-aware
+ * toLocaleTimeString/toLocaleDateString output. Shared by the message list and
+ * search panel; kept locale-based to preserve their existing rendering.
+ */
+export function formatTimestamp(iso: string): string {
+  try {
+    const date = new Date(iso);
+    const now = new Date();
+    const dateIsToday = date.toDateString() === now.toDateString();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const dateIsYesterday = date.toDateString() === yesterday.toDateString();
+
+    const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (dateIsToday) return `Today at ${time}`;
+    if (dateIsYesterday) return `Yesterday at ${time}`;
+    return `${date.toLocaleDateString()} ${time}`;
+  } catch {
+    return iso;
+  }
+}
+
+/**
+ * Formats a full date for message date separators using the browser locale.
+ * "Monday, January 15, 2025".
+ */
+export function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  } catch {
+    return iso;
+  }
+}
+
+/**
  * Formats a full date for date separators between message groups.
  * "Monday, January 15, 2025"
  */

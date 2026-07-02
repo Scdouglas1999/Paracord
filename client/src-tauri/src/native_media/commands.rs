@@ -634,15 +634,12 @@ pub async fn media_export_track_sender_key(
     })
 }
 
-#[tauri::command]
-pub async fn media_send_audio_key_announce(
-    epoch: u8,
+/// Parse `EncryptedKeyRecipient` entries (with string user ids) into the
+/// `(i64, ciphertext)` pairs the transport control messages expect.
+fn parse_encrypted_key_recipients(
     encrypted_keys: Vec<EncryptedKeyRecipient>,
-    state: State<'_, MediaState>,
-) -> Result<(), String> {
-    let guard = state.session.lock().await;
-    let session = guard.as_ref().ok_or("no active session")?;
-    let payload = encrypted_keys
+) -> Result<Vec<(i64, Vec<u8>)>, String> {
+    encrypted_keys
         .into_iter()
         .map(|entry| {
             let recipient_user_id = entry
@@ -651,7 +648,18 @@ pub async fn media_send_audio_key_announce(
                 .map_err(|_| "invalid recipient user id".to_string())?;
             Ok((recipient_user_id, entry.ciphertext))
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect()
+}
+
+#[tauri::command]
+pub async fn media_send_audio_key_announce(
+    epoch: u8,
+    encrypted_keys: Vec<EncryptedKeyRecipient>,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
+    let guard = state.session.lock().await;
+    let session = guard.as_ref().ok_or("no active session")?;
+    let payload = parse_encrypted_key_recipients(encrypted_keys)?;
     session
         .send_control_message(&ControlMessage::KeyAnnounce {
             epoch,
@@ -671,16 +679,7 @@ pub async fn media_send_track_key_announce(
 ) -> Result<(), String> {
     let guard = state.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
-    let payload = encrypted_keys
-        .into_iter()
-        .map(|entry| {
-            let recipient_user_id = entry
-                .recipient_user_id
-                .parse::<i64>()
-                .map_err(|_| "invalid recipient user id".to_string())?;
-            Ok((recipient_user_id, entry.ciphertext))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+    let payload = parse_encrypted_key_recipients(encrypted_keys)?;
     let codec = match codec
         .as_deref()
         .map(str::trim)
@@ -863,16 +862,7 @@ fn validate_file_path(
 ) -> Result<std::path::PathBuf, String> {
     use tauri::Manager;
 
-    let requested = std::path::PathBuf::from(raw_path);
-
-    // Reject obviously suspicious components before canonicalization
-    for component in requested.components() {
-        if let std::path::Component::ParentDir = component {
-            return Err("file path must not contain '..' components".into());
-        }
-    }
-
-    // Build the list of allowed base directories
+    // Build the list of allowed base directories (already canonicalized).
     let mut allowed_bases: Vec<std::path::PathBuf> = Vec::new();
 
     if let Ok(app_data) = app.path().app_data_dir() {
@@ -893,8 +883,29 @@ fn validate_file_path(
         return Err("could not resolve any allowed base directory".into());
     }
 
-    // For uploads, the file must already exist — canonicalize it.
-    // For downloads, the parent directory must exist and be within an allowed base.
+    validate_file_path_within_bases(raw_path, &allowed_bases)
+}
+
+/// Confine `raw_path` to one of `allowed_bases`, rejecting `..` traversal and
+/// symlinks that would escape the base. `allowed_bases` must already be
+/// canonicalized. Split out from [`validate_file_path`] so it can be unit-tested
+/// without a live `tauri::AppHandle`.
+fn validate_file_path_within_bases(
+    raw_path: &str,
+    allowed_bases: &[std::path::PathBuf],
+) -> Result<std::path::PathBuf, String> {
+    let requested = std::path::PathBuf::from(raw_path);
+
+    // Reject obviously suspicious components before canonicalization
+    for component in requested.components() {
+        if let std::path::Component::ParentDir = component {
+            return Err("file path must not contain '..' components".into());
+        }
+    }
+
+    // For uploads, the file must already exist — canonicalize it (which fully
+    // resolves any symlinks). For downloads, the parent directory must exist and
+    // be within an allowed base.
     let canonical = if requested.exists() {
         requested
             .canonicalize()
@@ -916,7 +927,21 @@ fn validate_file_path(
         let file_name = requested
             .file_name()
             .ok_or_else(|| "file path has no file name".to_string())?;
-        canonical_parent.join(file_name)
+        let final_path = canonical_parent.join(file_name);
+
+        // Re-canonicalization guard: the parent is now symlink-free, but the
+        // final component itself may be a symlink (possibly dangling, which is
+        // why `exists()` above returned false). The OS would follow it on
+        // write and escape the base, so reject any symlink at that component.
+        if let Ok(metadata) = std::fs::symlink_metadata(&final_path) {
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "file path final component is a symlink: {}",
+                    final_path.display()
+                ));
+            }
+        }
+        final_path
     };
 
     // Verify the canonical path is under one of the allowed bases
@@ -959,4 +984,137 @@ pub async fn quic_download_file(
         .to_str()
         .ok_or_else(|| "file path contains invalid characters".to_string())?;
     super::file_transfer::download_file(&endpoint, &token, &attachment_id, path_str, app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// Create a fresh, canonicalized temp directory for a test. Canonicalizing
+    /// matches how `validate_file_path` supplies its (already-canonical) bases.
+    fn unique_dir(tag: &str) -> PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "paracord-vfp-{tag}-{}-{}-{}",
+            std::process::id(),
+            nanos,
+            n
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn accepts_existing_file_within_base() {
+        let base = unique_dir("existing");
+        let file = base.join("inside.txt");
+        std::fs::write(&file, b"hello").unwrap();
+
+        let result =
+            validate_file_path_within_bases(file.to_str().unwrap(), std::slice::from_ref(&base))
+                .expect("existing file within base should be accepted");
+        assert!(result.starts_with(&base));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn accepts_nonexistent_download_target_within_base() {
+        let base = unique_dir("download");
+        let target = base.join("newfile.bin");
+
+        let result =
+            validate_file_path_within_bases(target.to_str().unwrap(), std::slice::from_ref(&base))
+                .expect("non-existent target inside base should be accepted");
+        assert_eq!(result, target);
+        assert!(result.starts_with(&base));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rejects_parent_dir_component() {
+        let base = unique_dir("dotdot");
+        let raw = format!("{}/../escape.txt", base.display());
+
+        let err = validate_file_path_within_bases(&raw, std::slice::from_ref(&base))
+            .expect_err("'..' components must be rejected");
+        assert!(err.contains(".."), "unexpected error: {err}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rejects_path_outside_base() {
+        let base = unique_dir("base");
+        let other = unique_dir("other");
+        let secret = other.join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+
+        let err =
+            validate_file_path_within_bases(secret.to_str().unwrap(), std::slice::from_ref(&base))
+                .expect_err("path outside all bases must be rejected");
+        assert!(err.contains("outside"), "unexpected error: {err}");
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    /// The core regression test for the re-canonicalization fix: a dangling
+    /// symlink placed inside the base directory whose target escapes the base.
+    /// `exists()` returns false for a dangling symlink, so this exercises the
+    /// download-target branch, where the parent is canonicalized but the final
+    /// component is not — the symlink guard must catch it.
+    #[cfg(unix)]
+    #[test]
+    fn rejects_dangling_symlink_final_component_escape() {
+        use std::os::unix::fs::symlink;
+
+        let base = unique_dir("symlink-dangling");
+        let outside = unique_dir("symlink-outside");
+        let escape_target = outside.join("does-not-exist.txt");
+        let link = base.join("evil");
+        symlink(&escape_target, &link).unwrap();
+
+        let err =
+            validate_file_path_within_bases(link.to_str().unwrap(), std::slice::from_ref(&base))
+                .expect_err("dangling symlink escaping base must be rejected");
+        assert!(err.contains("symlink"), "unexpected error: {err}");
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// A symlink inside the base pointing to an existing file outside the base:
+    /// `exists()` is true, so canonicalization resolves it outside the base and
+    /// the `starts_with` check rejects it.
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_to_existing_file_outside_base() {
+        use std::os::unix::fs::symlink;
+
+        let base = unique_dir("symlink-existing");
+        let outside = unique_dir("symlink-real");
+        let real = outside.join("real.txt");
+        std::fs::write(&real, b"data").unwrap();
+        let link = base.join("evil2");
+        symlink(&real, &link).unwrap();
+
+        let err =
+            validate_file_path_within_bases(link.to_str().unwrap(), std::slice::from_ref(&base))
+                .expect_err("symlink to existing file outside base must be rejected");
+        assert!(err.contains("outside"), "unexpected error: {err}");
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
 }

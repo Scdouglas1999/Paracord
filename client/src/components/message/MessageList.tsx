@@ -25,6 +25,8 @@ import { getAccessToken } from '../../lib/authToken';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
 import { parseMarkdown } from '../../lib/markdown';
+import { getHighestRoleColor } from '../../lib/colors';
+import { formatTimestamp, formatDate } from '../../lib/formatters';
 import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from '../../lib/customEmoji';
@@ -40,18 +42,6 @@ const EMPTY_TYPING: string[] = [];
 const EMPTY_CHANNELS: Channel[] = [];
 const EMPTY_MEMBERS: Member[] = [];
 
-function roleColorToHex(color: number): string | undefined {
-  if (!color) return undefined;
-  return `#${color.toString(16).padStart(6, '0')}`;
-}
-
-function getHighestRoleColor(memberRoles: string[], roles: Role[]): string | undefined {
-  const matched = roles
-    .filter((r) => memberRoles.includes(r.id) && r.color !== 0)
-    .sort((a, b) => b.position - a.position);
-  if (matched.length === 0) return undefined;
-  return roleColorToHex(matched[0].color);
-}
 const MAX_REPLY_NEST_DEPTH = 6;
 const REPLY_INDENT_PX = 18;
 const THREAD_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -94,37 +84,6 @@ function isImageAttachment(att: { content_type?: string; filename: string }): bo
 interface MessageListProps {
   channelId: string;
   onReply?: (message: Message) => void;
-}
-
-function formatTimestamp(iso: string): string {
-  try {
-    const date = new Date(iso);
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const isYesterday = date.toDateString() === yesterday.toDateString();
-
-    const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    if (isToday) return `Today at ${time}`;
-    if (isYesterday) return `Yesterday at ${time}`;
-    return `${date.toLocaleDateString()} ${time}`;
-  } catch {
-    return iso;
-  }
-}
-
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString(undefined, {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-  } catch {
-    return iso;
-  }
 }
 
 function getTimestamp(msg: { timestamp?: string; created_at?: string }): string {
