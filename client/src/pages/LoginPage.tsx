@@ -80,7 +80,7 @@ export function LoginPage() {
 
   const handleChangeServer = () => {
     clearStoredServerUrl();
-    window.location.href = '/connect';
+    navigate('/connect');
   };
 
   const completeLoginFlow = async () => {

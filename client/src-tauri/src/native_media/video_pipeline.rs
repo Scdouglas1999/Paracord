@@ -175,6 +175,14 @@ fn transport_codec_to_native(codec: TransportVideoCodec) -> VideoCodec {
     }
 }
 
+/// Pick the highest-preference codec that every remote participant can decode.
+///
+/// This must use `try_lock` rather than `blocking_lock`: it is reachable from
+/// async `#[tauri::command]` handlers (e.g. `voice_push_video_frame`) running on
+/// tokio worker threads, where `blocking_lock` panics. If the participant table
+/// is momentarily contended (a join/leave is being applied on the control task),
+/// we cannot verify remote support for this frame, so we keep the caller-supplied
+/// `fallback` (the current codec) and re-evaluate on the next frame.
 #[cfg(feature = "vpx")]
 fn choose_best_publish_codec(session: &NativeMediaSession, fallback: VideoCodec) -> VideoCodec {
     let local_encoders = session
@@ -188,12 +196,11 @@ fn choose_best_publish_codec(session: &NativeMediaSession, fallback: VideoCodec)
         return fallback;
     }
 
-    let participants = session
-        .session_participants
-        .blocking_lock()
-        .values()
-        .cloned()
-        .collect::<Vec<_>>();
+    let Ok(participants_guard) = session.session_participants.try_lock() else {
+        return fallback;
+    };
+    let participants = participants_guard.values().cloned().collect::<Vec<_>>();
+    drop(participants_guard);
 
     let preference = [VideoCodec::Av1, VideoCodec::H264, VideoCodec::Vp9];
     for codec in preference {
@@ -454,6 +461,18 @@ fn default_screen_codec() -> paracord_codec::video::VideoCodec {
     }
 }
 
+/// Ordered list of codecs to try when `current_codec` fails at runtime, most
+/// preferred first. Each list excludes `current_codec` itself; VP9 has no
+/// further fallback because it is the universal baseline.
+#[cfg(feature = "vpx")]
+fn runtime_fallback_preference(current_codec: VideoCodec) -> Vec<VideoCodec> {
+    match current_codec {
+        VideoCodec::Av1 => vec![VideoCodec::H264, VideoCodec::Vp9],
+        VideoCodec::H264 => vec![VideoCodec::Vp9],
+        VideoCodec::Vp9 => vec![],
+    }
+}
+
 #[cfg(feature = "vpx")]
 fn select_runtime_fallback_codec(
     session: &NativeMediaSession,
@@ -467,15 +486,9 @@ fn select_runtime_fallback_codec(
         .map(|capability| transport_codec_to_native(capability.codec))
         .collect::<std::collections::HashSet<_>>();
 
-    let preference = match current_codec {
-        VideoCodec::Av1 => [VideoCodec::H264, VideoCodec::Vp9],
-        VideoCodec::H264 => [VideoCodec::Vp9, VideoCodec::Vp9],
-        VideoCodec::Vp9 => [VideoCodec::Vp9, VideoCodec::Vp9],
-    };
-
-    preference
+    runtime_fallback_preference(current_codec)
         .into_iter()
-        .find(|codec| *codec != current_codec && local_encoders.contains(codec))
+        .find(|codec| local_encoders.contains(codec))
 }
 
 #[cfg(feature = "vpx")]
@@ -858,7 +871,14 @@ pub fn encode_and_send_video_frame(
             sync_published_video_track_metadata(session, true);
         } else {
             let desired_layers = build_camera_simulcast_configs(frame_width, frame_height, 30);
-            let desired_codec = choose_best_publish_codec(session, VideoCodec::Vp9);
+            let desired_codec = choose_best_publish_codec(
+                session,
+                session
+                    .video_simulcast
+                    .as_ref()
+                    .map(|encoder| encoder.codec)
+                    .unwrap_or(VideoCodec::Vp9),
+            );
             let needs_reinit = session
                 .video_simulcast
                 .as_ref()
@@ -1674,5 +1694,28 @@ mod tests {
         };
         let payload = vec![0x01, 0, 0, 0, 1, 9, 8, 7, 6];
         assert!(decode_video_fragment_payload(&header, &payload).is_none());
+    }
+
+    #[test]
+    fn runtime_fallback_preference_is_ordered_per_source_codec() {
+        assert_eq!(
+            runtime_fallback_preference(VideoCodec::Av1),
+            vec![VideoCodec::H264, VideoCodec::Vp9]
+        );
+        assert_eq!(
+            runtime_fallback_preference(VideoCodec::H264),
+            vec![VideoCodec::Vp9]
+        );
+        assert_eq!(runtime_fallback_preference(VideoCodec::Vp9), Vec::new());
+    }
+
+    #[test]
+    fn runtime_fallback_preference_never_includes_current_codec() {
+        for current in [VideoCodec::Av1, VideoCodec::H264, VideoCodec::Vp9] {
+            assert!(
+                !runtime_fallback_preference(current).contains(&current),
+                "fallback list for {current:?} must not contain itself"
+            );
+        }
     }
 }

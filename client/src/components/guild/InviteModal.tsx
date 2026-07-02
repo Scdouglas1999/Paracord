@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Copy, Check, Link } from 'lucide-react';
+import { X, Copy, Check, Link, RefreshCw } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { inviteApi } from '../../api/invites';
 import { getStoredServerUrl } from '../../lib/apiBaseUrl';
@@ -47,8 +47,16 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
   const [loading, setLoading] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
+  // True once the user has changed an option away from the currently-minted invite,
+  // signalling that a regenerate is needed to apply it.
+  const [optionsDirty, setOptionsDirty] = useState(false);
 
-  const generateInvite = async () => {
+  /**
+   * Mint an invite for the current options. When `previousCode` is supplied (a
+   * regenerate), the prior invite is revoked afterwards so toggling options can
+   * never leave orphaned, still-usable invites behind.
+   */
+  const generateInvite = async (previousCode?: string) => {
     setLoading(true);
     setInviteError(null);
     setCopyError(null);
@@ -61,18 +69,40 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       const serverUrl = resolveServerBaseUrl();
       setInviteCode(code);
       setPortableLink(toPortableUri(serverUrl, code));
+      setOptionsDirty(false);
+      // Best-effort cleanup of the invite this one replaces. The new invite is
+      // already live, so a failed revoke should not surface as a user error.
+      if (previousCode && previousCode !== code) {
+        try {
+          await inviteApi.delete(previousCode);
+        } catch {
+          /* ignore: the replacement invite is already active */
+        }
+      }
     } catch (err) {
-      setInviteCode('');
-      setPortableLink('');
+      // Preserve the existing invite on a failed regenerate; only clear on the
+      // initial generation where there is nothing usable to fall back to.
+      if (!previousCode) {
+        setInviteCode('');
+        setPortableLink('');
+      }
       setInviteError(`Failed to generate invite: ${extractApiError(err)}`);
     } finally {
       setLoading(false);
     }
   };
 
+  // Generate a single invite when the modal opens (or the channel changes).
+  // Option changes intentionally do NOT auto-regenerate; the user applies them
+  // via the explicit Regenerate action below.
   useEffect(() => {
-    generateInvite();
-  }, [channelId, expiration, maxUses]);
+    void generateInvite();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId]);
+
+  const handleRegenerate = () => {
+    void generateInvite(inviteCode || undefined);
+  };
 
   useFocusTrap(dialogRef, true, onClose);
 
@@ -219,7 +249,10 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
               </span>
               <select
                 value={expiration}
-                onChange={(e) => setExpiration(e.target.value)}
+                onChange={(e) => {
+                  setExpiration(e.target.value);
+                  setOptionsDirty(true);
+                }}
                 className="select-field mt-3"
               >
                 <option value="30min">30 minutes</option>
@@ -237,7 +270,10 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
               </span>
               <select
                 value={maxUses}
-                onChange={(e) => setMaxUses(e.target.value)}
+                onChange={(e) => {
+                  setMaxUses(e.target.value);
+                  setOptionsDirty(true);
+                }}
                 className="select-field mt-3"
               >
                 <option value="1">1 use</option>
@@ -249,6 +285,24 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                 <option value="unlimited">No limit</option>
               </select>
             </label>
+          </div>
+
+          {/* Regenerate action -- option changes only take effect when applied here. */}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {optionsDirty
+                ? 'Options changed -- regenerate to apply them to a fresh link.'
+                : 'Regenerating revokes the current link and issues a new one.'}
+            </p>
+            <button
+              type="button"
+              onClick={handleRegenerate}
+              disabled={loading}
+              className="btn-ghost gap-2 border border-[color:var(--border-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : undefined} />
+              {loading ? 'Regenerating...' : 'Regenerate'}
+            </button>
           </div>
         </div>
       </div>

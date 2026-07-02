@@ -18,7 +18,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Enforce audit exception review dates
+        run: python3 scripts/check_audit_exceptions.py
       - name: Cargo audit
         run: cargo audit
       - uses: actions/setup-node@v4
@@ -362,8 +364,14 @@ jobs:
       - name: Build client for embedded assets
         working-directory: client
         run: npm run build
-      - name: Rust coverage (lcov + summary)
-        run: cargo llvm-cov --workspace --all-targets --lcov --output-path coverage/rust.lcov
+      - name: Rust coverage (lcov + floor)
+        # --fail-under-lines is a ratchet floor (a regression backstop, NOT a target):
+        # raise it over time as coverage improves; never lower it to make a red build
+        # pass. The value is a conservative initial floor — local measurement was
+        # unavailable (cargo-llvm-cov not installed on the dev machine), so it is set
+        # below the expected line coverage. Ratchet it up once CI reports the real
+        # number in this step's summary output.
+        run: cargo llvm-cov --workspace --all-targets --lcov --output-path coverage/rust.lcov --fail-under-lines 40
       - name: Client coverage
         working-directory: client
         run: npm run test:unit:coverage -- --reporter=dot

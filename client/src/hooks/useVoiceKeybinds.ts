@@ -202,6 +202,18 @@ export function useVoiceKeybinds() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleWindowBlur);
+      // If these listeners are torn down (binding or PTT-mode change) while the
+      // PTT key is physically held, the matching keyup fires against the new
+      // listener set and the release is lost — leaving the mic open (privacy
+      // hazard). Force-release here so a re-subscription can never strand it.
+      if (pushToTalkEngaged.current) {
+        pushToTalkEngaged.current = false;
+        useVoiceStore.getState().setPttEngaged(false);
+        const voiceState = useVoiceStore.getState();
+        if (voiceState.connected && voiceState.channelId && !voiceState.selfMute) {
+          void toggleMuteAndPublish();
+        }
+      }
     };
   }, [bindings, isPttMode]);
 }

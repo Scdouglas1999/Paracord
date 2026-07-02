@@ -16,8 +16,9 @@ services:
       - PARACORD_DATABASE_URL=sqlite:///data/paracord.db?mode=rwc
       - PARACORD_DATABASE_MAX_CONNECTIONS=20
 
-      # Auth - set a strong random secret in production
-      # - PARACORD_JWT_SECRET=your-64-char-random-secret-here
+      # Auth - required; set a strong random secret in .env (see .env.example).
+      # The :? form makes `docker compose up` fail fast if it is unset/empty.
+      - PARACORD_JWT_SECRET=${PARACORD_JWT_SECRET:?set PARACORD_JWT_SECRET in .env (openssl rand -hex 32)}
       - PARACORD_REGISTRATION_ENABLED=true
 
       # Storage
@@ -31,10 +32,15 @@ services:
       - PARACORD_LIVEKIT_URL=ws://livekit:7880
       - PARACORD_LIVEKIT_HTTP_URL=http://livekit:7880
       - PARACORD_LIVEKIT_API_KEY=paracordlocal
-      - PARACORD_LIVEKIT_API_SECRET=localcompose_livekit_secret_0123456789abcdef
+      # Shared with the livekit service below; both read the SAME variable.
+      # Required; set in .env (see .env.example). :? fails fast if unset/empty.
+      - PARACORD_LIVEKIT_API_SECRET=${PARACORD_LIVEKIT_API_SECRET:?set PARACORD_LIVEKIT_API_SECRET in .env (openssl rand -hex 32)}
       # - PARACORD_LIVEKIT_PUBLIC_URL=wss://chat.example.com/livekit
 
-      # TLS - disabled inside Docker by default; terminate TLS at a reverse proxy.
+      # TLS - disabled inside Docker by default; the container serves plain HTTP
+      # on 8090. Terminate TLS at a reverse proxy such as Caddy/nginx (or set
+      # PARACORD_TLS_ENABLED=true with mounted certs). Browsers block mic/camera
+      # and screen-share on plain HTTP, so voice needs HTTPS in front of this.
       - PARACORD_TLS_ENABLED=false
 
       # Port forwarding should be configured at your router/firewall layer
@@ -50,7 +56,9 @@ services:
       - "7881:7881"
       - "7882:7882/udp"
     environment:
-      - "LIVEKIT_KEYS=paracordlocal: localcompose_livekit_secret_0123456789abcdef"
+      # Same secret as the paracord service above (the key id "paracordlocal"
+      # is not a secret). Set PARACORD_LIVEKIT_API_SECRET in .env.
+      - "LIVEKIT_KEYS=paracordlocal: ${PARACORD_LIVEKIT_API_SECRET:?set PARACORD_LIVEKIT_API_SECRET in .env (openssl rand -hex 32)}"
     command: --dev --bind 0.0.0.0
     restart: unless-stopped
 

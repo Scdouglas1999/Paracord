@@ -40,7 +40,7 @@ jobs:
 
       - name: Install cargo-audit
         shell: bash
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Audit Rust dependencies
         shell: bash

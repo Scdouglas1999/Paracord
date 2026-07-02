@@ -2,7 +2,8 @@
 # Temporary exceptions with documented review date:
 # - RUSTSEC-2023-0071 (rsa via sqlx-mysql in sqlx macro internals): Paracord supports
 #   SQLite and PostgreSQL, not MySQL.
-#   Review by: 2026-06-30 (remove when upstream sqlx no longer pulls sqlx-mysql/rsa into this graph).
+#   Re-verified 2026-07-02: SQLx MySQL/rsa graph still not used (Paracord targets only SQLite + PostgreSQL).
+#   Review by: 2026-09-30 (remove when upstream sqlx no longer pulls sqlx-mysql/rsa into this graph).
 ignore = [
   "RUSTSEC-2023-0071",
 ]

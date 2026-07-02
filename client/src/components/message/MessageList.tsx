@@ -34,7 +34,7 @@ import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
 import { PollMessageCard } from './PollMessageCard';
 import { EphemeralMessage } from './EphemeralMessage';
 import { toast } from '../../stores/toastStore';
-import { LoadingSpinner } from '../ui/Feedback';
+import { LoadingSpinner, ErrorBanner } from '../ui/Feedback';
 
 const EMPTY_TYPING: string[] = [];
 const EMPTY_CHANNELS: Channel[] = [];
@@ -190,7 +190,8 @@ type VirtualRow =
 export function MessageList({ channelId, onReply }: MessageListProps) {
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const navigate = useNavigate();
-  const { messages, isLoading, hasMore, loadMore } = useMessages(channelId);
+  const { messages, isLoading, hasMore, loadMore, error } = useMessages(channelId);
+  const fetchMessages = useMessageStore((s) => s.fetchMessages);
   const addReaction = useMessageStore((s) => s.addReaction);
   const removeReaction = useMessageStore((s) => s.removeReaction);
   const deleteMessage = useMessageStore((s) => s.deleteMessage);
@@ -241,6 +242,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   // Popup/overlay state group
   const [popupState, setPopupState] = useState<{
     hoveredMessageId: string | null;
+    focusedMessageId: string | null;
     menuMessageId: string | null;
     profileUser: Message['author'] | null;
     profilePos: { x: number; y: number };
@@ -249,6 +251,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     contextMenuAnchor: { x: number; y: number };
   }>({
     hoveredMessageId: null,
+    focusedMessageId: null,
     menuMessageId: null,
     profileUser: null,
     profilePos: { x: 0, y: 0 },
@@ -257,6 +260,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     contextMenuAnchor: { x: 0, y: 0 },
   });
   const hoveredMessageId = popupState.hoveredMessageId;
+  const focusedMessageId = popupState.focusedMessageId;
   const menuMessageId = popupState.menuMessageId;
   const profileUser = popupState.profileUser;
   const profilePos = popupState.profilePos;
@@ -265,6 +269,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const contextMenuAnchor = popupState.contextMenuAnchor;
   const setHoveredMessageId = (hoveredMessageId: string | null) =>
     setPopupState((s) => ({ ...s, hoveredMessageId }));
+  const setFocusedMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
+    setPopupState((s) => ({ ...s, focusedMessageId: typeof value === 'function' ? value(s.focusedMessageId) : value }));
   const setMenuMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
     setPopupState((s) => ({ ...s, menuMessageId: typeof value === 'function' ? value(s.menuMessageId) : value }));
   const setProfileUser = (profileUser: Message['author'] | null) =>
@@ -1238,14 +1244,22 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         aria-label={`Message from ${msg.author.username}`}
         aria-posinset={row.messageIndex + 1}
         aria-setsize={messages.length}
-        className="group relative -mx-1.5 flex gap-3.5 rounded-2xl px-2.5 py-1.5 transition-colors sm:-mx-2.5 sm:gap-4 sm:px-3"
+        tabIndex={0}
+        className="group relative -mx-1.5 flex gap-3.5 rounded-2xl px-2.5 py-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary/60 sm:-mx-2.5 sm:gap-4 sm:px-3"
         style={{
           marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '1.35rem',
           paddingLeft: replyIndent > 0 ? `${replyIndent}px` : undefined,
-          backgroundColor: hoveredMessageId === msg.id ? 'var(--bg-mod-subtle)' : 'transparent',
+          backgroundColor:
+            hoveredMessageId === msg.id || focusedMessageId === msg.id ? 'var(--bg-mod-subtle)' : 'transparent',
         }}
         onMouseEnter={() => setHoveredMessageId(msg.id)}
         onMouseLeave={() => setHoveredMessageId(null)}
+        onFocus={() => setFocusedMessageId(msg.id)}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+            setFocusedMessageId((curr) => (curr === msg.id ? null : curr));
+          }
+        }}
         onContextMenu={(e) => handleMessageContextMenu(e, msg)}
       >
         {replyDepth > 0 && (
@@ -1371,6 +1385,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             <div className="mt-0.5">
               <textarea
                 autoFocus
+                aria-label={`Edit message from ${msg.author.username}`}
                 className="w-full resize-none rounded-lg border border-border-subtle bg-bg-primary/80 px-3 py-2 text-[15px] leading-[1.48rem] outline-none focus:border-accent-primary/60"
                 style={{ color: 'var(--text-secondary)', minHeight: '2.5rem', maxHeight: '50vh' }}
                 value={editContent}
@@ -1735,7 +1750,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           </button>
         )}
 
-        {hoveredMessageId === msg.id && !isCoarsePointer && (
+        {(hoveredMessageId === msg.id || focusedMessageId === msg.id) && !isCoarsePointer && (
           <div className="message-actions rounded-xl border border-border-subtle bg-bg-floating p-0.5">
             <button className="hover-action-btn rounded-lg" title="Add Reaction" aria-label="Add Reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
               <Smile size={16} />
@@ -1859,6 +1874,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             {Array.from({ length: 8 }, (_, i) => (
               <SkeletonMessage key={i} />
             ))}
+          </div>
+        ) : error && messages.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center px-4">
+            <ErrorBanner
+              className="w-full max-w-md"
+              message={error}
+              onRetry={() => void fetchMessages(channelId)}
+            />
           </div>
         ) : messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3">

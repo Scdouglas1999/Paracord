@@ -248,8 +248,11 @@ pub async fn voice_switch_output_device(
         }
     }
 
-    session.audio_playback.stop();
-    session.audio_playback = replacement;
+    {
+        let mut playback = session.audio_playback.lock().await;
+        playback.stop();
+        *playback = replacement;
+    }
 
     tracing::debug!(device_index = index, "switched audio output device");
     Ok(())

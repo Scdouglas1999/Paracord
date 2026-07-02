@@ -201,18 +201,28 @@ That's it. For remote access, forward TCP+UDP port 8080 and TCP port 8443 (HTTPS
 ```bash
 git clone https://github.com/Scoduglas1999/Paracord.git
 cd Paracord
+cp .env.example .env
+# Fill in the required secrets before starting (each must be unique + random):
+#   PARACORD_JWT_SECRET=$(openssl rand -hex 32)
+#   PARACORD_LIVEKIT_API_SECRET=$(openssl rand -hex 32)
+# Edit .env and paste the generated values. `docker compose up` intentionally
+# fails fast until both secrets are set.
 docker compose up -d
 ```
 
 This starts the Paracord server and a LiveKit SFU instance. See `docker-compose.yml` for the full list of environment variables, or check [docs/docker-setup.md](docs/docker-setup.md) for detailed configuration.
 
+Once running, the Docker stack serves plain **HTTP** at `http://<server-ip>:8090` (there is no TLS on 8443 in the container).
+
+> **Voice/screen-share on Docker needs HTTPS.** Browsers only grant microphone, camera, and screen-share access in a secure context, so the plain-HTTP Docker deployment **must** sit behind a TLS-terminating reverse proxy (Caddy/nginx) — or run with `PARACORD_TLS_ENABLED=true` and mounted certificates — before mic/camera/screen-share work in a browser. The native desktop client is unaffected. See [docs/docker-setup.md](docs/docker-setup.md) for a reverse-proxy example.
+
 ### Joining a Server
 
 **Desktop app:** Install, paste the server URL, create an account.
 
-**Browser:** Navigate to `https://<server-ip>:8443`, accept the self-signed certificate warning, and create an account.
+**Browser (native/binary server):** Navigate to `https://<server-ip>:8443`, accept the self-signed certificate warning, and create an account. (Docker users connect over `http://<server-ip>:8090` instead — see the Docker note above.)
 
-> **Why HTTPS?** Browsers require a secure context for microphone and camera access. The server auto-generates self-signed TLS certificates and serves HTTPS on port 8443 so voice and streaming work out of the box.
+> **Why HTTPS?** Browsers require a secure context for microphone and camera access. The **native/binary** server auto-generates self-signed TLS certificates and serves HTTPS on port 8443 so voice and streaming work out of the box. This does **not** apply to the Docker stack, which serves plain HTTP on 8090 and needs a TLS reverse proxy in front for browser voice.
 
 ## Configuration
 

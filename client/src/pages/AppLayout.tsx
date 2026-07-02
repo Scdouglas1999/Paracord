@@ -60,9 +60,10 @@ export function AppLayout() {
     isMobile,
   );
 
+  // User settings render as an overlay (see userSettingsOpen), not a route, so there is
+  // no /app/settings path to match here. Admin and guild-settings are real full-page routes.
   const isSettingsRoute =
-    location.pathname === '/app/settings'
-    || location.pathname === '/app/admin'
+    location.pathname === '/app/admin'
     || /^\/app\/guilds\/[^/]+\/settings$/.test(location.pathname);
   const isGuildChannelRoute = /^\/app\/guilds\/[^/]+\/channels\/[^/]+$/.test(location.pathname);
 

@@ -4,10 +4,11 @@ use std::time::Instant;
 use bytes::{BufMut, BytesMut};
 use tokio::time::{interval, Duration};
 
-use paracord_codec::audio::opus::FRAME_SIZE;
+use paracord_codec::audio::jitter::JitterBuffer;
+use paracord_codec::audio::opus::{OpusDecoder, FRAME_SIZE};
 use paracord_transport::protocol::{MediaHeader, TrackType, HEADER_SIZE};
 
-use super::session::NativeMediaSession;
+use super::session::{NativeMediaSession, RemoteAudioState};
 
 const VOICE_BITRATE_BPS: i32 = 96_000;
 const STREAM_BITRATE_BPS: i32 = 192_000;
@@ -170,6 +171,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
 pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
     let shutdown = session.shutdown.clone();
     let remote_audio = session.remote_audio.clone();
+    let audio_playback = session.audio_playback.clone();
     let deafened = session.deafened.clone();
     let conn_inner = session.connection.inner().clone();
     let frame_decryptor = session.frame_decryptor.clone();
@@ -226,18 +228,53 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                                 continue;
                             }
                             let arrival_ms = start_time.elapsed().as_millis() as u64;
-                            let mut remote = remote_audio.lock().await;
-                            if let Some(state) = remote.get_mut(&header.ssrc) {
-                                state.jitter_buffer.insert(
-                                    header.sequence,
-                                    header.timestamp,
-                                    decrypted,
-                                    arrival_ms,
-                                );
-                                state.audio_level = header.audio_level;
+
+                            // Fast path: SSRC already has decode/playout state.
+                            {
+                                let mut remote = remote_audio.lock().await;
+                                if let Some(state) = remote.get_mut(&header.ssrc) {
+                                    state.jitter_buffer.insert(
+                                        header.sequence,
+                                        header.timestamp,
+                                        decrypted,
+                                        arrival_ms,
+                                    );
+                                    state.audio_level = header.audio_level;
+                                    continue;
+                                }
                             }
-                            // New SSRCs are registered when add_playback_source
-                            // is called from the playout/session setup code.
+
+                            // Slow path: first datagram from a new remote SSRC.
+                            // Lazily build its decoder + playout source. The
+                            // `remote_audio` guard is intentionally not held
+                            // across `audio_playback.lock().await` because
+                            // `OpusDecoder` is not `Sync` and would make the task
+                            // future non-`Send`.
+                            let decoder = match OpusDecoder::new() {
+                                Ok(decoder) => decoder,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        ssrc = header.ssrc,
+                                        "failed to init opus decoder for remote audio: {e}"
+                                    );
+                                    continue;
+                                }
+                            };
+                            let playback_tx =
+                                audio_playback.lock().await.add_source(header.ssrc);
+                            let mut state = RemoteAudioState {
+                                decoder,
+                                jitter_buffer: JitterBuffer::new(),
+                                playback_tx,
+                                audio_level: header.audio_level,
+                            };
+                            state.jitter_buffer.insert(
+                                header.sequence,
+                                header.timestamp,
+                                decrypted,
+                                arrival_ms,
+                            );
+                            remote_audio.lock().await.insert(header.ssrc, state);
                         }
                         TrackType::Video => {
                             super::video_pipeline::handle_video_datagram(
@@ -341,5 +378,73 @@ fn mix_audio_in_place(primary: &mut [f32], overlay: &[f32]) {
         // Keep headroom and clamp to valid PCM range.
         let mixed = (*dst * 0.75) + (*src * 0.75);
         *dst = mixed.clamp(-1.0, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_audio_level_reports_silence_as_max() {
+        assert_eq!(compute_audio_level(&[]), 127);
+        assert_eq!(compute_audio_level(&[0.0; FRAME_SIZE]), 127);
+    }
+
+    #[test]
+    fn compute_audio_level_full_scale_is_zero() {
+        assert_eq!(compute_audio_level(&[1.0; FRAME_SIZE]), 0);
+    }
+
+    #[test]
+    fn compute_audio_level_is_quieter_for_lower_amplitude() {
+        // Level is a dBov-like scale where larger == quieter.
+        let loud = compute_audio_level(&[0.5; FRAME_SIZE]);
+        let quiet = compute_audio_level(&[0.05; FRAME_SIZE]);
+        assert!(quiet > loud, "expected quiet ({quiet}) > loud ({loud})");
+    }
+
+    #[test]
+    fn mix_audio_in_place_sums_matching_mono_frames() {
+        let mut primary = [0.4f32, -0.4, 0.2, 0.0];
+        mix_audio_in_place(&mut primary, &[0.4, -0.4, 0.2, 0.0]);
+        // Each output is (a * 0.75) + (b * 0.75) with a == b, clamped to [-1, 1].
+        assert!((primary[0] - 0.6).abs() < 1e-6);
+        assert!((primary[1] - (-0.6)).abs() < 1e-6);
+        assert!((primary[2] - 0.3).abs() < 1e-6);
+        assert!((primary[3] - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mix_audio_in_place_downmixes_stereo_overlay() {
+        let mut primary = [0.0f32, 0.0];
+        // Interleaved L/R: (1.0, 0.0) and (0.0, 1.0) -> mono 0.5, 0.5.
+        mix_audio_in_place(&mut primary, &[1.0, 0.0, 0.0, 1.0]);
+        assert!((primary[0] - 0.375).abs() < 1e-6);
+        assert!((primary[1] - 0.375).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mix_audio_in_place_clamps_to_pcm_range() {
+        let mut primary = [1.0f32];
+        mix_audio_in_place(&mut primary, &[1.0]);
+        assert_eq!(primary[0], 1.0);
+    }
+
+    #[test]
+    fn mix_audio_in_place_ignores_empty_overlay() {
+        let mut primary = [0.3f32, -0.2];
+        mix_audio_in_place(&mut primary, &[]);
+        assert_eq!(primary, [0.3, -0.2]);
+    }
+
+    #[test]
+    fn mix_audio_in_place_zero_pads_short_overlay() {
+        let mut primary = [0.4f32, 0.4];
+        // Overlay shorter than primary and not a stereo multiple: pad with zeros.
+        mix_audio_in_place(&mut primary, &[0.4]);
+        assert!((primary[0] - 0.6).abs() < 1e-6);
+        // Second sample mixes against a zero-padded overlay value.
+        assert!((primary[1] - 0.3).abs() < 1e-6);
     }
 }

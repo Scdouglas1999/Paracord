@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
-import { gateway } from '../../gateway/manager';
+import { useVoice } from '../../hooks/useVoice';
 
 export function MiniVoiceBar() {
   const channelId = useVoiceStore((s) => s.channelId);
@@ -12,9 +12,10 @@ export function MiniVoiceBar() {
   const selfMute = useVoiceStore((s) => s.selfMute);
   const selfDeaf = useVoiceStore((s) => s.selfDeaf);
   const pttEngaged = useVoiceStore((s) => s.pttEngaged);
-  const toggleMute = useVoiceStore((s) => s.toggleMute);
-  const toggleDeaf = useVoiceStore((s) => s.toggleDeaf);
   const leaveChannel = useVoiceStore((s) => s.leaveChannel);
+  // Route mute/deaf through useVoice so the gateway broadcast lives in one place
+  // and can't diverge from VoiceControlBar.
+  const { toggleMute, toggleDeaf } = useVoice();
   const channels = useChannelStore((s) => s.channels);
   const rawNotifications = useAuthStore((s) => s.settings?.notifications as Record<string, unknown> | undefined);
   const isPttMode = (rawNotifications?.['voiceInputMode'] ?? 'voice_activity') === 'push_to_talk';
@@ -26,17 +27,11 @@ export function MiniVoiceBar() {
   );
 
   const handleToggleMute = () => {
-    void toggleMute().then(() => {
-      const s = useVoiceStore.getState();
-      gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf, s.selfVideo);
-    });
+    void toggleMute();
   };
 
   const handleToggleDeaf = () => {
-    void toggleDeaf().then(() => {
-      const s = useVoiceStore.getState();
-      gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf, s.selfVideo);
-    });
+    void toggleDeaf();
   };
 
   return (

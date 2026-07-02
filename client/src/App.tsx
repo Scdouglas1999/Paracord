@@ -23,7 +23,10 @@ const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m
 const DiscoveryPage = lazy(() => import('./pages/DiscoveryPage').then(m => ({ default: m.DiscoveryPage })));
 const DeveloperPage = lazy(() => import('./pages/DeveloperPage').then(m => ({ default: m.DeveloperPage })));
 const TemplateGalleryPage = lazy(() => import('./pages/TemplateGalleryPage').then(m => ({ default: m.TemplateGalleryPage })));
-const MediaTest = lazy(() => import('./pages/MediaTest'));
+// Internal media engine harness — dev builds only. The ternary folds to `null`
+// in production (import.meta.env.DEV is statically false), so Rollup drops the
+// dynamic import and the harness never ships to end users.
+const MediaTest = import.meta.env.DEV ? lazy(() => import('./pages/MediaTest')) : null;
 import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
 import { useAuthStore } from './stores/authStore';
@@ -69,6 +72,28 @@ function useServerStatus() {
   return status;
 }
 
+/** Where the crypto-auth flow should send the user, or `null` to let them in. */
+export type CryptoAuthRedirect = '/setup' | '/unlock' | '/login' | '/connect' | null;
+
+/**
+ * Pure decision for the optional device-key ("crypto auth") flow.
+ * Returns the path to redirect to, or `null` when the user may proceed.
+ */
+export function resolveCryptoAuthRedirect(params: {
+  hasAccount: boolean;
+  isUnlocked: boolean;
+  hasServers: boolean;
+  hasToken: boolean;
+  serverReady: boolean;
+}): CryptoAuthRedirect {
+  const { hasAccount, isUnlocked, hasServers, hasToken, serverReady } = params;
+  if (!hasAccount) return '/setup';
+  if (!isUnlocked) return '/unlock';
+  if (hasServers || (hasToken && serverReady)) return null;
+  if (!hasToken) return '/login';
+  return '/connect';
+}
+
 /**
  * Route guard for the main app.
  *
@@ -106,22 +131,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   // Optional crypto-auth mode (server-controlled, default false).
   if (cryptoAuthEnabled) {
-    if (!hasAccount()) {
-      return <Navigate to="/setup" />;
-    }
-    if (!isUnlocked) {
-      return <Navigate to="/unlock" />;
-    }
-    if (servers.length > 0 || (token && serverStatus === 'ready')) {
-      return <>{children}</>;
-    }
-    if (!token) {
-      return <Navigate to="/login" />;
-    }
-    if (servers.length === 0 && serverStatus !== 'ready') {
-      return <Navigate to="/connect" />;
-    }
-    return <Navigate to="/connect" />;
+    const target = resolveCryptoAuthRedirect({
+      hasAccount: hasAccount(),
+      isUnlocked,
+      hasServers: servers.length > 0,
+      hasToken: Boolean(token),
+      serverReady: serverStatus === 'ready',
+    });
+    return target ? <Navigate to={target} /> : <>{children}</>;
   }
 
   // Password mode: valid token can enter directly.
@@ -136,9 +153,10 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <Navigate to="/login" />;
 }
 
-function AuthRoute({ children }: { children: React.ReactNode }) {
+export function AuthRoute({ children }: { children: React.ReactNode }) {
   const serverStatus = useServerStatus();
   const sessionBootstrapComplete = useAuthStore((s) => s.sessionBootstrapComplete);
+  const token = useAuthStore((s) => s.token);
 
   if (!sessionBootstrapComplete) {
     return <AuthLoadingSpinner label="Restoring session..." />;
@@ -150,6 +168,11 @@ function AuthRoute({ children }: { children: React.ReactNode }) {
 
   if (serverStatus === 'needed') {
     return <Navigate to="/connect" />;
+  }
+
+  // Already authenticated: don't show the login/register forms.
+  if (token && serverStatus === 'ready') {
+    return <Navigate to="/app" replace />;
   }
 
   return <>{children}</>;
@@ -214,8 +237,10 @@ export default function App() {
         <Route path="developers" element={lazyRoute(<DeveloperPage />)} />
       </Route>
 
-      {/* Media engine test page (no auth required) */}
-      <Route path="/media-test" element={lazyRoute(<MediaTest />)} />
+      {/* Media engine test harness — registered in dev builds only, stripped from production. */}
+      {import.meta.env.DEV && MediaTest && (
+        <Route path="/media-test" element={lazyRoute(<MediaTest />)} />
+      )}
 
       {/* Default: send to app (which handles auth redirects) */}
       <Route path="*" element={<Navigate to="/app" />} />

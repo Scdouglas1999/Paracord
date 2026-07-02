@@ -8,6 +8,7 @@ import { inviteApi } from '../api/invites';
 import { toast } from '../stores/toastStore';
 import { cn } from '../lib/utils';
 import { safeStoredImageDataUrl } from '../lib/security';
+import { getGuildColor } from '../lib/colors';
 
 interface DiscoverableGuild {
   id: string;
@@ -37,20 +38,6 @@ const CATEGORIES = [
   'Movies',
   'Sports',
 ];
-
-const GUILD_COLORS = [
-  '#5865f2', '#57f287', '#fee75c', '#eb459e', '#ed4245',
-  '#3ba55c', '#faa61a', '#e67e22', '#e91e63', '#1abc9c',
-];
-
-function getGuildColor(id: string) {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = ((hash << 5) - hash) + id.charCodeAt(i);
-    hash |= 0;
-  }
-  return GUILD_COLORS[Math.abs(hash) % GUILD_COLORS.length];
-}
 
 export function DiscoveryPage() {
   const navigate = useNavigate();

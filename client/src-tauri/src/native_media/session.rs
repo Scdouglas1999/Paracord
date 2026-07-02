@@ -70,8 +70,10 @@ pub struct NativeMediaSession {
     pub screen_audio_tx: mpsc::Sender<Vec<f32>>,
     pub screen_audio_enabled: Arc<AtomicBool>,
 
-    // Audio playback
-    pub audio_playback: AudioPlayback,
+    // Audio playback. Shared behind a mutex so the datagram receive task can
+    // lazily register new remote SSRCs while `voice_switch_output_device` can
+    // swap the whole engine underneath it.
+    pub audio_playback: Arc<tokio::sync::Mutex<AudioPlayback>>,
 
     // Opus codec
     pub opus_encoder: OpusEncoder,
@@ -305,7 +307,7 @@ impl NativeMediaSession {
             screen_audio_rx: Some(screen_audio_rx),
             screen_audio_tx,
             screen_audio_enabled: Arc::new(AtomicBool::new(false)),
-            audio_playback,
+            audio_playback: Arc::new(tokio::sync::Mutex::new(audio_playback)),
             opus_encoder,
             noise_suppressor,
             frame_encryptor: Arc::new(std::sync::Mutex::new(frame_encryptor)),
@@ -412,7 +414,7 @@ impl NativeMediaSession {
         }
 
         // Stop audio playback
-        self.audio_playback.stop();
+        self.audio_playback.lock().await.stop();
 
         // Close QUIC connection
         self.connection.close("session ended");
