@@ -5,7 +5,9 @@ import { useVoiceKeybinds } from '../hooks/useVoiceKeybinds';
 import { useActivityPresence } from '../hooks/useActivityPresence';
 import { useAuthStore } from '../stores/authStore';
 import { useGuildStore } from '../stores/guildStore';
+import { useMessageStore } from '../stores/messageStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { RestartBanner } from '../components/RestartBanner';
 import { ConnectionStatusBar } from '../components/ConnectionStatusBar';
@@ -38,6 +40,8 @@ function AppInitializer({ children }: { children: ReactNode }) {
   const voiceConnected = useVoiceStore((s) => s.connected);
   const applyAudioInputDevice = useVoiceStore((s) => s.applyAudioInputDevice);
   const applyAudioOutputDevice = useVoiceStore((s) => s.applyAudioOutputDevice);
+  const connectionStatus = useUIStore((s) => s.connectionStatus);
+  const flushOfflineQueue = useMessageStore((s) => s.flushOfflineQueue);
 
   useEffect(() => {
     void hydrateServerTokens();
@@ -69,6 +73,21 @@ function AppInitializer({ children }: { children: ReactNode }) {
     applyAudioInputDevice,
     applyAudioOutputDevice,
   ]);
+
+  useEffect(() => {
+    if (connectionStatus !== 'connected') return;
+    void flushOfflineQueue();
+  }, [connectionStatus, flushOfflineQueue]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      void flushOfflineQueue();
+    };
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [flushOfflineQueue]);
 
   return (
     <>

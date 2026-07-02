@@ -76,9 +76,7 @@ pub async fn get_interaction_token(
     pool: &DbPool,
     interaction_id: i64,
 ) -> Result<Option<InteractionTokenRow>, DbError> {
-    let sql = format!(
-        "SELECT {SELECT_COLS} FROM interaction_tokens WHERE interaction_id = $1"
-    );
+    let sql = format!("SELECT {SELECT_COLS} FROM interaction_tokens WHERE interaction_id = $1");
     let row = sqlx::query_as::<_, InteractionTokenRow>(&sql)
         .bind(interaction_id)
         .fetch_optional(pool)

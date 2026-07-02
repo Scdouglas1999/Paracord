@@ -1,4 +1,20 @@
-import type { MediaEngine, ScreenShareConfig } from './mediaEngine';
+import type {
+  MediaEngine,
+  MediaStreamCapabilities,
+  MediaStreamDiagnostics,
+  PublishedTrackDescriptor,
+  ScreenShareConfig,
+  ScreenShareSource,
+  ScreenShareThumbnail,
+  TrackSubscriptionRequest,
+} from './mediaEngine';
+import { MediaVideoDecoder } from './video/videoDecoder';
+import { CanvasRenderer } from './video/canvasRenderer';
+import { logVoiceDiagnostic } from '../desktopDiagnostics';
+import {
+  unwrapDeliveredMediaSenderKey,
+  wrapMediaSenderKeyForRecipient,
+} from './mediaSenderKeyEnvelope';
 
 // Tauri API imports - these resolve at runtime in the Tauri environment
 let invoke: (cmd: string, args?: Record<string, unknown> | ArrayBuffer | Uint8Array) => Promise<unknown>;
@@ -17,6 +33,138 @@ const tauriReady = (async () => {
 })();
 
 type UnlistenFn = () => void;
+const VIDEO_POLL_INTERVAL_MS = 16;
+const VP9_CODEC = 'vp09.00.10.08';
+const H264_CODEC = 'avc1.640028';
+const AV1_CODEC = 'av01.0.10M.08';
+
+type PulledEncodedFrameResponse = {
+  timestampUs: number;
+  sequence: number;
+  isKeyframe: boolean;
+  codec: 'vp9' | 'av1' | 'h264' | string;
+  dataBase64: string;
+};
+
+type ExportedSenderKey = {
+  epoch: number;
+  rawKey: number[];
+};
+
+type SessionParticipantCapabilities = {
+  userId: string;
+  sessionId: string;
+  videoCapabilities: Array<{
+    codec: 'vp9' | 'av1' | 'h264' | string;
+    encode: boolean;
+    decode: boolean;
+    hardwareAccelerated: boolean;
+  }>;
+};
+
+interface NativeVideoSubscription {
+  decoder?: MediaVideoDecoder;
+  renderer: CanvasRenderer;
+  streamId?: string;
+  trackId?: string;
+  activeLayer?: number;
+  stop: () => void;
+}
+
+let nativeStreamCapabilitiesPromise: Promise<MediaStreamCapabilities> | null = null;
+
+async function probeVideoDecoderSupport(
+  codec: string,
+  opts?: { avcAnnexB?: boolean },
+): Promise<boolean> {
+  if (typeof VideoDecoder === 'undefined' || typeof VideoDecoder.isConfigSupported !== 'function') {
+    return false;
+  }
+  try {
+    const config: Record<string, unknown> = {
+      codec,
+      hardwareAcceleration: 'prefer-hardware',
+      optimizeForLatency: true,
+    };
+    if (opts?.avcAnnexB) {
+      config.avc = { format: 'annexb' };
+    }
+    const support = await VideoDecoder.isConfigSupported(
+      config as unknown as Parameters<typeof VideoDecoder.isConfigSupported>[0],
+    );
+    return Boolean(support?.supported);
+  } catch {
+    return false;
+  }
+}
+
+async function mergeNativeAndViewerCapabilities(
+  nativeCapabilities: MediaStreamCapabilities,
+): Promise<MediaStreamCapabilities> {
+  const [vp9Decode, h264Decode, av1Decode] = await Promise.all([
+    probeVideoDecoderSupport(VP9_CODEC),
+    probeVideoDecoderSupport(H264_CODEC, { avcAnnexB: true }),
+    probeVideoDecoderSupport(AV1_CODEC),
+  ]);
+  const decodeSupport = new Map<string, boolean>([
+    ['vp9', vp9Decode],
+    ['h264', h264Decode],
+    ['av1', av1Decode],
+  ]);
+
+  return {
+    ...nativeCapabilities,
+    video: nativeCapabilities.video.map((capability) => {
+      const codec = String(capability.codec).toLowerCase();
+      const canDecode = decodeSupport.get(codec);
+      if (canDecode == null) {
+        return capability;
+      }
+      return {
+        ...capability,
+        decode: canDecode,
+        hardwareAccelerated:
+          capability.hardwareAccelerated || (canDecode && (codec === 'h264' || codec === 'av1')),
+      };
+    }),
+  };
+}
+
+function decodeBase64Frame(dataBase64: string): Uint8Array {
+  const binary = atob(dataBase64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
+function rendererCanvasSize(renderer: CanvasRenderer): { width: number; height: number } {
+  const canvas = renderer.canvasElement;
+  const clientWidth = canvas?.clientWidth ?? canvas?.width ?? 0;
+  const clientHeight = canvas?.clientHeight ?? canvas?.height ?? 0;
+  const ratio = typeof window !== 'undefined' ? Math.max(1, window.devicePixelRatio || 1) : 1;
+  return {
+    width: Math.max(1, Math.round(clientWidth * ratio)),
+    height: Math.max(1, Math.round(clientHeight * ratio)),
+  };
+}
+
+function selectPublishedLayer(
+  track: PublishedTrackDescriptor,
+  viewport: { width: number; height: number },
+) {
+  if (!track.layers.length) {
+    return null;
+  }
+  const sortedLayers = [...track.layers].sort((a, b) => a.layerId - b.layerId);
+  const fittingLayer = sortedLayers.find((layer) => {
+    const width = Number(layer.width ?? 0);
+    const height = Number(layer.height ?? 0);
+    return width >= viewport.width || height >= viewport.height;
+  });
+  return fittingLayer ?? sortedLayers[sortedLayers.length - 1] ?? null;
+}
 
 function normalizeNativeRelayEndpoint(endpoint: string): string {
   if (!endpoint) return '';
@@ -48,26 +196,56 @@ function normalizeNativeRelayEndpoint(endpoint: string): string {
  */
 export class TauriMediaEngine implements MediaEngine {
   private unlisteners: UnlistenFn[] = [];
+  private listenerPromises: Promise<void>[] = [];
+  private videoSubscriptions = new Map<string, NativeVideoSubscription>();
+  private publishedTracks = new Map<string, PublishedTrackDescriptor>();
+  private publishedTrackListenersReady = false;
+  private localUserId: string | null = null;
+  private localRoomId: string | null = null;
+  private sessionParticipantCapabilities = new Map<string, SessionParticipantCapabilities>();
 
-  // Screen share state — uses getDisplayMedia in the WebView for capture
-  private screenStream: MediaStream | null = null;
-  private screenTrack: MediaStreamTrack | null = null;
+  // Screen share state for the native desktop capture path
   private screenShareEndedCb: (() => void) | null = null;
   private screenAudioAccumulator: number[] = [];
   private screenAudioActive = false;
+  private screenEventUnlisten: UnlistenFn | null = null;
 
   // Video frame extraction
   private videoStream: MediaStream | null = null;
   private videoFrameLoop: number | null = null;
-  private screenFrameLoop: number | null = null;
   private videoSendInFlight = false;
-  private screenSendInFlight = false;
 
   async connect(endpoint: string, token: string, _certHash?: string): Promise<void> {
     await tauriReady;
+    this.localUserId = this.parseUserIdFromToken(token);
+    this.localRoomId = this.parseRoomIdFromToken(token);
+    // Wait for all pending listener registrations to complete before
+    // starting the session so we don't miss early events on cold boot.
+    if (this.listenerPromises.length > 0) {
+      await Promise.all(this.listenerPromises);
+      this.listenerPromises = [];
+    }
     const relayEndpoint = normalizeNativeRelayEndpoint(endpoint);
     try {
-      await invoke('start_voice_session', { endpoint: relayEndpoint, token, roomId: '' });
+      const advertisedCapabilities = await this.getStreamCapabilities().catch(() => null);
+      await invoke('start_voice_session', {
+        endpoint: relayEndpoint,
+        token,
+        roomId: '',
+        advertisedCapabilities,
+      });
+      await this.initializePublishedTrackListeners();
+      await this.initializeMediaKeyListeners();
+      const tracks = await this.listPublishedTracks().catch(() => []);
+      for (const track of tracks) {
+        this.publishedTracks.set(`${track.streamId}:${track.trackId}`, track);
+      }
+      const participants = await this.listSessionParticipantCapabilities().catch(() => []);
+      this.sessionParticipantCapabilities.clear();
+      for (const participant of participants) {
+        this.sessionParticipantCapabilities.set(participant.userId, participant);
+      }
+      await this.announceWrappedLocalSenderKeys().catch(() => {});
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(
@@ -79,12 +257,19 @@ export class TauriMediaEngine implements MediaEngine {
   async disconnect(): Promise<void> {
     await tauriReady;
     this.stopFrameExtraction();
+    this.clearVideoSubscriptions();
     this.cleanupScreenShare();
     this.screenAudioActive = false;
     for (const unlisten of this.unlisteners) {
       unlisten();
     }
     this.unlisteners = [];
+    this.screenEventUnlisten = null;
+    this.publishedTracks.clear();
+    this.sessionParticipantCapabilities.clear();
+    this.publishedTrackListenersReady = false;
+    this.localUserId = null;
+    this.localRoomId = null;
     await invoke('stop_voice_session');
   }
 
@@ -122,68 +307,62 @@ export class TauriMediaEngine implements MediaEngine {
       throw new Error('Tauri IPC not available — cannot start screen share');
     }
 
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      throw new Error('getDisplayMedia API not available in this WebView. Screen sharing requires WebView2 v93+.');
-    }
-
     this.cleanupScreenShare();
     this.screenAudioActive = false;
+    await this.ensureNativeScreenShareEventListener();
+    const resolvedCodec = config.preferredCodec ?? (await this.choosePreferredScreenCodec());
 
     const targetFps = config.maxFrameRate ?? 30;
-
-    const constraints: DisplayMediaStreamOptions = {
-      video: {
-        frameRate: { ideal: targetFps, max: targetFps },
+    await invoke('screen_share_start', {
+      request: {
+        sourceId: config.sourceId ?? null,
+        maxFrameRate: targetFps,
+        maxWidth: config.maxWidth ?? null,
+        maxHeight: config.maxHeight ?? null,
+        maxBitrateBps: config.maxBitrateBps ?? null,
+        contentHint: config.contentHint ?? null,
+        preferredCodec: resolvedCodec ?? null,
+        captureAudio: config.audio,
       },
-      // Desktop QUIC streaming uses the native system-audio capture path.
-      // Keep getDisplayMedia focused on video capture only.
-      audio: false,
-    };
-
-    this.screenStream = await navigator.mediaDevices.getDisplayMedia(constraints);
-
-    const videoTracks = this.screenStream.getVideoTracks();
-    if (videoTracks.length === 0) {
-      this.screenStream = null;
-      throw new Error('No video track in screen share stream');
-    }
-
-    this.screenTrack = videoTracks[0];
-
-    this.screenTrack.addEventListener('ended', () => {
-      this.cleanupScreenShare();
-      this.screenAudioActive = false;
-      this.screenShareEndedCb?.();
     });
 
-    await invoke('voice_start_screen_share');
     if (config.audio) {
-      const audioForwardingReady = await this.startScreenAudioForwarding();
-      if (!audioForwardingReady) {
-        console.warn('[TauriMediaEngine] Native system audio capture unavailable; streaming video-only.');
+      if (this.usesIntegratedScreenAudio()) {
+        this.screenAudioActive = true;
+      } else {
+        const audioForwardingReady = await this.startScreenAudioForwarding();
+        if (!audioForwardingReady) {
+          console.warn('[TauriMediaEngine] Native system audio capture unavailable; streaming video-only.');
+        }
+        this.screenAudioActive = audioForwardingReady;
       }
-      this.screenAudioActive = audioForwardingReady;
     } else {
       await invoke('voice_set_screen_audio_enabled', { enabled: false }).catch(() => { });
       this.screenAudioActive = false;
     }
-
-    // Start frame extraction loop for screen share
-    this.startVideoFrameExtraction(this.screenStream, true);
   }
 
-  stopScreenShare(): void {
-    if (this.screenFrameLoop !== null) {
-      cancelAnimationFrame(this.screenFrameLoop);
-      this.screenFrameLoop = null;
-    }
+  async stopScreenShare(): Promise<void> {
     this.cleanupScreenShare();
     this.screenAudioActive = false;
-    invoke('voice_stop_screen_share');
+    if (!invoke) return;
+    await invoke('screen_share_stop').catch(() => { });
   }
 
-  getLocalScreenShareTrack(): MediaStreamTrack | null {
-    return this.screenTrack;
+  supportsNativeSourcePicker(): boolean {
+    return true;
+  }
+
+  async listScreenShareSources(): Promise<ScreenShareSource[]> {
+    await tauriReady;
+    const sources = await invoke('screen_share_list_sources');
+    return (sources as ScreenShareSource[]) ?? [];
+  }
+
+  async getScreenShareSourceThumbnail(sourceId: string): Promise<ScreenShareThumbnail | null> {
+    await tauriReady;
+    const thumbnail = await invoke('screen_share_source_thumbnail', { sourceId });
+    return (thumbnail as ScreenShareThumbnail | null) ?? null;
   }
 
   isScreenShareAudioActive(): boolean {
@@ -195,22 +374,31 @@ export class TauriMediaEngine implements MediaEngine {
   }
 
   private cleanupScreenShare(): void {
-    if (this.screenFrameLoop !== null) {
-      cancelAnimationFrame(this.screenFrameLoop);
-      this.screenFrameLoop = null;
-    }
-    if (this.screenTrack) {
-      this.screenTrack.stop();
-      this.screenTrack = null;
-    }
-    if (this.screenStream) {
-      for (const track of this.screenStream.getTracks()) {
-        track.stop();
-      }
-      this.screenStream = null;
-    }
-
     this.stopScreenAudioForwarding();
+  }
+
+  private async ensureNativeScreenShareEventListener(): Promise<void> {
+    if (!listen) return;
+
+    if (!this.screenEventUnlisten) {
+      this.screenEventUnlisten = await listen('native_screen_share_event', (event) => {
+        const payload = event.payload as { kind?: string; message?: string | null };
+        if (payload.kind === 'error') {
+          console.warn('[TauriMediaEngine] Native screen share error:', payload.message ?? 'unknown error');
+          return;
+        }
+        if (payload.kind === 'ended') {
+          this.cleanupScreenShare();
+          this.screenAudioActive = false;
+          this.screenShareEndedCb?.();
+        }
+      });
+      this.unlisteners.push(this.screenEventUnlisten);
+    }
+  }
+
+  private usesIntegratedScreenAudio(): boolean {
+    return typeof navigator !== 'undefined' && navigator.platform?.startsWith('Mac');
   }
 
   private async startScreenAudioForwarding(): Promise<boolean> {
@@ -291,10 +479,6 @@ export class TauriMediaEngine implements MediaEngine {
 
   private stopFrameExtraction(): void {
     this.stopVideoCapture();
-    if (this.screenFrameLoop !== null) {
-      cancelAnimationFrame(this.screenFrameLoop);
-      this.screenFrameLoop = null;
-    }
   }
 
   /**
@@ -328,17 +512,13 @@ export class TauriMediaEngine implements MediaEngine {
     const extractFrame = (now: number) => {
       if (now - lastFrameTime < targetInterval) {
         const loopId = requestAnimationFrame(extractFrame);
-        if (isScreen) {
-          this.screenFrameLoop = loopId;
-        } else {
-          this.videoFrameLoop = loopId;
-        }
+        this.videoFrameLoop = loopId;
         return;
       }
       lastFrameTime = now;
 
       // Drop frame if previous send hasn't completed (backpressure)
-      const inFlight = isScreen ? this.screenSendInFlight : this.videoSendInFlight;
+      const inFlight = this.videoSendInFlight;
 
       if (!inFlight && video.readyState >= video.HAVE_CURRENT_DATA) {
         ctx.drawImage(video, 0, 0, width, height);
@@ -354,78 +534,798 @@ export class TauriMediaEngine implements MediaEngine {
         header.setUint32(4, height, true);
         payload.set(rgba, 8);
 
-        if (isScreen) { this.screenSendInFlight = true; } else { this.videoSendInFlight = true; }
+        this.videoSendInFlight = true;
         invoke(command, payload)
           .catch(() => { /* VP9 feature may not be enabled; silently skip */ })
           .finally(() => {
-            if (isScreen) { this.screenSendInFlight = false; } else { this.videoSendInFlight = false; }
+            this.videoSendInFlight = false;
           });
       }
 
       const loopId = requestAnimationFrame(extractFrame);
-      if (isScreen) {
-        this.screenFrameLoop = loopId;
-      } else {
-        this.videoFrameLoop = loopId;
-      }
+      this.videoFrameLoop = loopId;
     };
 
     const loopId = requestAnimationFrame(extractFrame);
-    if (isScreen) {
-      this.screenFrameLoop = loopId;
-    } else {
-      this.videoFrameLoop = loopId;
-    }
+    this.videoFrameLoop = loopId;
   }
 
   onSpeakingChange(cb: (speakers: Map<string, number>) => void): void {
-    tauriReady.then(async () => {
+    const p = tauriReady.then(async () => {
       const unlisten = await listen('media_speaking_change', (event) => {
-        const payload = event.payload as Record<string, number>;
-        const speakers = new Map(Object.entries(payload));
+        const payload = event.payload;
+        const speakers =
+          payload && typeof payload === 'object'
+            ? new Map(Object.entries(payload as Record<string, number>))
+            : new Map<string, number>();
         cb(speakers);
       });
       this.unlisteners.push(unlisten);
     });
+    this.listenerPromises.push(p);
   }
 
   onParticipantJoin(cb: (userId: string) => void): void {
-    tauriReady.then(async () => {
+    const p = tauriReady.then(async () => {
       const unlisten = await listen('media_participant_join', (event) => {
         cb(event.payload as string);
       });
       this.unlisteners.push(unlisten);
     });
+    this.listenerPromises.push(p);
   }
 
   onParticipantLeave(cb: (userId: string) => void): void {
-    tauriReady.then(async () => {
+    const p = tauriReady.then(async () => {
       const unlisten = await listen('media_participant_leave', (event) => {
         cb(event.payload as string);
       });
       this.unlisteners.push(unlisten);
     });
+    this.listenerPromises.push(p);
   }
 
-  subscribeVideo(userId: string, canvas: HTMLCanvasElement): void {
-    invoke('media_subscribe_video', {
-      userId,
-      canvasWidth: canvas.width,
-      canvasHeight: canvas.height,
-    }).then(async () => {
-      const unlisten = await listen(`media_video_frame_${userId}`, (event) => {
-        const frame = event.payload as { width: number; height: number; data: number[] };
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        const imageData = new ImageData(
-          new Uint8ClampedArray(frame.data),
-          frame.width,
-          frame.height,
-        );
-        ctx.putImageData(imageData, 0, 0);
-      });
-      this.unlisteners.push(unlisten);
+  async getStreamCapabilities(): Promise<MediaStreamCapabilities> {
+    await tauriReady;
+    if (!nativeStreamCapabilitiesPromise) {
+      nativeStreamCapabilitiesPromise = (async () => {
+        const nativeCapabilities = (await invoke(
+          'media_get_stream_capabilities',
+        )) as MediaStreamCapabilities;
+        return mergeNativeAndViewerCapabilities(nativeCapabilities);
+      })();
+    }
+    return nativeStreamCapabilitiesPromise;
+  }
+
+  async getStreamingDiagnostics(): Promise<MediaStreamDiagnostics> {
+    await tauriReady;
+    const diagnostics = (await invoke('media_get_stream_diagnostics')) as MediaStreamDiagnostics;
+    const preferredCommonCodec = await this.choosePreferredScreenCodec().catch(() => null);
+    const localUserId = String(this.localUserId ?? '');
+    const localTracks = (diagnostics.publishedTracks ?? []).filter(
+      (track) => String(track.publisherUserId) === localUserId,
+    );
+    const cameraTrack =
+      localTracks.find((track) => track.trackId === 'camera') ??
+      localTracks.find((track) => track.streamId.includes(':camera'));
+    const screenTrack =
+      localTracks.find((track) => track.trackId === 'screen') ??
+      localTracks.find((track) => track.streamId.includes(':screen'));
+    return {
+      ...diagnostics,
+      localPublishCodecs: {
+        preferredCommonCodec,
+        cameraCodec: cameraTrack?.codec ?? null,
+        screenCodec: screenTrack?.codec ?? null,
+      },
+    };
+  }
+
+  async listPublishedTracks(): Promise<PublishedTrackDescriptor[]> {
+    await tauriReady;
+    const tracks = (await invoke('media_list_published_tracks')) as PublishedTrackDescriptor[] | null;
+    if (tracks) {
+      this.publishedTracks.clear();
+      for (const track of tracks) {
+        this.publishedTracks.set(`${track.streamId}:${track.trackId}`, track);
+      }
+      return tracks;
+    }
+    return Array.from(this.publishedTracks.values());
+  }
+
+  async registerTrackSubscription(request: TrackSubscriptionRequest): Promise<void> {
+    await tauriReady;
+    await invoke('media_register_track_subscription', {
+      request: {
+        streamId: request.streamId,
+        trackId: request.trackId,
+        requestedLayer: request.requestedLayer ?? null,
+        activeLayer: request.activeLayer ?? null,
+        viewportWidth: request.viewport?.width ?? null,
+        viewportHeight: request.viewport?.height ?? null,
+      },
     });
+  }
+
+  async unregisterTrackSubscription(streamId: string, trackId: string): Promise<void> {
+    await tauriReady;
+    await invoke('media_unregister_track_subscription', { streamId, trackId });
+  }
+
+  private clearVideoSubscriptions(): void {
+    for (const [, sub] of this.videoSubscriptions) {
+      sub.stop();
+      sub.decoder?.close();
+      sub.renderer.destroy();
+    }
+    this.videoSubscriptions.clear();
+  }
+
+  private startPulledEncodedVideoSubscription(
+    label: string,
+    pullFrame: (afterSequence: number | null) => Promise<PulledEncodedFrameResponse | null>,
+    decoderRef: { current: MediaVideoDecoder | null; codec: string | null },
+    renderer: CanvasRenderer,
+    onFrame?: () => void,
+    onDecodedFrame?: () => void,
+  ): () => void {
+    let stopped = false;
+    let lastSequence: number | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let pollInFlight = false;
+    let sawDecodedFrame = false;
+    let pollCount = 0;
+    let emptyPollCount = 0;
+
+    const attachDecoder = (decoder: MediaVideoDecoder) => {
+      decoder.onDecoded((frame) => {
+        if (!sawDecodedFrame) {
+          sawDecodedFrame = true;
+          logVoiceDiagnostic('[media] native video subscription received first decoded frame', {
+            label,
+            width: frame.displayWidth,
+            height: frame.displayHeight,
+            timestamp: frame.timestamp,
+          });
+          onDecodedFrame?.();
+        }
+        renderer.renderFrame(frame);
+        onFrame?.();
+      });
+    };
+
+    if (decoderRef.current) {
+      attachDecoder(decoderRef.current);
+    }
+
+    const scheduleNextPoll = () => {
+      if (stopped) return;
+      timer = setTimeout(runPoll, VIDEO_POLL_INTERVAL_MS);
+    };
+
+    const runPoll = async () => {
+      if (stopped || pollInFlight) {
+        scheduleNextPoll();
+        return;
+      }
+
+      pollInFlight = true;
+      pollCount += 1;
+      if (pollCount <= 3) {
+        logVoiceDiagnostic('[media] native encoded video poll start', {
+          label,
+          pollCount,
+          afterSequence: lastSequence,
+        });
+      }
+      try {
+        const frame = await pullFrame(lastSequence);
+        if (stopped) {
+          return;
+        }
+        if (frame) {
+          lastSequence = frame.sequence;
+          emptyPollCount = 0;
+          const encoded = decodeBase64Frame(frame.dataBase64);
+          if (!decoderRef.current || frame.codec !== decoderRef.codec) {
+            decoderRef.current?.close();
+            decoderRef.current = new MediaVideoDecoder({ codec: frame.codec });
+            decoderRef.codec = frame.codec;
+            sawDecodedFrame = false;
+            attachDecoder(decoderRef.current);
+            logVoiceDiagnostic('[media] native video decoder prepared codec', {
+              label,
+              codec: frame.codec,
+            });
+          }
+          decoderRef.current.decode(encoded, frame.timestampUs, frame.isKeyframe);
+        } else if (emptyPollCount < 5) {
+          emptyPollCount += 1;
+          logVoiceDiagnostic('[media] native encoded video poll returned no frame', {
+            label,
+            pollCount,
+            afterSequence: lastSequence,
+          });
+        }
+      } catch (err) {
+        if (!stopped) {
+          logVoiceDiagnostic('[media] native encoded video pull failed', {
+            label,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } finally {
+        pollInFlight = false;
+        scheduleNextPoll();
+      }
+    };
+
+    void runPoll();
+
+    return () => {
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+  }
+
+  private startEncodedTrackVideoSubscription(
+    label: string,
+    pullEncodedFrame: (afterSequence: number | null) => Promise<PulledEncodedFrameResponse | null>,
+    renderer: CanvasRenderer,
+    onFrame?: () => void,
+  ): NativeVideoSubscription {
+    const decoderRef = {
+      current: null as MediaVideoDecoder | null,
+      codec: null as string | null,
+    };
+
+    const stop = this.startPulledEncodedVideoSubscription(
+      label,
+      pullEncodedFrame,
+      decoderRef,
+      renderer,
+      onFrame,
+      undefined,
+    );
+
+    return {
+      renderer,
+      stop: () => {
+        stop();
+        decoderRef.current?.close();
+      },
+    };
+  }
+
+  private async waitForPublishedVideoTrack(
+    publisherUserId: string,
+    timeoutMs = 10000,
+  ): Promise<PublishedTrackDescriptor | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const tracks = await this.listPublishedTracks().catch(() => []);
+      const publisherTracks = tracks.filter(
+        (track) =>
+          String(track.publisherUserId) === publisherUserId &&
+          track.kind === 'video',
+      );
+      const match =
+        publisherTracks.find((track) => track.trackId === 'screen') ??
+        publisherTracks.find((track) => track.trackId === 'camera') ??
+        publisherTracks[0] ??
+        null;
+      if (match) {
+        return match;
+      }
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 120);
+      });
+    }
+    return null;
+  }
+
+  private async initializePublishedTrackListeners(): Promise<void> {
+    if (!listen) return;
+    if (this.publishedTrackListenersReady) {
+      return;
+    }
+
+    const publishUnlisten = await listen('media_track_publish', (event) => {
+      const track = event.payload as PublishedTrackDescriptor | null;
+      if (!track?.streamId || !track.trackId) return;
+      this.publishedTracks.set(`${track.streamId}:${track.trackId}`, track);
+      if (String(track.publisherUserId) === String(this.localUserId ?? '')) {
+        void this.announceWrappedTrackKey(track).catch(() => {});
+      }
+      const userId = String(track.publisherUserId);
+      const existing = this.videoSubscriptions.get(userId);
+      if (!existing) {
+        return;
+      }
+      const viewport = rendererCanvasSize(existing.renderer);
+      const selectedLayer = selectPublishedLayer(track, viewport);
+      if (!selectedLayer) {
+        return;
+      }
+      existing.streamId = track.streamId;
+      existing.trackId = track.trackId;
+      existing.activeLayer = selectedLayer.layerId;
+      void invoke('media_register_stream_video_subscription', {
+        streamId: track.streamId,
+        trackId: track.trackId,
+        ssrc: selectedLayer.ssrc,
+      }).catch(() => {});
+      void this.registerTrackSubscription({
+        streamId: track.streamId,
+        trackId: track.trackId,
+        requestedLayer: selectedLayer.layerId,
+        viewport,
+      }).catch(() => {});
+    });
+
+    const unpublishUnlisten = await listen('media_track_unpublish', (event) => {
+      const payload = event.payload as { streamId?: string; trackId?: string } | null;
+      if (!payload?.streamId || !payload.trackId) return;
+      this.publishedTracks.delete(`${payload.streamId}:${payload.trackId}`);
+    });
+
+    this.publishedTrackListenersReady = true;
+    this.unlisteners.push(publishUnlisten, unpublishUnlisten);
+  }
+
+  private async initializeMediaKeyListeners(): Promise<void> {
+    if (!listen) return;
+
+    const audioKeyUnlisten = await listen('media_key_deliver', (event) => {
+      const payload = event.payload as {
+        senderUserId?: string;
+        epoch?: number;
+        ciphertext?: number[];
+      } | null;
+      if (!payload?.senderUserId || payload.epoch == null || !Array.isArray(payload.ciphertext)) {
+        return;
+      }
+      void unwrapDeliveredMediaSenderKey(
+        this.audioKeyScope(),
+        payload.senderUserId,
+        Uint8Array.from(payload.ciphertext),
+      )
+        .then((decrypted) =>
+          invoke('media_apply_audio_sender_key', {
+            senderUserId: payload.senderUserId,
+            epoch: decrypted.epoch || payload.epoch,
+            rawKey: Array.from(decrypted.rawKey),
+          }),
+        )
+        .catch(() => {});
+    });
+
+    const streamKeyUnlisten = await listen('media_stream_key_deliver', (event) => {
+      const payload = event.payload as {
+        streamId?: string;
+        trackId?: string;
+        senderUserId?: string;
+        epoch?: number;
+        ciphertext?: number[];
+      } | null;
+      if (
+        !payload?.streamId ||
+        !payload.trackId ||
+        !payload.senderUserId ||
+        payload.epoch == null ||
+        !Array.isArray(payload.ciphertext)
+      ) {
+        return;
+      }
+      void unwrapDeliveredMediaSenderKey(
+        this.trackKeyScope(payload.streamId, payload.trackId),
+        payload.senderUserId,
+        Uint8Array.from(payload.ciphertext),
+      )
+        .then((decrypted) =>
+          invoke('media_apply_track_sender_key', {
+            streamId: payload.streamId,
+            trackId: payload.trackId,
+            epoch: decrypted.epoch || payload.epoch,
+            rawKey: Array.from(decrypted.rawKey),
+          }),
+        )
+        .catch(() => {});
+    });
+    const participantJoinUnlisten = await listen('media_participant_join', (event) => {
+      const userId = String(event.payload ?? '');
+      if (!userId || userId === String(this.localUserId ?? '')) {
+        return;
+      }
+      void this.announceWrappedLocalSenderKeys([userId]).catch(() => {});
+    });
+    const participantJoinDetailsUnlisten = await listen('media_participant_join_details', (event) => {
+      const payload = event.payload as SessionParticipantCapabilities | null;
+      if (!payload?.userId || payload.userId === String(this.localUserId ?? '')) {
+        return;
+      }
+      this.sessionParticipantCapabilities.set(payload.userId, payload);
+    });
+    const participantLeaveUnlisten = await listen('media_participant_leave', (event) => {
+      const userId = String(event.payload ?? '');
+      if (userId) {
+        this.sessionParticipantCapabilities.delete(userId);
+      }
+      void this.announceWrappedLocalSenderKeys().catch(() => {});
+    });
+    const requestStreamKeyUnlisten = await listen('media_request_stream_key', (event) => {
+      const payload = event.payload as {
+        streamId?: string;
+        trackId?: string;
+        recipientUserId?: string;
+      } | null;
+      if (!payload?.streamId || !payload.trackId || !payload.recipientUserId) {
+        return;
+      }
+      const track = this.publishedTracks.get(`${payload.streamId}:${payload.trackId}`);
+      if (!track || String(track.publisherUserId) !== String(this.localUserId ?? '')) {
+        return;
+      }
+      void this.announceWrappedTrackKey(track, [payload.recipientUserId]).catch(() => {});
+    });
+
+    this.unlisteners.push(
+      audioKeyUnlisten,
+      streamKeyUnlisten,
+      participantJoinUnlisten,
+      participantJoinDetailsUnlisten,
+      participantLeaveUnlisten,
+      requestStreamKeyUnlisten,
+    );
+  }
+
+  subscribeVideo(userId: string, canvas: HTMLCanvasElement, onFrame?: () => void): () => void {
+    let disposed = false;
+    const existing = this.videoSubscriptions.get(userId);
+    if (existing) {
+      existing.stop();
+      existing.renderer.destroy();
+      this.videoSubscriptions.delete(userId);
+    }
+
+    void tauriReady.then(async () => {
+      if (disposed) return;
+      try {
+        logVoiceDiagnostic('[media] starting native remote video subscription', { userId });
+        const renderer = new CanvasRenderer(canvas);
+        const publishedTrack = await this.waitForPublishedVideoTrack(userId);
+        let subscription: NativeVideoSubscription;
+        if (publishedTrack && !disposed) {
+          const viewport = rendererCanvasSize(renderer);
+          const selectedLayer = selectPublishedLayer(publishedTrack, viewport);
+        if (selectedLayer) {
+          await invoke('media_register_stream_video_subscription', {
+            streamId: publishedTrack.streamId,
+            trackId: publishedTrack.trackId,
+            ssrc: selectedLayer.ssrc,
+            });
+          }
+          await this.registerTrackSubscription({
+            streamId: publishedTrack.streamId,
+            trackId: publishedTrack.trackId,
+            requestedLayer: selectedLayer?.layerId,
+            viewport,
+          }).catch((error) => {
+            logVoiceDiagnostic('[media] failed to register native track subscription', {
+              userId,
+              streamId: publishedTrack.streamId,
+              trackId: publishedTrack.trackId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+          subscription = this.startEncodedTrackVideoSubscription(
+            `remote:${publishedTrack.streamId}:${publishedTrack.trackId}`,
+            (afterSequence) =>
+              invoke('media_pull_stream_video_frame', {
+                streamId: publishedTrack.streamId,
+                trackId: publishedTrack.trackId,
+                afterSequence,
+              }).then((frame) => (frame as PulledEncodedFrameResponse | null) ?? null),
+            renderer,
+            onFrame,
+          );
+          subscription.streamId = publishedTrack.streamId;
+          subscription.trackId = publishedTrack.trackId;
+          subscription.activeLayer = selectedLayer?.layerId;
+        } else {
+          logVoiceDiagnostic('[media] no published native track announced before subscription timeout', {
+            userId,
+          });
+          subscription = {
+            renderer,
+            stop: () => {},
+          };
+        }
+        let resizeObserver: ResizeObserver | null = null;
+        let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+        const updateViewportSubscription = () => {
+          const current = this.videoSubscriptions.get(userId);
+          if (!current?.streamId || !current.trackId) {
+            return;
+          }
+          const track = this.publishedTracks.get(`${current.streamId}:${current.trackId}`);
+          if (!track) {
+            return;
+          }
+          const viewport = rendererCanvasSize(current.renderer);
+          const selectedLayer = selectPublishedLayer(track, viewport);
+          if (!selectedLayer) {
+            return;
+          }
+          if (current.activeLayer === selectedLayer.layerId) {
+            return;
+          }
+          current.activeLayer = selectedLayer.layerId;
+          void invoke('media_register_stream_video_subscription', {
+            streamId: current.streamId,
+            trackId: current.trackId,
+            ssrc: selectedLayer.ssrc,
+          }).catch(() => {});
+          void this.registerTrackSubscription({
+            streamId: current.streamId,
+            trackId: current.trackId,
+            requestedLayer: selectedLayer.layerId,
+            viewport,
+          }).catch(() => {});
+        };
+        if (!disposed && typeof ResizeObserver !== 'undefined') {
+          resizeObserver = new ResizeObserver(() => {
+            if (resizeTimer) {
+              clearTimeout(resizeTimer);
+            }
+            resizeTimer = setTimeout(updateViewportSubscription, 120);
+          });
+          resizeObserver.observe(canvas);
+          const originalStop = subscription.stop;
+          subscription.stop = () => {
+            if (resizeTimer) {
+              clearTimeout(resizeTimer);
+            }
+            resizeObserver?.disconnect();
+            originalStop();
+          };
+        }
+        this.videoSubscriptions.set(userId, subscription);
+      } catch (err) {
+        logVoiceDiagnostic('[media] failed to start native remote video subscription', {
+          userId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+
+    return () => {
+      disposed = true;
+      const current = this.videoSubscriptions.get(userId);
+      if (current) {
+        if (current.streamId && current.trackId) {
+          void this.unregisterTrackSubscription(current.streamId, current.trackId).catch(() => {});
+          void invoke('media_unregister_stream_video_subscription', {
+            streamId: current.streamId,
+            trackId: current.trackId,
+          }).catch(() => {});
+        }
+        current.stop();
+        current.decoder?.close();
+        current.renderer.destroy();
+        this.videoSubscriptions.delete(userId);
+      }
+    };
+  }
+
+  subscribeLocalPublishedScreen(canvas: HTMLCanvasElement, onFrame?: () => void): () => void {
+    if (!this.localUserId) {
+      return () => {};
+    }
+    return this.subscribeVideo(this.localUserId, canvas, onFrame);
+  }
+
+  private parseUserIdFromToken(token: string): string | null {
+    try {
+      const [, payload] = token.split('.');
+      if (!payload) return null;
+      const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
+        sub?: string | number;
+      };
+      return json.sub != null ? String(json.sub) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private parseRoomIdFromToken(token: string): string | null {
+    try {
+      const [, payload] = token.split('.');
+      if (!payload) return null;
+      const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
+        room?: string;
+      };
+      return typeof json.room === 'string' ? json.room : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async listSessionParticipantCapabilities(): Promise<SessionParticipantCapabilities[]> {
+    await tauriReady;
+    const participants = await invoke('media_list_session_participant_capabilities');
+    return ((participants as SessionParticipantCapabilities[] | null) ?? []).filter(
+      (participant) => participant.userId && participant.userId !== String(this.localUserId ?? ''),
+    );
+  }
+
+  private pickBestCommonCodec(
+    localCapabilities: MediaStreamCapabilities,
+    participants: SessionParticipantCapabilities[],
+  ): 'av1' | 'h264' | 'vp9' | null {
+    const localEncoders = new Set(
+      localCapabilities.video
+        .filter((capability) => capability.encode)
+        .map((capability) => String(capability.codec).toLowerCase()),
+    );
+    if (!localEncoders.size) {
+      return null;
+    }
+
+    const remoteDecoderSets = participants.map(
+      (participant) =>
+        new Set(
+          participant.videoCapabilities
+            .filter((capability) => capability.decode)
+            .map((capability) => String(capability.codec).toLowerCase()),
+        ),
+    );
+    const codecPreference: Array<'av1' | 'h264' | 'vp9'> = ['av1', 'h264', 'vp9'];
+    for (const codec of codecPreference) {
+      if (!localEncoders.has(codec)) {
+        continue;
+      }
+      if (remoteDecoderSets.every((supported) => supported.size === 0 || supported.has(codec))) {
+        return codec;
+      }
+    }
+    for (const codec of codecPreference) {
+      if (localEncoders.has(codec)) {
+        return codec;
+      }
+    }
+    return null;
+  }
+
+  private async choosePreferredScreenCodec(): Promise<'av1' | 'h264' | 'vp9' | null> {
+    const localCapabilities = await this.getStreamCapabilities().catch(() => null);
+    if (!localCapabilities) {
+      return null;
+    }
+    const participants =
+      this.sessionParticipantCapabilities.size > 0
+        ? Array.from(this.sessionParticipantCapabilities.values())
+        : await this.listSessionParticipantCapabilities().catch(() => []);
+    return this.pickBestCommonCodec(localCapabilities, participants);
+  }
+
+  private audioKeyScope(): string {
+    return `room:${this.localRoomId ?? 'unknown'}:audio`;
+  }
+
+  private trackKeyScope(streamId: string, trackId: string): string {
+    return `stream:${streamId}:${trackId}`;
+  }
+
+  private async listSessionParticipants(): Promise<string[]> {
+    await tauriReady;
+    const participants = await invoke('media_list_session_participants');
+    return ((participants as string[] | null) ?? []).filter(
+      (userId) => userId && userId !== String(this.localUserId ?? ''),
+    );
+  }
+
+  private async buildWrappedRecipients(
+    scope: string,
+    senderKey: ExportedSenderKey,
+    recipientUserIds: string[],
+  ): Promise<Array<{ recipientUserId: string; ciphertext: number[] }>> {
+    const encrypted = await Promise.all(
+      recipientUserIds.map(async (recipientUserId) => {
+        const wrapped = await wrapMediaSenderKeyForRecipient(
+          scope,
+          Uint8Array.from(senderKey.rawKey),
+          senderKey.epoch,
+          recipientUserId,
+        );
+        if (!wrapped) {
+          return null;
+        }
+        return {
+          recipientUserId,
+          ciphertext: Array.from(wrapped),
+        };
+      }),
+    );
+
+    return encrypted.filter(
+      (
+        value,
+      ): value is {
+        recipientUserId: string;
+        ciphertext: number[];
+      } => Boolean(value),
+    );
+  }
+
+  private async announceWrappedAudioSenderKey(
+    recipientUserIds?: string[],
+  ): Promise<void> {
+    const recipients = recipientUserIds ?? (await this.listSessionParticipants());
+    if (!recipients.length) {
+      return;
+    }
+    const senderKey = (await invoke('media_export_audio_sender_key')) as ExportedSenderKey;
+    const encryptedKeys = await this.buildWrappedRecipients(
+      this.audioKeyScope(),
+      senderKey,
+      recipients,
+    );
+    if (!encryptedKeys.length) {
+      return;
+    }
+    await invoke('media_send_audio_key_announce', {
+      epoch: senderKey.epoch,
+      encryptedKeys,
+    });
+  }
+
+  private async announceWrappedTrackKey(
+    track: PublishedTrackDescriptor,
+    recipientUserIds?: string[],
+  ): Promise<void> {
+    const recipients = recipientUserIds ?? (await this.listSessionParticipants());
+    if (!recipients.length) {
+      return;
+    }
+    const senderKey = (await invoke('media_export_track_sender_key', {
+      streamId: track.streamId,
+      trackId: track.trackId,
+    })) as ExportedSenderKey;
+    const encryptedKeys = await this.buildWrappedRecipients(
+      this.trackKeyScope(track.streamId, track.trackId),
+      senderKey,
+      recipients,
+    );
+    if (!encryptedKeys.length) {
+      return;
+    }
+    await invoke('media_send_track_key_announce', {
+      streamId: track.streamId,
+      trackId: track.trackId,
+      codec: track.codec ?? null,
+      epoch: senderKey.epoch,
+      encryptedKeys,
+    });
+  }
+
+  private async announceWrappedLocalSenderKeys(recipientUserIds?: string[]): Promise<void> {
+    const recipients = recipientUserIds ?? (await this.listSessionParticipants());
+    if (!recipients.length) {
+      return;
+    }
+    await this.announceWrappedAudioSenderKey(recipients);
+    const localUserId = String(this.localUserId ?? '');
+    const localTracks = Array.from(this.publishedTracks.values()).filter(
+      (track) => String(track.publisherUserId) === localUserId,
+    );
+    for (const track of localTracks) {
+      await this.announceWrappedTrackKey(track, recipients);
+    }
   }
 }
 

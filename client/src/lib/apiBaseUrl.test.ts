@@ -25,7 +25,7 @@ describe('apiBaseUrl', () => {
       const { setStoredServerUrl, getStoredServerUrl } = await import('./apiBaseUrl');
       setStoredServerUrl('https://example.com');
       expect(getStoredServerUrl()).toBe('https://example.com');
-      expect(localStorage.getItem('paracord:server-url')).toBe('https://example.com');
+      expect(localStorage.getItem('paracord:v2:server-url')).toBe('https://example.com');
     });
   });
 
@@ -49,7 +49,7 @@ describe('apiBaseUrl', () => {
   describe('SERVER_URL_KEY', () => {
     it('equals the expected constant', async () => {
       const { SERVER_URL_KEY } = await import('./apiBaseUrl');
-      expect(SERVER_URL_KEY).toBe('paracord:server-url');
+      expect(SERVER_URL_KEY).toBe('server-url');
     });
   });
 
@@ -82,6 +82,27 @@ describe('apiBaseUrl', () => {
       vi.resetModules();
       const mod = await import('./apiBaseUrl');
       expect(mod.resolveApiBaseUrl()).toBe('https://myserver.com/api/v1');
+    });
+  });
+
+  describe('resolveServerRootUrl', () => {
+    it('uses the stored server origin without the /api/v1 suffix', async () => {
+      vi.stubEnv('VITE_API_URL', '');
+      localStorage.setItem('paracord:server-url', 'https://myserver.com/api/v1');
+      vi.resetModules();
+      const mod = await import('./apiBaseUrl');
+      expect(mod.resolveServerRootUrl('/_paracord/federation/v1/servers')).toBe(
+        'https://myserver.com/_paracord/federation/v1/servers'
+      );
+    });
+
+    it('uses the current browser origin for relative API bases', async () => {
+      vi.stubEnv('VITE_API_URL', '');
+      vi.resetModules();
+      const mod = await import('./apiBaseUrl');
+      expect(mod.resolveServerRootUrl('/_paracord/federation/v1/servers')).toBe(
+        `${window.location.origin}/_paracord/federation/v1/servers`
+      );
     });
   });
 });

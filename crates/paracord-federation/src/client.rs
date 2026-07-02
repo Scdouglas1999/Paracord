@@ -1,7 +1,10 @@
 use crate::protocol::{FederatedEvent, ServerInfo};
 use crate::signing;
 use crate::transport;
-use crate::{FederationError, FederationEventEnvelope, FederationServerKey};
+use crate::{
+    FederationError, FederationEventEnvelope, FederationServerKey, FEDERATION_PROTOCOL_DEFAULT,
+    FEDERATION_PROTOCOL_VERSION_V1,
+};
 use ed25519_dalek::SigningKey;
 use reqwest::Client;
 use std::net::IpAddr;
@@ -44,11 +47,7 @@ impl FederationClient {
         key_id: Option<String>,
         signing_key: Option<SigningKey>,
     ) -> Result<Self, FederationError> {
-        let http = Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
-            .user_agent("Paracord-Federation/0.4")
-            .build()
-            .map_err(|e| FederationError::Http(e.to_string()))?;
+        let http = ssrf_checked_http_client("Paracord-Federation/0.4", DEFAULT_TIMEOUT)?;
 
         let transport_signer = match (origin, key_id, signing_key) {
             (Some(origin), Some(key_id), Some(signing_key)) => Some(TransportSigner {
@@ -261,44 +260,64 @@ impl FederationClient {
         &self,
         download_url: &str,
     ) -> Result<(Vec<u8>, Option<String>, Option<String>), FederationError> {
-        // SSRF protection: validate the initial URL and resolve DNS
-        validate_ssrf_safe_url(download_url)?;
-        resolve_and_check_dns(download_url).await?;
+        // Manual redirects allow every hop to receive the same async DNS
+        // validation before reqwest opens a connection.
+        let download_client = ssrf_checked_http_client("Paracord-Federation/0.4", DEFAULT_TIMEOUT)?;
 
-        // Build a dedicated client for file downloads with a custom redirect
-        // policy that re-validates every redirect target against the SSRF
-        // blocklist. This prevents an attacker from passing initial validation
-        // with a public URL and then redirecting to an internal address.
-        let download_client = Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
-            .user_agent("Paracord-Federation/0.4")
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= MAX_DOWNLOAD_REDIRECTS {
-                    attempt.error(format!(
+        let mut current_url = download_url.to_string();
+        let mut redirects = 0usize;
+        let resp = loop {
+            validate_ssrf_safe_url(&current_url)?;
+            resolve_and_check_dns(&current_url).await?;
+
+            let resp = download_client
+                .get(&current_url)
+                .send()
+                .await
+                .map_err(|e| FederationError::Http(e.to_string()))?;
+
+            if resp.status().is_redirection() {
+                if redirects >= MAX_DOWNLOAD_REDIRECTS {
+                    return Err(FederationError::Http(format!(
                         "SSRF protection: too many redirects (max {})",
                         MAX_DOWNLOAD_REDIRECTS
-                    ))
-                } else {
-                    match validate_ssrf_safe_url(attempt.url().as_str()) {
-                        Ok(()) => attempt.follow(),
-                        Err(e) => attempt.error(format!(
-                            "SSRF protection: redirect target blocked: {e}"
-                        )),
-                    }
+                    )));
                 }
-            }))
-            .build()
-            .map_err(|e| FederationError::Http(e.to_string()))?;
 
-        let resp = download_client
-            .get(download_url)
-            .send()
-            .await
-            .map_err(|e| FederationError::Http(e.to_string()))?;
+                let location = resp
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or_else(|| {
+                        FederationError::Http(
+                            "SSRF protection: redirect response missing Location header"
+                                .to_string(),
+                        )
+                    })?;
+                let base = url::Url::parse(&current_url).map_err(|e| {
+                    FederationError::Http(format!(
+                        "SSRF protection: invalid redirect base URL: {e}"
+                    ))
+                })?;
+                current_url = base
+                    .join(location)
+                    .map_err(|e| {
+                        FederationError::Http(format!(
+                            "SSRF protection: invalid redirect target: {e}"
+                        ))
+                    })?
+                    .to_string();
+                redirects += 1;
+                continue;
+            }
+
+            break resp;
+        };
+
         if !resp.status().is_success() {
             return Err(FederationError::RemoteError(format!(
                 "download from {} returned {}",
-                download_url,
+                current_url,
                 resp.status()
             )));
         }
@@ -334,33 +353,50 @@ impl FederationClient {
         url: &str,
         extra_headers: &[(&str, String)],
     ) -> Result<reqwest::Response, FederationError> {
+        validate_public_federation_url_with_dns(url).await?;
         let mut last_err = FederationError::Http("no attempts made".to_string());
         for attempt in 0..MAX_RETRIES {
             let path = transport::request_path_from_url(url);
-            let mut request = self.http.get(url);
-            request = self.with_transport_signature_headers(request, "GET", &path, &[]);
-            for (key, value) in extra_headers {
-                request = request.header(*key, value);
-            }
+            for protocol_version in [FEDERATION_PROTOCOL_DEFAULT, FEDERATION_PROTOCOL_VERSION_V1] {
+                let mut request = self.http.get(url);
+                request = self.with_transport_signature_headers(
+                    request,
+                    "GET",
+                    &path,
+                    &[],
+                    protocol_version,
+                );
+                for (key, value) in extra_headers {
+                    request = request.header(*key, value);
+                }
 
-            match request.send().await {
-                Ok(resp) if resp.status().is_success() => return Ok(resp),
-                Ok(resp) if resp.status().is_server_error() => {
-                    last_err = FederationError::RemoteError(format!(
-                        "server error {} from {}",
-                        resp.status(),
-                        url
-                    ));
-                }
-                Ok(resp) => {
-                    return Err(FederationError::RemoteError(format!(
-                        "request to {} returned {}",
-                        url,
-                        resp.status()
-                    )));
-                }
-                Err(e) => {
-                    last_err = FederationError::Http(e.to_string());
+                match request.send().await {
+                    Ok(resp) if resp.status().is_success() => return Ok(resp),
+                    Ok(resp)
+                        if resp.status() == reqwest::StatusCode::UPGRADE_REQUIRED
+                            && protocol_version != FEDERATION_PROTOCOL_VERSION_V1 =>
+                    {
+                        continue;
+                    }
+                    Ok(resp) if resp.status().is_server_error() => {
+                        last_err = FederationError::RemoteError(format!(
+                            "server error {} from {}",
+                            resp.status(),
+                            url
+                        ));
+                        break;
+                    }
+                    Ok(resp) => {
+                        return Err(FederationError::RemoteError(format!(
+                            "request to {} returned {}",
+                            url,
+                            resp.status()
+                        )));
+                    }
+                    Err(e) => {
+                        last_err = FederationError::Http(e.to_string());
+                        break;
+                    }
                 }
             }
             if attempt + 1 < MAX_RETRIES {
@@ -377,36 +413,53 @@ impl FederationClient {
         url: &str,
         body_bytes: Vec<u8>,
     ) -> Result<reqwest::Response, FederationError> {
+        validate_public_federation_url_with_dns(url).await?;
         let mut last_err = FederationError::Http("no attempts made".to_string());
         for attempt in 0..MAX_RETRIES {
-            let mut request = self
-                .http
-                .post(url)
-                .header("content-type", "application/json")
-                .body(body_bytes.clone());
             let path = transport::request_path_from_url(url);
-            request = self.with_transport_signature_headers(request, "POST", &path, &body_bytes);
+            for protocol_version in [FEDERATION_PROTOCOL_DEFAULT, FEDERATION_PROTOCOL_VERSION_V1] {
+                let mut request = self
+                    .http
+                    .post(url)
+                    .header("content-type", "application/json")
+                    .body(body_bytes.clone());
+                request = self.with_transport_signature_headers(
+                    request,
+                    "POST",
+                    &path,
+                    &body_bytes,
+                    protocol_version,
+                );
 
-            match request.send().await {
-                Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 202 => {
-                    return Ok(resp);
-                }
-                Ok(resp) if resp.status().is_server_error() => {
-                    last_err = FederationError::RemoteError(format!(
-                        "server error {} from {}",
-                        resp.status(),
-                        url
-                    ));
-                }
-                Ok(resp) => {
-                    return Err(FederationError::RemoteError(format!(
-                        "request to {} returned {}",
-                        url,
-                        resp.status()
-                    )));
-                }
-                Err(e) => {
-                    last_err = FederationError::Http(e.to_string());
+                match request.send().await {
+                    Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 202 => {
+                        return Ok(resp);
+                    }
+                    Ok(resp)
+                        if resp.status() == reqwest::StatusCode::UPGRADE_REQUIRED
+                            && protocol_version != FEDERATION_PROTOCOL_VERSION_V1 =>
+                    {
+                        continue;
+                    }
+                    Ok(resp) if resp.status().is_server_error() => {
+                        last_err = FederationError::RemoteError(format!(
+                            "server error {} from {}",
+                            resp.status(),
+                            url
+                        ));
+                        break;
+                    }
+                    Ok(resp) => {
+                        return Err(FederationError::RemoteError(format!(
+                            "request to {} returned {}",
+                            url,
+                            resp.status()
+                        )));
+                    }
+                    Err(e) => {
+                        last_err = FederationError::Http(e.to_string());
+                        break;
+                    }
                 }
             }
             if attempt + 1 < MAX_RETRIES {
@@ -423,9 +476,10 @@ impl FederationClient {
         method: &str,
         path: &str,
         body_bytes: &[u8],
+        protocol_version: &str,
     ) -> reqwest::RequestBuilder {
         let Some(signer) = &self.transport_signer else {
-            return request;
+            return request.header("X-Paracord-Fed-Version", protocol_version);
         };
         let timestamp_ms = chrono::Utc::now().timestamp_millis();
         let canonical =
@@ -436,7 +490,23 @@ impl FederationClient {
             .header("X-Paracord-Key-Id", signer.key_id.as_str())
             .header("X-Paracord-Timestamp", timestamp_ms.to_string())
             .header("X-Paracord-Signature", signature)
+            .header("X-Paracord-Fed-Version", protocol_version)
     }
+}
+
+/// Build an HTTP client for requests whose URL is protected by the federation
+/// SSRF validators. Redirects are disabled so each next hop can be explicitly
+/// validated before any connection is opened.
+pub fn ssrf_checked_http_client(
+    user_agent: &'static str,
+    timeout: Duration,
+) -> Result<Client, FederationError> {
+    Client::builder()
+        .timeout(timeout)
+        .user_agent(user_agent)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| FederationError::Http(e.to_string()))
 }
 
 impl Default for FederationClient {
@@ -567,8 +637,9 @@ pub struct FederationFileTokenResponse {
 /// This prevents SSRF attacks where a compromised federation partner returns a
 /// download URL pointing at internal services (AWS metadata, databases, etc.).
 pub fn validate_ssrf_safe_url(url_str: &str) -> Result<(), FederationError> {
-    let parsed = url::Url::parse(url_str)
-        .map_err(|e| FederationError::Http(format!("SSRF protection: invalid download URL: {e}")))?;
+    let parsed = url::Url::parse(url_str).map_err(|e| {
+        FederationError::Http(format!("SSRF protection: invalid download URL: {e}"))
+    })?;
 
     // Only HTTPS is allowed — block http://, file://, ftp://, etc.
     if parsed.scheme() != "https" {
@@ -625,6 +696,97 @@ pub fn validate_ssrf_safe_url(url_str: &str) -> Result<(), FederationError> {
     Ok(())
 }
 
+/// Validates federation peer URLs before server-to-server discovery or RPCs.
+///
+/// Unlike file downloads, federation RPCs may run on non-standard ports or
+/// plain HTTP in development deployments. The important SSRF invariant is that
+/// the target host must not be local, private, link-local, or otherwise
+/// reserved unless an operator explicitly opts into private federation URLs.
+pub fn validate_public_federation_url(url_str: &str) -> Result<(), FederationError> {
+    if private_federation_urls_allowed() {
+        return Ok(());
+    }
+
+    let parsed = url::Url::parse(url_str)
+        .map_err(|e| FederationError::Http(format!("SSRF protection: invalid URL: {e}")))?;
+
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return Err(FederationError::Http(format!(
+            "SSRF protection: unsupported federation URL scheme '{}'",
+            parsed.scheme()
+        )));
+    }
+
+    validate_url_host_is_public(&parsed)
+}
+
+/// Validates a federation URL and resolves DNS so private-address hostnames are
+/// rejected before reqwest opens a connection.
+pub async fn validate_public_federation_url_with_dns(url_str: &str) -> Result<(), FederationError> {
+    if private_federation_urls_allowed() {
+        return Ok(());
+    }
+    validate_public_federation_url(url_str)?;
+    resolve_and_check_dns(url_str).await
+}
+
+fn private_federation_urls_allowed() -> bool {
+    std::env::var("PARACORD_ALLOW_PRIVATE_FEDERATION_URLS")
+        .ok()
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn validate_url_host_is_public(parsed: &url::Url) -> Result<(), FederationError> {
+    match parsed.host() {
+        None => Err(FederationError::Http(
+            "SSRF protection: URL has no host".to_string(),
+        )),
+        Some(url::Host::Ipv4(v4)) => {
+            if is_private_ip(&IpAddr::V4(v4)) {
+                Err(FederationError::Http(format!(
+                    "SSRF protection: private/reserved IP address '{v4}' is not allowed"
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        Some(url::Host::Ipv6(v6)) => {
+            if is_private_ip(&IpAddr::V6(v6)) {
+                Err(FederationError::Http(format!(
+                    "SSRF protection: private/reserved IP address '{v6}' is not allowed"
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        Some(url::Host::Domain(domain)) => {
+            let lower = domain.to_ascii_lowercase();
+            let blocked_hosts = [
+                "localhost",
+                "metadata.google.internal",
+                "metadata",
+                "local",
+                "home.arpa",
+            ];
+            if blocked_hosts
+                .iter()
+                .any(|blocked| lower == *blocked || lower.ends_with(&format!(".{blocked}")))
+            {
+                return Err(FederationError::Http(format!(
+                    "SSRF protection: blocked host '{domain}'"
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Resolves the hostname in the URL via DNS and checks that all returned IP
 /// addresses are public. This mitigates DNS rebinding attacks where an attacker
 /// controls a domain that resolves to an internal IP after initial validation.
@@ -641,11 +803,11 @@ async fn resolve_and_check_dns(url_str: &str) -> Result<(), FederationError> {
     if let Some(url::Host::Domain(domain)) = parsed.host() {
         let port = parsed.port().unwrap_or(443);
         let lookup = format!("{domain}:{port}");
-        let addrs = tokio::net::lookup_host(&lookup)
-            .await
-            .map_err(|e| FederationError::Http(format!(
+        let addrs = tokio::net::lookup_host(&lookup).await.map_err(|e| {
+            FederationError::Http(format!(
                 "SSRF protection: DNS resolution failed for '{domain}': {e}"
-            )))?;
+            ))
+        })?;
         for addr in addrs {
             if is_private_ip(&addr.ip()) {
                 return Err(FederationError::Http(format!(
@@ -674,6 +836,14 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             || (o[0] == 169 && o[1] == 254)
             // 100.64.0.0/10 (Carrier-grade NAT)
             || (o[0] == 100 && (64..=127).contains(&o[1]))
+            // 192.0.0.0/24 (IETF protocol assignments), except not needed for public federation
+            || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+            // TEST-NET documentation ranges
+            || (o[0] == 192 && o[1] == 0 && o[2] == 2)
+            || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+            || (o[0] == 203 && o[1] == 0 && o[2] == 113)
+            // 224.0.0.0/4 (multicast)
+            || (224..=239).contains(&o[0])
             // 0.0.0.0/8
             || o[0] == 0
             // 240.0.0.0/4 (reserved / broadcast)
@@ -690,6 +860,10 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             || (v6.segments()[0] & 0xfe00) == 0xfc00
             // fe80::/10 (link-local)
             || (v6.segments()[0] & 0xffc0) == 0xfe80
+            // 2001:db8::/32 (documentation)
+            || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
+            // ff00::/8 (multicast)
+            || (v6.segments()[0] & 0xff00) == 0xff00
             // :: unspecified
             || v6.is_unspecified()
         }
@@ -698,12 +872,63 @@ fn is_private_ip(ip: &IpAddr) -> bool {
 
 #[cfg(test)]
 mod ssrf_tests {
-    use super::validate_ssrf_safe_url;
+    use super::{ssrf_checked_http_client, validate_public_federation_url, validate_ssrf_safe_url};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn blocks_localhost() {
         assert!(validate_ssrf_safe_url("https://localhost/file").is_err());
         assert!(validate_ssrf_safe_url("https://127.0.0.1/file").is_err());
+    }
+
+    #[tokio::test]
+    async fn ssrf_checked_http_client_does_not_follow_redirects() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hit_redirect_target = Arc::new(AtomicBool::new(false));
+        let hit_redirect_target_clone = hit_redirect_target.clone();
+
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let hit_redirect_target = hit_redirect_target_clone.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let Ok(n) = stream.read(&mut buf).await else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&buf[..n]);
+                    let response = if request.starts_with("GET /redirect ") {
+                        "HTTP/1.1 302 Found\r\nLocation: /target\r\nContent-Length: 0\r\n\r\n"
+                    } else {
+                        hit_redirect_target.store(true, Ordering::SeqCst);
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+                    };
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let client = ssrf_checked_http_client("Paracord-Test/1.0", Duration::from_secs(2))
+            .expect("client should build");
+        let response = client
+            .get(format!("http://{addr}/redirect"))
+            .send()
+            .await
+            .expect("redirect response should be returned");
+
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!hit_redirect_target.load(Ordering::SeqCst));
+        server.abort();
     }
 
     #[test]
@@ -743,7 +968,9 @@ mod ssrf_tests {
 
     #[test]
     fn blocks_google_metadata() {
-        assert!(validate_ssrf_safe_url("https://metadata.google.internal/computeMetadata/v1/").is_err());
+        assert!(
+            validate_ssrf_safe_url("https://metadata.google.internal/computeMetadata/v1/").is_err()
+        );
     }
 
     #[test]
@@ -776,7 +1003,10 @@ mod ssrf_tests {
     #[test]
     fn allows_public_https() {
         assert!(validate_ssrf_safe_url("https://cdn.example.com/files/abc123").is_ok());
-        assert!(validate_ssrf_safe_url("https://federation.partner.org/v1/file/download?token=abc").is_ok());
+        assert!(validate_ssrf_safe_url(
+            "https://federation.partner.org/v1/file/download?token=abc"
+        )
+        .is_ok());
     }
 
     #[test]
@@ -801,6 +1031,30 @@ mod ssrf_tests {
     fn allows_public_ip() {
         assert!(validate_ssrf_safe_url("https://8.8.8.8/file").is_ok());
         assert!(validate_ssrf_safe_url("https://1.1.1.1/file").is_ok());
+    }
+
+    #[test]
+    fn federation_rpc_urls_block_private_targets() {
+        assert!(
+            validate_public_federation_url("http://127.0.0.1:8090/_paracord/federation/v1")
+                .is_err()
+        );
+        assert!(
+            validate_public_federation_url("https://10.0.0.5/_paracord/federation/v1").is_err()
+        );
+        assert!(validate_public_federation_url("https://metadata.google.internal/").is_err());
+    }
+
+    #[test]
+    fn federation_rpc_urls_allow_public_http_or_https() {
+        assert!(validate_public_federation_url(
+            "https://federation.example.com/_paracord/federation/v1"
+        )
+        .is_ok());
+        assert!(validate_public_federation_url(
+            "http://federation.example.com:8090/_paracord/federation/v1"
+        )
+        .is_ok());
     }
 
     #[test]

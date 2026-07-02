@@ -18,6 +18,19 @@ export interface MediaHeader {
   audioLevel: number;
   keyEpoch: number;
   payloadLength: number;
+  codec: number;
+}
+
+export interface VideoFrameMetadata {
+  streamId: string;
+  trackId: string;
+  frameId: bigint;
+  layerId: number;
+  codec: number;
+  timestampUs: bigint;
+  isKeyframe: boolean;
+  fragmentIndex: number;
+  fragmentCount: number;
 }
 
 export function encodeHeader(header: MediaHeader): DataView {
@@ -33,7 +46,7 @@ export function encodeHeader(header: MediaHeader): DataView {
   buf.setUint8(11, header.audioLevel);
   buf.setUint8(12, header.keyEpoch);
   buf.setUint16(13, header.payloadLength, false);
-  buf.setUint8(15, 0); // reserved
+  buf.setUint8(15, header.codec & 0xff);
   return buf;
 }
 
@@ -54,6 +67,7 @@ export function decodeHeader(buf: DataView): MediaHeader {
     audioLevel: buf.getUint8(11),
     keyEpoch: buf.getUint8(12),
     payloadLength: buf.getUint16(13, false),
+    codec: buf.getUint8(15),
   };
 }
 
@@ -75,4 +89,94 @@ export function parsePacket(data: Uint8Array): { header: MediaHeader; payload: U
   const header = decodeHeader(headerView);
   const payload = data.slice(HEADER_SIZE, HEADER_SIZE + header.payloadLength);
   return { header, payload };
+}
+
+export function encodeVideoFrameMetadata(metadata: VideoFrameMetadata): Uint8Array {
+  const encoder = new TextEncoder();
+  const streamBytes = encoder.encode(metadata.streamId);
+  const trackBytes = encoder.encode(metadata.trackId);
+  if (streamBytes.byteLength > 0xff) {
+    throw new Error('streamId too long');
+  }
+  if (trackBytes.byteLength > 0xff) {
+    throw new Error('trackId too long');
+  }
+  const buf = new Uint8Array(1 + streamBytes.byteLength + 1 + trackBytes.byteLength + 8 + 1 + 1 + 8 + 1 + 2 + 2);
+  const view = new DataView(buf.buffer);
+  let offset = 0;
+  view.setUint8(offset, streamBytes.byteLength);
+  offset += 1;
+  buf.set(streamBytes, offset);
+  offset += streamBytes.byteLength;
+  view.setUint8(offset, trackBytes.byteLength);
+  offset += 1;
+  buf.set(trackBytes, offset);
+  offset += trackBytes.byteLength;
+  view.setBigUint64(offset, metadata.frameId, false);
+  offset += 8;
+  view.setUint8(offset, metadata.layerId & 0xff);
+  offset += 1;
+  view.setUint8(offset, metadata.codec & 0xff);
+  offset += 1;
+  view.setBigUint64(offset, metadata.timestampUs, false);
+  offset += 8;
+  view.setUint8(offset, metadata.isKeyframe ? 1 : 0);
+  offset += 1;
+  view.setUint16(offset, metadata.fragmentIndex, false);
+  offset += 2;
+  view.setUint16(offset, metadata.fragmentCount, false);
+  return buf;
+}
+
+export function decodeVideoFrameMetadata(
+  data: Uint8Array,
+): { metadata: VideoFrameMetadata; payloadOffset: number } {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let offset = 0;
+  if (data.byteLength < 1) {
+    throw new Error('video metadata buffer too short');
+  }
+  const streamLen = view.getUint8(offset);
+  offset += 1;
+  if (data.byteLength < offset + streamLen + 1) {
+    throw new Error('video metadata stream id truncated');
+  }
+  const decoder = new TextDecoder();
+  const streamId = decoder.decode(data.slice(offset, offset + streamLen));
+  offset += streamLen;
+  const trackLen = view.getUint8(offset);
+  offset += 1;
+  if (data.byteLength < offset + trackLen + 22) {
+    throw new Error('video metadata track id truncated');
+  }
+  const trackId = decoder.decode(data.slice(offset, offset + trackLen));
+  offset += trackLen;
+  const frameId = view.getBigUint64(offset, false);
+  offset += 8;
+  const layerId = view.getUint8(offset);
+  offset += 1;
+  const codec = view.getUint8(offset);
+  offset += 1;
+  const timestampUs = view.getBigUint64(offset, false);
+  offset += 8;
+  const isKeyframe = view.getUint8(offset) !== 0;
+  offset += 1;
+  const fragmentIndex = view.getUint16(offset, false);
+  offset += 2;
+  const fragmentCount = view.getUint16(offset, false);
+  offset += 2;
+  return {
+    metadata: {
+      streamId,
+      trackId,
+      frameId,
+      layerId,
+      codec,
+      timestampUs,
+      isKeyframe,
+      fragmentIndex,
+      fragmentCount,
+    },
+    payloadOffset: offset,
+  };
 }

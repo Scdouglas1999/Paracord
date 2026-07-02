@@ -86,6 +86,46 @@ impl PixelFormat {
     }
 }
 
+/// High-level hint for how the encoder should tune compression decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum VideoContentHint {
+    /// Generic/default video content.
+    Default,
+    /// Prioritize crisp text and UI edges.
+    Detail,
+    /// Prioritize smooth motion and scene changes.
+    Motion,
+    /// Prioritize film-like content and grain retention.
+    Film,
+}
+
+/// Video codec carried on the native media path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum VideoCodec {
+    Vp9,
+    Av1,
+    H264,
+}
+
+impl VideoCodec {
+    pub fn header_id(self) -> u8 {
+        match self {
+            VideoCodec::Vp9 => 1,
+            VideoCodec::Av1 => 2,
+            VideoCodec::H264 => 3,
+        }
+    }
+
+    pub fn from_header_id(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(VideoCodec::Vp9),
+            2 => Some(VideoCodec::Av1),
+            3 => Some(VideoCodec::H264),
+            _ => None,
+        }
+    }
+}
+
 // ── Simulcast layer definitions ──────────────────────────────────────
 
 /// Identifies a simulcast quality tier.
@@ -140,7 +180,7 @@ impl SimulcastLayer {
 // ── Encoder configuration ────────────────────────────────────────────
 
 /// Configuration for creating a video encoder instance.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncoderConfig {
     /// Frame width in pixels (must be even).
     pub width: u32,
@@ -154,6 +194,8 @@ pub struct EncoderConfig {
     pub pixel_format: PixelFormat,
     /// Keyframe interval in frames (0 = codec default).
     pub keyframe_interval: u32,
+    /// Optional content hint for backend-specific tuning.
+    pub content_hint: VideoContentHint,
 }
 
 impl EncoderConfig {
@@ -167,12 +209,17 @@ impl EncoderConfig {
             bitrate_kbps: layer.bitrate_kbps(),
             pixel_format,
             keyframe_interval: 0,
+            content_hint: VideoContentHint::Default,
         }
     }
 
     /// Validate that width and height are even and positive.
     pub fn validate(&self) -> Result<(), VideoError> {
-        if self.width == 0 || self.height == 0 || self.width % 2 != 0 || self.height % 2 != 0 {
+        if self.width == 0
+            || self.height == 0
+            || !self.width.is_multiple_of(2)
+            || !self.height.is_multiple_of(2)
+        {
             return Err(VideoError::InvalidDimensions {
                 width: self.width,
                 height: self.height,
@@ -206,6 +253,8 @@ impl Default for DecoderConfig {
 pub struct EncodedFrame {
     /// The compressed frame data.
     pub data: Vec<u8>,
+    /// Codec used to encode this frame.
+    pub codec: VideoCodec,
     /// Presentation timestamp (units depend on encoder timebase).
     pub pts: i64,
     /// Whether this frame is a keyframe (IDR / intra).
@@ -235,10 +284,35 @@ pub struct DecodedFrame {
 
 // ── Color-space conversion helpers ───────────────────────────────────
 
-/// Convert an RGBA frame to I420 (YUV 4:2:0) in-place.
-///
-/// Both buffers must be pre-allocated to the correct sizes.
-pub fn rgba_to_i420(rgba: &[u8], width: u32, height: u32, i420: &mut [u8]) {
+#[inline]
+fn clamp_to_u8(value: i32) -> u8 {
+    value.clamp(0, 255) as u8
+}
+
+#[inline]
+fn rgb_to_y(r: i32, g: i32, b: i32) -> u8 {
+    clamp_to_u8(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16)
+}
+
+#[inline]
+fn rgb_to_u(r: i32, g: i32, b: i32) -> u8 {
+    clamp_to_u8(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128)
+}
+
+#[inline]
+fn rgb_to_v(r: i32, g: i32, b: i32) -> u8 {
+    clamp_to_u8(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128)
+}
+
+fn packed_rgb_to_i420(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    i420: &mut [u8],
+    r_index: usize,
+    g_index: usize,
+    b_index: usize,
+) {
     let w = width as usize;
     let h = height as usize;
     let y_size = w * h;
@@ -248,44 +322,51 @@ pub fn rgba_to_i420(rgba: &[u8], width: u32, height: u32, i420: &mut [u8]) {
     let (y_plane, uv_planes) = i420.split_at_mut(y_size);
     let (u_plane, v_plane) = uv_planes.split_at_mut(uv_w * uv_h);
 
-    // Compute Y plane
     for row in 0..h {
         for col in 0..w {
             let idx = (row * w + col) * 4;
-            let r = rgba[idx] as f32;
-            let g = rgba[idx + 1] as f32;
-            let b = rgba[idx + 2] as f32;
-            let y = (0.257 * r + 0.504 * g + 0.098 * b + 16.0).clamp(0.0, 255.0);
-            y_plane[row * w + col] = y as u8;
+            let r = data[idx + r_index] as i32;
+            let g = data[idx + g_index] as i32;
+            let b = data[idx + b_index] as i32;
+            y_plane[row * w + col] = rgb_to_y(r, g, b);
         }
     }
 
-    // Compute U and V planes (subsampled 2x2)
     for row in 0..uv_h {
         for col in 0..uv_w {
-            // Average the 2x2 block
-            let mut r_sum = 0.0f32;
-            let mut g_sum = 0.0f32;
-            let mut b_sum = 0.0f32;
+            let mut r_sum = 0i32;
+            let mut g_sum = 0i32;
+            let mut b_sum = 0i32;
             for dy in 0..2 {
                 for dx in 0..2 {
                     let px = ((row * 2 + dy) * w + col * 2 + dx) * 4;
-                    r_sum += rgba[px] as f32;
-                    g_sum += rgba[px + 1] as f32;
-                    b_sum += rgba[px + 2] as f32;
+                    r_sum += data[px + r_index] as i32;
+                    g_sum += data[px + g_index] as i32;
+                    b_sum += data[px + b_index] as i32;
                 }
             }
-            let r = r_sum / 4.0;
-            let g = g_sum / 4.0;
-            let b = b_sum / 4.0;
+            let r = (r_sum + 2) >> 2;
+            let g = (g_sum + 2) >> 2;
+            let b = (b_sum + 2) >> 2;
 
-            let u = (-0.148 * r - 0.291 * g + 0.439 * b + 128.0).clamp(0.0, 255.0);
-            let v = (0.439 * r - 0.368 * g - 0.071 * b + 128.0).clamp(0.0, 255.0);
-
-            u_plane[row * uv_w + col] = u as u8;
-            v_plane[row * uv_w + col] = v as u8;
+            u_plane[row * uv_w + col] = rgb_to_u(r, g, b);
+            v_plane[row * uv_w + col] = rgb_to_v(r, g, b);
         }
     }
+}
+
+/// Convert an RGBA frame to I420 (YUV 4:2:0) in-place.
+///
+/// Both buffers must be pre-allocated to the correct sizes.
+pub fn rgba_to_i420(rgba: &[u8], width: u32, height: u32, i420: &mut [u8]) {
+    packed_rgb_to_i420(rgba, width, height, i420, 0, 1, 2);
+}
+
+/// Convert a BGRA frame to I420 (YUV 4:2:0) in-place.
+///
+/// Both buffers must be pre-allocated to the correct sizes.
+pub fn bgra_to_i420(bgra: &[u8], width: u32, height: u32, i420: &mut [u8]) {
+    packed_rgb_to_i420(bgra, width, height, i420, 2, 1, 0);
 }
 
 /// Convert an I420 (YUV 4:2:0) frame to RGBA.
@@ -305,32 +386,63 @@ pub fn i420_to_rgba(i420: &[u8], width: u32, height: u32, rgba: &mut [u8]) {
 
     for row in 0..h {
         for col in 0..w {
-            let y = y_plane[row * w + col] as f32;
-            let u = u_plane[(row / 2) * uv_w + col / 2] as f32;
-            let v = v_plane[(row / 2) * uv_w + col / 2] as f32;
+            let y = y_plane[row * w + col] as i32;
+            let u = u_plane[(row / 2) * uv_w + col / 2] as i32;
+            let v = v_plane[(row / 2) * uv_w + col / 2] as i32;
 
-            let c = y - 16.0;
-            let d = u - 128.0;
-            let e = v - 128.0;
+            let c = (y - 16).max(0);
+            let d = u - 128;
+            let e = v - 128;
 
-            let r = (1.164 * c + 1.596 * e).clamp(0.0, 255.0);
-            let g = (1.164 * c - 0.392 * d - 0.813 * e).clamp(0.0, 255.0);
-            let b = (1.164 * c + 2.017 * d).clamp(0.0, 255.0);
+            let r = clamp_to_u8((298 * c + 409 * e + 128) >> 8);
+            let g = clamp_to_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
+            let b = clamp_to_u8((298 * c + 516 * d + 128) >> 8);
 
             let out_idx = (row * w + col) * 4;
-            rgba[out_idx] = r as u8;
-            rgba[out_idx + 1] = g as u8;
-            rgba[out_idx + 2] = b as u8;
+            rgba[out_idx] = r;
+            rgba[out_idx + 1] = g;
+            rgba[out_idx + 2] = b;
             rgba[out_idx + 3] = 255; // full alpha
         }
     }
 }
 
-/// Naively downscale an I420 frame to a target resolution using nearest-neighbor.
-///
-/// This is intentionally simple; a production pipeline would use a proper
-/// scaler (e.g. libyuv or lanczos). For simulcast we need quick downscaling
-/// to feed multiple encoder instances.
+fn bilinear_sample_plane(
+    src: &[u8],
+    src_w: usize,
+    src_h: usize,
+    dst: &mut [u8],
+    dst_w: usize,
+    dst_h: usize,
+) {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return;
+    }
+
+    let x_scale = src_w as f32 / dst_w as f32;
+    let y_scale = src_h as f32 / dst_h as f32;
+
+    for row in 0..dst_h {
+        let src_y = ((row as f32 + 0.5) * y_scale - 0.5).clamp(0.0, (src_h - 1) as f32);
+        let y0 = src_y.floor() as usize;
+        let y1 = (y0 + 1).min(src_h - 1);
+        let fy = src_y - y0 as f32;
+
+        for col in 0..dst_w {
+            let src_x = ((col as f32 + 0.5) * x_scale - 0.5).clamp(0.0, (src_w - 1) as f32);
+            let x0 = src_x.floor() as usize;
+            let x1 = (x0 + 1).min(src_w - 1);
+            let fx = src_x - x0 as f32;
+
+            let top = src[y0 * src_w + x0] as f32 * (1.0 - fx) + src[y0 * src_w + x1] as f32 * fx;
+            let bottom =
+                src[y1 * src_w + x0] as f32 * (1.0 - fx) + src[y1 * src_w + x1] as f32 * fx;
+            dst[row * dst_w + col] = (top * (1.0 - fy) + bottom * fy).round() as u8;
+        }
+    }
+}
+
+/// Downscale an I420 frame to a target resolution using bilinear filtering.
 pub fn downscale_i420(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
     let sw = src_w as usize;
     let sh = src_h as usize;
@@ -356,24 +468,9 @@ pub fn downscale_i420(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32
     let (dst_y, dst_uv) = dst.split_at_mut(dst_y_size);
     let (dst_u, dst_v) = dst_uv.split_at_mut(dst_uv_size);
 
-    // Nearest-neighbor Y
-    for row in 0..dh {
-        let src_row = row * sh / dh;
-        for col in 0..dw {
-            let src_col = col * sw / dw;
-            dst_y[row * dw + col] = src_y[src_row * sw + src_col];
-        }
-    }
-
-    // Nearest-neighbor U and V
-    for row in 0..dst_uv_h {
-        let src_row = row * src_uv_h / dst_uv_h;
-        for col in 0..dst_uv_w {
-            let src_col = col * src_uv_w / dst_uv_w;
-            dst_u[row * dst_uv_w + col] = src_u[src_row * src_uv_w + src_col];
-            dst_v[row * dst_uv_w + col] = src_v[src_row * src_uv_w + src_col];
-        }
-    }
+    bilinear_sample_plane(src_y, sw, sh, dst_y, dw, dh);
+    bilinear_sample_plane(src_u, src_uv_w, src_uv_h, dst_u, dst_uv_w, dst_uv_h);
+    bilinear_sample_plane(src_v, src_uv_w, src_uv_h, dst_v, dst_uv_w, dst_uv_h);
 
     dst
 }
@@ -414,6 +511,7 @@ mod tests {
             bitrate_kbps: 500,
             pixel_format: PixelFormat::I420,
             keyframe_interval: 0,
+            content_hint: VideoContentHint::Default,
         };
         assert!(bad.validate().is_err());
 
@@ -424,6 +522,7 @@ mod tests {
             bitrate_kbps: 500,
             pixel_format: PixelFormat::I420,
             keyframe_interval: 0,
+            content_hint: VideoContentHint::Default,
         };
         assert!(zero.validate().is_err());
     }

@@ -773,18 +773,28 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
             for vs in &stale {
                 // Only clean up if they're not actually in the LiveKit room
                 // (safety check in case of race with a concurrent join).
-                if !state
+                match state
                     .voice
                     .is_participant_in_livekit_room(vs.channel_id, vs.guild_id(), session.user_id)
                     .await
                 {
-                    let _ = paracord_db::voice_states::remove_voice_state(
-                        &state.db,
-                        session.user_id,
-                        vs.guild_id(),
-                    )
-                    .await;
-                    let _ = state.voice.leave_room(vs.channel_id, session.user_id).await;
+                    Some(false) => {
+                        let _ = paracord_db::voice_states::remove_voice_state(
+                            &state.db,
+                            session.user_id,
+                            vs.guild_id(),
+                        )
+                        .await;
+                        let _ = state.voice.leave_room(vs.channel_id, session.user_id).await;
+                    }
+                    Some(true) => {}
+                    None => {
+                        tracing::warn!(
+                            "Skipping stale voice cleanup for user {} channel {} because LiveKit presence is unknown",
+                            session.user_id,
+                            vs.channel_id
+                        );
+                    }
                 }
             }
         }
@@ -808,8 +818,16 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
         };
 
         // Snapshot of currently online users for building presence lists
-        let online_snapshot = state.online_users.read().await.clone();
-        let presence_snapshot = state.user_presences.read().await.clone();
+        let online_snapshot: std::collections::HashSet<i64> = state
+            .online_users
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
+        let presence_snapshot: std::collections::HashMap<i64, Value> = state
+            .user_presences
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect();
 
         // Fetch guild data for READY with bounded concurrency.
         let sem = Arc::new(Semaphore::new(10));
@@ -929,14 +947,12 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
 
     // Track this user as online
     state.presence_manager.cancel_offline(session_user_id);
-    state.online_users.write().await.insert(session_user_id);
+    state.online_users.insert(session_user_id);
     let online_presence = {
         let existing = state
             .user_presences
-            .read()
-            .await
             .get(&session_user_id)
-            .cloned();
+            .map(|value| value.clone());
         if let Some(mut value) = existing {
             if let Some(obj) = value.as_object_mut() {
                 obj.insert("user_id".to_string(), json!(session_user_id.to_string()));
@@ -952,8 +968,6 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
     };
     state
         .user_presences
-        .write()
-        .await
         .insert(session_user_id, online_presence.clone());
 
     // Publish presence only to users who share a guild or friendship edge.
@@ -996,7 +1010,7 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
                 for voice_state in current_states {
                     // Check LiveKit ground truth: is the user actually still
                     // connected to the media room?  If yes, keep the state.
-                    if state_clone
+                    match state_clone
                         .voice
                         .is_participant_in_livekit_room(
                             voice_state.channel_id,
@@ -1005,11 +1019,21 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
                         )
                         .await
                     {
-                        tracing::debug!(
-                            "Gateway disconnect grace period: user {} still in LiveKit room for channel {}, keeping voice state",
-                            session_user_id, voice_state.channel_id
-                        );
-                        continue;
+                        Some(true) => {
+                            tracing::debug!(
+                                "Gateway disconnect grace period: user {} still in LiveKit room for channel {}, keeping voice state",
+                                session_user_id, voice_state.channel_id
+                            );
+                            continue;
+                        }
+                        None => {
+                            tracing::warn!(
+                                "Gateway disconnect grace period: LiveKit presence unknown for user {} channel {}, skipping cleanup",
+                                session_user_id, voice_state.channel_id
+                            );
+                            continue;
+                        }
+                        Some(false) => {}
                     }
 
                     tracing::info!(
@@ -1085,16 +1109,10 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
                     return;
                 }
 
-                state_clone
-                    .online_users
-                    .write()
-                    .await
-                    .remove(&session_user_id);
+                state_clone.online_users.remove(&session_user_id);
                 let offline_presence = default_presence_payload(session_user_id, "offline");
                 state_clone
                     .user_presences
-                    .write()
-                    .await
                     .insert(session_user_id, offline_presence.clone());
 
                 let offline_presence_recipient_ids =
@@ -1146,7 +1164,7 @@ async fn wait_for_identify_or_resume(
                         let op = payload.get("op").and_then(|v| v.as_u64())?;
                         if op == OP_IDENTIFY as u64 {
                             let guilds =
-                                paracord_db::guilds::get_user_guilds(&state.db, claims.sub)
+                                paracord_db::guilds::get_user_guilds(&state.db, claims.sub.into())
                                     .await
                                     .unwrap_or_default();
                             let guild_ids = guilds.iter().map(|g| g.id).collect();
@@ -1208,7 +1226,7 @@ async fn wait_for_identify_or_resume(
                             // fresh session immediately so clients recover without an extra
                             // invalid-session reconnect cycle.
                             let guilds =
-                                paracord_db::guilds::get_user_guilds(&state.db, claims.sub)
+                                paracord_db::guilds::get_user_guilds(&state.db, claims.sub.into())
                                     .await
                                     .unwrap_or_default();
                             let guild_ids = guilds.iter().map(|g| g.id).collect();
@@ -1548,10 +1566,8 @@ async fn handle_client_message(
             if let Some(d) = payload.get("d") {
                 let existing_presence = state
                     .user_presences
-                    .read()
-                    .await
                     .get(&session.user_id)
-                    .cloned();
+                    .map(|value| value.clone());
                 let status = d.get("status").and_then(|v| v.as_str());
                 let custom_status = d.get("custom_status").and_then(|v| v.as_str()).or_else(|| {
                     existing_presence
@@ -1576,8 +1592,6 @@ async fn handle_client_message(
                 );
                 state
                     .user_presences
-                    .write()
-                    .await
                     .insert(session.user_id, presence_payload.clone());
 
                 let presence_recipient_ids =
@@ -1674,6 +1688,10 @@ async fn handle_client_message(
                     .unwrap_or(false);
                 let self_deaf = d
                     .get("self_deaf")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let self_video = d
+                    .get("self_video")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
@@ -1798,6 +1816,10 @@ async fn handle_client_message(
                             .voice
                             .update_self_deaf(channel_id, session.user_id, self_deaf)
                             .await;
+                        state
+                            .voice
+                            .update_self_video(channel_id, session.user_id, self_video)
+                            .await;
 
                         // Read actual self_stream from VoiceManager instead of hardcoding false
                         let current_self_stream = state
@@ -1814,7 +1836,7 @@ async fn handle_client_message(
                                 "self_mute": self_mute,
                                 "self_deaf": self_deaf,
                                 "self_stream": current_self_stream,
-                                "self_video": false,
+                                "self_video": self_video,
                                 "suppress": false,
                                 "mute": false,
                                 "deaf": false,
@@ -1842,6 +1864,101 @@ async fn handle_client_message(
                         .and_then(|v| v.as_str())
                         .and_then(|s| s.parse::<i64>().ok());
                     if let (Some(guild_id), Some(channel_id)) = (guild_id, channel_id) {
+                        // ── Permission checks (mirrors REST join_voice) ──
+                        // 1. Verify guild membership
+                        if paracord_core::permissions::ensure_guild_member(
+                            &state.db,
+                            guild_id,
+                            session.user_id,
+                        )
+                        .await
+                        .is_err()
+                        {
+                            tracing::warn!(
+                                "OP_MEDIA_CONNECT denied: user {} not member of guild {}",
+                                session.user_id,
+                                guild_id
+                            );
+                            return;
+                        }
+
+                        // 2. Fetch channel and verify it is a voice/stage channel
+                        let channel =
+                            match paracord_db::channels::get_channel(&state.db, channel_id).await {
+                                Ok(Some(ch)) => ch,
+                                _ => {
+                                    tracing::warn!(
+                                        "OP_MEDIA_CONNECT denied: channel {} not found",
+                                        channel_id
+                                    );
+                                    return;
+                                }
+                            };
+                        if channel.channel_type != 2 && channel.channel_type != 13 {
+                            tracing::warn!(
+                                "OP_MEDIA_CONNECT denied: channel {} is not a voice channel (type {})",
+                                channel_id,
+                                channel.channel_type
+                            );
+                            return;
+                        }
+
+                        // 3. Compute channel permissions and require VIEW_CHANNEL + CONNECT
+                        let owner_id = session
+                            .guild_owner_ids
+                            .get(&guild_id)
+                            .copied()
+                            .unwrap_or_else(|| {
+                                // Fallback: check if this user is the owner
+                                if session.guild_ids.contains(&guild_id) {
+                                    0 // Will be resolved by compute_channel_permissions
+                                } else {
+                                    0
+                                }
+                            });
+                        // Try to get the actual owner_id from DB if not cached
+                        let resolved_owner_id = if owner_id == 0 {
+                            paracord_db::guilds::get_guild(&state.db, guild_id)
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(|g| g.owner_id)
+                                .unwrap_or(0)
+                        } else {
+                            owner_id
+                        };
+                        let perms =
+                            match paracord_core::permissions::compute_channel_permissions_cached(
+                                &state.permission_cache,
+                                &state.db,
+                                guild_id,
+                                channel_id,
+                                resolved_owner_id,
+                                session.user_id,
+                            )
+                            .await
+                            {
+                                Ok(p) => p,
+                                Err(_) => {
+                                    tracing::warn!(
+                                    "OP_MEDIA_CONNECT denied: failed to compute permissions for user {} in channel {}",
+                                    session.user_id,
+                                    channel_id
+                                );
+                                    return;
+                                }
+                            };
+                        if !perms.contains(Permissions::VIEW_CHANNEL)
+                            || !perms.contains(Permissions::CONNECT)
+                        {
+                            tracing::warn!(
+                                "OP_MEDIA_CONNECT denied: user {} lacks VIEW_CHANNEL or CONNECT for channel {}",
+                                session.user_id,
+                                channel_id
+                            );
+                            return;
+                        }
+
                         let participant = paracord_relay::participant::MediaParticipant::new(
                             session.user_id,
                             session.session_id.clone(),
@@ -1898,8 +2015,55 @@ async fn handle_client_message(
             // participants in the same room via the event bus.
             if let Some(d) = payload.get("d") {
                 if let Ok(announce) = serde_json::from_value::<MediaKeyAnnounce>(d.clone()) {
-                    // Deliver each per-recipient key
+                    // Verify sender is in an active voice channel
+                    let voice_state = paracord_db::voice_states::get_user_voice_state(
+                        &state.db,
+                        session.user_id,
+                        None,
+                    )
+                    .await
+                    .ok()
+                    .flatten();
+                    let Some(vs) = voice_state else {
+                        tracing::warn!(
+                            "OP_MEDIA_KEY_ANNOUNCE denied: user {} not in any voice channel",
+                            session.user_id
+                        );
+                        return;
+                    };
+
+                    // Determine which users are in the same voice room
+                    let room_user_ids: std::collections::HashSet<i64> =
+                        if let Some(ref native) = state.native_media {
+                            native
+                                .rooms
+                                .get_room_by_channel(vs.guild_id().unwrap_or(0), vs.channel_id)
+                                .map(|room| room.user_ids().into_iter().collect())
+                                .unwrap_or_default()
+                        } else {
+                            // Fallback: use DB voice states for same channel
+                            paracord_db::voice_states::get_guild_voice_states(
+                                &state.db,
+                                vs.guild_id().unwrap_or(0),
+                            )
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|s| s.channel_id == vs.channel_id)
+                            .map(|s| s.user_id)
+                            .collect()
+                        };
+
+                    // Deliver each per-recipient key, but only to users in the same room
                     for encrypted_key in &announce.encrypted_keys {
+                        if !room_user_ids.contains(&encrypted_key.recipient_user_id) {
+                            tracing::warn!(
+                                "OP_MEDIA_KEY_ANNOUNCE: skipping recipient {} not in same voice room as sender {}",
+                                encrypted_key.recipient_user_id,
+                                session.user_id
+                            );
+                            continue;
+                        }
                         let deliver = json!({
                             "op": OP_MEDIA_KEY_DELIVER,
                             "d": {
@@ -1908,14 +2072,14 @@ async fn handle_client_message(
                                 "ciphertext": encrypted_key.ciphertext,
                             },
                         });
-                        // Dispatch as a targeted event to the specific recipient
+                        // Dispatch scoped to the guild
                         state.event_bus.dispatch(
                             EVENT_MEDIA_KEY_DELIVER,
                             json!({
                                 "target_user_id": encrypted_key.recipient_user_id,
                                 "payload": deliver,
                             }),
-                            None,
+                            vs.guild_id(),
                         );
                     }
                 }
@@ -1937,6 +2101,92 @@ async fn handle_client_message(
                         // this WS opcode is primarily for signaling intent.
                     }
                 }
+            }
+        }
+        OP_REQUEST_GUILD_MEMBERS => {
+            if let Some(d) = payload.get("d") {
+                let guild_id_str = d.get("guild_id").and_then(|v| v.as_str());
+                let Some(guild_id_str) = guild_id_str else {
+                    return;
+                };
+                let Some(guild_id) = guild_id_str.parse::<i64>().ok() else {
+                    return;
+                };
+
+                // Ensure the requesting user is a member of the guild
+                if !session.guild_ids.contains(&guild_id) {
+                    return;
+                }
+
+                let query = d
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let limit = d
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n.min(1000) as i64)
+                    .unwrap_or(1000);
+
+                let members = if query.is_empty() {
+                    paracord_db::members::get_guild_members(&state.db, guild_id, limit, None)
+                        .await
+                        .unwrap_or_default()
+                } else {
+                    paracord_db::members::search_guild_members(&state.db, guild_id, &query, limit)
+                        .await
+                        .unwrap_or_default()
+                };
+
+                let members_json: Vec<Value> = members
+                    .iter()
+                    .map(|m| {
+                        json!({
+                            "user_id": m.user_id.to_string(),
+                            "guild_id": guild_id.to_string(),
+                            "nick": m.nick,
+                            "joined_at": m.joined_at.to_rfc3339(),
+                            "deaf": m.deaf,
+                            "mute": m.mute,
+                            "communication_disabled_until": m.communication_disabled_until.map(|v| v.to_rfc3339()),
+                            "user": {
+                                "id": m.user_id.to_string(),
+                                "username": m.username,
+                                "discriminator": m.discriminator,
+                                "avatar_hash": m.user_avatar_hash,
+                                "flags": m.user_flags,
+                                "bot": paracord_core::is_bot(m.user_flags),
+                                "system": false,
+                            }
+                        })
+                    })
+                    .collect();
+
+                session.sequence += 1;
+                let chunk_payload = json!({
+                    "op": OP_DISPATCH,
+                    "t": EVENT_GUILD_MEMBERS_CHUNK,
+                    "s": session.sequence,
+                    "d": {
+                        "guild_id": guild_id.to_string(),
+                        "members": members_json,
+                        "chunk_index": 0,
+                        "chunk_count": 1,
+                    }
+                });
+                let _ = send_ws_text_logged(
+                    sender,
+                    chunk_payload.to_string(),
+                    compressor,
+                    Some(session.user_id),
+                    Some(session.session_id.as_str()),
+                    "guild_members_chunk",
+                    Some(OP_DISPATCH),
+                    Some(EVENT_GUILD_MEMBERS_CHUNK),
+                    Some(session.sequence),
+                )
+                .await;
             }
         }
         _ => {

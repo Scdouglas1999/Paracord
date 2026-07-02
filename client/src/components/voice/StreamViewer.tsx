@@ -66,6 +66,7 @@ export function StreamViewer({
   const previewStreamerId = useVoiceStore((s) => s.previewStreamerId);
   const localUserId = useAuthStore((s) => s.user?.id ?? null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const streamStartTime = useRef<number>(Date.now());
   const screenShareAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -336,52 +337,50 @@ export function StreamViewer({
     setScreenShareSubscriptions,
   ]);
 
-  // Native media path: attach local screen share track from MediaEngine
-  // (no LiveKit room available — we get the raw MediaStreamTrack directly)
+  // Native media path: subscribe to the published QUIC stream via MediaEngine.
   useEffect(() => {
-    if (room || !mediaEngine) return; // Only when using native media (no LiveKit room)
-    const videoEl = videoRef.current;
-    if (!videoEl) return;
+    if (room || !mediaEngine) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
     const watchingSelf = localUserId != null && streamerId === localUserId;
+    if (watchingSelf && hideSelfPreview) {
+      setActiveStreamerName('You');
+      setIsOwnStream(true);
+      setHasActiveTrack(selfStream);
+      const ctx = canvas.getContext('2d');
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
 
-    const attachNativeTrack = () => {
-      if (!watchingSelf) {
-        // Remote stream viewing over QUIC not yet implemented
-        return;
-      }
-      const track = mediaEngine.getLocalScreenShareTrack();
-      if (track && track.readyState === 'live' && !(hideSelfPreview)) {
-        const currentStream = videoEl.srcObject instanceof MediaStream ? videoEl.srcObject : null;
-        const currentTrack = currentStream?.getVideoTracks()[0] ?? null;
-        if (currentTrack !== track) {
-          videoEl.srcObject = new MediaStream([track]);
-          videoEl.muted = true;
-          videoEl.play().catch(() => { });
-        }
-        setHasActiveTrack(true);
-        setActiveStreamerName('You');
-        setIsOwnStream(true);
-      } else if (track && track.readyState === 'live' && hideSelfPreview) {
-        videoEl.srcObject = null;
-        setHasActiveTrack(true);
-        setActiveStreamerName('You');
-        setIsOwnStream(true);
-      } else {
-        videoEl.srcObject = null;
+    let sawFrame = false;
+    const onFrame = () => {
+      sawFrame = true;
+      setHasActiveTrack(true);
+    };
+
+    let unsubscribe = () => {};
+    if (watchingSelf) {
+      unsubscribe = mediaEngine.subscribeLocalPublishedScreen(canvas, onFrame);
+      setActiveStreamerName('You');
+      setIsOwnStream(true);
+      setHasActiveTrack(selfStream);
+    } else {
+      unsubscribe = mediaEngine.subscribeVideo(streamerId, canvas, onFrame);
+      setActiveStreamerName(streamerName ?? null);
+      setIsOwnStream(false);
+      setHasActiveTrack(false);
+    }
+
+    return () => {
+      unsubscribe();
+      const ctx = canvas.getContext('2d');
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      if (!sawFrame) {
         setHasActiveTrack(false);
       }
     };
-
-    // Attach immediately then poll (track may arrive slightly after state update)
-    attachNativeTrack();
-    const interval = setInterval(attachNativeTrack, 500);
-    return () => {
-      clearInterval(interval);
-      if (videoRef.current) videoRef.current.srcObject = null;
-      setHasActiveTrack(false);
-    };
-  }, [room, mediaEngine, streamerId, localUserId, hideSelfPreview]);
+  }, [room, mediaEngine, streamerId, localUserId, selfStream, streamerName, hideSelfPreview]);
 
   // LiveKit room path: subscribe to room events for track attachment
   useEffect(() => {
@@ -427,6 +426,7 @@ export function StreamViewer({
 
   const toggleMaximized = () => setIsMaximized((prev) => !prev);
 
+  const usingNativeCanvas = !room && !!mediaEngine;
   const showVideo = hasActiveTrack && !(isOwnStream && hideSelfPreview);
 
   return (
@@ -590,6 +590,7 @@ export function StreamViewer({
               onClick={() => setHideSelfPreview((prev) => !prev)}
               className="flex h-9 w-9 items-center justify-center rounded-lg bg-black/40 text-white/80 transition-colors hover:bg-black/60 hover:text-white backdrop-blur-md"
               title={hideSelfPreview ? 'Show your stream preview' : 'Hide your stream preview (saves resources)'}
+              aria-label={hideSelfPreview ? 'Show your stream preview' : 'Hide your stream preview'}
             >
               {hideSelfPreview ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
@@ -599,6 +600,7 @@ export function StreamViewer({
             onClick={toggleMaximized}
             className="flex h-9 w-9 items-center justify-center rounded-lg bg-black/40 text-white/80 transition-colors hover:bg-black/60 hover:text-white backdrop-blur-md"
             title={isMaximized ? 'Restore' : 'Maximize'}
+            aria-label={isMaximized ? 'Restore stream viewer' : 'Maximize stream viewer'}
           >
             {isMaximized ? <Minimize size={16} /> : <Maximize size={16} />}
           </button>
@@ -608,6 +610,7 @@ export function StreamViewer({
               onClick={onStopWatching}
               className="flex h-9 w-9 items-center justify-center rounded-lg bg-black/40 text-white/80 transition-colors hover:bg-black/60 hover:text-white backdrop-blur-md"
               title="Stop watching"
+              aria-label="Stop watching stream"
             >
               <X size={16} />
             </button>
@@ -622,6 +625,7 @@ export function StreamViewer({
                 border: '1px solid color-mix(in srgb, var(--accent-danger) 38%, transparent)',
               }}
               title="Stop streaming"
+              aria-label="Stop streaming"
             >
               <MonitorOff size={15} />
               {!isCompactLayout && 'Stop'}
@@ -639,8 +643,19 @@ export function StreamViewer({
           muted
           style={{
             backgroundColor: 'var(--bg-tertiary)',
-            opacity: showVideo ? 1 : 0,
-            position: showVideo ? 'relative' : 'absolute',
+            opacity: showVideo && !usingNativeCanvas ? 1 : 0,
+            position: showVideo && !usingNativeCanvas ? 'relative' : 'absolute',
+            pointerEvents: 'none',
+          }}
+        />
+        <canvas
+          ref={canvasRef}
+          className="h-full w-full object-contain"
+          style={{
+            backgroundColor: 'var(--bg-tertiary)',
+            opacity: showVideo && usingNativeCanvas ? 1 : 0,
+            position: showVideo && usingNativeCanvas ? 'relative' : 'absolute',
+            pointerEvents: 'none',
           }}
         />
 

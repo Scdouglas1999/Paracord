@@ -107,7 +107,7 @@ export function AccountUnlockPage() {
         )}
 
         {error && (
-          <div className="mb-5 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-4 py-3 text-sm font-medium text-accent-danger">
+          <div role="alert" className="mb-5 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-4 py-3 text-sm font-medium text-accent-danger">
             {error}
           </div>
         )}
@@ -123,6 +123,7 @@ export function AccountUnlockPage() {
             required
             className="input-field mt-2"
             placeholder="Enter your password"
+            autoComplete="current-password"
             autoFocus
           />
         </label>

@@ -1,3 +1,11 @@
+#![allow(
+    clippy::if_same_then_else,
+    clippy::question_mark,
+    clippy::too_many_arguments,
+    clippy::unnecessary_map_or,
+    clippy::useless_conversion
+)]
+
 mod compression;
 mod handler;
 mod session;

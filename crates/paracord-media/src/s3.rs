@@ -12,10 +12,16 @@ pub struct S3Config {
     /// Optional key prefix prepended to all object keys (e.g. `paracord/`).
     #[serde(default)]
     pub prefix: String,
-    /// Access key ID. Falls back to the standard AWS credential chain if not set.
+    /// Access key ID for the configured S3-compatible provider.
     pub access_key_id: Option<String>,
     /// Secret access key.
     pub secret_access_key: Option<String>,
+    /// Opt in to the AWS SDK credential chain when static credentials are not set.
+    ///
+    /// Disabled by default so self-hosted deployments do not unexpectedly read
+    /// ambient AWS profile, SSO, environment, or instance metadata credentials.
+    #[serde(default)]
+    pub use_aws_credential_chain: bool,
     /// Optional CDN/public base URL for serving files (e.g. `https://cdn.example.com`).
     /// When set, `get_url` returns `{cdn_url}/{prefix}{key}` instead of a presigned URL.
     pub cdn_url: Option<String>,
@@ -44,6 +50,7 @@ impl Default for S3Config {
             prefix: String::new(),
             access_key_id: None,
             secret_access_key: None,
+            use_aws_credential_chain: false,
             cdn_url: None,
             presign_expiry_seconds: default_presign_expiry(),
             force_path_style: false,
@@ -85,26 +92,38 @@ mod inner {
                 s3_config_builder = s3_config_builder.endpoint_url(endpoint);
             }
 
-            if let (Some(ref key_id), Some(ref secret)) =
-                (&config.access_key_id, &config.secret_access_key)
-            {
-                let credentials = Credentials::new(key_id, secret, None, None, "paracord-static");
-                s3_config_builder = s3_config_builder.credentials_provider(credentials);
-            } else {
-                // Fall back to the default AWS credential chain (env vars, IAM roles, etc.)
-                let aws_config = aws_config::defaults(BehaviorVersion::latest())
-                    .region(region)
-                    .load()
-                    .await;
-                let cred_provider = aws_config
-                    .credentials_provider()
-                    .ok_or_else(|| {
-                        StorageError::Backend(
-                            "No AWS credentials found (set access_key_id/secret_access_key in config or configure the AWS credential chain)".into(),
-                        )
-                    })?
-                    .clone();
-                s3_config_builder = s3_config_builder.credentials_provider(cred_provider);
+            match (&config.access_key_id, &config.secret_access_key) {
+                (Some(key_id), Some(secret)) => {
+                    let credentials =
+                        Credentials::new(key_id, secret, None, None, "paracord-static");
+                    s3_config_builder = s3_config_builder.credentials_provider(credentials);
+                }
+                (None, None) if config.use_aws_credential_chain => {
+                    let aws_config = aws_config::defaults(BehaviorVersion::latest())
+                        .region(region)
+                        .load()
+                        .await;
+                    let cred_provider = aws_config
+                        .credentials_provider()
+                        .ok_or_else(|| {
+                            StorageError::Backend(
+                                "No AWS credentials found in the opted-in AWS credential chain"
+                                    .into(),
+                            )
+                        })?
+                        .clone();
+                    s3_config_builder = s3_config_builder.credentials_provider(cred_provider);
+                }
+                (None, None) => {
+                    return Err(StorageError::Backend(
+                        "S3 storage requires access_key_id and secret_access_key, or explicit use_aws_credential_chain = true".into(),
+                    ));
+                }
+                _ => {
+                    return Err(StorageError::Backend(
+                        "S3 storage requires both access_key_id and secret_access_key when static credentials are used".into(),
+                    ));
+                }
             }
 
             let s3_config = s3_config_builder.build();
@@ -249,3 +268,39 @@ mod inner {
 
 #[cfg(feature = "s3")]
 pub use inner::S3Storage;
+
+#[cfg(all(test, feature = "s3"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn s3_requires_explicit_credentials_by_default() {
+        let config = S3Config {
+            bucket: "paracord-test".to_string(),
+            ..S3Config::default()
+        };
+
+        let err = match S3Storage::new(&config).await {
+            Ok(_) => panic!("missing credentials should fail without opt-in chain"),
+            Err(err) => err,
+        };
+
+        assert!(format!("{err}").contains("requires access_key_id and secret_access_key"));
+    }
+
+    #[tokio::test]
+    async fn s3_rejects_partial_static_credentials() {
+        let config = S3Config {
+            bucket: "paracord-test".to_string(),
+            access_key_id: Some("key".to_string()),
+            ..S3Config::default()
+        };
+
+        let err = match S3Storage::new(&config).await {
+            Ok(_) => panic!("partial credentials should fail"),
+            Err(err) => err,
+        };
+
+        assert!(format!("{err}").contains("requires both access_key_id and secret_access_key"));
+    }
+}

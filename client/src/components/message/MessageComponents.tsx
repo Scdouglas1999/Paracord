@@ -1,8 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Hash, Volume2, User, Shield } from 'lucide-react';
 import { ComponentType, ButtonStyle, type Component } from '../../types/components';
 import { InteractionType } from '../../types/interactions';
-import { apiClient } from '../../api/client';
+import { apiClient, extractApiError } from '../../api/client';
+import { guildApi } from '../../api/guilds';
+import { useChannelStore } from '../../stores/channelStore';
+import { toast } from '../../stores/toastStore';
+import type { Member, Role, Channel } from '../../types';
+import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
+import { LoadingSpinner } from '../ui/Feedback';
 
 interface MessageComponentsProps {
   components: Component[];
@@ -30,19 +36,23 @@ async function dispatchComponentInteraction(
   });
 }
 
+function notifyComponentError(action: string, err: unknown): void {
+  toast.error(`${action}: ${extractApiError(err)}`);
+}
+
 // ---------------------------------------------------------------------------
 // Button Component
 // ---------------------------------------------------------------------------
 
 const BUTTON_STYLE_CLASSES: Record<number, string> = {
   [ButtonStyle.Primary]:
-    'bg-blue-600 hover:bg-blue-700 text-white border-blue-600',
+    'bg-accent-primary hover:bg-accent-primary/85 text-white border-accent-primary',
   [ButtonStyle.Secondary]:
-    'bg-gray-600 hover:bg-gray-700 text-white border-gray-600',
+    'bg-bg-mod-strong hover:bg-bg-mod-subtle text-text-primary border-border-subtle',
   [ButtonStyle.Success]:
-    'bg-green-600 hover:bg-green-700 text-white border-green-600',
+    'bg-accent-success hover:bg-accent-success/85 text-white border-accent-success',
   [ButtonStyle.Danger]:
-    'bg-red-600 hover:bg-red-700 text-white border-red-600',
+    'bg-accent-danger hover:bg-accent-danger/85 text-white border-accent-danger',
   [ButtonStyle.Link]:
     'bg-transparent hover:underline text-text-link border-transparent',
 };
@@ -71,7 +81,12 @@ function ComponentButton({
     if (isDisabled) return;
 
     if (isLink && component.url) {
-      window.open(component.url, '_blank', 'noopener,noreferrer');
+      const url = safeExternalUrl(component.url);
+      if (!url) {
+        toast.error('Blocked unsafe link button URL.');
+        return;
+      }
+      window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }
 
@@ -84,8 +99,8 @@ function ComponentButton({
         component.custom_id,
         ComponentType.Button,
       );
-    } catch {
-      // interaction errors are non-fatal
+    } catch (err) {
+      notifyComponentError('Could not run message action', err);
     } finally {
       setBusy(false);
     }
@@ -189,8 +204,8 @@ function StringSelectMenu({
         ComponentType.StringSelect,
         selectedValues,
       );
-    } catch {
-      // non-fatal
+    } catch (err) {
+      notifyComponentError('Could not submit selection', err);
     } finally {
       setBusy(false);
     }
@@ -211,7 +226,7 @@ function StringSelectMenu({
         component.custom_id!,
         ComponentType.StringSelect,
         [value],
-      ).catch(() => {}).finally(() => setBusy(false));
+      ).catch((err) => notifyComponentError('Could not submit selection', err)).finally(() => setBusy(false));
     }
   };
 
@@ -298,7 +313,7 @@ function StringSelectMenu({
                 className={`w-full rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
                   selectedValues.length >= minValues
                     ? 'bg-accent-primary text-white hover:bg-accent-primary/90'
-                    : 'cursor-not-allowed bg-gray-600 text-gray-400 opacity-50'
+                    : 'cursor-not-allowed bg-bg-mod-strong text-text-muted opacity-50'
                 }`}
                 onClick={() => void submitSelection()}
                 disabled={selectedValues.length < minValues}
@@ -314,24 +329,504 @@ function StringSelectMenu({
 }
 
 // ---------------------------------------------------------------------------
-// Placeholder for unimplemented select types (UserSelect, RoleSelect, etc.)
+// Shared dropdown shell for entity selects
 // ---------------------------------------------------------------------------
 
-function PlaceholderSelect({ component }: { component: Component }) {
-  const typeLabels: Record<number, string> = {
-    [ComponentType.UserSelect]: 'User Select',
-    [ComponentType.RoleSelect]: 'Role Select',
-    [ComponentType.MentionableSelect]: 'Mentionable Select',
-    [ComponentType.ChannelSelect]: 'Channel Select',
+interface EntityItem {
+  id: string;
+  label: string;
+  sublabel?: string;
+  avatar?: string | null;
+  color?: number;
+  icon?: React.ReactNode;
+}
+
+function EntitySelectMenu({
+  component,
+  channelId,
+  messageId,
+  componentType,
+  loadItems,
+  renderItem,
+  placeholderText,
+}: {
+  component: Component;
+  channelId: string;
+  messageId: string;
+  componentType: ComponentType;
+  loadItems: () => Promise<EntityItem[]>;
+  renderItem: (item: EntityItem, isSelected: boolean, isMulti: boolean) => React.ReactNode;
+  placeholderText: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<EntityItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const minValues = component.min_values ?? 1;
+  const maxValues = component.max_values ?? 1;
+  const isMulti = maxValues > 1;
+  const isDisabled = component.disabled || busy;
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  // Load items when opening
+  const handleOpen = async () => {
+    if (isDisabled) return;
+    setOpen((prev) => {
+      if (!prev && items.length === 0) {
+        setLoading(true);
+        setLoadError(null);
+        void loadItems().then((loaded) => {
+          setItems(loaded);
+          setLoading(false);
+        }).catch((err) => {
+          const message = `Could not load options: ${extractApiError(err)}`;
+          setLoadError(message);
+          toast.error(message);
+          setLoading(false);
+        });
+      }
+      return !prev;
+    });
   };
 
+  const toggleItem = (id: string) => {
+    setSelectedIds((prev) => {
+      if (isMulti) {
+        if (prev.includes(id)) return prev.filter((v) => v !== id);
+        if (prev.length >= maxValues) return prev;
+        return [...prev, id];
+      }
+      return [id];
+    });
+  };
+
+  const submitSelection = async (ids: string[]) => {
+    if (!component.custom_id) return;
+    setBusy(true);
+    setOpen(false);
+    try {
+      await dispatchComponentInteraction(
+        channelId,
+        messageId,
+        component.custom_id,
+        componentType,
+        ids,
+      );
+    } catch (err) {
+      notifyComponentError('Could not submit selection', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleItemClick = (id: string) => {
+    if (isMulti) {
+      toggleItem(id);
+    } else {
+      void submitSelection([id]);
+    }
+  };
+
+  const displayText =
+    selectedIds.length > 0
+      ? items
+          .filter((i) => selectedIds.includes(i.id))
+          .map((i) => i.label)
+          .join(', ')
+      : component.placeholder || placeholderText;
+
   return (
-    <div className="inline-flex min-w-[12rem] items-center gap-2 rounded-md border border-border-subtle bg-bg-primary/80 px-3 py-2 text-sm text-text-muted opacity-60">
-      <span>{component.placeholder || typeLabels[component.type] || 'Select'}</span>
-      <span className="rounded border border-border-subtle px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
-        TODO
-      </span>
+    <div ref={containerRef} className="relative inline-block min-w-[12rem] max-w-[25rem]">
+      <button
+        type="button"
+        className={`flex w-full items-center justify-between gap-2 rounded-md border border-border-subtle bg-bg-primary/80 px-3 py-2 text-left text-sm transition-colors ${
+          isDisabled
+            ? 'cursor-not-allowed opacity-50'
+            : 'cursor-pointer hover:border-border-subtle/80 hover:bg-bg-mod-subtle'
+        }`}
+        onClick={() => void handleOpen()}
+        disabled={isDisabled}
+      >
+        <span className={`truncate ${selectedIds.length > 0 ? 'text-text-primary' : 'text-text-muted'}`}>
+          {displayText}
+        </span>
+        <svg
+          className={`h-4 w-4 shrink-0 text-text-muted transition-transform ${open ? 'rotate-180' : ''}`}
+          viewBox="0 0 20 20"
+          fill="currentColor"
+        >
+          <path
+            fillRule="evenodd"
+            d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute left-0 z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-border-subtle bg-bg-floating shadow-lg">
+          {loading ? (
+            <LoadingSpinner className="px-3 py-3" size="sm" label="Loading options..." />
+          ) : loadError ? (
+            <div role="alert" className="px-3 py-3 text-sm text-accent-danger">
+              {loadError}
+            </div>
+          ) : items.length === 0 ? (
+            <div className="px-3 py-3 text-center text-sm text-text-muted">No options available</div>
+          ) : (
+            items.map((item) => {
+              const isSelected = selectedIds.includes(item.id);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-bg-mod-subtle ${
+                    isSelected ? 'bg-accent-primary/10 text-text-primary' : 'text-text-secondary'
+                  }`}
+                  onClick={() => handleItemClick(item.id)}
+                >
+                  {isMulti && (
+                    <span
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-xs ${
+                        isSelected
+                          ? 'border-accent-primary bg-accent-primary text-white'
+                          : 'border-border-subtle bg-transparent'
+                      }`}
+                    >
+                      {isSelected ? '\u2713' : ''}
+                    </span>
+                  )}
+                  {renderItem(item, isSelected, isMulti)}
+                </button>
+              );
+            })
+          )}
+
+          {isMulti && selectedIds.length > 0 && (
+            <div className="border-t border-border-subtle px-3 py-2">
+              <button
+                type="button"
+                className={`w-full rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
+                  selectedIds.length >= minValues
+                    ? 'bg-accent-primary text-white hover:bg-accent-primary/90'
+                    : 'cursor-not-allowed bg-bg-mod-strong text-text-muted opacity-50'
+                }`}
+                onClick={() => void submitSelection(selectedIds)}
+                disabled={selectedIds.length < minValues}
+              >
+                Confirm ({selectedIds.length} selected)
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// User Select
+// ---------------------------------------------------------------------------
+
+function UserSelectMenu({
+  component,
+  channelId,
+  messageId,
+}: {
+  component: Component;
+  channelId: string;
+  messageId: string;
+}) {
+  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+
+  // Derive guildId from the channelId
+  const guildId = Object.entries(channelsByGuild).find(([, chs]) =>
+    chs.some((c) => c.id === channelId)
+  )?.[0] ?? null;
+
+  const loadItems = useCallback(async (): Promise<EntityItem[]> => {
+    if (!guildId) return [];
+    const { data } = await guildApi.getMembers(guildId);
+    return (data as Member[]).map((m) => ({
+      id: m.user.id,
+      label: m.nick || m.user.username,
+      sublabel: m.nick ? m.user.username : undefined,
+      avatar: m.user.avatar_hash,
+    }));
+  }, [guildId]);
+
+  const renderItem = useCallback((item: EntityItem) => {
+    const avatarSrc = safeStoredImageDataUrl(item.avatar);
+    return (
+      <div className="flex min-w-0 items-center gap-2">
+        {avatarSrc ? (
+          <img
+            src={avatarSrc}
+            alt=""
+            className="h-6 w-6 shrink-0 rounded-full object-cover"
+          />
+        ) : (
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong">
+            <User size={12} className="text-text-muted" />
+          </span>
+        )}
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-text-primary">{item.label}</div>
+          {item.sublabel && (
+            <div className="truncate text-xs text-text-muted">{item.sublabel}</div>
+          )}
+        </div>
+      </div>
+    );
+  }, []);
+
+  return (
+    <EntitySelectMenu
+      component={component}
+      channelId={channelId}
+      messageId={messageId}
+      componentType={ComponentType.UserSelect}
+      loadItems={loadItems}
+      renderItem={renderItem}
+      placeholderText="Select a user..."
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Role Select
+// ---------------------------------------------------------------------------
+
+function RoleSelectMenu({
+  component,
+  channelId,
+  messageId,
+}: {
+  component: Component;
+  channelId: string;
+  messageId: string;
+}) {
+  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+
+  const guildId = Object.entries(channelsByGuild).find(([, chs]) =>
+    chs.some((c) => c.id === channelId)
+  )?.[0] ?? null;
+
+  const loadItems = useCallback(async (): Promise<EntityItem[]> => {
+    if (!guildId) return [];
+    const { data } = await guildApi.getRoles(guildId);
+    return (data as Role[])
+      .filter((r) => r.id !== guildId) // exclude @everyone
+      .sort((a, b) => b.position - a.position)
+      .map((r) => ({
+        id: r.id,
+        label: r.name,
+        color: r.color,
+      }));
+  }, [guildId]);
+
+  const renderItem = useCallback((item: EntityItem) => {
+    const colorHex = item.color
+      ? `#${item.color.toString(16).padStart(6, '0')}`
+      : undefined;
+    return (
+      <div className="flex min-w-0 items-center gap-2">
+        <span
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
+          style={colorHex ? { backgroundColor: colorHex + '33', border: `2px solid ${colorHex}` } : undefined}
+        >
+          <Shield size={10} style={colorHex ? { color: colorHex } : undefined} className="text-text-muted" />
+        </span>
+        <span className="truncate text-sm font-medium" style={colorHex ? { color: colorHex } : undefined}>
+          {item.label}
+        </span>
+      </div>
+    );
+  }, []);
+
+  return (
+    <EntitySelectMenu
+      component={component}
+      channelId={channelId}
+      messageId={messageId}
+      componentType={ComponentType.RoleSelect}
+      loadItems={loadItems}
+      renderItem={renderItem}
+      placeholderText="Select a role..."
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mentionable Select (users + roles combined)
+// ---------------------------------------------------------------------------
+
+function MentionableSelectMenu({
+  component,
+  channelId,
+  messageId,
+}: {
+  component: Component;
+  channelId: string;
+  messageId: string;
+}) {
+  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+
+  const guildId = Object.entries(channelsByGuild).find(([, chs]) =>
+    chs.some((c) => c.id === channelId)
+  )?.[0] ?? null;
+
+  const loadItems = useCallback(async (): Promise<EntityItem[]> => {
+    if (!guildId) return [];
+    const [membersRes, rolesRes] = await Promise.all([
+      guildApi.getMembers(guildId),
+      guildApi.getRoles(guildId),
+    ]);
+    const memberItems: EntityItem[] = (membersRes.data as Member[]).map((m) => ({
+      id: `user:${m.user.id}`,
+      label: m.nick || m.user.username,
+      sublabel: 'User',
+      avatar: m.user.avatar_hash,
+    }));
+    const roleItems: EntityItem[] = (rolesRes.data as Role[])
+      .filter((r) => r.id !== guildId)
+      .sort((a, b) => b.position - a.position)
+      .map((r) => ({
+        id: `role:${r.id}`,
+        label: r.name,
+        sublabel: 'Role',
+        color: r.color,
+      }));
+    return [...roleItems, ...memberItems];
+  }, [guildId]);
+
+  const renderItem = useCallback((item: EntityItem) => {
+    const isRole = item.id.startsWith('role:');
+    const colorHex = item.color
+      ? `#${item.color.toString(16).padStart(6, '0')}`
+      : undefined;
+    const avatarSrc = safeStoredImageDataUrl(item.avatar);
+    return (
+      <div className="flex min-w-0 items-center gap-2">
+        {isRole ? (
+          <span
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
+            style={colorHex ? { backgroundColor: colorHex + '33', border: `2px solid ${colorHex}` } : undefined}
+          >
+            <Shield size={10} style={colorHex ? { color: colorHex } : undefined} className="text-text-muted" />
+          </span>
+        ) : avatarSrc ? (
+          <img
+            src={avatarSrc}
+            alt=""
+            className="h-5 w-5 shrink-0 rounded-full object-cover"
+          />
+        ) : (
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong">
+            <User size={10} className="text-text-muted" />
+          </span>
+        )}
+        <div className="min-w-0">
+          <span
+            className="truncate text-sm font-medium"
+            style={!isRole || !colorHex ? undefined : { color: colorHex }}
+          >
+            {item.label}
+          </span>
+          {item.sublabel && (
+            <span className="ml-1.5 text-xs text-text-muted">{item.sublabel}</span>
+          )}
+        </div>
+      </div>
+    );
+  }, []);
+
+  // Strip the type prefix before submitting
+  const handleLoadItems = loadItems;
+
+  return (
+    <EntitySelectMenu
+      component={component}
+      channelId={channelId}
+      messageId={messageId}
+      componentType={ComponentType.MentionableSelect}
+      loadItems={handleLoadItems}
+      renderItem={renderItem}
+      placeholderText="Select a user or role..."
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Channel Select
+// ---------------------------------------------------------------------------
+
+function channelIcon(type: number) {
+  if (type === 2) return <Volume2 size={12} className="text-text-muted" />;
+  return <Hash size={12} className="text-text-muted" />;
+}
+
+function ChannelSelectMenu({
+  component,
+  channelId,
+  messageId,
+}: {
+  component: Component;
+  channelId: string;
+  messageId: string;
+}) {
+  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+
+  const guildId = Object.entries(channelsByGuild).find(([, chs]) =>
+    chs.some((c) => c.id === channelId)
+  )?.[0] ?? null;
+
+  const loadItems = useCallback(async (): Promise<EntityItem[]> => {
+    if (!guildId) return [];
+    const { data } = await guildApi.getChannels(guildId);
+    return (data as Channel[])
+      .filter((c) => c.type !== 4) // exclude categories
+      .sort((a, b) => a.position - b.position)
+      .map((c) => ({
+        id: c.id,
+        label: c.name || c.id,
+        color: c.type,
+        icon: channelIcon(c.type),
+      }));
+  }, [guildId]);
+
+  const renderItem = useCallback((item: EntityItem) => (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <span className="shrink-0">{item.icon ?? <Hash size={12} className="text-text-muted" />}</span>
+      <span className="truncate text-sm font-medium text-text-primary">{item.label}</span>
+    </div>
+  ), []);
+
+  return (
+    <EntitySelectMenu
+      component={component}
+      channelId={channelId}
+      messageId={messageId}
+      componentType={ComponentType.ChannelSelect}
+      loadItems={loadItems}
+      renderItem={renderItem}
+      placeholderText="Select a channel..."
+    />
   );
 }
 
@@ -375,10 +870,41 @@ function ActionRow({
               />
             );
           case ComponentType.UserSelect:
+            return (
+              <UserSelectMenu
+                key={key}
+                component={child}
+                channelId={channelId}
+                messageId={messageId}
+              />
+            );
           case ComponentType.RoleSelect:
+            return (
+              <RoleSelectMenu
+                key={key}
+                component={child}
+                channelId={channelId}
+                messageId={messageId}
+              />
+            );
           case ComponentType.MentionableSelect:
+            return (
+              <MentionableSelectMenu
+                key={key}
+                component={child}
+                channelId={channelId}
+                messageId={messageId}
+              />
+            );
           case ComponentType.ChannelSelect:
-            return <PlaceholderSelect key={key} component={child} />;
+            return (
+              <ChannelSelectMenu
+                key={key}
+                component={child}
+                channelId={channelId}
+                messageId={messageId}
+              />
+            );
           default:
             return null;
         }

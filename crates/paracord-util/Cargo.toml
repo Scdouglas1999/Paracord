@@ -3,9 +3,10 @@ name = "paracord-util"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [dependencies]
+paracord-models = { workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
 rand = { workspace = true }

@@ -6,15 +6,21 @@ use axum::{
     Json,
 };
 use chrono::{Duration, Utc};
+use lettre::message::Mailbox;
+use lettre::transport::smtp::authentication::Credentials;
+use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+use moka::sync::Cache;
 use paracord_core::AppState;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use std::time::Duration as StdDuration;
+use totp_rs;
 use uuid::Uuid;
 
 use crate::error::ApiError;
@@ -25,35 +31,26 @@ const REFRESH_COOKIE_NAME: &str = "paracord_refresh";
 const REFRESH_COOKIE_PATH: &str = "/api/v1/auth";
 const ACCESS_COOKIE_NAME: &str = "paracord_access";
 const ACCESS_COOKIE_PATH: &str = "/api/v1";
+const CSRF_COOKIE_NAME: &str = "paracord_csrf";
+const CSRF_COOKIE_PATH: &str = "/";
 const CHALLENGE_STORE_MAX_ENTRIES: usize = 10_000;
+const CHALLENGE_STORE_TTL_SECONDS: u64 = 120;
 const MAX_DISPLAY_NAME_LEN: usize = 64;
 const AUTH_GUARD_TTL_SECONDS: i64 = 3600;
 const AUTH_GUARD_CLEANUP_LIMIT: i64 = 512;
 const MAX_LOGIN_BODY_BYTES: usize = 16 * 1024;
 
-// In-memory challenge nonce store (nonce -> timestamp). Cleaned up on each request.
-static CHALLENGE_STORE: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+// In-memory challenge nonce store (nonce -> timestamp).
+static CHALLENGE_STORE: OnceLock<Cache<String, i64>> = OnceLock::new();
 static AUTH_GUARD_OP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn challenge_store() -> &'static Mutex<HashMap<String, i64>> {
-    CHALLENGE_STORE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn cleanup_expired_challenges(store: &mut HashMap<String, i64>) {
-    let now = Utc::now().timestamp();
-    store.retain(|_, ts| (now - *ts).abs() <= 120);
-}
-
-fn cap_oldest_challenges(store: &mut HashMap<String, i64>) {
-    if store.len() <= CHALLENGE_STORE_MAX_ENTRIES {
-        return;
-    }
-    let mut entries: Vec<(String, i64)> = store.iter().map(|(k, v)| (k.clone(), *v)).collect();
-    entries.sort_by_key(|(_, ts)| *ts);
-    let overflow = store.len().saturating_sub(CHALLENGE_STORE_MAX_ENTRIES);
-    for (key, _) in entries.into_iter().take(overflow) {
-        store.remove(&key);
-    }
+fn challenge_store() -> &'static Cache<String, i64> {
+    CHALLENGE_STORE.get_or_init(|| {
+        Cache::builder()
+            .max_capacity(CHALLENGE_STORE_MAX_ENTRIES as u64)
+            .time_to_live(StdDuration::from_secs(CHALLENGE_STORE_TTL_SECONDS))
+            .build()
+    })
 }
 
 fn constant_time_equal(a: &str, b: &str) -> bool {
@@ -188,7 +185,7 @@ async fn auth_guard_enforce(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let locked = rows.iter().any(|row| row.locked_until > now);
     if locked && !challenge_bypass_enabled_and_valid(headers) {
-        return Err(ApiError::RateLimited);
+        return Err(ApiError::RateLimited(0));
     }
 
     auth_guard_maybe_cleanup(state, now).await;
@@ -245,11 +242,143 @@ fn normalize_login_identifier_for_auth(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
+fn parse_bool_env(name: &str, default: bool) -> bool {
+    env::var(name)
+        .ok()
+        .map(|raw| {
+            let normalized = raw.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(default)
+}
+
+fn parse_u16_env(name: &str, default: u16) -> u16 {
+    env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u16>().ok())
+        .unwrap_or(default)
+}
+
+#[derive(Clone, Debug)]
+struct SmtpConfig {
+    host: String,
+    port: u16,
+    username: Option<String>,
+    password: Option<String>,
+    from: Mailbox,
+    starttls: bool,
+}
+
+fn load_smtp_config() -> Result<Option<SmtpConfig>, ApiError> {
+    let host = env::var("PARACORD_SMTP_HOST")
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .unwrap_or_default();
+    if host.is_empty() {
+        return Ok(None);
+    }
+
+    let from_raw = env::var("PARACORD_SMTP_FROM")
+        .ok()
+        .filter(|raw| !raw.trim().is_empty())
+        .unwrap_or_else(|| "Paracord <no-reply@localhost>".to_string());
+    let from = from_raw.parse::<Mailbox>().map_err(|err| {
+        ApiError::Internal(anyhow::anyhow!(
+            "invalid PARACORD_SMTP_FROM mailbox '{}': {}",
+            from_raw,
+            err
+        ))
+    })?;
+
+    let username = env::var("PARACORD_SMTP_USERNAME")
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty());
+    let password = env::var("PARACORD_SMTP_PASSWORD")
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty());
+
+    Ok(Some(SmtpConfig {
+        host,
+        port: parse_u16_env("PARACORD_SMTP_PORT", 587),
+        username,
+        password,
+        from,
+        starttls: parse_bool_env("PARACORD_SMTP_STARTTLS", true),
+    }))
+}
+
+fn recipient_mailbox(address: &str) -> Option<Mailbox> {
+    let trimmed = address.trim();
+    if trimmed.is_empty() || trimmed.ends_with("@local.invalid") || trimmed.ends_with("@pubkey") {
+        return None;
+    }
+    trimmed.parse::<Mailbox>().ok()
+}
+
+async fn send_transactional_email(
+    recipient: &str,
+    subject: &str,
+    text_body: &str,
+) -> Result<bool, ApiError> {
+    let Some(to) = recipient_mailbox(recipient) else {
+        return Ok(false);
+    };
+
+    let Some(config) = load_smtp_config()? else {
+        return Ok(false);
+    };
+
+    let email = Message::builder()
+        .from(config.from.clone())
+        .to(to)
+        .subject(subject)
+        .body(text_body.to_string())
+        .map_err(|err| {
+            ApiError::Internal(anyhow::anyhow!("failed to build smtp message: {}", err))
+        })?;
+
+    let mut builder = if config.starttls {
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host).map_err(|err| {
+            ApiError::Internal(anyhow::anyhow!("invalid smtp relay host: {}", err))
+        })?
+    } else {
+        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
+    };
+
+    builder = builder.port(config.port);
+    if let (Some(username), Some(password)) = (config.username, config.password) {
+        builder = builder.credentials(Credentials::new(username, password));
+    }
+
+    let transport = builder.build();
+    transport.send(email).await.map_err(|err| {
+        ApiError::Internal(anyhow::anyhow!(
+            "failed sending transactional email via smtp host '{}': {}",
+            config.host,
+            err
+        ))
+    })?;
+
+    Ok(true)
+}
+
 fn first_non_whitespace_byte(bytes: &[u8]) -> Option<u8> {
     bytes
         .iter()
         .copied()
         .find(|b| !matches!(b, b' ' | b'\n' | b'\r' | b'\t'))
+}
+
+fn legacy_login_parser_enabled() -> bool {
+    std::env::var("PARACORD_AUTH_LOGIN_LEGACY_PARSER")
+        .ok()
+        .map(|raw| {
+            let normalized = raw.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true"
+        })
+        .unwrap_or(false)
 }
 
 fn parse_login_json_value(value: Value) -> Option<LoginRequest> {
@@ -319,6 +448,14 @@ fn parse_login_form_value(body: &[u8]) -> Option<LoginRequest> {
 }
 
 fn parse_login_request(headers: &HeaderMap, body: &[u8]) -> Option<LoginRequest> {
+    if let Ok(parsed) = serde_json::from_slice::<LoginRequest>(body) {
+        return Some(parsed);
+    }
+
+    if !legacy_login_parser_enabled() {
+        return None;
+    }
+
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -507,6 +644,19 @@ fn build_access_cookie(token: &str, ttl_seconds: u64, secure: bool) -> String {
     )
 }
 
+fn build_csrf_cookie(token: &str, ttl_seconds: u64, secure: bool) -> String {
+    let max_age = ttl_seconds;
+    let secure_attr = if secure { "; Secure" } else { "" };
+    format!(
+        "{name}={value}; Path={path}; SameSite=Lax; Max-Age={max_age}{secure}",
+        name = CSRF_COOKIE_NAME,
+        value = token,
+        path = CSRF_COOKIE_PATH,
+        max_age = max_age,
+        secure = secure_attr,
+    )
+}
+
 fn build_refresh_cookie_clear(secure: bool) -> String {
     let secure_attr = if secure { "; Secure" } else { "" };
     format!(
@@ -523,6 +673,16 @@ fn build_access_cookie_clear(secure: bool) -> String {
         "{name}=; HttpOnly; Path={path}; SameSite=Lax; Max-Age=0{secure}",
         name = ACCESS_COOKIE_NAME,
         path = ACCESS_COOKIE_PATH,
+        secure = secure_attr,
+    )
+}
+
+fn build_csrf_cookie_clear(secure: bool) -> String {
+    let secure_attr = if secure { "; Secure" } else { "" };
+    format!(
+        "{name}=; Path={path}; SameSite=Lax; Max-Age=0{secure}",
+        name = CSRF_COOKIE_NAME,
+        path = CSRF_COOKIE_PATH,
         secure = secure_attr,
     )
 }
@@ -588,14 +748,14 @@ fn request_metadata(
 }
 
 /// Result of issuing a new auth session:
-/// (access_token, access_cookie, refresh_cookie, session_id, raw_refresh_token)
+/// (access_token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh_token)
 async fn issue_auth_session(
     state: &AppState,
     user_id: i64,
     public_key: Option<&str>,
     headers: &HeaderMap,
     peer_ip: Option<&str>,
-) -> Result<(String, String, String, String, String), ApiError> {
+) -> Result<(String, String, String, String, String, String), ApiError> {
     let session_id = Uuid::new_v4().to_string();
     let jti = Uuid::new_v4().to_string();
     let refresh_token = random_token_hex(48);
@@ -633,20 +793,23 @@ async fn issue_auth_session(
     let secure = should_use_secure_cookie(state);
     let access_cookie = build_access_cookie(&access_token, state.config.jwt_expiry_seconds, secure);
     let refresh_cookie = build_refresh_cookie(&refresh_token, ttl_days, secure);
+    let csrf_token = random_token_hex(24);
+    let csrf_cookie = build_csrf_cookie(&csrf_token, state.config.jwt_expiry_seconds, secure);
     Ok((
         access_token,
         access_cookie,
         refresh_cookie,
+        csrf_cookie,
         session_id,
         refresh_token,
     ))
 }
 
-/// Result: (access_token, access_cookie, refresh_cookie, session_id, raw_new_refresh_token)
+/// Result: (access_token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_new_refresh_token)
 async fn rotate_auth_session(
     state: &AppState,
     refresh_token: &str,
-) -> Result<(String, String, String, String, String), ApiError> {
+) -> Result<(String, String, String, String, String, String), ApiError> {
     let refresh_hash = sha256_hex(refresh_token);
     let now = Utc::now();
     let session = paracord_db::sessions::get_session_by_refresh_hash(&state.db, &refresh_hash)
@@ -689,10 +852,13 @@ async fn rotate_auth_session(
     let secure = should_use_secure_cookie(state);
     let access_cookie = build_access_cookie(&access_token, state.config.jwt_expiry_seconds, secure);
     let refresh_cookie = build_refresh_cookie(&new_refresh, ttl_days, secure);
+    let csrf_token = random_token_hex(24);
+    let csrf_cookie = build_csrf_cookie(&csrf_token, state.config.jwt_expiry_seconds, secure);
     Ok((
         access_token,
         access_cookie,
         refresh_cookie,
+        csrf_cookie,
         session.id,
         new_refresh,
     ))
@@ -710,6 +876,7 @@ fn user_json(user: &paracord_db::users::UserRow) -> Value {
         "bot": paracord_core::is_bot(user.flags),
         "system": false,
         "public_key": user.public_key,
+        "email_verified": user.email_verified,
     })
 }
 
@@ -726,6 +893,7 @@ fn user_auth_json(user: &paracord_db::users::UserAuthRow) -> Value {
         "system": false,
         "public_key": user.public_key,
         "created_at": user.created_at.to_rfc3339(),
+        "email_verified": user.email_verified,
     })
 }
 
@@ -939,14 +1107,15 @@ pub async fn register(
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
 
-    let (token, access_cookie, refresh_cookie, session_id, raw_refresh) = issue_auth_session(
-        &state,
-        user.id,
-        user.public_key.as_deref(),
-        &headers,
-        Some(peer_ip.as_str()),
-    )
-    .await?;
+    let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
+        issue_auth_session(
+            &state,
+            user.id,
+            user.public_key.as_deref(),
+            &headers,
+            Some(peer_ip.as_str()),
+        )
+        .await?;
     security::log_security_event(
         &state,
         "auth.register.password",
@@ -957,6 +1126,66 @@ pub async fn register(
         Some(json!({ "auth_method": "password" })),
     )
     .await;
+
+    // Generate email verification token if required
+    if state.config.require_email_verification && !normalized_email.is_empty() {
+        let verify_token = random_token_hex(32);
+        let verify_token_hash = sha256_hex(&verify_token);
+        let verify_expires = Utc::now() + Duration::hours(EMAIL_VERIFY_TOKEN_TTL_HOURS);
+        let _ = paracord_db::users::create_email_verification_token(
+            &state.db,
+            user.id,
+            &verify_token_hash,
+            verify_expires,
+        )
+        .await;
+        let server_origin = resolve_server_origin(
+            state.config.public_url.as_deref(),
+            &headers,
+            Some(peer_ip.as_str()),
+        );
+        let verify_url = format!(
+            "{}/api/v1/auth/verify-email?token={}",
+            server_origin, verify_token
+        );
+        let subject = "Verify your Paracord email";
+        let body = format!(
+            "Hi {},\n\nWelcome to Paracord. Verify your email by opening this link:\n{}\n\nThis link expires in {} hours.\n\nIf you did not create this account, ignore this message.",
+            user.username, verify_url, EMAIL_VERIFY_TOKEN_TTL_HOURS
+        );
+        match send_transactional_email(&resolved_email, subject, &body).await {
+            Ok(true) => {
+                tracing::info!(
+                    target: "paracord::email_verification",
+                    user_id = user.id,
+                    username = %user.username,
+                    email = %resolved_email,
+                    "Sent email verification message"
+                );
+            }
+            Ok(false) => {
+                tracing::warn!(
+                    target: "paracord::email_verification",
+                    user_id = user.id,
+                    username = %user.username,
+                    email = %resolved_email,
+                    url = %verify_url,
+                    "Email verification SMTP delivery skipped (recipient or SMTP config unavailable)"
+                );
+            }
+            Err(err) => {
+                tracing::error!(
+                    target: "paracord::email_verification",
+                    user_id = user.id,
+                    username = %user.username,
+                    email = %resolved_email,
+                    error = %err,
+                    "Failed to send email verification message"
+                );
+            }
+        }
+    }
+
     auth_guard_record_success(
         &state,
         &headers,
@@ -970,6 +1199,7 @@ pub async fn register(
         AppendHeaders([
             (header::SET_COOKIE, header_value(&access_cookie)?),
             (header::SET_COOKIE, header_value(&refresh_cookie)?),
+            (header::SET_COOKIE, header_value(&csrf_cookie)?),
         ]),
         Json(AuthResponse {
             token,
@@ -1081,14 +1311,64 @@ pub async fn login(
         return Err(ApiError::Unauthorized);
     }
 
-    let (token, access_cookie, refresh_cookie, session_id, raw_refresh) = issue_auth_session(
-        &state,
-        user.id,
-        user.public_key.as_deref(),
-        &headers,
-        Some(peer_ip.as_str()),
-    )
-    .await?;
+    if state.config.require_email_verification && !user.email_verified {
+        // Correct credentials should clear auth-guard counters even when login
+        // is blocked pending verification.
+        auth_guard_record_success(
+            &state,
+            &headers,
+            Some(peer_ip.as_str()),
+            Some(&normalized_identifier),
+        )
+        .await;
+        return Err(ApiError::BadRequest(
+            "Email verification required before logging in".into(),
+        ));
+    }
+
+    // Check if user has MFA enabled — require TOTP before issuing tokens
+    if let Ok(Some(mfa_config)) = paracord_db::mfa::get_mfa_config(&state.db, user.id).await {
+        if mfa_config.enabled {
+            let ticket = Uuid::new_v4().to_string();
+            state.mfa_tickets.insert(ticket.clone(), user.id).await;
+            let secure = should_use_secure_cookie(&state);
+            let clear_access_cookie = build_access_cookie_clear(secure);
+            let clear_refresh_cookie = build_refresh_cookie_clear(secure);
+            let clear_csrf_cookie = build_csrf_cookie_clear(secure);
+            auth_guard_record_success(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                Some(&normalized_identifier),
+            )
+            .await;
+            return Ok((
+                AppendHeaders([
+                    (header::SET_COOKIE, header_value(&clear_access_cookie)?),
+                    (header::SET_COOKIE, header_value(&clear_refresh_cookie)?),
+                    (header::SET_COOKIE, header_value(&clear_csrf_cookie)?),
+                ]),
+                Json(AuthResponse {
+                    token: String::new(),
+                    user: json!({
+                        "mfa_required": true,
+                        "mfa_ticket": ticket,
+                    }),
+                    refresh_token: None,
+                }),
+            ));
+        }
+    }
+
+    let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
+        issue_auth_session(
+            &state,
+            user.id,
+            user.public_key.as_deref(),
+            &headers,
+            Some(peer_ip.as_str()),
+        )
+        .await?;
     security::log_security_event(
         &state,
         "auth.login.password",
@@ -1111,6 +1391,7 @@ pub async fn login(
         AppendHeaders([
             (header::SET_COOKIE, header_value(&access_cookie)?),
             (header::SET_COOKIE, header_value(&refresh_cookie)?),
+            (header::SET_COOKIE, header_value(&csrf_cookie)?),
         ]),
         Json(AuthResponse {
             token,
@@ -1135,7 +1416,7 @@ pub async fn refresh(
                 .map(str::to_string)
         })
         .ok_or(ApiError::Unauthorized)?;
-    let (token, access_cookie, refresh_cookie, session_id, new_raw_refresh) =
+    let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, new_raw_refresh) =
         rotate_auth_session(&state, &refresh_token).await?;
     security::log_security_event(
         &state,
@@ -1151,6 +1432,7 @@ pub async fn refresh(
         AppendHeaders([
             (header::SET_COOKIE, header_value(&access_cookie)?),
             (header::SET_COOKIE, header_value(&refresh_cookie)?),
+            (header::SET_COOKIE, header_value(&csrf_cookie)?),
         ]),
         Json(json!({ "token": token, "refresh_token": new_raw_refresh })),
     ))
@@ -1207,11 +1489,13 @@ pub async fn logout(
     let secure = should_use_secure_cookie(&state);
     let clear_access_cookie = build_access_cookie_clear(secure);
     let clear_refresh_cookie = build_refresh_cookie_clear(secure);
+    let clear_csrf_cookie = build_csrf_cookie_clear(secure);
     Ok((
         StatusCode::NO_CONTENT,
         AppendHeaders([
             (header::SET_COOKIE, header_value(&clear_access_cookie)?),
             (header::SET_COOKIE, header_value(&clear_refresh_cookie)?),
+            (header::SET_COOKIE, header_value(&clear_csrf_cookie)?),
         ]),
     ))
 }
@@ -1277,11 +1561,13 @@ pub async fn revoke_session(
         let secure = should_use_secure_cookie(&state);
         let clear_access_cookie = build_access_cookie_clear(secure);
         let clear_refresh_cookie = build_refresh_cookie_clear(secure);
+        let clear_csrf_cookie = build_csrf_cookie_clear(secure);
         Ok((
             StatusCode::NO_CONTENT,
             AppendHeaders([
                 (header::SET_COOKIE, header_value(&clear_access_cookie)?),
                 (header::SET_COOKIE, header_value(&clear_refresh_cookie)?),
+                (header::SET_COOKIE, header_value(&clear_csrf_cookie)?),
             ]),
         )
             .into_response())
@@ -1342,14 +1628,15 @@ pub async fn attach_public_key(
     )
     .await;
 
-    let (token, access_cookie, refresh_cookie, session_id, raw_refresh) = issue_auth_session(
-        &state,
-        user.id,
-        user.public_key.as_deref(),
-        &headers,
-        Some(peer_ip.as_str()),
-    )
-    .await?;
+    let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
+        issue_auth_session(
+            &state,
+            user.id,
+            user.public_key.as_deref(),
+            &headers,
+            Some(peer_ip.as_str()),
+        )
+        .await?;
     security::log_security_event(
         &state,
         "auth.public_key.attach",
@@ -1365,6 +1652,669 @@ pub async fn attach_public_key(
         AppendHeaders([
             (header::SET_COOKIE, header_value(&access_cookie)?),
             (header::SET_COOKIE, header_value(&refresh_cookie)?),
+            (header::SET_COOKIE, header_value(&csrf_cookie)?),
+        ]),
+        Json(AuthResponse {
+            token,
+            user: user_json(&user),
+            refresh_token: Some(raw_refresh),
+        }),
+    ))
+}
+
+// --- Password reset flow ---
+
+const RESET_TOKEN_TTL_MINUTES: i64 = 60;
+const EMAIL_VERIFY_TOKEN_TTL_HOURS: i64 = 24;
+
+#[derive(Deserialize)]
+pub struct ForgotPasswordRequest {
+    /// Email or username of the account to reset.
+    pub identifier: String,
+}
+
+#[derive(Deserialize)]
+pub struct ResetPasswordRequest {
+    pub token: String,
+    pub new_password: String,
+}
+
+pub async fn forgot_password(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<ForgotPasswordRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let peer_ip = addr.ip().to_string();
+    let normalized = normalize_login_identifier_for_auth(&body.identifier);
+    auth_guard_enforce(&state, &headers, Some(peer_ip.as_str()), Some(&normalized)).await?;
+
+    // Intentionally always return 200 to avoid user enumeration.
+    let ok_response = || {
+        Json(serde_json::json!({
+            "message": "If the account exists, a password reset email has been sent."
+        }))
+    };
+
+    if normalized.is_empty() {
+        return Ok(ok_response());
+    }
+
+    let allow_username_login = username_login_effective(
+        state.config.allow_username_login,
+        state.config.require_email,
+    );
+
+    let resolved_user = if allow_username_login && !normalized.contains('@') {
+        paracord_db::users::get_user_auth_by_username_only(&state.db, &normalized)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    } else {
+        paracord_db::users::get_user_by_email(&state.db, &normalized)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    };
+
+    let Some(user) = resolved_user else {
+        return Ok(ok_response());
+    };
+
+    // Invalidate any existing tokens for this user, then create a new one.
+    let _ = paracord_db::password_reset::invalidate_user_reset_tokens(&state.db, user.id).await;
+
+    let raw_token = random_token_hex(32);
+    let token_hash = sha256_hex(&raw_token);
+    let now = Utc::now();
+    let expires_at = now + Duration::minutes(RESET_TOKEN_TTL_MINUTES);
+
+    paracord_db::password_reset::create_reset_token(&state.db, &token_hash, user.id, expires_at)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let server_origin = resolve_server_origin(
+        state.config.public_url.as_deref(),
+        &headers,
+        Some(peer_ip.as_str()),
+    );
+    let reset_url = format!("{}/login?reset_token={}", server_origin, raw_token);
+    let subject = "Paracord password reset";
+    let body = format!(
+        "Hi {},\n\nA password reset was requested for your Paracord account.\n\nReset link: {}\nReset token: {}\n\nThis token expires in {} minutes. If you did not request this, ignore this message.",
+        user.username, reset_url, raw_token, RESET_TOKEN_TTL_MINUTES
+    );
+    match send_transactional_email(&user.email, subject, &body).await {
+        Ok(true) => {
+            tracing::info!(
+                target: "paracord::password_reset",
+                user_id = user.id,
+                username = %user.username,
+                email = %user.email,
+                "Sent password reset email"
+            );
+        }
+        Ok(false) => {
+            tracing::warn!(
+                target: "paracord::password_reset",
+                user_id = user.id,
+                username = %user.username,
+                email = %user.email,
+                "SMTP not configured - password reset token generated but cannot be delivered. Configure SMTP or use admin API to reset passwords."
+            );
+        }
+        Err(err) => {
+            tracing::error!(
+                target: "paracord::password_reset",
+                user_id = user.id,
+                username = %user.username,
+                email = %user.email,
+                error = %err,
+                "Failed to send password reset email"
+            );
+        }
+    }
+
+    security::log_security_event(
+        &state,
+        "auth.password_reset.requested",
+        Some(user.id),
+        Some(user.id),
+        None,
+        Some(&headers),
+        Some(serde_json::json!({ "ip": peer_ip })),
+    )
+    .await;
+
+    Ok(ok_response())
+}
+
+pub async fn reset_password(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<ResetPasswordRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let peer_ip = addr.ip().to_string();
+    auth_guard_enforce(&state, &headers, Some(peer_ip.as_str()), None).await?;
+
+    if body.token.is_empty() {
+        auth_guard_record_failure(&state, &headers, Some(peer_ip.as_str()), None).await;
+        return Err(ApiError::BadRequest("Token is required".into()));
+    }
+
+    paracord_util::validation::validate_password(&body.new_password).map_err(|_| {
+        ApiError::BadRequest("Password must be between 10 and 128 characters".into())
+    })?;
+
+    let token_hash = sha256_hex(&body.token);
+    let now = Utc::now();
+
+    let token_row = paracord_db::password_reset::get_valid_reset_token(&state.db, &token_hash, now)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let Some(token_row) = token_row else {
+        auth_guard_record_failure(&state, &headers, Some(peer_ip.as_str()), None).await;
+        return Err(ApiError::BadRequest(
+            "Invalid or expired reset token".into(),
+        ));
+    };
+
+    // Mark token as used before updating password to prevent race conditions.
+    let marked = paracord_db::password_reset::mark_reset_token_used(&state.db, &token_hash, now)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    if !marked {
+        auth_guard_record_failure(&state, &headers, Some(peer_ip.as_str()), None).await;
+        return Err(ApiError::BadRequest(
+            "Invalid or expired reset token".into(),
+        ));
+    }
+
+    let new_hash = paracord_core::auth::hash_password(&body.new_password)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    paracord_db::users::update_user_password_hash(&state.db, token_row.user_id, &new_hash)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    // Revoke all existing sessions to force re-login with new password.
+    let _ = paracord_db::sessions::revoke_all_user_sessions_except(
+        &state.db,
+        token_row.user_id,
+        None,
+        "password_reset",
+        now,
+    )
+    .await;
+
+    security::log_security_event(
+        &state,
+        "auth.password_reset.completed",
+        Some(token_row.user_id),
+        Some(token_row.user_id),
+        None,
+        Some(&headers),
+        Some(serde_json::json!({ "ip": peer_ip, "sessions_revoked": true })),
+    )
+    .await;
+
+    auth_guard_record_success(&state, &headers, Some(peer_ip.as_str()), None).await;
+
+    Ok(Json(
+        serde_json::json!({ "message": "Password updated successfully. Please log in with your new password." }),
+    ))
+}
+
+// --- Email Verification ---
+
+#[derive(Deserialize)]
+pub struct VerifyEmailRequest {
+    pub token: String,
+}
+
+pub async fn verify_email(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<VerifyEmailRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let peer_ip = addr.ip().to_string();
+    auth_guard_enforce(&state, &headers, Some(peer_ip.as_str()), None).await?;
+
+    if body.token.is_empty() {
+        auth_guard_record_failure(&state, &headers, Some(peer_ip.as_str()), None).await;
+        return Err(ApiError::BadRequest("Token is required".into()));
+    }
+
+    let token_hash = sha256_hex(&body.token);
+    let now = Utc::now();
+
+    let token_row = paracord_db::users::get_email_verification_token(&state.db, &token_hash, now)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let Some(token_row) = token_row else {
+        auth_guard_record_failure(&state, &headers, Some(peer_ip.as_str()), None).await;
+        return Err(ApiError::BadRequest(
+            "Invalid or expired verification token".into(),
+        ));
+    };
+
+    // Set user as email-verified
+    paracord_db::users::set_email_verified(&state.db, token_row.user_id, true)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    // Clean up all verification tokens for this user
+    let _ =
+        paracord_db::users::delete_email_verification_tokens_for_user(&state.db, token_row.user_id)
+            .await;
+
+    security::log_security_event(
+        &state,
+        "auth.email_verified",
+        Some(token_row.user_id),
+        Some(token_row.user_id),
+        None,
+        Some(&headers),
+        Some(serde_json::json!({ "ip": peer_ip })),
+    )
+    .await;
+
+    auth_guard_record_success(&state, &headers, Some(peer_ip.as_str()), None).await;
+
+    Ok(Json(
+        serde_json::json!({ "message": "Email verified successfully." }),
+    ))
+}
+
+// --- MFA / TOTP ---
+
+const MFA_BACKUP_CODE_COUNT: usize = 10;
+const MFA_ISSUER: &str = "Paracord";
+
+/// Encrypt a TOTP secret before storing in the database. Returns the original
+/// plaintext if no at-rest encryption is configured (graceful degradation).
+fn encrypt_totp_secret(state: &AppState, plaintext_base32: &str) -> Result<String, ApiError> {
+    let Some(cryptor) = state.config.totp_cryptor.as_ref() else {
+        return Ok(plaintext_base32.to_string());
+    };
+    let encrypted = cryptor
+        .encrypt(plaintext_base32.as_bytes())
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("TOTP secret encryption failed: {}", e)))?;
+    use base64::Engine;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&encrypted))
+}
+
+/// Decrypt a TOTP secret from the database. Handles both encrypted (base64-encoded)
+/// and legacy plaintext secrets transparently for migration.
+fn decrypt_totp_secret(state: &AppState, stored: &str) -> Result<String, ApiError> {
+    let Some(cryptor) = state.config.totp_cryptor.as_ref() else {
+        return Ok(stored.to_string());
+    };
+    // Try to base64-decode; if it fails, the value is likely plaintext (pre-encryption).
+    use base64::Engine;
+    let decoded = match base64::engine::general_purpose::STANDARD.decode(stored) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(stored.to_string()),
+    };
+    let plaintext_bytes = cryptor
+        .decrypt(&decoded)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("TOTP secret decryption failed: {}", e)))?;
+    String::from_utf8(plaintext_bytes)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("TOTP secret is not valid UTF-8: {}", e)))
+}
+
+fn generate_totp_secret() -> String {
+    let raw_secret = totp_rs::Secret::generate_secret();
+    match raw_secret.to_encoded() {
+        totp_rs::Secret::Encoded(s) => s,
+        other => format!("{other}"),
+    }
+}
+
+fn totp_for_secret(secret_base32: &str, account_name: &str) -> Result<totp_rs::TOTP, ApiError> {
+    let secret = totp_rs::Secret::Encoded(secret_base32.to_string());
+    totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1,
+        6,
+        1,
+        30,
+        secret
+            .to_bytes()
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("Invalid TOTP secret: {}", e)))?,
+        Some(MFA_ISSUER.to_string()),
+        account_name.to_string(),
+    )
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("TOTP init error: {}", e)))
+}
+
+fn verify_totp_code(secret_base32: &str, code: &str, account_name: &str) -> Result<bool, ApiError> {
+    let totp = totp_for_secret(secret_base32, account_name)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Allow 1 step (30s) of drift in either direction
+    Ok(totp.check(code, now))
+}
+
+fn generate_backup_codes() -> Vec<String> {
+    (0..MFA_BACKUP_CODE_COUNT)
+        .map(|_| {
+            let raw = random_token_hex(8); // 16 hex chars = 64 bits of entropy
+                                           // Format as XXXX-XXXX-XXXX-XXXX for readability
+            format!(
+                "{}-{}-{}-{}",
+                &raw[..4],
+                &raw[4..8],
+                &raw[8..12],
+                &raw[12..]
+            )
+        })
+        .collect()
+}
+
+fn normalize_backup_code(code: &str) -> String {
+    code.trim()
+        .to_ascii_uppercase()
+        .replace('-', "")
+        .replace(' ', "")
+}
+
+#[derive(Deserialize)]
+pub struct MfaVerifyRequest {
+    pub code: String,
+}
+
+#[derive(Deserialize)]
+pub struct MfaDisableRequest {
+    pub code: String,
+}
+
+pub async fn mfa_setup(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::Unauthorized)?;
+
+    let secret_base32 = generate_totp_secret();
+
+    // Encrypt the TOTP secret before storing (falls back to plaintext if no at-rest key)
+    let stored_secret = encrypt_totp_secret(&state, &secret_base32)?;
+
+    // Store as pending (not yet enabled)
+    paracord_db::mfa::upsert_mfa_secret(&state.db, user.id, &stored_secret)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let totp = totp_for_secret(&secret_base32, &user.email)?;
+    let otpauth_url = totp.get_url();
+
+    // Generate QR code as base64 PNG
+    let qr_code_base64 = totp
+        .get_qr_base64()
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("QR code generation failed: {}", e)))?;
+
+    Ok(Json(json!({
+        "secret": secret_base32,
+        "otpauth_url": otpauth_url,
+        "qr_code": format!("data:image/png;base64,{}", qr_code_base64),
+    })))
+}
+
+pub async fn mfa_verify(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<MfaVerifyRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::Unauthorized)?;
+
+    let mfa_config = paracord_db::mfa::get_mfa_config(&state.db, user.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or_else(|| ApiError::BadRequest("MFA setup not initiated".into()))?;
+
+    if mfa_config.enabled {
+        return Err(ApiError::BadRequest("MFA is already enabled".into()));
+    }
+
+    let totp_secret = decrypt_totp_secret(&state, &mfa_config.totp_secret)?;
+    let valid = verify_totp_code(&totp_secret, &body.code, &user.email)?;
+    if !valid {
+        return Err(ApiError::BadRequest("Invalid TOTP code".into()));
+    }
+
+    // Enable MFA
+    paracord_db::mfa::enable_mfa(&state.db, user.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    // Generate and store backup codes
+    let backup_codes = generate_backup_codes();
+    let code_hashes: Vec<String> = backup_codes
+        .iter()
+        .map(|code| sha256_hex(&normalize_backup_code(code)))
+        .collect();
+
+    paracord_db::mfa::store_backup_codes(&state.db, user.id, &code_hashes)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    security::log_security_event(
+        &state,
+        "auth.mfa.enabled",
+        Some(user.id),
+        Some(user.id),
+        auth.session_id.as_deref(),
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(json!({
+        "mfa_enabled": true,
+        "backup_codes": backup_codes,
+        "message": "MFA enabled. Save these backup codes in a safe place - they can only be shown once.",
+    })))
+}
+
+pub async fn mfa_disable(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<MfaDisableRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::Unauthorized)?;
+
+    let mfa_config = paracord_db::mfa::get_mfa_config(&state.db, user.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or_else(|| ApiError::BadRequest("MFA is not configured".into()))?;
+
+    if !mfa_config.enabled {
+        return Err(ApiError::BadRequest("MFA is not enabled".into()));
+    }
+
+    // Verify TOTP code (or backup code) before disabling
+    let now = Utc::now();
+    let normalized_code = normalize_backup_code(&body.code);
+    let code_hash = sha256_hex(&normalized_code);
+
+    let totp_secret = decrypt_totp_secret(&state, &mfa_config.totp_secret)?;
+    let valid_totp = verify_totp_code(&totp_secret, &body.code, &user.email)?;
+    let valid_backup = if !valid_totp {
+        paracord_db::mfa::consume_backup_code(&state.db, user.id, &code_hash, now)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    } else {
+        false
+    };
+
+    if !valid_totp && !valid_backup {
+        return Err(ApiError::BadRequest("Invalid code".into()));
+    }
+
+    paracord_db::mfa::disable_mfa(&state.db, user.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    security::log_security_event(
+        &state,
+        "auth.mfa.disabled",
+        Some(user.id),
+        Some(user.id),
+        auth.session_id.as_deref(),
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(
+        json!({ "mfa_enabled": false, "message": "MFA disabled." }),
+    ))
+}
+
+pub async fn mfa_status(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<impl IntoResponse, ApiError> {
+    let mfa_config = paracord_db::mfa::get_mfa_config(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let enabled = mfa_config.as_ref().map(|c| c.enabled).unwrap_or(false);
+
+    // Count unused backup codes
+    let backup_codes_remaining = if enabled {
+        paracord_db::mfa::get_unused_backup_codes(&state.db, auth.user_id)
+            .await
+            .map(|codes| codes.len())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    Ok(Json(json!({
+        "mfa_enabled": enabled,
+        "backup_codes_remaining": backup_codes_remaining,
+    })))
+}
+
+// --- MFA login (second step after password auth when MFA is enabled) ---
+
+#[derive(Deserialize)]
+pub struct MfaLoginRequest {
+    pub ticket: String,
+    pub code: String,
+}
+
+pub async fn mfa_login(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<MfaLoginRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let peer_ip = addr.ip().to_string();
+
+    // Rate-limit MFA login attempts (IP-level + ticket-level)
+    auth_guard_enforce(&state, &headers, Some(peer_ip.as_str()), Some(&body.ticket)).await?;
+
+    // Look up the MFA ticket
+    let user_id = state
+        .mfa_tickets
+        .get(&body.ticket)
+        .await
+        .ok_or(ApiError::BadRequest("Invalid or expired MFA ticket".into()))?;
+
+    let user = paracord_db::users::get_user_by_id(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    let mfa_config = paracord_db::mfa::get_mfa_config(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::BadRequest("MFA not configured".into()))?;
+
+    // Decrypt the TOTP secret (handles both encrypted and legacy plaintext)
+    let totp_secret = decrypt_totp_secret(&state, &mfa_config.totp_secret)?;
+
+    // Try TOTP code first
+    let code = body.code.trim();
+    let valid_totp = verify_totp_code(&totp_secret, code, &user.email)?;
+
+    if !valid_totp {
+        // Try as backup code
+        let normalized = normalize_backup_code(code);
+        let code_hash = format!("{:x}", Sha256::digest(normalized.as_bytes()));
+        let used =
+            paracord_db::mfa::consume_backup_code(&state.db, user_id, &code_hash, Utc::now())
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if !used {
+            // Record failure for rate limiting (uses ticket as account hint for per-ticket tracking)
+            auth_guard_record_failure(&state, &headers, Some(peer_ip.as_str()), Some(&body.ticket))
+                .await;
+
+            // Check if this ticket has accumulated too many failures (5+) and invalidate it
+            let guard_keys = auth_guard_keys(&headers, Some(peer_ip.as_str()), Some(&body.ticket));
+            let rows = paracord_db::rate_limits::get_auth_guard_states(&state.db, &guard_keys)
+                .await
+                .unwrap_or_default();
+            let max_failures = rows.iter().map(|r| r.failures).max().unwrap_or(0);
+            if max_failures >= 5 {
+                state.mfa_tickets.remove(&body.ticket).await;
+                tracing::warn!(
+                    target: "paracord::mfa",
+                    ticket = %body.ticket,
+                    "MFA ticket invalidated after too many failed attempts"
+                );
+            }
+
+            return Err(ApiError::BadRequest("Invalid MFA code".into()));
+        }
+    }
+
+    // Success: remove the ticket (single-use on success) and clear rate-limit state
+    state.mfa_tickets.remove(&body.ticket).await;
+    auth_guard_record_success(&state, &headers, Some(peer_ip.as_str()), Some(&body.ticket)).await;
+
+    let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
+        issue_auth_session(
+            &state,
+            user.id,
+            user.public_key.as_deref(),
+            &headers,
+            Some(peer_ip.as_str()),
+        )
+        .await?;
+
+    security::log_security_event(
+        &state,
+        "auth.login.mfa",
+        Some(user.id),
+        Some(user.id),
+        Some(&session_id),
+        Some(&headers),
+        Some(json!({ "auth_method": "password+mfa" })),
+    )
+    .await;
+
+    Ok((
+        AppendHeaders([
+            (header::SET_COOKIE, header_value(&access_cookie)?),
+            (header::SET_COOKIE, header_value(&refresh_cookie)?),
+            (header::SET_COOKIE, header_value(&csrf_cookie)?),
         ]),
         Json(AuthResponse {
             token,
@@ -1393,15 +2343,8 @@ pub async fn challenge(
 
     let (nonce, timestamp) = paracord_core::auth::generate_challenge();
 
-    // Store the nonce.
-    {
-        let mut store = challenge_store()
-            .lock()
-            .map_err(|_| ApiError::Internal(anyhow::anyhow!("lock error")))?;
-        cleanup_expired_challenges(&mut store);
-        store.insert(nonce.clone(), timestamp);
-        cap_oldest_challenges(&mut store);
-    }
+    // Store the nonce (bounded + TTL enforced by Moka cache policy).
+    challenge_store().insert(nonce.clone(), timestamp);
 
     let server_origin = resolve_server_origin(
         state.config.public_url.as_deref(),
@@ -1500,13 +2443,8 @@ pub async fn verify(
         return Err(ApiError::BadRequest("Invalid public key".into()));
     }
 
-    // Consume the nonce (one-time use) without holding the mutex across awaits.
-    let nonce_consumed = {
-        let mut store = challenge_store()
-            .lock()
-            .map_err(|_| ApiError::Internal(anyhow::anyhow!("lock error")))?;
-        store.remove(&body.nonce).is_some()
-    };
+    // Consume the nonce (one-time use).
+    let nonce_consumed = challenge_store().remove(&body.nonce).is_some();
     if !nonce_consumed {
         auth_guard_record_failure(
             &state,
@@ -1582,14 +2520,15 @@ pub async fn verify(
         }
     };
 
-    let (token, access_cookie, refresh_cookie, session_id, raw_refresh) = issue_auth_session(
-        &state,
-        user.id,
-        user.public_key.as_deref(),
-        &headers,
-        Some(peer_ip.as_str()),
-    )
-    .await?;
+    let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
+        issue_auth_session(
+            &state,
+            user.id,
+            user.public_key.as_deref(),
+            &headers,
+            Some(peer_ip.as_str()),
+        )
+        .await?;
     security::log_security_event(
         &state,
         "auth.login.public_key",
@@ -1612,6 +2551,7 @@ pub async fn verify(
         AppendHeaders([
             (header::SET_COOKIE, header_value(&access_cookie)?),
             (header::SET_COOKIE, header_value(&refresh_cookie)?),
+            (header::SET_COOKIE, header_value(&csrf_cookie)?),
         ]),
         Json(AuthResponse {
             token,
@@ -1624,9 +2564,9 @@ pub async fn verify(
 #[cfg(test)]
 mod tests {
     use super::{
-        auth_guard_keys, build_refresh_cookie, get_cookie_value, normalize_email_for_auth,
-        parse_login_form_value, parse_login_json_value, parse_login_request,
-        parse_username_with_discriminator, resolve_server_origin,
+        auth_guard_keys, build_csrf_cookie, build_refresh_cookie, get_cookie_value,
+        normalize_email_for_auth, parse_login_form_value, parse_login_json_value,
+        parse_login_request, parse_username_with_discriminator, resolve_server_origin,
         should_use_secure_cookie_with_public_url, synthesized_local_email,
         username_login_effective, HeaderMap, LoginRequest,
     };
@@ -1659,6 +2599,15 @@ mod tests {
         headers.insert(header::COOKIE, header_val);
         let parsed = get_cookie_value(&headers, "paracord_refresh");
         assert_eq!(parsed.as_deref(), Some("token-value"));
+    }
+
+    #[test]
+    fn csrf_cookie_is_readable_from_app_routes() {
+        let cookie = build_csrf_cookie("csrf-token", 3600, true);
+        assert!(
+            cookie.contains("Path=/;"),
+            "csrf cookie must be readable from /app routes so the browser can refresh sessions: {cookie}"
+        );
     }
 
     #[test]
@@ -1798,20 +2747,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_login_request_accepts_form_content_type() {
+    fn parse_login_request_rejects_form_content_type_by_default() {
+        let _guard = env_lock().lock().expect("env lock");
+        std::env::remove_var("PARACORD_AUTH_LOGIN_LEGACY_PARSER");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        let parsed = parse_login_request(&headers, b"username=alice&password=secret-123");
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn parse_login_request_accepts_legacy_form_when_enabled() {
+        let _guard = env_lock().lock().expect("env lock");
+        std::env::set_var("PARACORD_AUTH_LOGIN_LEGACY_PARSER", "true");
         let mut headers = HeaderMap::new();
         headers.insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
         let parsed = parse_login_request(&headers, b"username=alice&password=secret-123")
-            .expect("form payload should deserialize with content-type");
+            .expect("legacy form payload should deserialize with env flag");
         assert_eq!(parsed.email, "alice");
         assert_eq!(parsed.password, "secret-123");
+        std::env::remove_var("PARACORD_AUTH_LOGIN_LEGACY_PARSER");
     }
 
     #[test]
-    fn parse_login_request_tolerates_null_identifier_fields() {
+    fn parse_login_request_tolerates_null_identifier_fields_with_legacy_parser() {
+        let _guard = env_lock().lock().expect("env lock");
+        std::env::set_var("PARACORD_AUTH_LOGIN_LEGACY_PARSER", "true");
         let headers = HeaderMap::new();
         let parsed = parse_login_request(
             &headers,
@@ -1820,6 +2787,7 @@ mod tests {
         .expect("null identifiers should not hard-fail login payload parsing");
         assert!(parsed.email.is_empty());
         assert_eq!(parsed.password, "secret-123");
+        std::env::remove_var("PARACORD_AUTH_LOGIN_LEGACY_PARSER");
     }
 
     #[test]

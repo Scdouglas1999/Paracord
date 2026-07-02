@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useCommandStore } from '../../stores/commandStore';
 import type { ApplicationCommand } from '../../types/commands';
 import { ApplicationCommandType } from '../../types/commands';
+import { LoadingSpinner } from '../ui/Feedback';
 
 export interface SlashCommandPopupProps {
   query: string;
@@ -88,7 +89,7 @@ export function SlashCommandPopup({
   if (loading && commands.length === 0) {
     return (
       <div className="absolute bottom-full left-3 right-3 z-30 mb-2 rounded-xl border border-border-subtle bg-bg-floating p-3 shadow-lg backdrop-blur-lg">
-        <div className="text-sm text-text-muted">Loading commands...</div>
+        <LoadingSpinner size="sm" label="Loading commands..." />
       </div>
     );
   }

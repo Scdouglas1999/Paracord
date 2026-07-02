@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::routes::audit;
+use crate::routes::mod_log;
 
 fn validate_role_permission_assignment(
     guild_owner_id: i64,
@@ -133,6 +134,19 @@ pub async fn create_role(
     )
     .await;
 
+    mod_log::emit_mod_log(
+        &state,
+        guild_id,
+        "Role Created",
+        "A new role was created.",
+        &[
+            ("Actor", auth.user_id.to_string()),
+            ("Role", role.name.clone()),
+            ("Role ID", role.id.to_string()),
+        ],
+    )
+    .await;
+
     Ok((StatusCode::CREATED, Json(role_json)))
 }
 
@@ -226,6 +240,19 @@ pub async fn update_role(
     )
     .await;
 
+    mod_log::emit_mod_log(
+        &state,
+        guild_id,
+        "Role Updated",
+        "A role was updated.",
+        &[
+            ("Actor", auth.user_id.to_string()),
+            ("Role", updated.name.clone()),
+            ("Role ID", updated.id.to_string()),
+        ],
+    )
+    .await;
+
     Ok(Json(role_json))
 }
 
@@ -294,6 +321,19 @@ pub async fn delete_role(
         Some(role_id),
         None,
         None,
+    )
+    .await;
+
+    mod_log::emit_mod_log(
+        &state,
+        guild_id,
+        "Role Deleted",
+        "A role was removed.",
+        &[
+            ("Actor", auth.user_id.to_string()),
+            ("Role", target_role.name),
+            ("Role ID", role_id.to_string()),
+        ],
     )
     .await;
 

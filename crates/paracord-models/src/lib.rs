@@ -7,6 +7,7 @@ pub mod embed;
 pub mod emoji;
 pub mod gateway;
 pub mod guild;
+pub mod id;
 pub mod invite;
 pub mod member;
 pub mod message;

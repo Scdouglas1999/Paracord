@@ -1,114 +1,125 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+mod common;
 
 use axum::{
     body::Body,
     http::{Request, StatusCode},
     Router,
 };
-use paracord_core::{build_permission_cache, AppConfig, AppState, RuntimeSettings};
-use paracord_media::{
-    LiveKitConfig, LocalStorage, Storage, StorageConfig, StorageManager, VoiceManager,
-};
-use tempfile::TempDir;
-use tokio::sync::{Notify, RwLock};
+use common::{build_test_app, TestApp, TestAppOptions};
+use std::time::Duration;
 use tower::ServiceExt;
 
 struct TestHarness {
     app: Router,
-    _storage_dir: TempDir,
-    _media_dir: TempDir,
-    _backup_dir: TempDir,
+    _test_app: TestApp,
 }
 
 impl TestHarness {
     async fn new_without_migrations() -> anyhow::Result<Self> {
-        let db = paracord_db::create_pool("sqlite::memory:", 1).await?;
-        paracord_api::install_http_rate_limiter();
-
-        let storage_dir = tempfile::tempdir()?;
-        let media_dir = tempfile::tempdir()?;
-        let backup_dir = tempfile::tempdir()?;
-        let livekit = Arc::new(LiveKitConfig {
-            api_key: "lk-test-key".to_string(),
-            api_secret: "lk-test-secret".to_string(),
-            url: "ws://localhost:7880".to_string(),
-            http_url: "http://localhost:7880".to_string(),
-        });
-
-        let state = AppState {
-            db,
-            event_bus: paracord_core::events::EventBus::default(),
-            config: AppConfig {
-                jwt_secret: "integration-test-secret".to_string(),
-                jwt_expiry_seconds: 3600,
-                registration_enabled: true,
-                allow_username_login: false,
-                require_email: true,
-                storage_path: storage_dir.path().to_string_lossy().into_owned(),
-                max_upload_size: 10 * 1024 * 1024,
-                livekit_api_key: livekit.api_key.clone(),
-                livekit_api_secret: livekit.api_secret.clone(),
-                livekit_url: livekit.url.clone(),
-                livekit_http_url: livekit.http_url.clone(),
-                livekit_public_url: livekit.url.clone(),
-                livekit_available: false,
-                public_url: None,
-                media_storage_path: media_dir.path().to_string_lossy().into_owned(),
-                media_max_file_size: 10 * 1024 * 1024,
-                media_p2p_threshold: 1024 * 1024,
-                file_cryptor: None,
-                backup_dir: backup_dir.path().to_string_lossy().into_owned(),
-                database_url: "sqlite::memory:".to_string(),
-                federation_max_events_per_peer_per_minute: None,
-                federation_max_user_creates_per_peer_per_hour: None,
-                native_media_enabled: false,
-                native_media_port: 8443,
-                native_media_max_participants: 50,
-                native_media_e2ee_required: false,
-                max_guild_storage_quota: 0,
-                federation_file_cache_enabled: false,
-                federation_file_cache_max_size: 0,
-                federation_file_cache_ttl_hours: 0,
-            },
-            runtime: Arc::new(RwLock::new(RuntimeSettings::default())),
-            voice: Arc::new(VoiceManager::new(livekit)),
-            storage: Arc::new(StorageManager::new(StorageConfig {
-                base_path: media_dir.path().to_path_buf(),
-                max_file_size: 10 * 1024 * 1024,
-                p2p_threshold: 1024 * 1024,
-                allowed_extensions: None,
-            })),
-            storage_backend: Arc::new(Storage::Local(LocalStorage::new(storage_dir.path()))),
-            shutdown: Arc::new(Notify::new()),
-            online_users: Arc::new(RwLock::new(HashSet::new())),
-            user_presences: Arc::new(RwLock::new(HashMap::new())),
-            permission_cache: build_permission_cache(),
-            federation_service: None,
-            member_index: Arc::new(paracord_core::member_index::MemberIndex::empty()),
-            native_media: None,
-        };
-
-        let app = paracord_api::build_router().with_state(state);
+        let test_app = build_test_app(TestAppOptions {
+            run_migrations: false,
+            install_http_rate_limiter: true,
+            ..Default::default()
+        })
+        .await?;
         Ok(Self {
-            app,
-            _storage_dir: storage_dir,
-            _media_dir: media_dir,
-            _backup_dir: backup_dir,
+            app: test_app.app.clone(),
+            _test_app: test_app,
+        })
+    }
+
+    async fn new_with_migrations() -> anyhow::Result<Self> {
+        let test_app = build_test_app(TestAppOptions {
+            run_migrations: true,
+            install_http_rate_limiter: true,
+            ..Default::default()
+        })
+        .await?;
+        Ok(Self {
+            app: test_app.app.clone(),
+            _test_app: test_app,
         })
     }
 }
 
 #[tokio::test]
-async fn auth_refresh_without_migrations_still_reaches_handler() -> anyhow::Result<()> {
-    let harness = TestHarness::new_without_migrations().await?;
-
-    let request = Request::builder()
+async fn rate_limit_tiers_cover_auth_bot_and_bot_write_paths() -> anyhow::Result<()> {
+    // Regression guard: auth/refresh should still reach handler stack even if DB isn't migrated.
+    let no_migration_harness = TestHarness::new_without_migrations().await?;
+    let refresh_request = Request::builder()
         .method("POST")
         .uri("/api/v1/auth/refresh")
         .body(Body::empty())?;
-    let response = harness.app.clone().oneshot(request).await?;
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let refresh_response = no_migration_harness
+        .app
+        .clone()
+        .oneshot(refresh_request)
+        .await?;
+    assert_eq!(refresh_response.status(), StatusCode::UNAUTHORIZED);
+
+    let harness = TestHarness::new_with_migrations().await?;
+
+    // 1) Auth tier (60/min) on /auth/* endpoints.
+    let mut auth_tier_limited = false;
+    for _ in 0..80 {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/challenge")
+            .body(Body::empty())?;
+        let response = harness.app.clone().oneshot(request).await?;
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            auth_tier_limited = true;
+            break;
+        }
+    }
+    assert!(
+        auth_tier_limited,
+        "expected auth-tier rate limiting to trigger within burst window"
+    );
+
+    // Avoid overlap with the global 1s limiter bucket between tiers.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+
+    // 2) Bot write tier (5/s) on write methods with Bot auth header.
+    let mut bot_write_tier_limited = false;
+    for _ in 0..20 {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/challenge")
+            .header("authorization", "Bot coverage-bot-write-token")
+            .body(Body::empty())?;
+        let response = harness.app.clone().oneshot(request).await?;
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            bot_write_tier_limited = true;
+            break;
+        }
+    }
+    assert!(
+        bot_write_tier_limited,
+        "expected bot write-tier rate limiting to trigger for POST requests"
+    );
+
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+
+    // 3) Bot tier (300/min) on all bot requests. Pace requests to stay below global 120/s.
+    let mut bot_tier_limited = false;
+    for _ in 0..360 {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/health")
+            .header("authorization", "Bot coverage-bot-tier-token")
+            .body(Body::empty())?;
+        let response = harness.app.clone().oneshot(request).await?;
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            bot_tier_limited = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        bot_tier_limited,
+        "expected bot-tier per-minute rate limiting to trigger"
+    );
 
     Ok(())
 }

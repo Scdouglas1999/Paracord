@@ -12,6 +12,7 @@ use h3::server::Connection as H3Connection;
 use quinn::crypto::rustls::QuicServerConfig;
 
 use crate::endpoint::TlsConfig;
+use crate::ensure_rustls_provider;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebTransportError {
@@ -48,6 +49,7 @@ pub struct WebTransportServer {
 impl WebTransportServer {
     /// Create and bind a new WebTransport server.
     pub fn bind(config: WebTransportConfig) -> Result<Self, WebTransportError> {
+        ensure_rustls_provider();
         let mut server_crypto = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(config.tls.cert_chain, config.tls.private_key.clone_key())
@@ -293,20 +295,15 @@ pub fn spawn_webtransport_bridge(
 
     // Inbound: browser → relay
     tokio::spawn(async move {
-        loop {
-            match quinn_conn.read_datagram().await {
-                Ok(datagram) => {
-                    // Strip the QSID varint prefix
-                    if let Some((_qsid_val, prefix_len)) = decode_quic_varint(&datagram) {
-                        if prefix_len <= datagram.len() {
-                            let raw = datagram.slice(prefix_len..);
-                            if inbound_tx.send(raw).is_err() {
-                                break;
-                            }
-                        }
+        while let Ok(datagram) = quinn_conn.read_datagram().await {
+            // Strip the QSID varint prefix
+            if let Some((_qsid_val, prefix_len)) = decode_quic_varint(&datagram) {
+                if prefix_len <= datagram.len() {
+                    let raw = datagram.slice(prefix_len..);
+                    if inbound_tx.send(raw).is_err() {
+                        break;
                     }
                 }
-                Err(_) => break,
             }
         }
     });

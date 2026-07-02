@@ -96,10 +96,7 @@ pub async fn list_security_events(
 
 // ── Settings ────────────────────────────────────────────────────────────
 
-pub async fn get_settings(
-    State(state): State<AppState>,
-    _admin: AdminUser,
-) -> Result<Json<Value>, ApiError> {
+async fn settings_payload(state: &AppState) -> Value {
     let settings = state.runtime.read().await;
 
     // Read storage/federation settings from DB (they are config-level, not in RuntimeSettings)
@@ -128,7 +125,7 @@ pub async fn get_settings(
             .flatten()
             .unwrap_or_else(|| state.config.federation_file_cache_ttl_hours.to_string());
 
-    Ok(Json(json!({
+    json!({
         "registration_enabled": settings.registration_enabled.to_string(),
         "server_name": settings.server_name,
         "server_description": settings.server_description,
@@ -138,7 +135,14 @@ pub async fn get_settings(
         "federation_file_cache_enabled": federation_file_cache_enabled,
         "federation_file_cache_max_size": federation_file_cache_max_size,
         "federation_file_cache_ttl_hours": federation_file_cache_ttl_hours,
-    })))
+    })
+}
+
+pub async fn get_settings(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(settings_payload(&state).await))
 }
 
 const ALLOWED_SETTINGS: &[&str] = &[
@@ -278,19 +282,16 @@ pub async fn update_settings(
     )
     .await;
 
-    Ok(Json(json!({
-        "registration_enabled": settings.registration_enabled.to_string(),
-        "server_name": settings.server_name,
-        "server_description": settings.server_description,
-        "max_guilds_per_user": settings.max_guilds_per_user.to_string(),
-        "max_members_per_guild": settings.max_members_per_guild.to_string(),
-    })))
+    drop(settings);
+
+    Ok(Json(settings_payload(&state).await))
 }
 
 // ── Users ───────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
+    pub cursor: Option<i64>,
     pub offset: Option<i64>,
     pub limit: Option<i64>,
 }
@@ -300,12 +301,21 @@ pub async fn list_users(
     _admin: AdminUser,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<Value>, ApiError> {
-    let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(50).min(100);
+    let cursor = params.cursor;
 
-    let users = paracord_db::users::list_users_paginated(&state.db, offset, limit)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let users = if let Some(offset) = params.offset {
+        // Backward-compatible support for legacy offset clients.
+        paracord_db::users::list_users_paginated(&state.db, offset, limit)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    } else {
+        paracord_db::users::list_users_by_cursor(&state.db, cursor, limit)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    };
+
+    let next_cursor = users.last().map(|u| u.id);
 
     let total = paracord_db::users::count_users(&state.db)
         .await
@@ -330,7 +340,9 @@ pub async fn list_users(
     Ok(Json(json!({
         "users": user_list,
         "total": total,
-        "offset": offset,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
+        "offset": params.offset,
         "limit": limit,
     })))
 }
@@ -578,16 +590,33 @@ pub struct RestoreBackupRequest {
     pub name: String,
 }
 
+fn validate_backup_filename(name: &str) -> Result<(), ApiError> {
+    if name.is_empty() || name.len() > 128 {
+        return Err(ApiError::BadRequest("Invalid backup filename".into()));
+    }
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return Err(ApiError::BadRequest("Invalid backup name".into()));
+    }
+    if !name.ends_with(".tar.gz") {
+        return Err(ApiError::BadRequest("Invalid backup filename".into()));
+    }
+    if !name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(ApiError::BadRequest("Invalid backup filename".into()));
+    }
+
+    Ok(())
+}
+
 pub async fn restore_backup(
     State(state): State<AppState>,
     admin: AdminUser,
     headers: HeaderMap,
     Json(body): Json<RestoreBackupRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    // Validate the name to prevent path traversal
-    if body.name.contains("..") || body.name.contains('/') || body.name.contains('\\') {
-        return Err(ApiError::BadRequest("Invalid backup name".into()));
-    }
+    validate_backup_filename(&body.name)?;
 
     paracord_core::backup::restore_backup(
         &body.name,
@@ -620,13 +649,7 @@ pub async fn download_backup(
     _admin: AdminUser,
     Path(name): Path<String>,
 ) -> Result<axum::response::Response<Body>, ApiError> {
-    // Validate the name to prevent path traversal
-    if name.contains("..") || name.contains('/') || name.contains('\\') {
-        return Err(ApiError::BadRequest("Invalid backup name".into()));
-    }
-    if !name.ends_with(".tar.gz") {
-        return Err(ApiError::BadRequest("Invalid backup filename".into()));
-    }
+    validate_backup_filename(&name)?;
 
     let path = paracord_core::backup::backup_file_path(&state.config.backup_dir, &name);
     if !path.exists() {
@@ -639,14 +662,14 @@ pub async fn download_backup(
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    Ok(axum::response::Response::builder()
+    axum::response::Response::builder()
         .header("content-type", "application/gzip")
         .header(
             "content-disposition",
             format!("attachment; filename=\"{name}\""),
         )
         .body(body)
-        .unwrap())
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to build backup response: {e}")))
 }
 
 pub async fn delete_backup(
@@ -655,12 +678,7 @@ pub async fn delete_backup(
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if name.contains("..") || name.contains('/') || name.contains('\\') {
-        return Err(ApiError::BadRequest("Invalid backup name".into()));
-    }
-    if !name.ends_with(".tar.gz") {
-        return Err(ApiError::BadRequest("Invalid backup filename".into()));
-    }
+    validate_backup_filename(&name)?;
 
     let path = paracord_core::backup::backup_file_path(&state.config.backup_dir, &name);
     if !path.exists() {

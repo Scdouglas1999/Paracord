@@ -27,8 +27,7 @@ export function ConfirmDialog() {
     <AnimatePresence>
       {isOpen && options && (
         <motion.div
-          className="fixed inset-0 z-[60] flex items-center justify-center px-4 backdrop-blur-sm"
-          style={{ backgroundColor: 'var(--overlay-backdrop)' }}
+          className="fixed inset-0 z-[60] flex items-center justify-center px-4 backdrop-blur-sm modal-backdrop"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}

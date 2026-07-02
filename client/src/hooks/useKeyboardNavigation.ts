@@ -44,6 +44,9 @@ function matchesKeybind(e: KeyboardEvent, keybind: string | undefined): boolean 
 /**
  * Global keyboard shortcuts for the app shell:
  * - Alt+Up / Alt+Down: navigate to previous/next channel
+ * - Ctrl+Alt+Up / Ctrl+Alt+Down: switch previous/next guild
+ * - Ctrl+, : open user settings
+ * - Ctrl+Shift+, : open current guild settings
  * - Ctrl+B: toggle server dock
  * - Escape: close open panels (command palette)
  * - Configurable voice keybinds (default: Ctrl+Shift+M = mute, Ctrl+Shift+D = deafen)
@@ -111,8 +114,47 @@ export function useKeyboardNavigation() {
         return;
       }
 
+      // -- Ctrl+, : open user settings --
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key === ',') {
+        e.preventDefault();
+        useUIStore.getState().setUserSettingsOpen(true);
+        return;
+      }
+
+      // -- Ctrl+Shift+, : open current guild settings --
+      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key === ',') {
+        const currentGuildId = guildId || useGuildStore.getState().selectedGuildId;
+        if (currentGuildId) {
+          e.preventDefault();
+          useUIStore.getState().setGuildSettingsId(currentGuildId);
+        }
+        return;
+      }
+
       // The remaining shortcuts should not fire when editing text
       if (isEditing) return;
+
+      // -- Ctrl+Alt+Up / Ctrl+Alt+Down: guild navigation --
+      if (e.ctrlKey && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        const guilds = useGuildStore.getState().guilds;
+        if (guilds.length === 0) return;
+
+        const currentGuildId = guildId || useGuildStore.getState().selectedGuildId;
+        const currentIndex = guilds.findIndex((guild) => guild.id === currentGuildId);
+        const startIndex = currentIndex >= 0 ? currentIndex : 0;
+        const nextIndex =
+          e.key === 'ArrowUp'
+            ? (startIndex - 1 + guilds.length) % guilds.length
+            : (startIndex + 1) % guilds.length;
+
+        const nextGuild = guilds[nextIndex];
+        if (!nextGuild) return;
+        useGuildStore.getState().selectGuild(nextGuild.id);
+        useChannelStore.getState().selectGuild(nextGuild.id);
+        navigate(`/app/guilds/${nextGuild.id}`);
+        return;
+      }
 
       // -- Alt+Up / Alt+Down: channel navigation --
       if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -160,7 +202,7 @@ export function useKeyboardNavigation() {
         if (voiceState.connected) {
           void voiceState.toggleMute().then(() => {
             const s = useVoiceStore.getState();
-            gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf);
+            gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf, s.selfVideo);
           });
         }
         return;
@@ -173,7 +215,7 @@ export function useKeyboardNavigation() {
         if (voiceState.connected) {
           void voiceState.toggleDeaf().then(() => {
             const s = useVoiceStore.getState();
-            gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf);
+            gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf, s.selfVideo);
           });
         }
         return;

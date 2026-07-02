@@ -7,16 +7,43 @@ import { cn } from '../lib/utils';
 import { getGuildColor } from '../lib/colors';
 import { Tooltip } from '../components/ui/Tooltip';
 import { useEffect } from 'react';
+import { safeStoredImageDataUrl } from '../lib/security';
+import type { Channel } from '../types';
+
+const EMPTY_CHANNELS: Channel[] = [];
+
+function isChannel(channel: Channel | undefined): channel is Channel {
+    return Boolean(channel);
+}
+
+function formatGuildServerHost(serverUrl: string | null | undefined): string | null {
+    const raw = serverUrl?.trim();
+    if (!raw) {
+        return null;
+    }
+
+    try {
+        return new URL(raw).host;
+    } catch {
+        // Some local/self-hosted guild payloads store host:port without a scheme.
+    }
+
+    try {
+        return new URL(`http://${raw}`).host;
+    } catch {
+        return raw;
+    }
+}
 
 export function GuildHub() {
     const { guildId } = useParams();
     const navigate = useNavigate();
-    const guilds = useGuildStore((s: any) => s.guilds);
-    const channels = useChannelStore((s: any) => s.channelsByGuild[guildId || ''] || []);
-    const fetchChannels = useChannelStore((s: any) => s.fetchChannels);
-    const channelParticipants = useVoiceStore((s: any) => s.channelParticipants);
+    const guilds = useGuildStore((s) => s.guilds);
+    const channels = useChannelStore((s) => s.channelsByGuild[guildId || ''] ?? EMPTY_CHANNELS);
+    const fetchChannels = useChannelStore((s) => s.fetchChannels);
+    const channelParticipants = useVoiceStore((s) => s.channelParticipants);
 
-    const guild = guilds.find((g: any) => g.id === guildId);
+    const guild = guilds.find((g) => g.id === guildId);
 
     useEffect(() => {
         if (guildId && channels.length === 0) {
@@ -32,18 +59,20 @@ export function GuildHub() {
         );
     }
 
-    const voiceChannels = channels.filter((c: any) => c.type === 2);
-    const activeVoiceChannels = voiceChannels.filter((c: any) => (channelParticipants.get(c.id) || []).length > 0);
+    const voiceChannels = channels.filter((c) => c.type === 2);
+    const activeVoiceChannels = voiceChannels.filter((c) => (channelParticipants.get(c.id) || []).length > 0);
     const displayVoiceChannels = activeVoiceChannels.length > 0 ? activeVoiceChannels : voiceChannels.slice(0, 2);
 
-    const textChannels = channels.filter((c: any) => c.type === 0);
+    const textChannels = channels.filter((c) => c.type === 0);
     const pinnedChannelIds = guild.hub_settings?.pinned_channels || [];
 
-    const displayThreads = pinnedChannelIds.length > 0
-        ? pinnedChannelIds.map((id: string) => textChannels.find((c: any) => c.id === id)).filter(Boolean)
+    const displayThreads: Channel[] = pinnedChannelIds.length > 0
+        ? pinnedChannelIds.map((id: string) => textChannels.find((c) => c.id === id)).filter(isChannel)
         : textChannels.slice(0, 3);
 
     const guildColor = getGuildColor(guild.id);
+    const bannerSrc = safeStoredImageDataUrl(guild.hub_settings?.banner_hash);
+    const guildServerHost = formatGuildServerHost(guild.server_url);
 
     return (
         <div className="flex h-full flex-col overflow-y-auto scrollbar-thin rounded-2xl bg-bg-primary">
@@ -52,10 +81,10 @@ export function GuildHub() {
                 className="relative h-[160px] shrink-0 overflow-hidden sm:h-[180px] md:h-[200px]"
                 style={{ backgroundColor: 'var(--bg-primary)' }}
             >
-                {guild.hub_settings?.banner_hash ? (
+                {bannerSrc ? (
                     <div className="absolute inset-0">
                         <img
-                            src={guild.hub_settings.banner_hash.startsWith('data:') ? guild.hub_settings.banner_hash : `/api/v1/guilds/${guild.id}/banner`}
+                            src={bannerSrc}
                             alt="Server Banner"
                             className="h-full w-full object-cover"
                         />
@@ -73,7 +102,7 @@ export function GuildHub() {
                         {guild.hub_settings?.welcome_text || `Welcome to ${guild.name}`}
                     </h1>
                     <p className="mt-1 line-clamp-2 max-w-xl text-[14px] font-medium text-white/80 sm:mt-2 sm:text-[15px]">
-                        {guild.hub_settings?.description || (guild.server_url ? `Federated server on ${new URL(guild.server_url).host}. Jump into an active voice channel or catch up on the latest discussions.` : 'Local community server. Jump into an active voice channel or catch up on the latest discussions.')}
+                        {guild.hub_settings?.description || (guildServerHost ? `Federated server on ${guildServerHost}. Jump into an active voice channel or catch up on the latest discussions.` : 'Local community server. Jump into an active voice channel or catch up on the latest discussions.')}
                     </p>
                 </div>
             </div>
@@ -88,7 +117,7 @@ export function GuildHub() {
                         </h2>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                             {displayVoiceChannels.length > 0 ? (
-                                displayVoiceChannels.map((vc: any) => {
+                                displayVoiceChannels.map((vc) => {
                                     const participants = channelParticipants.get(vc.id) || [];
                                     const displayParticipants = participants.slice(0, 4);
                                     const overflow = participants.length > 4 ? participants.length - 4 : 0;
@@ -110,7 +139,7 @@ export function GuildHub() {
 
                                             <div className="mt-2 flex items-center">
                                                 {displayParticipants.length > 0 ? (
-                                                    displayParticipants.map((p: any, i: number) => (
+                                                    displayParticipants.map((p, i: number) => (
                                                         <Tooltip key={p.user_id} content={p.username || p.user_id} side="top">
                                                             <div
                                                                 className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-bg-mod-subtle bg-accent-primary text-[11px] font-bold text-white transition-transform group-hover:scale-105"
@@ -155,12 +184,13 @@ export function GuildHub() {
                         </h2>
                         <div className="rounded-[16px] border border-border-subtle bg-bg-mod-subtle">
                             {displayThreads.length > 0 ? (
-                                displayThreads.map((tc: any, idx: number) => (
-                                    <div
+                                displayThreads.map((tc, idx: number) => (
+                                    <button
+                                        type="button"
                                         key={tc.id}
                                         onClick={() => navigate(`/app/guilds/${guild.id}/channels/${tc.id}`)}
                                         className={cn(
-                                            "flex cursor-pointer items-start gap-4 p-4 transition-colors hover:bg-white/5",
+                                            "flex w-full items-start gap-4 p-4 text-left transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary",
                                             idx !== displayThreads.length - 1 && "border-b border-border-subtle"
                                         )}
                                     >
@@ -176,7 +206,7 @@ export function GuildHub() {
                                                 Click to view the latest messages in this channel and join the conversation.
                                             </p>
                                         </div>
-                                    </div>
+                                    </button>
                                 ))
                             ) : (
                                 <div className="p-8 text-center text-text-muted">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Plus, Compass, Users, ChevronRight, Volume2, MessageSquare } from 'lucide-react';
+import { UserPlus, Plus, Compass, Users, ChevronRight, Volume2, MessageSquare, FileText } from 'lucide-react';
 
 import { useAuthStore } from '../stores/authStore';
 import { useGuildStore } from '../stores/guildStore';
@@ -10,10 +10,12 @@ import { useChannelStore } from '../stores/channelStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { dmApi } from '../api/dms';
+import { extractApiError } from '../api/client';
 import { CreateGuildModal } from '../components/guild/CreateGuildModal';
-import { isSafeImageDataUrl } from '../lib/security';
+import { safeStoredImageDataUrl } from '../lib/security';
 import { getGuildColor } from '../lib/colors';
 import { Tooltip } from '../components/ui/Tooltip';
+import { toast } from '../stores/toastStore';
 
 import type { Channel } from '../types';
 
@@ -92,8 +94,8 @@ export function HomePage() {
       useChannelStore.getState().setDmChannels(nextDms);
       useChannelStore.getState().selectChannel(data.id);
       navigate(`/app/dms/${data.id}`);
-    } catch {
-      // ignore
+    } catch (err) {
+      toast.error(`Failed to open direct message: ${extractApiError(err)}`);
     }
   };
 
@@ -161,7 +163,7 @@ export function HomePage() {
                       )}
 
                       <div className="mt-2 flex items-center">
-                        {displayParticipants.map((p: any, i: number) => (
+                        {displayParticipants.map((p, i: number) => (
                           <Tooltip key={p.user_id} content={p.username || p.user_id} side="top">
                             <div
                               className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-bg-mod-subtle bg-accent-primary text-[11px] font-bold text-white transition-transform group-hover:scale-105"
@@ -207,13 +209,14 @@ export function HomePage() {
                   const username = dm.recipient?.username || 'Direct Message';
                   const isOnline = (getPresence(dm.recipient?.id || '', activeServerId ?? undefined)?.status || 'offline') !== 'offline';
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={dm.id}
                       onClick={() => {
                         useChannelStore.getState().selectChannel(dm.id);
                         navigate(`/app/dms/${dm.id}`);
                       }}
-                      className={`flex cursor-pointer items-start justify-between gap-4 p-4 transition-colors hover:bg-white/5 ${idx !== recentDms.length - 1 ? "border-b border-border-subtle" : ""}`}
+                      className={`flex w-full items-start justify-between gap-4 p-4 text-left transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary ${idx !== recentDms.length - 1 ? "border-b border-border-subtle" : ""}`}
                     >
                       <div className="flex items-center gap-3">
                         <div className="relative shrink-0">
@@ -232,7 +235,7 @@ export function HomePage() {
                       <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/20 text-text-muted hover:bg-black/40 transition-colors">
                         <ChevronRight size={16} />
                       </div>
-                    </div>
+                    </button>
                   );
                 })
               ) : (
@@ -276,6 +279,13 @@ export function HomePage() {
               <Users size={20} className="text-text-muted" />
               <span className="text-xs font-semibold text-text-secondary">Friends</span>
             </button>
+            <button
+              onClick={() => navigate('/app/templates')}
+              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-colors hover:bg-bg-mod-strong/55"
+            >
+              <FileText size={20} className="text-text-muted" />
+              <span className="text-xs font-semibold text-text-secondary">Templates</span>
+            </button>
           </section>
 
           {/* Online Friends Panel */}
@@ -292,6 +302,7 @@ export function HomePage() {
               ) : (
                 onlineFriends.map((rel) => (
                   <button
+                    type="button"
                     key={rel.user.id}
                     onClick={() => void handleMessageFriend(rel.user.id)}
                     className="flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-white/5 w-full text-left"
@@ -319,11 +330,7 @@ export function HomePage() {
               </h3>
               <div className="flex flex-col gap-2 max-h-[240px] overflow-y-auto scrollbar-thin">
                 {guilds.map((guild) => {
-                  const iconSrc = guild.icon_hash
-                    ? guild.icon_hash.startsWith('data:')
-                      ? (isSafeImageDataUrl(guild.icon_hash) ? guild.icon_hash : null)
-                      : `/api/v1/guilds/${guild.id}/icon`
-                    : null;
+                  const iconSrc = safeStoredImageDataUrl(guild.icon_hash);
                   return (
                     <button
                       key={guild.id}

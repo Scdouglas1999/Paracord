@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS stage_instances (
+    id BIGINT PRIMARY KEY,
+    channel_id BIGINT NOT NULL UNIQUE,
+    guild_id BIGINT NOT NULL,
+    topic TEXT NOT NULL DEFAULT '',
+    privacy_level INTEGER NOT NULL DEFAULT 2,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

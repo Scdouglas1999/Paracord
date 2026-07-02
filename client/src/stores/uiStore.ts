@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-type Theme = 'dark' | 'light' | 'amoled';
+type Theme = 'dark' | 'light' | 'amoled' | 'high-contrast';
 export type AccentPreset =
   | 'red'
   | 'blue'
@@ -32,8 +32,11 @@ interface UIState {
   searchPanelOpen: boolean;
   connectionStatus: ConnectionStatus;
   connectionLatency: number;
+  lowBandwidthMode: boolean;
   userSettingsOpen: boolean;
   guildSettingsId: string | null;
+  guildSettingsInitialSection: string | null;
+  guildSettingsChannelId: string | null;
 
   toggleSidebar: () => void;
   toggleDockPinned: () => void;
@@ -54,8 +57,10 @@ interface UIState {
   setSearchPanelOpen: (open: boolean) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setConnectionLatency: (latency: number) => void;
+  setLowBandwidthMode: (enabled: boolean) => void;
   setUserSettingsOpen: (open: boolean) => void;
   setGuildSettingsId: (id: string | null) => void;
+  openGuildSettings: (id: string, initialSection?: string | null, channelId?: string | null) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -75,8 +80,11 @@ export const useUIStore = create<UIState>()(
       searchPanelOpen: false,
       connectionStatus: 'disconnected' as ConnectionStatus,
       connectionLatency: 0,
+      lowBandwidthMode: false,
       userSettingsOpen: false,
       guildSettingsId: null,
+      guildSettingsInitialSection: null,
+      guildSettingsChannelId: null,
 
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       toggleDockPinned: () => set((s) => ({ dockPinned: !s.dockPinned })),
@@ -97,8 +105,15 @@ export const useUIStore = create<UIState>()(
       setSearchPanelOpen: (searchPanelOpen) => set({ searchPanelOpen }),
       setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
       setConnectionLatency: (connectionLatency) => set({ connectionLatency }),
+      setLowBandwidthMode: (lowBandwidthMode) => set({ lowBandwidthMode }),
       setUserSettingsOpen: (userSettingsOpen) => set({ userSettingsOpen }),
-      setGuildSettingsId: (guildSettingsId) => set({ guildSettingsId }),
+      setGuildSettingsId: (guildSettingsId) => set({
+        guildSettingsId,
+        guildSettingsInitialSection: null,
+        guildSettingsChannelId: null,
+      }),
+      openGuildSettings: (guildSettingsId, guildSettingsInitialSection = null, guildSettingsChannelId = null) =>
+        set({ guildSettingsId, guildSettingsInitialSection, guildSettingsChannelId }),
     }),
     {
       name: 'ui-storage',
@@ -111,6 +126,7 @@ export const useUIStore = create<UIState>()(
         memberSidebarOpen: state.memberSidebarOpen,
         memberPanelOpen: state.memberPanelOpen,
         sidebarCollapsed: state.sidebarCollapsed,
+        lowBandwidthMode: state.lowBandwidthMode,
       }),
     }
   )

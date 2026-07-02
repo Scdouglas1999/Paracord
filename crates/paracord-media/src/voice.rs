@@ -1,6 +1,6 @@
+use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use super::livekit::AudioBitrate;
 
@@ -32,9 +32,9 @@ pub struct VoiceRoom {
 
 pub struct VoiceManager {
     livekit: Arc<super::livekit::LiveKitConfig>,
-    rooms: RwLock<HashMap<i64, VoiceRoom>>,
+    rooms: DashMap<i64, VoiceRoom>,
     /// Maps channel_id -> LiveKit room name
-    active_livekit_rooms: Arc<RwLock<HashMap<i64, String>>>,
+    active_livekit_rooms: DashMap<i64, String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -55,8 +55,8 @@ impl VoiceManager {
     pub fn new(livekit: Arc<super::livekit::LiveKitConfig>) -> Self {
         Self {
             livekit,
-            rooms: RwLock::new(HashMap::new()),
-            active_livekit_rooms: Arc::new(RwLock::new(HashMap::new())),
+            rooms: DashMap::new(),
+            active_livekit_rooms: DashMap::new(),
         }
     }
 
@@ -75,25 +75,23 @@ impl VoiceManager {
         let room_name = format!("guild_{}_channel_{}", guild_id, channel_id);
 
         // Create LiveKit room if it doesn't exist
-        {
-            let mut lk_rooms = self.active_livekit_rooms.write().await;
-            if let std::collections::hash_map::Entry::Vacant(e) = lk_rooms.entry(channel_id) {
-                self.livekit.create_room(&room_name, 99, bitrate).await?;
-                e.insert(room_name.clone());
-            }
+        if self.active_livekit_rooms.get(&channel_id).is_none() {
+            self.livekit.create_room(&room_name, 99, bitrate).await?;
+            self.active_livekit_rooms
+                .entry(channel_id)
+                .or_insert_with(|| room_name.clone());
         }
 
         // Track participant locally
         {
-            let mut rooms = self.rooms.write().await;
-            let room = rooms.entry(channel_id).or_insert_with(|| VoiceRoom {
+            let mut room = self.rooms.entry(channel_id).or_insert_with(|| VoiceRoom {
                 guild_id,
                 channel_id,
                 participants: HashMap::new(),
                 audio_bitrate: bitrate,
                 active_streamers: HashSet::new(),
             });
-            room.participants.insert(
+            room.value_mut().participants.insert(
                 user_id,
                 VoiceParticipant {
                     user_id,
@@ -132,15 +130,12 @@ impl VoiceManager {
     ) -> Result<StreamStartResponse, anyhow::Error> {
         let room_name = format!("guild_{}_channel_{}", guild_id, channel_id);
 
-        {
-            let mut rooms = self.rooms.write().await;
-            if let Some(room) = rooms.get_mut(&channel_id) {
-                room.active_streamers.insert(user_id);
+        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
+            room.active_streamers.insert(user_id);
 
-                // Update participant state
-                if let Some(p) = room.participants.get_mut(&user_id) {
-                    p.self_stream = true;
-                }
+            // Update participant state
+            if let Some(p) = room.participants.get_mut(&user_id) {
+                p.self_stream = true;
             }
         }
 
@@ -157,8 +152,7 @@ impl VoiceManager {
 
     /// Stop streaming in a voice channel.
     pub async fn stop_stream(&self, channel_id: i64, user_id: i64) {
-        let mut rooms = self.rooms.write().await;
-        if let Some(room) = rooms.get_mut(&channel_id) {
+        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
             room.active_streamers.remove(&user_id);
             if let Some(p) = room.participants.get_mut(&user_id) {
                 p.self_stream = false;
@@ -168,8 +162,7 @@ impl VoiceManager {
 
     /// Get active streamers in a channel.
     pub async fn get_active_streamers(&self, channel_id: i64) -> Vec<i64> {
-        let rooms = self.rooms.read().await;
-        rooms
+        self.rooms
             .get(&channel_id)
             .map(|r| r.active_streamers.iter().copied().collect())
             .unwrap_or_default()
@@ -182,8 +175,7 @@ impl VoiceManager {
         user_id: i64,
         session_id: &str,
     ) -> Vec<VoiceParticipant> {
-        let mut rooms = self.rooms.write().await;
-        let room = rooms.entry(channel_id).or_insert_with(|| VoiceRoom {
+        let mut room = self.rooms.entry(channel_id).or_insert_with(|| VoiceRoom {
             guild_id,
             channel_id,
             participants: HashMap::new(),
@@ -191,7 +183,7 @@ impl VoiceManager {
             active_streamers: HashSet::new(),
         });
 
-        room.participants.insert(
+        room.value_mut().participants.insert(
             user_id,
             VoiceParticipant {
                 user_id,
@@ -206,19 +198,19 @@ impl VoiceManager {
             },
         );
 
-        room.participants.values().cloned().collect()
+        room.value().participants.values().cloned().collect()
     }
 
     pub async fn leave_room(&self, channel_id: i64, user_id: i64) -> Option<Vec<VoiceParticipant>> {
-        let mut rooms = self.rooms.write().await;
-        if let Some(room) = rooms.get_mut(&channel_id) {
+        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
             room.participants.remove(&user_id);
 
             // Clear active stream state if the leaver was streaming
             room.active_streamers.remove(&user_id);
 
             if room.participants.is_empty() {
-                rooms.remove(&channel_id);
+                drop(room);
+                self.rooms.remove(&channel_id);
                 return Some(vec![]);
             }
             return Some(room.participants.values().cloned().collect());
@@ -228,8 +220,7 @@ impl VoiceManager {
 
     /// Clean up LiveKit room when the voice channel is empty.
     pub async fn cleanup_room(&self, channel_id: i64) -> Result<(), anyhow::Error> {
-        let mut lk_rooms = self.active_livekit_rooms.write().await;
-        if let Some(room_name) = lk_rooms.remove(&channel_id) {
+        if let Some((_, room_name)) = self.active_livekit_rooms.remove(&channel_id) {
             self.livekit.delete_room(&room_name).await?;
         }
         Ok(())
@@ -237,8 +228,7 @@ impl VoiceManager {
 
     /// Check whether a specific participant is currently tracked in a room (local state).
     pub async fn is_participant_in_room(&self, channel_id: i64, user_id: i64) -> bool {
-        let rooms = self.rooms.read().await;
-        rooms
+        self.rooms
             .get(&channel_id)
             .map(|r| r.participants.contains_key(&user_id))
             .unwrap_or(false)
@@ -254,31 +244,30 @@ impl VoiceManager {
         channel_id: i64,
         guild_id: Option<i64>,
         user_id: i64,
-    ) -> bool {
-        let tracked_room_name = {
-            let lk_rooms = self.active_livekit_rooms.read().await;
-            lk_rooms.get(&channel_id).cloned()
-        };
+    ) -> Option<bool> {
+        let tracked_room_name = self
+            .active_livekit_rooms
+            .get(&channel_id)
+            .map(|name| name.value().clone());
         let room_name = if let Some(name) = tracked_room_name {
             name
         } else if let Some(gid) = guild_id {
             format!("guild_{}_channel_{}", gid, channel_id)
         } else {
-            let rooms = self.rooms.read().await;
-            match rooms.get(&channel_id) {
+            match self.rooms.get(&channel_id) {
                 Some(room) => format!("guild_{}_channel_{}", room.guild_id, channel_id),
-                None => return false,
+                None => return Some(false),
             }
         };
         match self.livekit.list_participants(&room_name).await {
             Ok(participants) => {
                 let user_id_str = user_id.to_string();
-                participants.iter().any(|p| {
+                Some(participants.iter().any(|p| {
                     p.get("identity")
                         .and_then(|v| v.as_str())
                         .map(|id| id == user_id_str)
                         .unwrap_or(false)
-                })
+                }))
             }
             Err(err) => {
                 tracing::warn!(
@@ -286,22 +275,16 @@ impl VoiceManager {
                     user_id,
                     room_name = %room_name,
                     error = %err,
-                    "LiveKit participant check failed; assuming PRESENT to avoid cascading kicks. \
-                     If this repeats, check that [livekit] api_key/api_secret match the running LiveKit instance."
+                    "LiveKit participant check failed; presence is UNKNOWN. \
+                     Skipping cleanup decisions for this participant until LiveKit is reachable."
                 );
-                // When we cannot reach LiveKit, default to "present".  A stale
-                // voice entry is cosmetic (cleaned up on next connect), but a
-                // false-negative cascades: the grace-period handler removes the
-                // user, sees an "empty" room, deletes the LiveKit room, and
-                // kicks everyone still connected.
-                true
+                None
             }
         }
     }
 
     pub async fn get_room_participants(&self, channel_id: i64) -> Vec<VoiceParticipant> {
-        let rooms = self.rooms.read().await;
-        rooms
+        self.rooms
             .get(&channel_id)
             .map(|r| r.participants.values().cloned().collect())
             .unwrap_or_default()
@@ -315,21 +298,16 @@ impl VoiceManager {
         user_id: i64,
         muted: bool,
     ) -> Result<(), anyhow::Error> {
-        let room_name = {
-            let rooms = self.rooms.read().await;
-            let room = rooms.get(&channel_id).ok_or_else(|| {
-                anyhow::anyhow!("Voice room not found for channel {}", channel_id)
-            })?;
-            format!("guild_{}_channel_{}", room.guild_id, channel_id)
-        };
+        let room_name = self
+            .rooms
+            .get(&channel_id)
+            .map(|room| format!("guild_{}_channel_{}", room.guild_id, channel_id))
+            .ok_or_else(|| anyhow::anyhow!("Voice room not found for channel {}", channel_id))?;
 
         // Update local state
-        {
-            let mut rooms = self.rooms.write().await;
-            if let Some(room) = rooms.get_mut(&channel_id) {
-                if let Some(p) = room.participants.get_mut(&user_id) {
-                    p.server_mute = muted;
-                }
+        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
+            if let Some(p) = room.participants.get_mut(&user_id) {
+                p.server_mute = muted;
             }
         }
 
@@ -355,24 +333,19 @@ impl VoiceManager {
         user_id: i64,
         deafened: bool,
     ) -> Result<(), anyhow::Error> {
-        let room_name = {
-            let rooms = self.rooms.read().await;
-            let room = rooms.get(&channel_id).ok_or_else(|| {
-                anyhow::anyhow!("Voice room not found for channel {}", channel_id)
-            })?;
-            format!("guild_{}_channel_{}", room.guild_id, channel_id)
-        };
+        let room_name = self
+            .rooms
+            .get(&channel_id)
+            .map(|room| format!("guild_{}_channel_{}", room.guild_id, channel_id))
+            .ok_or_else(|| anyhow::anyhow!("Voice room not found for channel {}", channel_id))?;
 
         // Update local state
-        {
-            let mut rooms = self.rooms.write().await;
-            if let Some(room) = rooms.get_mut(&channel_id) {
-                if let Some(p) = room.participants.get_mut(&user_id) {
-                    p.server_deaf = deafened;
-                    // Server deafen implies server mute
-                    if deafened {
-                        p.server_mute = true;
-                    }
+        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
+            if let Some(p) = room.participants.get_mut(&user_id) {
+                p.server_deaf = deafened;
+                // Server deafen implies server mute
+                if deafened {
+                    p.server_mute = true;
                 }
             }
         }
@@ -400,12 +373,9 @@ impl VoiceManager {
         username: &str,
         priority: bool,
     ) -> Result<Option<String>, anyhow::Error> {
-        {
-            let mut rooms = self.rooms.write().await;
-            if let Some(room) = rooms.get_mut(&channel_id) {
-                if let Some(p) = room.participants.get_mut(&user_id) {
-                    p.priority_speaker = priority;
-                }
+        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
+            if let Some(p) = room.participants.get_mut(&user_id) {
+                p.priority_speaker = priority;
             }
         }
 
@@ -422,8 +392,7 @@ impl VoiceManager {
 
     /// Update self-mute state for a participant.
     pub async fn update_self_mute(&self, channel_id: i64, user_id: i64, muted: bool) {
-        let mut rooms = self.rooms.write().await;
-        if let Some(room) = rooms.get_mut(&channel_id) {
+        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
             if let Some(p) = room.participants.get_mut(&user_id) {
                 p.self_mute = muted;
             }
@@ -432,8 +401,7 @@ impl VoiceManager {
 
     /// Update self-deaf state for a participant.
     pub async fn update_self_deaf(&self, channel_id: i64, user_id: i64, deafened: bool) {
-        let mut rooms = self.rooms.write().await;
-        if let Some(room) = rooms.get_mut(&channel_id) {
+        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
             if let Some(p) = room.participants.get_mut(&user_id) {
                 p.self_deaf = deafened;
                 // Self-deafen implies self-mute
@@ -446,17 +414,41 @@ impl VoiceManager {
 
     /// Check whether a participant is currently streaming in a channel.
     pub async fn get_participant_stream_state(&self, channel_id: i64, user_id: i64) -> bool {
-        let rooms = self.rooms.read().await;
-        rooms
-            .get(&channel_id)
-            .and_then(|r| r.participants.get(&user_id))
-            .map(|p| p.self_stream)
-            .unwrap_or(false)
+        if let Some(room) = self.rooms.get(&channel_id) {
+            room.participants
+                .get(&user_id)
+                .map(|p| p.self_stream)
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    }
+
+    /// Update self-video state for a participant.
+    pub async fn update_self_video(&self, channel_id: i64, user_id: i64, video: bool) {
+        if let Some(mut room) = self.rooms.get_mut(&channel_id) {
+            if let Some(p) = room.participants.get_mut(&user_id) {
+                p.self_video = video;
+            }
+        }
+    }
+
+    /// Check whether a participant has video enabled in a channel.
+    pub async fn get_participant_video_state(&self, channel_id: i64, user_id: i64) -> bool {
+        if let Some(room) = self.rooms.get(&channel_id) {
+            room.participants
+                .get(&user_id)
+                .map(|p| p.self_video)
+                .unwrap_or(false)
+        } else {
+            false
+        }
     }
 
     /// Get the LiveKit room name for a channel, if active.
     pub async fn get_room_name(&self, channel_id: i64) -> Option<String> {
-        let lk_rooms = self.active_livekit_rooms.read().await;
-        lk_rooms.get(&channel_id).cloned()
+        self.active_livekit_rooms
+            .get(&channel_id)
+            .map(|room| room.value().clone())
     }
 }

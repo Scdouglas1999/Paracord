@@ -6,6 +6,7 @@ import { useServerListStore } from '../stores/serverListStore';
 import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/apiBaseUrl';
 import { hasAccount } from '../lib/account';
 import { authApi } from '../api/auth';
+import { extractApiError } from '../api/client';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 
 export function RegisterPage() {
@@ -13,6 +14,7 @@ export function RegisterPage() {
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -38,8 +40,19 @@ export function RegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const trimmedEmail = email.trim();
+    const trimmedUsername = username.trim();
+    const trimmedDisplayName = displayName.trim();
+    if (!trimmedUsername) {
+      setError('Username is required.');
+      return;
+    }
     if (password.length < MIN_PASSWORD_LENGTH) {
       setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
       return;
     }
     if (!agreed) {
@@ -49,7 +62,7 @@ export function RegisterPage() {
     setError('');
     setLoading(true);
     try {
-      await register(email, username, password, displayName);
+      await register(trimmedEmail, trimmedUsername, password, trimmedDisplayName);
 
       // If the user already has a local keypair, attach it to this server account.
       if (hasAccount()) {
@@ -86,8 +99,8 @@ export function RegisterPage() {
       // Go straight to the app — legacy token auth works without a local
       // keypair. Users can set up a local crypto identity later in Settings.
       navigate('/app');
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Registration failed. Please try again.');
+    } catch (err: unknown) {
+      setError(extractApiError(err) || 'Registration failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -160,6 +173,23 @@ export function RegisterPage() {
                 minLength={MIN_PASSWORD_LENGTH}
                 className="input-field mt-2"
                 placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+                autoComplete="new-password"
+              />
+            </label>
+
+            <label className="block">
+              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                Confirm Password <span className="text-accent-danger">*</span>
+              </span>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                className="input-field mt-2"
+                placeholder="Re-enter password"
+                autoComplete="new-password"
               />
             </label>
           </div>

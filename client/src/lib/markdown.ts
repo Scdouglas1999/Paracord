@@ -1,5 +1,6 @@
 import { createElement, type ReactNode } from 'react';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from './customEmoji';
+import { safeExternalUrl } from './security';
 import CodeBlock from '../components/message/CodeBlock';
 
 interface Token {
@@ -15,12 +16,14 @@ interface Token {
     | 'highlight'
     | 'link'
     | 'br'
-    | 'customemoji';
+    | 'customemoji'
+    | 'mention';
   content: string;
   href?: string;
   emojiName?: string;
   emojiId?: string;
   language?: string;
+  mentionUserId?: string;
 }
 
 
@@ -32,6 +35,19 @@ function tokenizeInline(text: string): Token[] {
     if (remaining[0] === '<') {
       const closingIndex = remaining.indexOf('>');
       if (closingIndex > 0) {
+        const inner = remaining.slice(1, closingIndex);
+        // Check for user mention: <@userid>
+        const mentionMatch = inner.match(/^@!?(\d+)$/);
+        if (mentionMatch) {
+          const userId = mentionMatch[1];
+          tokens.push({
+            type: 'mention',
+            content: remaining.slice(0, closingIndex + 1),
+            mentionUserId: userId,
+          });
+          remaining = remaining.slice(closingIndex + 1);
+          continue;
+        }
         const maybeEmoji = remaining.slice(0, closingIndex + 1);
         const parsed = parseCustomEmojiToken(maybeEmoji);
         if (parsed) {
@@ -137,7 +153,7 @@ function tokenizeInline(text: string): Token[] {
 }
 
 
-function renderInline(text: string, guildId?: string): ReactNode[] {
+function renderInline(text: string, guildId?: string, mentionMap?: Map<string, string>, onMentionClick?: (userId: string) => void): ReactNode[] {
   const tokens = tokenizeInline(text);
   return tokens.map((token, i) => {
     switch (token.type) {
@@ -203,11 +219,15 @@ function renderInline(text: string, guildId?: string): ReactNode[] {
           token.content,
         );
       case 'link':
+        const safeHref = token.href ? safeExternalUrl(token.href) : null;
+        if (!safeHref) {
+          return token.content;
+        }
         return createElement(
           'a',
           {
             key: i,
-            href: token.href,
+            href: safeHref,
             target: '_blank',
             rel: 'noopener noreferrer',
             style: { color: 'var(--text-link, #00aff4)', textDecoration: 'none' },
@@ -239,6 +259,26 @@ function renderInline(text: string, guildId?: string): ReactNode[] {
             marginInline: '0.05em',
           },
         });
+      case 'mention': {
+        const userId = token.mentionUserId ?? '';
+        const displayName = mentionMap?.get(userId) ?? `<@${userId}>`;
+        return createElement(
+          'span',
+          {
+            key: i,
+            style: {
+              backgroundColor: 'rgba(88, 101, 242, 0.3)',
+              color: '#c9d1ff',
+              borderRadius: '3px',
+              padding: '0 2px',
+              fontWeight: 500,
+              cursor: onMentionClick ? 'pointer' : 'default',
+            },
+            onClick: onMentionClick ? () => onMentionClick(userId) : undefined,
+          },
+          `@${displayName}`,
+        );
+      }
       case 'br':
         return createElement('br', { key: i });
       case 'text':
@@ -268,7 +308,7 @@ function isOrderedList(line: string): boolean {
   return /^\s*\d+\.\s+/.test(line);
 }
 
-export function parseMarkdown(text: string, guildId?: string): ReactNode[] {
+export function parseMarkdown(text: string, guildId?: string, mentionMap?: Map<string, string>, onMentionClick?: (userId: string) => void): ReactNode[] {
   if (!text) return [];
 
   const lines = text.split('\n');
@@ -318,7 +358,7 @@ export function parseMarkdown(text: string, guildId?: string): ReactNode[] {
               lineHeight: '1.3',
             },
           },
-          renderInline(headingText, guildId),
+          renderInline(headingText, guildId, mentionMap, onMentionClick),
         ),
       );
       index += 1;
@@ -334,7 +374,7 @@ export function parseMarkdown(text: string, guildId?: string): ReactNode[] {
       const quoteNodes: ReactNode[] = [];
       quoteLines.forEach((quoteLine, quoteIndex) => {
         if (quoteIndex > 0) quoteNodes.push(createElement('br', { key: `quote-br-${quoteIndex}` }));
-        quoteNodes.push(...renderInline(quoteLine, guildId));
+        quoteNodes.push(...renderInline(quoteLine, guildId, mentionMap, onMentionClick));
       });
       nodes.push(
         createElement(
@@ -375,7 +415,7 @@ export function parseMarkdown(text: string, guildId?: string): ReactNode[] {
             createElement(
               'li',
               { key: `li-${itemIndex}`, style: { marginBottom: '2px' } },
-              renderInline(item, guildId),
+              renderInline(item, guildId, mentionMap, onMentionClick),
             ),
           ),
         ),
@@ -404,7 +444,7 @@ export function parseMarkdown(text: string, guildId?: string): ReactNode[] {
             createElement(
               'li',
               { key: `oli-${itemIndex}`, style: { marginBottom: '2px' } },
-              renderInline(item, guildId),
+              renderInline(item, guildId, mentionMap, onMentionClick),
             ),
           ),
         ),
@@ -429,7 +469,7 @@ export function parseMarkdown(text: string, guildId?: string): ReactNode[] {
     const paragraphNodes: ReactNode[] = [];
     paragraphLines.forEach((paragraphLine, paragraphIndex) => {
       if (paragraphIndex > 0) paragraphNodes.push(createElement('br', { key: `paragraph-br-${paragraphIndex}` }));
-      paragraphNodes.push(...renderInline(paragraphLine, guildId));
+      paragraphNodes.push(...renderInline(paragraphLine, guildId, mentionMap, onMentionClick));
     });
     nodes.push(
       createElement(

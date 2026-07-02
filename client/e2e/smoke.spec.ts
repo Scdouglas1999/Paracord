@@ -5,10 +5,17 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
   const textChannelId = '2001';
   const voiceChannelId = '2002';
   const nowIso = new Date().toISOString();
+  const pageErrors: string[] = [];
+  let serverTheme: 'dark' | 'light' | 'amoled' | 'high-contrast' = 'dark';
+  let adminStatsRequests = 0;
+
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message);
+  });
 
   const userPayload = {
     id: '42',
-    username: 'smoke-user',
+    username: 'smoke-user-with-a-very-long-unbroken-name-for-overflow-coverage',
     discriminator: '0001',
     avatar_hash: null,
     bot: false,
@@ -24,7 +31,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ service: 'paracord' }),
+      body: JSON.stringify({ status: 'ok' }),
     });
   });
 
@@ -42,7 +49,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
       });
 
     if (path === '/api/v1/auth/refresh' && method === 'POST') {
-      return json(401, { code: 'UNAUTHORIZED', message: 'No active session' });
+      return json(200, { token: 'smoke-token', refresh_token: 'smoke-refresh', user: userPayload });
     }
     if (path === '/api/v1/auth/login' && method === 'POST') {
       return json(200, { token: 'smoke-token', user: userPayload });
@@ -53,7 +60,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
     if (path === '/api/v1/users/@me/settings' && method === 'GET') {
       return json(200, {
         user_id: userPayload.id,
-        theme: 'dark',
+        theme: serverTheme,
         locale: 'en-US',
         message_display_compact: false,
         custom_css: null,
@@ -68,7 +75,8 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
       return json(200, [
         {
           id: guildId,
-          name: 'QA Guild',
+          name: 'QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout',
+          server_url: 'https://smoke.paracord.local',
           icon_hash: null,
           owner_id: userPayload.id,
           member_count: 4,
@@ -82,7 +90,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
         {
           id: textChannelId,
           guild_id: guildId,
-          name: 'general',
+          name: 'qa-general-channel-with-a-very-long-name-for-overflow-coverage',
           type: 0,
           channel_type: 0,
           position: 0,
@@ -104,6 +112,47 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
           created_at: nowIso,
         },
       ]);
+    }
+    if (path === `/api/v1/guilds/${guildId}` && method === 'GET') {
+      return json(200, {
+        id: guildId,
+        name: 'QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout',
+        server_url: 'https://smoke.paracord.local',
+        icon_hash: null,
+        owner_id: userPayload.id,
+        member_count: 4,
+        features: [],
+        hub_settings: null,
+        created_at: nowIso,
+      });
+    }
+    if (path === `/api/v1/guilds/${guildId}/onboarding/me` && method === 'GET') {
+      return json(200, {
+        settings: {
+          welcome_title: 'Welcome to QA Guild With A Very Long Name That Should Truncate Instead Of Breaking Layout',
+          welcome_body: 'Quick start onboarding',
+          rules_text: null,
+          role_prompt: null,
+          role_options: [],
+        },
+        member_state: {
+          accepted_rules: true,
+          selected_role_ids: [],
+          completed_at: nowIso,
+        },
+      });
+    }
+    if (path === `/api/v1/guilds/${guildId}/onboarding/me` && method === 'PATCH') {
+      const payload = request.postDataJSON() as {
+        accepted_rules?: boolean;
+        selected_role_ids?: string[];
+        completed?: boolean;
+      };
+      return json(200, {
+        accepted_rules: Boolean(payload?.accepted_rules),
+        selected_role_ids: payload?.selected_role_ids ?? [],
+        completed_at: payload?.completed ? nowIso : null,
+      });
     }
     if (path === `/api/v1/channels/${textChannelId}/messages` && method === 'GET') {
       return json(200, messages);
@@ -146,27 +195,245 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
     if (path === `/api/v1/guilds/${guildId}/members` && method === 'GET') {
       return json(200, []);
     }
+    if (path === `/api/v1/guilds/${guildId}/economy/leaderboard` && method === 'GET') {
+      return json(200, {
+        guild_id: guildId,
+        entries: [],
+        limit: 8,
+      });
+    }
+    if (path === `/api/v1/guilds/${guildId}/economy/me` && method === 'GET') {
+      return json(200, {
+        guild_id: guildId,
+        user_id: userPayload.id,
+        xp: 0,
+        level: 0,
+        rank: null,
+        last_xp_at: nowIso,
+        progress: {
+          current_level_floor: 0,
+          next_level_at: 100,
+          xp_into_level: 0,
+          xp_required_this_level: 100,
+        },
+        streak: {
+          days: 0,
+          longest_days: 0,
+          last_active_date: nowIso.slice(0, 10),
+        },
+        achievements: [],
+      });
+    }
+    if (path === `/api/v1/guilds/${guildId}/economy/level-roles` && method === 'GET') {
+      return json(200, {
+        guild_id: guildId,
+        mappings: [],
+      });
+    }
+    if (path === '/api/v1/discovery/guilds' && method === 'GET') {
+      return json(200, {
+        guilds: [],
+        total: 0,
+      });
+    }
+    if (path === '/api/v1/templates' && method === 'GET') {
+      return json(200, []);
+    }
+    if (path === '/api/v1/bots/applications' && method === 'GET') {
+      return json(200, []);
+    }
+    if (path === '/api/v1/admin/stats' && method === 'GET') {
+      adminStatsRequests += 1;
+      return json(403, { error: 'admin required' });
+    }
 
-    return json(404, { code: 'NOT_FOUND', message: `Unhandled mock route: ${method} ${path}` });
+    if (method === 'GET') {
+      return json(200, []);
+    }
+    return route.fulfill({ status: 204, body: '' });
   });
 
-  await page.goto('/login');
-  await page.getByLabel('Email *').fill('qa@example.com');
-  await page.getByLabel('Password *').fill('password123!');
-  await page.getByRole('button', { name: 'Log In' }).click();
+  await page.route('**/api/v2/rt/session', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ws_url: 'ws://127.0.0.1:0/gateway',
+        session_id: 'smoke-session',
+        token: 'smoke-rt-token',
+      }),
+    });
+  });
+  await page.route('**/api/v2/rt/events**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      },
+      body: 'event: gateway\ndata: {\"op\":0,\"t\":\"READY\",\"d\":{}}\n\n',
+    });
+  });
+  await page.route('**/api/v2/rt/commands', async (route) => {
+    await route.fulfill({ status: 204, body: '' });
+  });
+  await page.route('**/api/v2/voice/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/join')) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'Voice unavailable in smoke harness',
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 204, body: '' });
+  });
 
-  await expect(page).toHaveURL(/\/app/);
-  await page.getByRole('button', { name: /QA Guild/i }).first().click();
+  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
 
-  const composer = page.getByPlaceholder('Message #general');
+  const responsiveWidths = [320, 375, 414, 768];
+  for (const width of responsiveWidths) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByRole('main')).toBeVisible();
+    await expect(page.getByPlaceholder(/Message #qa-general-channel/)).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      )
+      .toBe(true);
+  }
+
+  const desktopViewports = [
+    { width: 1366, height: 768 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 },
+  ];
+  for (const viewport of desktopViewports) {
+    await page.setViewportSize(viewport);
+    await expect(page.getByRole('main')).toBeVisible();
+    await expect(page.getByPlaceholder(/Message #qa-general-channel/)).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      )
+      .toBe(true);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  const lazyRoutes = [
+    { path: '/app', text: /Welcome to Paracord/i },
+    { path: '/app/friends', text: /Friends/i },
+    { path: '/app/dms', text: /Select a conversation/i },
+    { path: '/app/discovery', text: /Discover Servers/i },
+    { path: '/app/templates', text: /Template Gallery/i },
+    { path: '/app/developers', text: /Developer Portal/i },
+  ];
+  for (const lazyRoute of lazyRoutes) {
+    await page.goto(lazyRoute.path);
+    await expect(page.getByRole('main')).toBeVisible();
+    await expect(page.getByText(lazyRoute.text).first()).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      )
+      .toBe(true);
+  }
+
+  await page.goto('/app/admin');
+  await expect(page.getByRole('heading', { name: 'Access denied' })).toBeVisible();
+  expect(adminStatsRequests).toBe(0);
+
+  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
+
+  const themes = ['dark', 'light', 'amoled', 'high-contrast'] as const;
+  for (const theme of themes) {
+    serverTheme = theme;
+    await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+    await expect(page.getByRole('main')).toBeVisible();
+    await expect.poll(
+      async () => page.evaluate(() => document.documentElement.getAttribute('data-theme')),
+    ).toBe(theme);
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      )
+      .toBe(true);
+  }
+
+  const composer = page.getByPlaceholder(/Message #qa-general-channel/);
   await composer.fill('e2e smoke message');
   await composer.press('Enter');
-  await expect(page.getByText('e2e smoke message')).toBeVisible();
+  const history = page.getByLabel('Message history');
+  await expect(history.getByText('e2e smoke message')).toBeVisible();
+  await composer.fill('SuperLongUnbrokenMessageContentForOverflowCoverage'.repeat(4));
+  await composer.press('Enter');
+  await expect(history.getByText(/SuperLongUnbrokenMessageContentForOverflowCoverage/)).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 900 });
+  await expect
+    .poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
+    .toBe(true);
+  await page.setViewportSize({ width: 1280, height: 900 });
 
-  await page.getByRole('button', { name: /Voice Lounge/i }).first().click();
+  const closeWelcome = page.getByRole('button', { name: /Close welcome screen/i });
+  if (await closeWelcome.isVisible().catch(() => false)) {
+    await closeWelcome.click();
+  }
+
+  await page.keyboard.press('Control+K');
+  const commandPaletteInput = page.getByPlaceholder('Where would you like to go?');
+  await expect(commandPaletteInput).toBeVisible();
+  await expect(commandPaletteInput).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(commandPaletteInput).toBeHidden();
+
+  await page.keyboard.press('Control+K');
+  await expect(commandPaletteInput).toBeVisible();
+  await commandPaletteInput.fill('Voice Lounge');
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${voiceChannelId}`));
+
+  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
+
+  await page.getByRole('button', { name: /Edit qa-general-channel/i }).click({ force: true });
+  const serverSettingsDialog = page.getByRole('dialog', { name: 'Server settings' });
+  await expect(serverSettingsDialog).toBeVisible();
+  await expect(serverSettingsDialog.getByRole('heading', { name: 'Channels' })).toBeVisible();
+  await expect(serverSettingsDialog.locator(`[data-highlighted-channel="${textChannelId}"]`)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(serverSettingsDialog).toBeHidden();
+
+  const textChannelItem = page.getByRole('treeitem', { name: /qa-general-channel/i }).first();
+  await textChannelItem.focus();
+  await expect(textChannelItem).toBeFocused();
+  await textChannelItem.press('ArrowDown');
+  const voiceCategoryItem = page.getByRole('treeitem', { name: /Voice Channels/i }).first();
+  await expect(voiceCategoryItem).toBeFocused();
+  await voiceCategoryItem.press('ArrowDown');
+  const voiceChannelItem = page.getByRole('treeitem', { name: /Voice Lounge/i }).first();
+  await expect(voiceChannelItem).toBeFocused();
+  await voiceChannelItem.press('ArrowUp');
+  await expect(voiceCategoryItem).toBeFocused();
+  await voiceCategoryItem.press('ArrowUp');
+  await expect(textChannelItem).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
+
+  await voiceChannelItem.focus();
+  await expect(voiceChannelItem).toBeFocused();
+  await page.keyboard.press('Space');
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${voiceChannelId}`));
   await expect(
     page.getByText(/(Join from the channel rail to start speaking or screen sharing\.|Voice join failed:)/i),
   ).toBeVisible();
+
+  await page.goto(`/app/guilds/${guildId}/channels/999999999`);
+  await expect(page.getByRole('heading', { name: 'Channel not found' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });

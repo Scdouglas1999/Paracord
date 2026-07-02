@@ -244,6 +244,12 @@ def main() -> int:
             raise RuntimeError(f"Missing expected server binary: {BINARY}")
 
         cfg_paths = {k: write_config(v) for k, v in NODES.items()}
+        child_env = os.environ.copy()
+        # This script intentionally validates loopback-only local federation.
+        # Production deployments should leave this unset so SSRF protections
+        # continue blocking private/internal federation endpoints by default.
+        child_env["PARACORD_ALLOW_PRIVATE_FEDERATION_URLS"] = "true"
+        child_env["PARACORD_FEDERATION_ALLOWED_GUILD_IDS"] = "*"
 
         log("[3/9] Starting three federation-enabled nodes (A, B, C)")
         for key, node in NODES.items():
@@ -256,6 +262,7 @@ def main() -> int:
                 stdout=fh,
                 stderr=subprocess.STDOUT,
                 text=True,
+                env=child_env,
             )
             procs.append(proc)
 
@@ -349,16 +356,22 @@ def main() -> int:
         message_id = int(created_msg["id"])
         origin_event_id = f"${message_id}:{NODES['a'].server_name}"
 
-        def message_present(node_key: str, content: str) -> bool:
+        def mapped_message_content(node_key: str) -> str | None:
             with db_connect(node_key) as conn:
                 row = conn.execute(
-                    "SELECT COUNT(*) FROM messages WHERE channel_id = ? AND content = ?",
-                    (channel_id, content),
+                    """
+                    SELECT m.content
+                    FROM federation_message_map fm
+                    JOIN messages m ON m.id = fm.local_message_id
+                    WHERE fm.origin_server = ? AND fm.remote_message_id = ?
+                    LIMIT 1
+                    """,
+                    (NODES["a"].server_name, str(message_id)),
                 ).fetchone()
-                return int(row[0]) > 0
+                return None if row is None else str(row["content"])
 
-        wait_until("message replicated to B", lambda: message_present("b", message_text), 30.0)
-        wait_until("message relayed to C", lambda: message_present("c", message_text), 30.0)
+        wait_until("message replicated to B", lambda: mapped_message_content("b") == message_text, 30.0)
+        wait_until("message relayed to C", lambda: mapped_message_content("c") == message_text, 30.0)
 
         with db_connect("a") as a_db, db_connect("b") as b_db, db_connect("c") as c_db:
             a_to_c = a_db.execute(
@@ -387,19 +400,13 @@ def main() -> int:
             expected=(200,),
         )
 
-        def mapped_message_content(node_key: str) -> str | None:
+        def mapped_guild_id(node_key: str) -> int | None:
             with db_connect(node_key) as conn:
                 row = conn.execute(
-                    """
-                    SELECT m.content
-                    FROM federation_message_map fm
-                    JOIN messages m ON m.id = fm.local_message_id
-                    WHERE fm.origin_server = ? AND fm.remote_message_id = ?
-                    LIMIT 1
-                    """,
-                    (NODES["a"].server_name, str(message_id)),
+                    "SELECT local_guild_id FROM federation_space_map WHERE origin_server = ? AND remote_space_id = ?",
+                    (NODES["a"].server_name, str(guild_id)),
                 ).fetchone()
-                return None if row is None else str(row["content"])
+                return None if row is None else int(row["local_guild_id"])
 
         wait_until("edited message on B", lambda: mapped_message_content("b") == edited_text, 30.0)
         wait_until("edited message on C", lambda: mapped_message_content("c") == edited_text, 30.0)
@@ -464,9 +471,12 @@ def main() -> int:
                 ).fetchone()
                 if mapping is None:
                     return False
+                local_guild_id = mapped_guild_id(node_key)
+                if local_guild_id is None:
+                    return False
                 row = conn.execute(
                     "SELECT COUNT(*) FROM members WHERE user_id = ? AND guild_id = ?",
-                    (int(mapping["local_user_id"]), guild_id),
+                    (int(mapping["local_user_id"]), local_guild_id),
                 ).fetchone()
                 return int(row[0]) > 0
 
@@ -488,9 +498,12 @@ def main() -> int:
                 ).fetchone()
                 if mapping is None:
                     return False
+                local_guild_id = mapped_guild_id(node_key)
+                if local_guild_id is None:
+                    return False
                 row = conn.execute(
                     "SELECT COUNT(*) FROM members WHERE user_id = ? AND guild_id = ?",
-                    (int(mapping["local_user_id"]), guild_id),
+                    (int(mapping["local_user_id"]), local_guild_id),
                 ).fetchone()
                 return int(row[0]) == 0
 

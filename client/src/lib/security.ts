@@ -1,4 +1,5 @@
 const SAFE_IMAGE_DATA_URL_RE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i;
+const MAX_EXTERNAL_URL_LENGTH = 2_000;
 const MAX_CUSTOM_CSS_LENGTH = 10 * 1024;
 
 const ALLOWED_CSS_PROPERTIES = new Set([
@@ -11,8 +12,6 @@ const ALLOWED_CSS_PROPERTIES = new Set([
   'border-width',
   'box-shadow',
   'color',
-  'display',
-  'filter',
   'font-family',
   'font-size',
   'font-style',
@@ -24,7 +23,6 @@ const ALLOWED_CSS_PROPERTIES = new Set([
   'margin-left',
   'margin-right',
   'margin-top',
-  'opacity',
   'outline',
   'outline-color',
   'outline-offset',
@@ -38,7 +36,6 @@ const ALLOWED_CSS_PROPERTIES = new Set([
   'text-decoration',
   'text-transform',
   'transition',
-  'visibility',
 ]);
 
 const BLOCKED_VALUE_PATTERNS = [
@@ -58,7 +55,7 @@ function sanitizeDeclarations(block: string): string {
     const prop = declaration.slice(0, idx).trim().toLowerCase();
     const value = declaration.slice(idx + 1).trim();
     if (!prop || !value) continue;
-    if (!ALLOWED_CSS_PROPERTIES.has(prop)) continue;
+    if (!ALLOWED_CSS_PROPERTIES.has(prop) && !prop.startsWith('--')) continue;
     if (BLOCKED_VALUE_PATTERNS.some((pattern) => pattern.test(value))) continue;
     safe.push(`${prop}: ${value}`);
   }
@@ -78,6 +75,31 @@ export function isAllowedImageMimeType(mimeType: string): boolean {
 
 export function isSafeImageDataUrl(value: string): boolean {
   return SAFE_IMAGE_DATA_URL_RE.test(value.trim());
+}
+
+export function safeStoredImageDataUrl(value: string | null | undefined): string | null {
+  if (!value?.startsWith('data:')) return null;
+  return isSafeImageDataUrl(value) ? value : null;
+}
+
+export function safeExternalUrl(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed.length > MAX_EXTERNAL_URL_LENGTH) return null;
+
+  try {
+    const url = new URL(trimmed);
+    if (url.username || url.password) return null;
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function safeClientResourceUrl(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed.length > MAX_EXTERNAL_URL_LENGTH) return null;
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return trimmed;
+  return safeExternalUrl(trimmed);
 }
 
 export function sanitizeCustomCss(value: string): string {

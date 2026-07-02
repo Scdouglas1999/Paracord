@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import hljs from 'highlight.js/lib/core';
+import DOMPurify from 'dompurify';
 
 import javascript from 'highlight.js/lib/languages/javascript';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -21,6 +22,8 @@ import yaml from 'highlight.js/lib/languages/yaml';
 import markdown from 'highlight.js/lib/languages/markdown';
 import diff from 'highlight.js/lib/languages/diff';
 import plaintext from 'highlight.js/lib/languages/plaintext';
+import { writeClipboardText } from '../../lib/clipboard';
+import { toast } from '../../stores/toastStore';
 
 // TOML is registered under 'ini' in highlight.js
 import ini from 'highlight.js/lib/languages/ini';
@@ -65,6 +68,23 @@ interface CodeBlockProps {
   language?: string;
 }
 
+function sanitizeHighlightedHtml(html: string): string {
+  const sanitized = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['span'],
+    ALLOWED_ATTR: ['class'],
+    ALLOW_DATA_ATTR: false,
+    FORBID_ATTR: ['style'],
+  });
+
+  return sanitized.replace(/class="([^"]*)"/g, (_match, classList: string) => {
+    const safe = classList
+      .split(/\s+/)
+      .filter((token) => token === 'hljs' || token.startsWith('hljs-'))
+      .join(' ');
+    return safe ? `class="${safe}"` : '';
+  });
+}
+
 export default function CodeBlock({ code, language }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
 
@@ -83,10 +103,17 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
     return result.value;
   }, [code, language]);
 
+  const safeHighlightedHtml = useMemo(
+    () => sanitizeHighlightedHtml(highlightedHtml),
+    [highlightedHtml],
+  );
+
   const handleCopy = () => {
-    navigator.clipboard.writeText(code).then(() => {
+    writeClipboardText(code).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }).catch((err) => {
+      toast.error(`Failed to copy code: ${err instanceof Error ? err.message : String(err)}`);
     });
   };
 
@@ -174,7 +201,7 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
       >
         <code
           className="hljs"
-          dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+          dangerouslySetInnerHTML={{ __html: safeHighlightedHtml }}
         />
       </pre>
     </div>

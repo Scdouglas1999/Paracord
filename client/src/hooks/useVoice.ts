@@ -35,12 +35,13 @@ export function useVoice() {
         // Only send a gateway update here when we need to sync non-default
         // mute/deafen state immediately after connecting.
         const state = useVoiceStore.getState();
-        if (state.selfMute || state.selfDeaf) {
+        if (state.selfMute || state.selfDeaf || state.selfVideo) {
           gateway.updateVoiceStateAll(
             targetGuildId || state.guildId,
             targetChannelId,
             state.selfMute,
-            state.selfDeaf
+            state.selfDeaf,
+            state.selfVideo
           );
         }
       } catch (err) {
@@ -64,7 +65,8 @@ export function useVoice() {
       state.guildId,
       state.channelId,
       state.selfMute,
-      state.selfDeaf
+      state.selfDeaf,
+      state.selfVideo
     );
   }, []);
 
@@ -75,12 +77,13 @@ export function useVoice() {
       state.guildId,
       state.channelId,
       state.selfMute,
-      state.selfDeaf
+      state.selfDeaf,
+      state.selfVideo
     );
   }, []);
 
-  const startStream = useCallback(async (qualityPreset?: string) => {
-    await startStreamStore(qualityPreset);
+  const startStream = useCallback(async (qualityPreset?: string, sourceId?: string) => {
+    await startStreamStore(qualityPreset, sourceId);
   }, [startStreamStore]);
 
   const stopStream = useCallback(() => {

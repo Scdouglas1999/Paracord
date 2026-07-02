@@ -2,7 +2,13 @@ import { create } from 'zustand';
 import type { User, UserSettings } from '../types';
 import { authApi } from '../api/auth';
 import { extractApiError } from '../api/client';
-import { clearLegacyPersistedAuth, getRefreshToken, setAccessToken, setRefreshToken } from '../lib/authToken';
+import {
+  clearLegacyPersistedAuth,
+  getRefreshToken,
+  hydrateRefreshTokenStorage,
+  setAccessToken,
+  setRefreshToken,
+} from '../lib/authToken';
 import { toast } from './toastStore';
 
 interface AuthState {
@@ -91,6 +97,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
 
   initializeSession: async () => {
     clearLegacyPersistedAuth();
+    await hydrateRefreshTokenStorage();
     try {
       const refreshToken = getRefreshToken();
       const { data } = await authApi.refresh(refreshToken || undefined);

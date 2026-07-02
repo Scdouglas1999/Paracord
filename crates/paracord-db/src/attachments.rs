@@ -270,9 +270,15 @@ mod tests {
             .await
             .expect("create user b");
 
-        let guild = crate::guilds::create_space(&db, 2001, "space", user_a.id, None)
-            .await
-            .expect("create space");
+        let guild = crate::guilds::create_space(
+            &db,
+            paracord_models::id::GuildId::new(2001),
+            "space",
+            paracord_models::id::UserId::new(user_a.id),
+            None,
+        )
+        .await
+        .expect("create space");
         let channel_a =
             crate::channels::create_channel(&db, 3001, guild.id, "general", 0, 0, None, None)
                 .await

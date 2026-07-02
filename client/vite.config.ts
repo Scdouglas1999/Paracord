@@ -34,7 +34,7 @@ export default defineConfig(({ mode }) => {
           ],
         },
         workbox: {
-          navigateFallbackDenylist: [/^\/api\//, /^\/gateway/, /^\/livekit/, /^\/health/],
+          navigateFallbackDenylist: [/^\/api\//, /^\/_paracord\//, /^\/gateway/, /^\/livekit/, /^\/health/],
           runtimeCaching: [],
           skipWaiting: true,
           clientsClaim: true,
@@ -59,6 +59,11 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
+        "/_paracord": {
+          target: proxyTarget,
+          changeOrigin: true,
+          secure: false,
+        },
         "/gateway": {
           target: proxyTarget,
           ws: true,
@@ -78,6 +83,36 @@ export default defineConfig(({ mode }) => {
       target: "esnext",
       minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
       sourcemap: !!process.env.TAURI_DEBUG,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            const normalized = id.replace(/\\/g, "/");
+
+            if (!normalized.includes("/node_modules/")) {
+              return undefined;
+            }
+
+            if (
+              normalized.includes("/react/")
+              || normalized.includes("/react-dom/")
+              || normalized.includes("/react-router")
+            ) {
+              return "vendor-react";
+            }
+            if (normalized.includes("/livekit-client/")) return "vendor-livekit";
+            if (normalized.includes("/@noble/")) return "vendor-crypto";
+            if (normalized.includes("/lucide-react/")) return "vendor-icons";
+            if (normalized.includes("/framer-motion/")) return "vendor-motion";
+            if (normalized.includes("/highlight.js/") || normalized.includes("/dompurify/")) {
+              return "vendor-markdown";
+            }
+            if (normalized.includes("/@dnd-kit/")) return "vendor-dnd";
+            if (normalized.includes("/@tauri-apps/")) return "vendor-tauri";
+
+            return undefined;
+          },
+        },
+      },
     },
     esbuild: {
       // Strip verbose logging in production builds — keep warn/error for

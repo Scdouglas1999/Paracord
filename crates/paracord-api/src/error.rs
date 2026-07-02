@@ -18,8 +18,11 @@ pub enum ApiError {
     BadRequest(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("upgrade required: {0}")]
+    UpgradeRequired(String),
+    /// Rate limited. The i64 value is retry_after in seconds (0 = generic rate limit).
     #[error("rate limited")]
-    RateLimited,
+    RateLimited(i64),
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
     #[error("internal server error")]
@@ -35,7 +38,8 @@ impl ApiError {
             ApiError::Forbidden => "FORBIDDEN",
             ApiError::BadRequest(_) => "BAD_REQUEST",
             ApiError::Conflict(_) => "CONFLICT",
-            ApiError::RateLimited => "RATE_LIMITED",
+            ApiError::UpgradeRequired(_) => "UPGRADE_REQUIRED",
+            ApiError::RateLimited(_) => "RATE_LIMITED",
             ApiError::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
             ApiError::Internal(_) => "INTERNAL_ERROR",
         }
@@ -48,7 +52,8 @@ impl ApiError {
             ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::Conflict(_) => StatusCode::CONFLICT,
-            ApiError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            ApiError::UpgradeRequired(_) => StatusCode::UPGRADE_REQUIRED,
+            ApiError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -60,23 +65,35 @@ impl IntoResponse for ApiError {
         let status = self.status_code();
         let code = self.error_code();
 
-        let message = match &self {
+        let (message, retry_after) = match &self {
             ApiError::Internal(err) => {
                 tracing::error!("API internal error: {err:#}");
-                "internal server error".to_string()
+                ("internal server error".to_string(), None)
             }
-            other => other.to_string(),
+            ApiError::RateLimited(secs) if *secs > 0 => (self.to_string(), Some(*secs)),
+            other => (other.to_string(), None),
         };
 
-        let body = json!({
+        let mut body = json!({
             "code": code,
             "message": message,
             // Keep legacy "error" field for backwards compatibility
             "error": message,
             "details": Value::Null,
         });
+        if let Some(secs) = retry_after {
+            body["retry_after"] = json!(secs);
+        }
 
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        if let Some(secs) = retry_after {
+            if let Ok(value) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, value);
+            }
+        }
+        response
     }
 }
 
@@ -88,6 +105,7 @@ impl From<paracord_core::error::CoreError> for ApiError {
             paracord_core::error::CoreError::MissingPermission => ApiError::Forbidden,
             paracord_core::error::CoreError::BadRequest(msg) => ApiError::BadRequest(msg),
             paracord_core::error::CoreError::Conflict(msg) => ApiError::Conflict(msg),
+            paracord_core::error::CoreError::RateLimited(secs) => ApiError::RateLimited(secs),
             paracord_core::error::CoreError::Database(_) => {
                 ApiError::Internal(anyhow::anyhow!("database error"))
             }

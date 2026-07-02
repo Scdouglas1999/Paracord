@@ -12,6 +12,23 @@ import { useAuthStore } from '../../stores/authStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { formatActivityLabel, getPrimaryActivity } from '../../lib/activityPresence';
 import { SkeletonMember } from '../ui/Skeleton';
+import { guildApi } from '../../api/guilds';
+import { extractApiError } from '../../api/client';
+import { writeClipboardText } from '../../lib/clipboard';
+import { toast } from '../../stores/toastStore';
+
+function roleColorToHex(color: number): string | undefined {
+  if (!color) return undefined;
+  return `#${color.toString(16).padStart(6, '0')}`;
+}
+
+function getHighestRoleColor(memberRoles: string[], roles: Role[]): string | undefined {
+  const matchedRoles = roles
+    .filter((r) => memberRoles.includes(r.id) && r.color !== 0)
+    .sort((a, b) => b.position - a.position);
+  if (matchedRoles.length === 0) return undefined;
+  return roleColorToHex(matchedRoles[0].color);
+}
 
 interface MemberWithUser {
   user_id: string;
@@ -47,7 +64,7 @@ export function resolveMemberStatus(
   return 'offline';
 }
 
-export function MemberList({ members: propMembers, roles = [], compact = false }: MemberListProps) {
+export function MemberList({ members: propMembers, roles: propRoles = [], compact = false }: MemberListProps) {
   const selectedGuildId = useGuildStore(s => s.selectedGuildId);
   const activeServerId = useServerListStore(s => s.activeServerId);
   const activeServer = useServerListStore((s) =>
@@ -63,12 +80,25 @@ export function MemberList({ members: propMembers, roles = [], compact = false }
   const voiceParticipants = useVoiceStore((s) => s.participants);
   const selfUserId = activeServer?.userId ?? authUserId;
   const isAuthenticated = Boolean(authToken && selfUserId);
+  const [fetchedRoles, setFetchedRoles] = useState<Role[]>([]);
+
+  // Use prop roles if provided, otherwise use fetched roles
+  const roles = propRoles.length > 0 ? propRoles : fetchedRoles;
 
   useEffect(() => {
     if (selectedGuildId && !storeMembers) {
       fetchMembers(selectedGuildId);
     }
   }, [selectedGuildId]);
+
+  useEffect(() => {
+    if (!selectedGuildId || propRoles.length > 0) return;
+    guildApi.getRoles(selectedGuildId).then(({ data }) => {
+      setFetchedRoles(data);
+    }).catch(() => {
+      // non-fatal
+    });
+  }, [selectedGuildId, propRoles.length]);
 
   const members: MemberWithUser[] = useMemo(() => {
     if (propMembers) return propMembers;
@@ -100,6 +130,16 @@ export function MemberList({ members: propMembers, roles = [], compact = false }
   const [showOffline, setShowOffline] = useState(false);
   const [selectedMember, setSelectedMember] = useState<MemberWithUser | null>(null);
   const [popupPos, setPopupPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [contextMenuMember, setContextMenuMember] = useState<{ userId: string; x: number; y: number } | null>(null);
+
+  const copyMemberIdToClipboard = useCallback(async (userId: string) => {
+    try {
+      await writeClipboardText(userId);
+      toast.success('Member ID copied.');
+    } catch (err) {
+      toast.error(`Failed to copy member ID: ${extractApiError(err)}`);
+    }
+  }, []);
 
   const onlineMems = members.filter(m => m.status !== 'offline');
   const offlineMems = members.filter(m => m.status === 'offline');
@@ -129,6 +169,129 @@ export function MemberList({ members: propMembers, roles = [], compact = false }
 
   const getStatusColor = (status?: string) => STATUS_COLORS[status || 'offline'];
   const isMemberListLoading = !propMembers && !storeMembers && !!selectedGuildId;
+
+  const renderMember = (member: MemberWithUser) => {
+    const roleColor = getHighestRoleColor(member.roles, roles);
+    return (
+    <button
+      key={member.user_id}
+      className="group flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-3 text-left transition-all hover:border-border-subtle hover:bg-bg-mod-subtle"
+      onClick={(e) => handleMemberClick(e, member)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setContextMenuMember({ userId: member.user_id, x: e.clientX, y: e.clientY });
+      }}
+      onKeyDown={(e) => {
+        if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') {
+          e.preventDefault();
+          const rect = e.currentTarget.getBoundingClientRect();
+          setContextMenuMember({ userId: member.user_id, x: rect.left, y: rect.bottom });
+        }
+      }}
+    >
+      <div className="relative flex-shrink-0">
+        <div
+          className="flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold text-white"
+          style={{
+            backgroundColor: roleColor ?? 'var(--accent-primary)',
+            opacity: member.status === 'offline' ? 0.4 : 1,
+          }}
+        >
+          {(member.nick || member.username).charAt(0).toUpperCase()}
+        </div>
+        <div
+          className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2"
+          style={{
+            backgroundColor: getStatusColor(member.status),
+            borderColor: 'var(--bg-secondary)',
+          }}
+        />
+      </div>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <div
+            className="truncate text-sm font-semibold transition-colors group-hover:text-text-primary"
+            style={{
+              opacity: member.status === 'offline' ? 0.4 : 1,
+              color: roleColor ?? 'var(--text-secondary)',
+            }}
+          >
+            {member.nick || member.username}
+          </div>
+          {member.bot && (
+            <span className="shrink-0 rounded-md border border-accent-primary/35 bg-accent-primary/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
+              Bot
+            </span>
+          )}
+        </div>
+        {member.activityText && member.status !== 'offline' && (
+          <div className="truncate text-xs text-text-muted">{member.activityText}</div>
+        )}
+      </div>
+    </button>
+  );
+  };
+
+  // Flatten all sections into a single virtual row list for virtualization
+  type VirtualRow =
+    | { type: 'stats' }
+    | { type: 'header'; label: string; count: number }
+    | { type: 'member'; member: MemberWithUser }
+    | { type: 'offlineToggle'; count: number }
+    | { type: 'empty' };
+
+  const virtualRows = useMemo<VirtualRow[]>(() => {
+    if (isMemberListLoading) return [];
+    const rows: VirtualRow[] = [];
+    rows.push({ type: 'stats' });
+
+    for (const [roleId, groupMembers] of roleGroups.entries()) {
+      const role = roles.find(r => r.id === roleId);
+      rows.push({ type: 'header', label: role?.name || 'Members', count: groupMembers.length });
+      for (const m of groupMembers) rows.push({ type: 'member', member: m });
+    }
+
+    if (noRoleGroup.length > 0) {
+      rows.push({ type: 'header', label: 'Online', count: noRoleGroup.length });
+      for (const m of noRoleGroup) rows.push({ type: 'member', member: m });
+    }
+
+    if (offlineMems.length > 0) {
+      rows.push({ type: 'offlineToggle', count: offlineMems.length });
+      if (showOffline) {
+        for (const m of offlineMems) rows.push({ type: 'member', member: m });
+      }
+    }
+
+    if (members.length === 0) {
+      rows.push({ type: 'empty' });
+    }
+
+    return rows;
+  }, [roleGroups, noRoleGroup, offlineMems, showOffline, members.length, roles, isMemberListLoading]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const estimateSize = useCallback((index: number) => {
+    const row = virtualRows[index];
+    if (!row) return 52;
+    switch (row.type) {
+      case 'stats': return 76;
+      case 'header': return 38;
+      case 'offlineToggle': return 42;
+      case 'empty': return 80;
+      case 'member': return 52;
+      default: return 52;
+    }
+  }, [virtualRows]);
+
+  const virtualizer = useVirtualizer({
+    count: virtualRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize,
+    overscan: 10,
+    paddingStart: 18,
+  });
 
   if (compact) {
     const compactMembers = [...members].sort((a, b) => {
@@ -203,113 +366,6 @@ export function MemberList({ members: propMembers, roles = [], compact = false }
     );
   }
 
-  const renderMember = (member: MemberWithUser) => (
-    <button
-      key={member.user_id}
-      className="group flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-3 text-left transition-all hover:border-border-subtle hover:bg-bg-mod-subtle"
-      onClick={(e) => handleMemberClick(e, member)}
-    >
-      <div className="relative flex-shrink-0">
-        <div
-          className="flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold text-white"
-          style={{
-            backgroundColor: 'var(--accent-primary)',
-            opacity: member.status === 'offline' ? 0.4 : 1,
-          }}
-        >
-          {(member.nick || member.username).charAt(0).toUpperCase()}
-        </div>
-        <div
-          className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2"
-          style={{
-            backgroundColor: getStatusColor(member.status),
-            borderColor: 'var(--bg-secondary)',
-          }}
-        />
-      </div>
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <div
-            className="truncate text-sm font-semibold text-text-secondary transition-colors group-hover:text-text-primary"
-            style={{
-              opacity: member.status === 'offline' ? 0.4 : 1,
-            }}
-          >
-            {member.nick || member.username}
-          </div>
-          {member.bot && (
-            <span className="shrink-0 rounded-md border border-accent-primary/35 bg-accent-primary/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
-              Bot
-            </span>
-          )}
-        </div>
-        {member.activityText && member.status !== 'offline' && (
-          <div className="truncate text-xs text-text-muted">{member.activityText}</div>
-        )}
-      </div>
-    </button>
-  );
-
-  // Flatten all sections into a single virtual row list for virtualization
-  type VirtualRow =
-    | { type: 'stats' }
-    | { type: 'header'; label: string; count: number }
-    | { type: 'member'; member: MemberWithUser }
-    | { type: 'offlineToggle'; count: number }
-    | { type: 'empty' };
-
-  const virtualRows = useMemo<VirtualRow[]>(() => {
-    if (isMemberListLoading) return [];
-    const rows: VirtualRow[] = [];
-    rows.push({ type: 'stats' });
-
-    for (const [roleId, groupMembers] of roleGroups.entries()) {
-      const role = roles.find(r => r.id === roleId);
-      rows.push({ type: 'header', label: role?.name || 'Members', count: groupMembers.length });
-      for (const m of groupMembers) rows.push({ type: 'member', member: m });
-    }
-
-    if (noRoleGroup.length > 0) {
-      rows.push({ type: 'header', label: 'Online', count: noRoleGroup.length });
-      for (const m of noRoleGroup) rows.push({ type: 'member', member: m });
-    }
-
-    if (offlineMems.length > 0) {
-      rows.push({ type: 'offlineToggle', count: offlineMems.length });
-      if (showOffline) {
-        for (const m of offlineMems) rows.push({ type: 'member', member: m });
-      }
-    }
-
-    if (members.length === 0) {
-      rows.push({ type: 'empty' });
-    }
-
-    return rows;
-  }, [roleGroups, noRoleGroup, offlineMems, showOffline, members.length, roles, isMemberListLoading]);
-
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  const estimateSize = useCallback((index: number) => {
-    const row = virtualRows[index];
-    if (!row) return 52;
-    switch (row.type) {
-      case 'stats': return 76;
-      case 'header': return 38;
-      case 'offlineToggle': return 42;
-      case 'empty': return 80;
-      case 'member': return 52;
-      default: return 52;
-    }
-  }, [virtualRows]);
-
-  const virtualizer = useVirtualizer({
-    count: virtualRows.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize,
-    overscan: 10,
-  });
-
   return (
     <div
       ref={scrollRef}
@@ -329,7 +385,7 @@ export function MemberList({ members: propMembers, roles = [], compact = false }
         </div>
       ) : (
         <div
-          className="relative px-3 pt-4.5"
+          className="relative px-3"
           style={{ height: virtualizer.getTotalSize() }}
         >
           {virtualizer.getVirtualItems().map((virtualItem) => {
@@ -378,6 +434,37 @@ export function MemberList({ members: propMembers, roles = [], compact = false }
             );
           })}
         </div>
+      )}
+
+      {contextMenuMember && (
+        <>
+          <div className="fixed inset-0 z-50" onClick={() => setContextMenuMember(null)} />
+          <div
+            className="glass-modal fixed z-50 min-w-[200px] rounded-xl p-1.5"
+            style={{ left: contextMenuMember.x + 10, top: contextMenuMember.y }}
+            role="menu"
+            aria-label="Member actions"
+            tabIndex={-1}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setContextMenuMember(null);
+              }
+            }}
+          >
+            <button
+              autoFocus
+              role="menuitem"
+              className="w-full rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+              onClick={() => {
+                void copyMemberIdToClipboard(contextMenuMember.userId);
+                setContextMenuMember(null);
+              }}
+            >
+              Copy ID
+            </button>
+          </div>
+        </>
       )}
 
       {selectedMember && createPortal(

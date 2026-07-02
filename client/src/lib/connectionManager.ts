@@ -750,14 +750,18 @@ class ConnectionManager {
   }
 
   private handleDispatch(conn: ServerConnection, event: string, data: unknown): void {
-    if (event === GatewayEvents.READY) {
-      const ready = data as { session_id?: string };
-      conn.sessionId = ready.session_id ?? null;
+    if (event === GatewayEvents.READY || event === GatewayEvents.RESUMED) {
+      const lifecycle = data as { session_id?: string };
+      if (event === GatewayEvents.READY) {
+        conn.sessionId = lifecycle.session_id ?? null;
+      } else if (lifecycle.session_id) {
+        conn.sessionId = lifecycle.session_id;
+      }
       conn.reconnectAttempts = 0;
       this.flushPendingMessages(conn);
       this.syncUiConnectionStatus();
     }
-    dispatchGatewayEvent(conn.serverId, event, data);
+    dispatchGatewayEvent(conn.serverId, event, (data ?? {}) as Record<string, unknown>);
   }
 
   private send(conn: ServerConnection, data: unknown): void {
@@ -833,6 +837,7 @@ class ConnectionManager {
     channelId: string | null,
     selfMute: boolean,
     selfDeaf: boolean,
+    selfVideo: boolean = false,
   ): void {
     const conn = this.connections.get(serverId);
     if (!conn) return;
@@ -842,12 +847,13 @@ class ConnectionManager {
         channel_id: channelId,
         self_mute: selfMute,
         self_deaf: selfDeaf,
+        self_video: selfVideo,
       }).catch(() => { });
       return;
     }
     this.send(conn, {
       op: 4,
-      d: { guild_id: guildId, channel_id: channelId, self_mute: selfMute, self_deaf: selfDeaf },
+      d: { guild_id: guildId, channel_id: channelId, self_mute: selfMute, self_deaf: selfDeaf, self_video: selfVideo },
     });
   }
 
@@ -866,9 +872,10 @@ class ConnectionManager {
     channelId: string | null,
     selfMute: boolean,
     selfDeaf: boolean,
+    selfVideo: boolean = false,
   ): void {
     for (const conn of this.getAllConnections()) {
-      this.updateVoiceState(conn.serverId, guildId, channelId, selfMute, selfDeaf);
+      this.updateVoiceState(conn.serverId, guildId, channelId, selfMute, selfDeaf, selfVideo);
     }
   }
 
@@ -936,6 +943,18 @@ class ConnectionManager {
     this.syncUiConnectionStatus();
   }
 
+  /** Ask the Tauri backend to verify and sync server URLs for TLS trust decisions. */
+  private async syncTrustedHosts(serverUrls: string[]): Promise<void> {
+    try {
+      if (typeof window !== 'undefined' && '__TAURI__' in window) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('update_trusted_server_hosts', { serverUrls });
+      }
+    } catch {
+      // Not running in Tauri or command not available — ignore.
+    }
+  }
+
   /** Connect to all saved servers */
   async connectAll(): Promise<void> {
     if (this.offline) {
@@ -946,6 +965,16 @@ class ConnectionManager {
     const servers = useServerListStore.getState().servers;
     const localToken = useAuthStore.getState().token;
     logVoiceDiagnostic('[gateway] connectAll', { serverCount: servers.length, useRealtimeV2: this.useRealtimeV2, hasAuthToken: !!localToken, serverIds: servers.map(s => s.id) });
+
+    // Ask the Tauri backend to verify and sync trusted server hosts so that TLS
+    // certificate errors for user-configured self-hosted servers are allowed through.
+    // Include the local server URL alongside remote servers.
+    const allServerUrls = servers.map((s) => s.url);
+    const localServerUrl = this.resolveLocalServerUrl();
+    if (localServerUrl && !allServerUrls.includes(localServerUrl)) {
+      allServerUrls.push(localServerUrl);
+    }
+    void this.syncTrustedHosts(allServerUrls);
     const keepIds = new Set<string>();
 
     // Determine the local server URL so we can detect when a server entry

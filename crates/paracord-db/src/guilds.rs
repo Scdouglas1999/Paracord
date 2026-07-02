@@ -1,7 +1,8 @@
 use crate::{datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use paracord_models::id::{GuildId, RoleId, UserId};
 use sqlx::Row;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct SpaceRow {
@@ -19,6 +20,18 @@ pub struct SpaceRow {
     pub created_at: DateTime<Utc>,
     pub hub_settings: Option<String>,
     pub bot_settings: Option<String>,
+}
+
+impl SpaceRow {
+    #[inline]
+    pub fn guild_id(&self) -> GuildId {
+        GuildId::from(self.id)
+    }
+
+    #[inline]
+    pub fn owner_user_id(&self) -> UserId {
+        UserId::from(self.owner_id)
+    }
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for SpaceRow {
@@ -46,16 +59,17 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for SpaceRow {
 // Backward compat alias
 pub type GuildRow = SpaceRow;
 
+/// Core implementation using newtype IDs.
 pub async fn create_space(
     pool: &DbPool,
-    id: i64,
+    id: GuildId,
     name: &str,
-    owner_id: i64,
+    owner_id: UserId,
     icon_hash: Option<&str>,
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
-        "INSERT INTO spaces (id, name, owner_id, icon_hash)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO spaces (id, name, owner_id, icon_hash, visibility)
+         VALUES ($1, $2, $3, $4, 'private')
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
     )
     .bind(id)
@@ -67,6 +81,7 @@ pub async fn create_space(
     Ok(row)
 }
 
+/// Raw i64 shim for backward compatibility with callers that haven't migrated.
 pub async fn create_guild(
     pool: &DbPool,
     id: i64,
@@ -74,10 +89,18 @@ pub async fn create_guild(
     owner_id: i64,
     icon_hash: Option<&str>,
 ) -> Result<SpaceRow, DbError> {
-    create_space(pool, id, name, owner_id, icon_hash).await
+    create_space(
+        pool,
+        GuildId::new(id),
+        name,
+        UserId::new(owner_id),
+        icon_hash,
+    )
+    .await
 }
 
-pub async fn get_space(pool: &DbPool, id: i64) -> Result<Option<SpaceRow>, DbError> {
+/// Core implementation using newtype ID.
+pub async fn get_space(pool: &DbPool, id: GuildId) -> Result<Option<SpaceRow>, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
         "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings
          FROM spaces WHERE id = $1"
@@ -88,13 +111,15 @@ pub async fn get_space(pool: &DbPool, id: i64) -> Result<Option<SpaceRow>, DbErr
     Ok(row)
 }
 
+/// Raw i64 shim for backward compatibility.
 pub async fn get_guild(pool: &DbPool, id: i64) -> Result<Option<SpaceRow>, DbError> {
-    get_space(pool, id).await
+    get_space(pool, GuildId::new(id)).await
 }
 
+/// Core implementation using newtype ID.
 pub async fn update_space(
     pool: &DbPool,
-    id: i64,
+    id: GuildId,
     name: Option<&str>,
     description: Option<&str>,
     icon_hash: Option<&str>,
@@ -123,6 +148,7 @@ pub async fn update_space(
     Ok(row)
 }
 
+/// Raw i64 shim for backward compatibility.
 pub async fn update_guild(
     pool: &DbPool,
     id: i64,
@@ -134,7 +160,7 @@ pub async fn update_guild(
 ) -> Result<SpaceRow, DbError> {
     update_space(
         pool,
-        id,
+        GuildId::new(id),
         name,
         description,
         icon_hash,
@@ -144,9 +170,10 @@ pub async fn update_guild(
     .await
 }
 
+/// Core implementation using newtype ID.
 pub async fn update_space_visibility(
     pool: &DbPool,
-    id: i64,
+    id: GuildId,
     visibility: &str,
     allowed_roles: &str,
 ) -> Result<SpaceRow, DbError> {
@@ -166,7 +193,8 @@ pub async fn update_space_visibility(
     Ok(row)
 }
 
-pub async fn delete_space(pool: &DbPool, id: i64) -> Result<(), DbError> {
+/// Core implementation using newtype ID.
+pub async fn delete_space(pool: &DbPool, id: GuildId) -> Result<(), DbError> {
     sqlx::query("DELETE FROM spaces WHERE id = $1")
         .bind(id)
         .execute(pool)
@@ -174,8 +202,9 @@ pub async fn delete_space(pool: &DbPool, id: i64) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Raw i64 shim for backward compatibility.
 pub async fn delete_guild(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    delete_space(pool, id).await
+    delete_space(pool, GuildId::new(id)).await
 }
 
 pub async fn list_all_spaces(pool: &DbPool) -> Result<Vec<SpaceRow>, DbError> {
@@ -189,7 +218,8 @@ pub async fn list_all_spaces(pool: &DbPool) -> Result<Vec<SpaceRow>, DbError> {
     Ok(rows)
 }
 
-pub async fn get_user_guilds(pool: &DbPool, user_id: i64) -> Result<Vec<SpaceRow>, DbError> {
+/// Core implementation using newtype ID.
+pub async fn get_user_guilds(pool: &DbPool, user_id: UserId) -> Result<Vec<SpaceRow>, DbError> {
     let rows = sqlx::query_as::<_, SpaceRow>(
         "SELECT s.id, s.name, s.description, s.icon_hash, s.banner_hash, s.owner_id, s.features,
                 s.system_channel_id, s.vanity_url_code, s.visibility, s.allowed_roles, s.created_at, s.hub_settings, s.bot_settings
@@ -201,6 +231,25 @@ pub async fn get_user_guilds(pool: &DbPool, user_id: i64) -> Result<Vec<SpaceRow
     .bind(user_id)
     .fetch_all(pool)
     .await?;
+
+    // Batch-fetch all member roles once to avoid per-guild role lookups.
+    let member_roles: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT r.space_id, mr.role_id
+         FROM member_roles mr
+         INNER JOIN roles r ON r.id = mr.role_id
+         WHERE mr.user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut user_roles_by_space: HashMap<i64, HashSet<i64>> = HashMap::new();
+    for (space_id, role_id) in member_roles {
+        user_roles_by_space
+            .entry(space_id)
+            .or_default()
+            .insert(role_id);
+    }
 
     let mut visible = Vec::with_capacity(rows.len());
     for row in rows {
@@ -215,22 +264,10 @@ pub async fn get_user_guilds(pool: &DbPool, user_id: i64) -> Result<Vec<SpaceRow
             continue;
         }
 
-        let member_role_rows: Vec<(i64,)> = sqlx::query_as(
-            "SELECT mr.role_id
-             FROM member_roles mr
-             INNER JOIN roles r ON r.id = mr.role_id
-             WHERE mr.user_id = $1
-               AND r.space_id = $2",
-        )
-        .bind(user_id)
-        .bind(row.id)
-        .fetch_all(pool)
-        .await?;
-
-        let user_roles: HashSet<i64> = member_role_rows.into_iter().map(|(id,)| id).collect();
+        let user_roles = user_roles_by_space.get(&row.id);
         if allowed_roles
             .into_iter()
-            .any(|role_id| user_roles.contains(&role_id))
+            .any(|role_id| user_roles.is_some_and(|roles| roles.contains(&role_id)))
         {
             visible.push(row);
         }
@@ -241,6 +278,48 @@ pub async fn get_user_guilds(pool: &DbPool, user_id: i64) -> Result<Vec<SpaceRow
 
 pub fn parse_allowed_role_ids(raw: &str) -> Vec<i64> {
     serde_json::from_str::<Vec<i64>>(raw).unwrap_or_default()
+}
+
+pub fn parse_allowed_role_ids_typed(raw: &str) -> Vec<RoleId> {
+    parse_allowed_role_ids(raw)
+        .into_iter()
+        .map(RoleId::from)
+        .collect()
+}
+
+/// Set or clear the vanity URL code for a guild. Pass `None` to clear it.
+/// Core implementation using newtype ID.
+pub async fn update_vanity_url(
+    pool: &DbPool,
+    guild_id: GuildId,
+    code: Option<&str>,
+) -> Result<SpaceRow, DbError> {
+    let row = sqlx::query_as::<_, SpaceRow>(
+        "UPDATE spaces
+         SET vanity_url_code = $2, updated_at = datetime('now')
+         WHERE id = $1
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
+    )
+    .bind(guild_id)
+    .bind(code)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Look up a guild by its vanity URL code.
+pub async fn get_guild_by_vanity_code(
+    pool: &DbPool,
+    code: &str,
+) -> Result<Option<SpaceRow>, DbError> {
+    let row = sqlx::query_as::<_, SpaceRow>(
+        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings
+         FROM spaces WHERE vanity_url_code = $1"
+    )
+    .bind(code)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
 }
 
 pub async fn list_all_guilds(pool: &DbPool) -> Result<Vec<SpaceRow>, DbError> {
@@ -258,10 +337,11 @@ pub async fn count_guilds(pool: &DbPool) -> Result<i64, DbError> {
     count_spaces(pool).await
 }
 
+/// Core implementation using newtype IDs.
 pub async fn transfer_ownership(
     pool: &DbPool,
-    space_id: i64,
-    new_owner_id: i64,
+    space_id: GuildId,
+    new_owner_id: UserId,
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
         "UPDATE spaces SET owner_id = $2, updated_at = datetime('now')
@@ -302,7 +382,7 @@ mod tests {
     async fn test_create_guild_with_valid_data() {
         let pool = test_pool().await;
         create_test_user(&pool, 1).await;
-        let guild = create_guild(&pool, 100, "Test Guild", 1, None)
+        let guild = create_space(&pool, GuildId::new(100), "Test Guild", UserId::new(1), None)
             .await
             .unwrap();
         assert_eq!(guild.id, 100);
@@ -310,15 +390,22 @@ mod tests {
         assert_eq!(guild.owner_id, 1);
         assert!(guild.icon_hash.is_none());
         assert!(guild.description.is_none());
+        assert_eq!(guild.visibility, "private");
     }
 
     #[tokio::test]
     async fn test_create_guild_with_icon() {
         let pool = test_pool().await;
         create_test_user(&pool, 1).await;
-        let guild = create_guild(&pool, 101, "Icon Guild", 1, Some("abc123"))
-            .await
-            .unwrap();
+        let guild = create_space(
+            &pool,
+            GuildId::new(101),
+            "Icon Guild",
+            UserId::new(1),
+            Some("abc123"),
+        )
+        .await
+        .unwrap();
         assert_eq!(guild.icon_hash.as_deref(), Some("abc123"));
     }
 
@@ -327,14 +414,14 @@ mod tests {
         let pool = test_pool().await;
         create_test_user(&pool, 1).await;
         create_guild(&pool, 200, "My Guild", 1, None).await.unwrap();
-        let guild = get_guild(&pool, 200).await.unwrap().unwrap();
+        let guild = get_space(&pool, GuildId::new(200)).await.unwrap().unwrap();
         assert_eq!(guild.name, "My Guild");
     }
 
     #[tokio::test]
     async fn test_get_guild_not_found() {
         let pool = test_pool().await;
-        let guild = get_guild(&pool, 999).await.unwrap();
+        let guild = get_space(&pool, GuildId::new(999)).await.unwrap();
         assert!(guild.is_none());
     }
 
@@ -343,9 +430,9 @@ mod tests {
         let pool = test_pool().await;
         create_test_user(&pool, 1).await;
         create_guild(&pool, 300, "Old Name", 1, None).await.unwrap();
-        let updated = update_guild(
+        let updated = update_space(
             &pool,
-            300,
+            GuildId::new(300),
             Some("New Name"),
             Some("A description"),
             None,
@@ -363,9 +450,17 @@ mod tests {
         let pool = test_pool().await;
         create_test_user(&pool, 1).await;
         create_guild(&pool, 301, "Original", 1, None).await.unwrap();
-        let updated = update_guild(&pool, 301, None, Some("desc only"), None, None, None)
-            .await
-            .unwrap();
+        let updated = update_space(
+            &pool,
+            GuildId::new(301),
+            None,
+            Some("desc only"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(updated.name, "Original");
         assert_eq!(updated.description.as_deref(), Some("desc only"));
     }
@@ -377,8 +472,8 @@ mod tests {
         create_guild(&pool, 400, "To Delete", 1, None)
             .await
             .unwrap();
-        delete_guild(&pool, 400).await.unwrap();
-        let guild = get_guild(&pool, 400).await.unwrap();
+        delete_space(&pool, GuildId::new(400)).await.unwrap();
+        let guild = get_space(&pool, GuildId::new(400)).await.unwrap();
         assert!(guild.is_none());
     }
 
@@ -390,7 +485,7 @@ mod tests {
         create_guild(&pool, 501, "Guild B", 1, None).await.unwrap();
         crate::members::add_member(&pool, 1, 500).await.unwrap();
         crate::members::add_member(&pool, 1, 501).await.unwrap();
-        let guilds = get_user_guilds(&pool, 1).await.unwrap();
+        let guilds = get_user_guilds(&pool, UserId::new(1)).await.unwrap();
         assert_eq!(guilds.len(), 2);
     }
 
@@ -422,7 +517,9 @@ mod tests {
         create_guild(&pool, 800, "Owned Guild", 1, None)
             .await
             .unwrap();
-        let transferred = transfer_ownership(&pool, 800, 2).await.unwrap();
+        let transferred = transfer_ownership(&pool, GuildId::new(800), UserId::new(2))
+            .await
+            .unwrap();
         assert_eq!(transferred.owner_id, 2);
     }
 
@@ -433,7 +530,7 @@ mod tests {
         create_guild(&pool, 900, "Vis Guild", 1, None)
             .await
             .unwrap();
-        let updated = update_space_visibility(&pool, 900, "roles", "[10,20]")
+        let updated = update_space_visibility(&pool, GuildId::new(900), "roles", "[10,20]")
             .await
             .unwrap();
         assert_eq!(updated.visibility, "roles");

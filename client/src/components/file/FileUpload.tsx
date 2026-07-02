@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { Upload, X, FileText, AlertTriangle } from 'lucide-react';
+import { isAllowedImageMimeType } from '../../lib/security';
 
 interface FileUploadProps {
   onFilesSelected: (files: File[]) => void;
@@ -8,6 +9,10 @@ interface FileUploadProps {
 }
 
 const ONE_GB = 1024 * 1024 * 1024;
+
+function canPreviewImage(file: File): boolean {
+  return isAllowedImageMimeType(file.type);
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B';
@@ -22,7 +27,7 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
   const stagedImagePreviews = useMemo(
     () =>
       stagedFiles.map((file) => (
-        file.type.startsWith('image/') ? URL.createObjectURL(file) : null
+        canPreviewImage(file) ? URL.createObjectURL(file) : null
       )),
     [stagedFiles]
   );
@@ -51,7 +56,8 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
   return (
     <div>
       {/* Drop zone */}
-      <div
+      <button
+        type="button"
         className="cursor-pointer rounded-xl border-2 border-dashed p-7 text-center transition-colors"
         style={{
           borderColor: isDragOver ? 'var(--accent-primary)' : 'var(--border-subtle)',
@@ -61,6 +67,7 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
         onDragLeave={() => setIsDragOver(false)}
         onDrop={handleDrop}
         onClick={() => fileInputRef.current?.click()}
+        aria-label="Select files to upload"
       >
         <Upload size={32} style={{ color: 'var(--text-muted)', margin: '0 auto 8px' }} />
         <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
@@ -69,7 +76,7 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
         <div className="mt-1.5 text-sm" style={{ color: 'var(--text-muted)' }}>
           or click to browse
         </div>
-      </div>
+      </button>
       <input
         ref={fileInputRef}
         type="file"
@@ -87,7 +94,7 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
               className="group flex items-center gap-3.5 rounded-lg px-3.5 py-2.5"
               style={{ backgroundColor: 'var(--bg-secondary)' }}
             >
-              {file.type.startsWith('image/') ? (
+              {canPreviewImage(file) ? (
                 <img
                   src={stagedImagePreviews[i] || ''}
                   alt={file.name}
@@ -107,9 +114,12 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
                 </div>
               )}
               <button
+                type="button"
                 onClick={() => onRemoveFile(i)}
                 className="rounded p-1.5 opacity-0 transition-opacity group-hover:opacity-100"
                 style={{ color: 'var(--text-muted)' }}
+                aria-label={`Remove ${file.name}`}
+                title={`Remove ${file.name}`}
               >
                 <X size={16} />
               </button>

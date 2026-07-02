@@ -3,6 +3,7 @@ import {
   clearLegacyPersistedAuth,
   getAccessToken,
   getRefreshToken,
+  hydrateRefreshTokenStorage,
   setAccessToken,
   setRefreshToken,
 } from './authToken';
@@ -26,6 +27,14 @@ describe('authToken', () => {
 
     setRefreshToken(null);
     expect(getRefreshToken()).toBeNull();
+  });
+
+  it('hydrates refresh token from legacy localStorage in web mode', async () => {
+    localStorage.setItem('paracord:refresh-token', 'hydrated-token');
+
+    await hydrateRefreshTokenStorage();
+
+    expect(getRefreshToken()).toBe('hydrated-token');
   });
 
   it('clears legacy auth keys without clearing refresh token', () => {

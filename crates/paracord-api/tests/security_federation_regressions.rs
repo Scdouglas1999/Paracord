@@ -1,19 +1,21 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+mod common;
+
+use std::{
+    net::SocketAddr,
+    sync::{Mutex, OnceLock},
+};
 
 use axum::{
-    body::{to_bytes, Body},
+    body::Body,
+    extract::connect_info::ConnectInfo,
     http::{header, Request, StatusCode},
-    Router,
+    routing::get,
+    Json, Router,
 };
-use paracord_core::{build_permission_cache, AppConfig, AppState, RuntimeSettings};
-use paracord_media::{
-    LiveKitConfig, LocalStorage, Storage, StorageConfig, StorageManager, VoiceManager,
-};
+use common::{build_test_app, dispatch_json, TestApp, TestAppOptions};
 use serde_json::{json, Value};
-use tempfile::TempDir;
-use tokio::sync::{Notify, RwLock};
-use tower::ServiceExt;
+use sha2::{Digest, Sha256};
+use tokio::net::TcpListener;
 
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -23,103 +25,202 @@ fn env_lock() -> &'static Mutex<()> {
 struct TestHarness {
     app: Router,
     db: paracord_db::DbPool,
-    _storage_dir: TempDir,
-    _media_dir: TempDir,
-    _backup_dir: TempDir,
+    _test_app: TestApp,
 }
 
 impl TestHarness {
     async fn new(run_migrations: bool) -> anyhow::Result<Self> {
-        let db = paracord_db::create_pool("sqlite::memory:", 1).await?;
-        if run_migrations {
-            paracord_db::run_migrations(&db).await?;
-        }
-
-        let storage_dir = tempfile::tempdir()?;
-        let media_dir = tempfile::tempdir()?;
-        let backup_dir = tempfile::tempdir()?;
-        let livekit = Arc::new(LiveKitConfig {
-            api_key: "lk-test-key".to_string(),
-            api_secret: "lk-test-secret".to_string(),
-            url: "ws://localhost:7880".to_string(),
-            http_url: "http://localhost:7880".to_string(),
-        });
-
-        let state = AppState {
-            db: db.clone(),
-            event_bus: paracord_core::events::EventBus::default(),
-            config: AppConfig {
-                jwt_secret: "integration-test-secret".to_string(),
-                jwt_expiry_seconds: 3600,
-                registration_enabled: true,
-                allow_username_login: false,
-                require_email: true,
-                storage_path: storage_dir.path().to_string_lossy().into_owned(),
-                max_upload_size: 10 * 1024 * 1024,
-                livekit_api_key: livekit.api_key.clone(),
-                livekit_api_secret: livekit.api_secret.clone(),
-                livekit_url: livekit.url.clone(),
-                livekit_http_url: livekit.http_url.clone(),
-                livekit_public_url: livekit.url.clone(),
-                livekit_available: false,
-                public_url: None,
-                media_storage_path: media_dir.path().to_string_lossy().into_owned(),
-                media_max_file_size: 10 * 1024 * 1024,
-                media_p2p_threshold: 1024 * 1024,
-                file_cryptor: None,
-                backup_dir: backup_dir.path().to_string_lossy().into_owned(),
-                database_url: "sqlite::memory:".to_string(),
-                federation_max_events_per_peer_per_minute: None,
-                federation_max_user_creates_per_peer_per_hour: None,
-                native_media_enabled: false,
-                native_media_port: 8443,
-                native_media_max_participants: 50,
-                native_media_e2ee_required: false,
-                max_guild_storage_quota: 0,
-                federation_file_cache_enabled: false,
-                federation_file_cache_max_size: 0,
-                federation_file_cache_ttl_hours: 0,
-            },
-            runtime: Arc::new(RwLock::new(RuntimeSettings::default())),
-            voice: Arc::new(VoiceManager::new(livekit)),
-            storage: Arc::new(StorageManager::new(StorageConfig {
-                base_path: media_dir.path().to_path_buf(),
-                max_file_size: 10 * 1024 * 1024,
-                p2p_threshold: 1024 * 1024,
-                allowed_extensions: None,
-            })),
-            storage_backend: Arc::new(Storage::Local(LocalStorage::new(storage_dir.path()))),
-            shutdown: Arc::new(Notify::new()),
-            online_users: Arc::new(RwLock::new(HashSet::new())),
-            user_presences: Arc::new(RwLock::new(HashMap::new())),
-            permission_cache: build_permission_cache(),
-            federation_service: None,
-            member_index: Arc::new(paracord_core::member_index::MemberIndex::empty()),
-            native_media: None,
-        };
-
-        let app = paracord_api::build_router().with_state(state);
+        let test_app = build_test_app(TestAppOptions {
+            run_migrations,
+            ..Default::default()
+        })
+        .await?;
         Ok(Self {
-            app,
-            db,
-            _storage_dir: storage_dir,
-            _media_dir: media_dir,
-            _backup_dir: backup_dir,
+            app: test_app.app.clone(),
+            db: test_app.db.clone(),
+            _test_app: test_app,
         })
     }
 
     async fn request(&self, request: Request<Body>) -> anyhow::Result<(StatusCode, Value)> {
-        let response = self.app.clone().oneshot(request).await?;
-        let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX).await?;
-        let payload = if body.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&body)
-                .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&body) }))
-        };
-        Ok((status, payload))
+        dispatch_json(&self.app, request).await
     }
+}
+
+fn sha256_hex(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+fn json_request_with_peer(method: &str, uri: &str, body: Value) -> anyhow::Result<Request<Body>> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))?;
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49152))));
+    Ok(request)
+}
+
+async fn make_admin_token(harness: &TestHarness, prefix: &str) -> anyhow::Result<String> {
+    let token = common::create_authenticated_user_token(
+        &harness.db,
+        &harness._test_app.jwt_secret,
+        prefix,
+        "Adm1nPassw0rd!",
+    )
+    .await?;
+
+    let me_request = Request::builder()
+        .uri("/api/v1/users/@me")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())?;
+    let (status, payload) = harness.request(me_request).await?;
+    anyhow::ensure!(status == StatusCode::OK, "failed to fetch @me: {payload}");
+    let user_id = payload
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("@me response missing id"))?
+        .parse::<i64>()?;
+    let user = paracord_db::users::get_user_by_id(&harness.db, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("admin user missing"))?;
+    paracord_db::users::update_user_flags(
+        &harness.db,
+        user_id,
+        user.flags | paracord_core::USER_FLAG_ADMIN,
+    )
+    .await?;
+    Ok(token)
+}
+
+#[tokio::test]
+async fn password_reset_completion_updates_password_revokes_sessions_and_consumes_token(
+) -> anyhow::Result<()> {
+    let harness = TestHarness::new(true).await?;
+    let user_id = paracord_util::snowflake::generate(1);
+    let email = "reset-flow@example.com";
+    let old_password = "OriginalPass123!";
+    let new_password = "NewPassword123!";
+    let password_hash = paracord_core::auth::hash_password(old_password)?;
+    let user = paracord_db::users::create_user(
+        &harness.db,
+        user_id,
+        "resetuser",
+        1,
+        email,
+        &password_hash,
+    )
+    .await?;
+
+    let old_session_id = "reset-session";
+    let old_jti = "reset-jti";
+    paracord_db::sessions::create_session(
+        &harness.db,
+        old_session_id,
+        user.id,
+        "refresh-token-hash",
+        old_jti,
+        user.public_key.as_deref(),
+        None,
+        None,
+        None,
+        chrono::Utc::now() + chrono::Duration::days(1),
+    )
+    .await?;
+    let old_access_token = paracord_core::auth::create_session_token(
+        user.id,
+        user.public_key.as_deref(),
+        &harness._test_app.jwt_secret,
+        3600,
+        old_session_id,
+        old_jti,
+    )?;
+
+    let raw_reset_token = "known-reset-token-for-test";
+    paracord_db::password_reset::create_reset_token(
+        &harness.db,
+        &sha256_hex(raw_reset_token),
+        user.id,
+        chrono::Utc::now() + chrono::Duration::minutes(10),
+    )
+    .await?;
+
+    let reset_request = json_request_with_peer(
+        "POST",
+        "/api/v1/auth/reset-password",
+        json!({
+            "token": raw_reset_token,
+            "new_password": new_password
+        }),
+    )?;
+    let (reset_status, reset_body) = harness.request(reset_request).await?;
+    assert_eq!(
+        reset_status,
+        StatusCode::OK,
+        "password reset failed: {reset_body}"
+    );
+
+    let reuse_request = json_request_with_peer(
+        "POST",
+        "/api/v1/auth/reset-password",
+        json!({
+            "token": raw_reset_token,
+            "new_password": "AnotherPass123!"
+        }),
+    )?;
+    let (reuse_status, _) = harness.request(reuse_request).await?;
+    assert_eq!(reuse_status, StatusCode::BAD_REQUEST);
+
+    let old_session_request = Request::builder()
+        .uri("/api/v1/users/@me")
+        .header(header::AUTHORIZATION, format!("Bearer {old_access_token}"))
+        .body(Body::empty())?;
+    let (old_session_status, _) = harness.request(old_session_request).await?;
+    assert_eq!(old_session_status, StatusCode::UNAUTHORIZED);
+
+    let old_login_request = json_request_with_peer(
+        "POST",
+        "/api/v1/auth/login",
+        json!({
+            "email": email,
+            "password": old_password
+        }),
+    )?;
+    let (old_login_status, _) = harness.request(old_login_request).await?;
+    assert_eq!(old_login_status, StatusCode::UNAUTHORIZED);
+
+    let new_login_request = json_request_with_peer(
+        "POST",
+        "/api/v1/auth/login",
+        json!({
+            "email": email,
+            "password": new_password
+        }),
+    )?;
+    let (new_login_status, new_login_body) = harness.request(new_login_request).await?;
+    assert_eq!(
+        new_login_status,
+        StatusCode::OK,
+        "new password login failed: {new_login_body}"
+    );
+    assert!(
+        new_login_body
+            .get("token")
+            .and_then(|v| v.as_str())
+            .is_some(),
+        "new password login did not issue an access token: {new_login_body}"
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -137,6 +238,50 @@ async fn federation_read_rejects_unsigned_requests_without_token() -> anyhow::Re
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+#[tokio::test]
+async fn csrf_blocks_cookie_authenticated_mutations_without_matching_header() -> anyhow::Result<()>
+{
+    let harness = TestHarness::new(true).await?;
+    let access_cookie = common::create_authenticated_user_token(
+        &harness.db,
+        &harness._test_app.jwt_secret,
+        "csrfuser",
+        "S3cur3P@ssword!",
+    )
+    .await?;
+    let csrf_cookie = "csrf-test-token".to_string();
+    let cookie_header = format!("paracord_access={access_cookie}; paracord_csrf={csrf_cookie}");
+
+    let patch_without_csrf = Request::builder()
+        .method("PATCH")
+        .uri("/api/v1/users/@me")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie_header)
+        .body(Body::from(
+            json!({ "display_name": "NoHeader" }).to_string(),
+        ))?;
+    let (status_without, _) = harness.request(patch_without_csrf).await?;
+    assert_eq!(status_without, StatusCode::FORBIDDEN);
+
+    let patch_with_csrf = Request::builder()
+        .method("PATCH")
+        .uri("/api/v1/users/@me")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie_header)
+        .header("x-paracord-csrf", csrf_cookie)
+        .body(Body::from(
+            json!({ "display_name": "WithHeader" }).to_string(),
+        ))?;
+    let (status_with, body_with) = harness.request(patch_with_csrf).await?;
+    assert_eq!(status_with, StatusCode::OK, "unexpected body: {body_with}");
+    assert_eq!(
+        body_with.get("display_name").and_then(|v| v.as_str()),
+        Some("WithHeader")
+    );
+
     Ok(())
 }
 
@@ -383,6 +528,256 @@ async fn federation_message_ingest_materializes_missing_space_and_channel() -> a
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+#[tokio::test]
+async fn federation_transport_rejects_unsupported_protocol_version() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+
+    let harness = TestHarness::new(true).await?;
+    let body = json!({
+        "event_id": "$event:remote.example",
+        "room_id": "!1:remote.example",
+        "event_type": "m.message",
+        "sender": "@alice:remote.example",
+        "origin_server": "remote.example",
+        "origin_ts": chrono::Utc::now().timestamp_millis(),
+        "content": { "body": "test" },
+        "depth": 1,
+        "state_key": Value::Null,
+        "signatures": {}
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/_paracord/federation/v1/event")
+        .header("content-type", "application/json")
+        .header("x-paracord-origin", "remote.example")
+        .header("x-paracord-key-id", "ed25519:test")
+        .header(
+            "x-paracord-timestamp",
+            chrono::Utc::now().timestamp_millis().to_string(),
+        )
+        .header("x-paracord-signature", "deadbeef")
+        .header("x-paracord-fed-version", "federation-v999")
+        .body(Body::from(body.to_string()))?;
+
+    let (status, payload) = harness.request(request).await?;
+    assert_eq!(
+        status,
+        StatusCode::UPGRADE_REQUIRED,
+        "expected unsupported version to return 426: {payload}"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+#[tokio::test]
+async fn discovery_includes_federated_guilds_when_requested() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("PARACORD_ALLOW_PRIVATE_FEDERATION_URLS", "true");
+    let harness = TestHarness::new(true).await?;
+
+    let remote_app = Router::new().route(
+        "/api/v1/discovery/guilds",
+        get(|| async move {
+            Json(json!({
+                "guilds": [{
+                    "id": "4444",
+                    "name": "Remote Guild",
+                    "description": "Federated discovery result",
+                    "member_count": 321,
+                    "online_count": 12,
+                    "tags": ["federated", "games"],
+                    "created_at": "2026-03-02T00:00:00Z"
+                }],
+                "total": 1
+            }))
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, remote_app.into_make_service()).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let endpoint = format!("http://{}/_paracord/federation/v1", addr);
+    paracord_db::federation::upsert_federated_server(
+        &harness.db,
+        42,
+        "remote.example",
+        "remote.example",
+        &endpoint,
+        None,
+        None,
+        true,
+    )
+    .await?;
+    let trusted = paracord_db::federation::list_trusted_federated_servers(&harness.db).await?;
+    assert!(
+        trusted
+            .iter()
+            .any(|peer| peer.server_name == "remote.example"),
+        "trusted peer should be persisted for federated discovery"
+    );
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/discovery/guilds?include_federated=true")
+        .body(Body::empty())?;
+    let (status, payload) = harness.request(request).await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "federated discovery should succeed: {payload}"
+    );
+    let guilds = payload
+        .get("guilds")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("guilds should be an array"))?;
+    assert!(
+        guilds.iter().any(|entry| {
+            entry.get("federated").and_then(|v| v.as_bool()) == Some(true)
+                && entry.get("origin_server").and_then(|v| v.as_str()) == Some("remote.example")
+                && entry.get("name").and_then(|v| v.as_str()) == Some("Remote Guild")
+        }),
+        "expected remote discovery entry in response: {payload}"
+    );
+    std::env::remove_var("PARACORD_ALLOW_PRIVATE_FEDERATION_URLS");
+    Ok(())
+}
+
+#[tokio::test]
+async fn moderation_list_apply_updates_peer_trust_state() -> anyhow::Result<()> {
+    let harness = TestHarness::new(true).await?;
+    let admin_token = make_admin_token(&harness, "fedmod").await?;
+
+    let apply_request = Request::builder()
+        .method("POST")
+        .uri("/_paracord/federation/v1/moderation/apply")
+        .header("content-type", "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::from(
+            json!({
+                "source": "test-list",
+                "entries": [
+                    { "server_name": "bad.remote", "action": "block", "reason": "malware" },
+                    { "server_name": "slow.remote", "action": "quarantine", "quarantine_minutes": 30 }
+                ]
+            })
+            .to_string(),
+        ))?;
+    let (status, payload) = harness.request(apply_request).await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "moderation apply should succeed: {payload}"
+    );
+    assert_eq!(payload.get("applied").and_then(|v| v.as_u64()), Some(2));
+
+    let state_request = Request::builder()
+        .method("GET")
+        .uri("/_paracord/federation/v1/moderation/state")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::empty())?;
+    let (status, payload) = harness.request(state_request).await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "moderation state should list applied trust entries: {payload}"
+    );
+    let states = payload
+        .get("states")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("states should be array"))?;
+    assert!(
+        states.iter().any(|entry| {
+            entry.get("server_name").and_then(|v| v.as_str()) == Some("bad.remote")
+                && entry.get("mode").and_then(|v| v.as_str()) == Some("block")
+        }),
+        "expected blocked peer in trust state: {payload}"
+    );
+    assert!(
+        states.iter().any(|entry| {
+            entry.get("server_name").and_then(|v| v.as_str()) == Some("slow.remote")
+                && entry.get("mode").and_then(|v| v.as_str()) == Some("quarantine")
+        }),
+        "expected quarantined peer in trust state: {payload}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn moderation_subscription_crud_round_trip() -> anyhow::Result<()> {
+    let harness = TestHarness::new(true).await?;
+    let admin_token = make_admin_token(&harness, "fedsub").await?;
+
+    let create_request = Request::builder()
+        .method("POST")
+        .uri("/_paracord/federation/v1/moderation/subscriptions")
+        .header("content-type", "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::from(
+            json!({
+                "source_url": "https://example.com/blocklist.json",
+                "source_server": "example.com",
+                "enabled": true
+            })
+            .to_string(),
+        ))?;
+    let (status, payload) = harness.request(create_request).await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "subscription create should succeed: {payload}"
+    );
+    let subscription_id = payload
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("create response missing subscription id"))?
+        .to_string();
+
+    let list_request = Request::builder()
+        .method("GET")
+        .uri("/_paracord/federation/v1/moderation/subscriptions")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::empty())?;
+    let (status, payload) = harness.request(list_request).await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "subscription list should succeed: {payload}"
+    );
+    let subscriptions = payload
+        .get("subscriptions")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("subscriptions should be array"))?;
+    assert!(
+        subscriptions.iter().any(|entry| {
+            entry.get("id").and_then(|v| v.as_i64()) == subscription_id.parse::<i64>().ok()
+                && entry.get("source_url").and_then(|v| v.as_str())
+                    == Some("https://example.com/blocklist.json")
+        }),
+        "expected persisted moderation subscription in list: {payload}"
+    );
+
+    let delete_request = Request::builder()
+        .method("DELETE")
+        .uri(format!(
+            "/_paracord/federation/v1/moderation/subscriptions/{}",
+            subscription_id
+        ))
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::empty())?;
+    let (status, payload) = harness.request(delete_request).await?;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "subscription delete should succeed: {payload}"
+    );
     Ok(())
 }
 

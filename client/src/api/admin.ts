@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { resolveServerRootUrl } from '../lib/apiBaseUrl';
 
 export interface SecurityEvent {
   id: string;
@@ -10,6 +11,18 @@ export interface SecurityEvent {
   user_agent?: string | null;
   ip_address?: string | null;
   details?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface FederatedServer {
+  id: string;
+  server_name: string;
+  domain: string;
+  federation_endpoint: string;
+  public_key_hex?: string | null;
+  key_id?: string | null;
+  trusted: boolean;
+  last_seen_at?: string | null;
   created_at: string;
 }
 
@@ -29,7 +42,7 @@ export const adminApi = {
   updateSettings: (data: Record<string, string>) =>
     apiClient.patch<Record<string, string>>('/admin/settings', data),
 
-  getUsers: (params?: { offset?: number; limit?: number }) =>
+  getUsers: (params?: { cursor?: number; offset?: number; limit?: number }) =>
     apiClient.get<{
       users: Array<{
         id: string;
@@ -42,7 +55,9 @@ export const adminApi = {
         created_at: string;
       }>;
       total: number;
-      offset: number;
+      cursor: number | null;
+      next_cursor: number | null;
+      offset: number | null;
       limit: number;
     }>('/admin/users', { params }),
 
@@ -112,4 +127,31 @@ export const adminApi = {
 
   deleteBackup: (name: string) =>
     apiClient.delete(`/admin/backups/${encodeURIComponent(name)}`),
+
+  // Federation server management (admin only)
+  listFederatedServers: () =>
+    apiClient.get<{ servers: FederatedServer[] }>(
+      resolveServerRootUrl('/_paracord/federation/v1/servers')
+    ),
+
+  addFederatedServer: (data: {
+    server_name: string;
+    domain: string;
+    federation_endpoint: string;
+    public_key_hex?: string;
+    key_id?: string;
+    trusted?: boolean;
+    discover?: boolean;
+  }) =>
+    apiClient.post(resolveServerRootUrl('/_paracord/federation/v1/servers'), data),
+
+  getFederatedServer: (serverName: string) =>
+    apiClient.get<FederatedServer>(
+      resolveServerRootUrl(`/_paracord/federation/v1/servers/${encodeURIComponent(serverName)}`)
+    ),
+
+  deleteFederatedServer: (serverName: string) =>
+    apiClient.delete(
+      resolveServerRootUrl(`/_paracord/federation/v1/servers/${encodeURIComponent(serverName)}`)
+    ),
 };

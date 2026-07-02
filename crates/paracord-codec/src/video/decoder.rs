@@ -11,7 +11,7 @@
 //! Each remote video stream gets its own decoder instance to maintain
 //! independent codec state.
 
-use super::{DecodedFrame, DecoderConfig, EncodedFrame, VideoError};
+use super::{DecodedFrame, DecoderConfig, EncodedFrame, VideoCodec, VideoError};
 
 #[cfg(feature = "vpx")]
 use super::PixelFormat;
@@ -46,6 +46,26 @@ pub trait VideoDecoder: Send {
 
     /// Return the decoder configuration.
     fn config(&self) -> &DecoderConfig;
+}
+
+pub fn create_decoder(
+    codec: VideoCodec,
+    _config: DecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    match codec {
+        #[cfg(feature = "vpx")]
+        VideoCodec::Vp9 => Ok(Box::new(Vp9Decoder::new(_config)?)),
+        #[cfg(not(feature = "vpx"))]
+        VideoCodec::Vp9 => Err(VideoError::CodecUnavailable(
+            "vp9 decoder unavailable without 'vpx' feature".into(),
+        )),
+        VideoCodec::Av1 => Err(VideoError::CodecUnavailable(
+            "av1 decoder backend not implemented yet".into(),
+        )),
+        VideoCodec::H264 => Err(VideoError::CodecUnavailable(
+            "h264 decoder backend not implemented yet".into(),
+        )),
+    }
 }
 
 // ── VP9 Decoder (feature-gated) ──────────────────────────────────────
@@ -312,7 +332,7 @@ impl VideoDecoder for NullDecoder {
 mod tests {
     use super::*;
     use crate::video::encoder::{NullEncoder, VideoEncoder};
-    use crate::video::{EncoderConfig, PixelFormat, SimulcastLayer};
+    use crate::video::{EncoderConfig, PixelFormat, SimulcastLayer, VideoCodec};
 
     fn make_i420_frame(width: u32, height: u32, luma: u8) -> Vec<u8> {
         let y_size = (width * height) as usize;
@@ -331,6 +351,7 @@ mod tests {
         // Non-keyframe should be rejected when we haven't received a keyframe yet.
         let non_kf = EncodedFrame {
             data: vec![0u8; 32],
+            codec: VideoCodec::Vp9,
             pts: 0,
             is_keyframe: false,
             layer: None,
@@ -348,6 +369,7 @@ mod tests {
 
         let kf = EncodedFrame {
             data: vec![42u8; 64],
+            codec: VideoCodec::Vp9,
             pts: 0,
             is_keyframe: true,
             layer: None,
@@ -370,6 +392,7 @@ mod tests {
         // First: keyframe
         let kf = EncodedFrame {
             data: vec![1u8; 16],
+            codec: VideoCodec::Vp9,
             pts: 0,
             is_keyframe: true,
             layer: None,
@@ -381,6 +404,7 @@ mod tests {
         // Second: non-keyframe should now work
         let non_kf = EncodedFrame {
             data: vec![2u8; 16],
+            codec: VideoCodec::Vp9,
             pts: 1,
             is_keyframe: false,
             layer: None,
@@ -400,6 +424,7 @@ mod tests {
         // Feed a keyframe
         let kf = EncodedFrame {
             data: vec![0u8; 8],
+            codec: VideoCodec::Vp9,
             pts: 0,
             is_keyframe: true,
             layer: None,
@@ -416,6 +441,7 @@ mod tests {
         // Non-keyframe should fail again
         let non_kf = EncodedFrame {
             data: vec![0u8; 8],
+            codec: VideoCodec::Vp9,
             pts: 1,
             is_keyframe: false,
             layer: None,
@@ -473,6 +499,7 @@ mod tests {
         // Keyframe first
         let kf = EncodedFrame {
             data: vec![100u8; i420_size],
+            codec: VideoCodec::Vp9,
             pts: 0,
             is_keyframe: true,
             layer: None,
@@ -486,6 +513,7 @@ mod tests {
         for i in 1..=10 {
             let f = EncodedFrame {
                 data: vec![(100 + i) as u8; i420_size],
+                codec: VideoCodec::Vp9,
                 pts: i as i64,
                 is_keyframe: false,
                 layer: None,
@@ -505,6 +533,7 @@ mod tests {
 
         let f = EncodedFrame {
             data: vec![0u8; 16],
+            codec: VideoCodec::Vp9,
             pts: 42,
             is_keyframe: true,
             layer: Some(SimulcastLayer::High),

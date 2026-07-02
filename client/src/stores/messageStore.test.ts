@@ -19,6 +19,31 @@ const mockChannelApi = vi.hoisted(() => ({
   removeReaction: vi.fn(),
 }));
 
+const mockChannelsByGuild = vi.hoisted((): { value: Record<string, Array<Record<string, unknown>>> } => ({
+  value: {
+    g1: [
+      {
+        id: 'ch1',
+        type: 0,
+        channel_type: 0,
+        guild_id: 'g1',
+        name: 'general',
+        position: 0,
+      },
+    ],
+  },
+}));
+
+const mockDmE2ee = vi.hoisted(() => ({
+  decryptDmMessage: vi.fn(),
+  encryptDmMessageV2: vi.fn(),
+}));
+
+const mockAccountSession = vi.hoisted(() => ({
+  hasUnlockedPrivateKey: vi.fn(() => false),
+  withUnlockedPrivateKey: vi.fn(),
+}));
+
 vi.mock('./toastStore', () => ({ toast: mockToast }));
 
 vi.mock('./pollStore', () => ({
@@ -33,31 +58,14 @@ vi.mock('./pollStore', () => ({
 vi.mock('./channelStore', () => ({
   useChannelStore: {
     getState: () => ({
-      channelsByGuild: {
-        g1: [
-          {
-            id: 'ch1',
-            type: 0,
-            channel_type: 0,
-            guild_id: 'g1',
-            name: 'general',
-            position: 0,
-          },
-        ],
-      },
+      channelsByGuild: mockChannelsByGuild.value,
     }),
   },
 }));
 
-vi.mock('../lib/dmE2ee', () => ({
-  decryptDmMessage: vi.fn(),
-  encryptDmMessageV2: vi.fn(),
-}));
+vi.mock('../lib/dmE2ee', () => mockDmE2ee);
 
-vi.mock('../lib/accountSession', () => ({
-  hasUnlockedPrivateKey: vi.fn(() => false),
-  withUnlockedPrivateKey: vi.fn(),
-}));
+vi.mock('../lib/accountSession', () => mockAccountSession);
 
 vi.mock('../api/channels', () => ({ channelApi: mockChannelApi }));
 
@@ -73,6 +81,8 @@ vi.mock('../lib/constants', () => ({
 }));
 
 import { useMessageStore } from './messageStore';
+import { encryptDmMessageV2 } from '../lib/dmE2ee';
+import { hasUnlockedPrivateKey, withUnlockedPrivateKey } from '../lib/accountSession';
 
 function makeMessage(overrides: Partial<{
   id: string;
@@ -99,6 +109,21 @@ function makeMessage(overrides: Partial<{
 describe('messageStore', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockChannelsByGuild.value = {
+      g1: [
+        {
+          id: 'ch1',
+          type: 0,
+          channel_type: 0,
+          guild_id: 'g1',
+          name: 'general',
+          position: 0,
+        },
+      ],
+    };
+    vi.mocked(hasUnlockedPrivateKey).mockReturnValue(false);
+    vi.mocked(withUnlockedPrivateKey).mockReset();
+    vi.mocked(encryptDmMessageV2).mockReset();
     useMessageStore.setState({
       messages: {},
       hasMore: {},
@@ -202,6 +227,68 @@ describe('messageStore', () => {
 
       await useMessageStore.getState().sendMessage('ch1', 'Existing');
       expect(useMessageStore.getState().messages['ch1']).toHaveLength(1);
+    });
+
+    it('encrypts one-to-one DM content before sending to the API', async () => {
+      const e2ee = { version: 2, nonce: 'nonce', ciphertext: 'ciphertext', header: 'header' };
+      mockChannelsByGuild.value = {
+        '': [
+          {
+            id: 'dm1',
+            type: 1,
+            channel_type: 1,
+            guild_id: undefined,
+            name: 'Friend',
+            position: 0,
+            recipient: { id: 'peer-1', username: 'Friend', public_key: 'peer-public-key' },
+          },
+        ],
+      };
+      vi.mocked(hasUnlockedPrivateKey).mockReturnValue(true);
+      vi.mocked(withUnlockedPrivateKey).mockImplementation(async (callback) =>
+        callback(new Uint8Array([1, 2, 3]))
+      );
+      vi.mocked(encryptDmMessageV2).mockResolvedValue(e2ee);
+      mockChannelApi.sendMessage.mockResolvedValue({ data: makeMessage({ id: 'dm-msg', channel_id: 'dm1', content: '' }) });
+
+      await useMessageStore.getState().sendMessage('dm1', 'secret hello');
+
+      expect(encryptDmMessageV2).toHaveBeenCalledWith(
+        'dm1',
+        'secret hello',
+        new Uint8Array([1, 2, 3]),
+        'peer-public-key',
+        'peer-1',
+      );
+      expect(mockChannelApi.sendMessage).toHaveBeenCalledWith('dm1', {
+        content: '',
+        referenced_message_id: undefined,
+        attachment_ids: undefined,
+        sticker_ids: undefined,
+        e2ee,
+      });
+    });
+
+    it('rejects one-to-one DM sends while the account key is locked', async () => {
+      mockChannelsByGuild.value = {
+        '': [
+          {
+            id: 'dm1',
+            type: 1,
+            channel_type: 1,
+            guild_id: undefined,
+            name: 'Friend',
+            position: 0,
+            recipient: { id: 'peer-1', username: 'Friend', public_key: 'peer-public-key' },
+          },
+        ],
+      };
+      vi.mocked(hasUnlockedPrivateKey).mockReturnValue(false);
+
+      await expect(useMessageStore.getState().sendMessage('dm1', 'secret hello')).rejects.toThrow(
+        'Unlock your account to send encrypted DMs',
+      );
+      expect(mockChannelApi.sendMessage).not.toHaveBeenCalled();
     });
   });
 

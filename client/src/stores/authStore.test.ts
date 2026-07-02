@@ -14,6 +14,9 @@ const mockAuthApi = vi.hoisted(() => ({
 vi.mock('../lib/authToken', () => ({
   getAccessToken: vi.fn(() => null),
   setAccessToken: vi.fn(),
+  getRefreshToken: vi.fn(() => null),
+  hydrateRefreshTokenStorage: vi.fn(async () => undefined),
+  setRefreshToken: vi.fn(),
   clearLegacyPersistedAuth: vi.fn(),
 }));
 

@@ -114,6 +114,16 @@ impl AudioPlayback {
         Self::start_from_device(device)
     }
 
+    /// Start playback on an output device by host index.
+    pub fn start_device(index: usize) -> Result<Self, PlaybackError> {
+        let host = cpal::default_host();
+        let mut devices = host.output_devices()?;
+        let device = devices.nth(index).ok_or(PlaybackError::NoOutputDevice)?;
+        let device_name = device.name().unwrap_or_else(|_| "unknown".into());
+        info!(device_index = index, device = %device_name, "opening selected audio output device");
+        Self::start_from_device(device)
+    }
+
     pub fn start_from_device(device: Device) -> Result<Self, PlaybackError> {
         let config = device.default_output_config()?;
         let device_sample_rate = config.sample_rate().0;

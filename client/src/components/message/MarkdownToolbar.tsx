@@ -209,6 +209,7 @@ export function MarkdownToolbar({ textareaRef, onContentChange }: MarkdownToolba
         >
           <button
             type="button"
+            aria-label={button.shortcut ? `${button.label} (${button.shortcut})` : button.label}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => handleClick(button)}
             className={cn(

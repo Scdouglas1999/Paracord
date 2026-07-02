@@ -3,7 +3,7 @@ name = "paracord-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [[bin]]
 name = "paracord-server"
@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 paracord-api = { workspace = true }
 paracord-ws = { workspace = true }
-paracord-core = { workspace = true }
+paracord-core = { workspace = true, features = ["backup"] }
 paracord-db = { workspace = true }
 paracord-federation = { workspace = true }
 paracord-models = { workspace = true }
@@ -25,14 +25,15 @@ clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 paracord-media = { workspace = true }
-paracord-relay = { path = "../paracord-relay" }
-paracord-transport = { path = "../paracord-transport" }
+paracord-relay = { workspace = true }
+paracord-transport = { workspace = true }
 quinn = { workspace = true }
 anyhow = { workspace = true }
 sha2 = { workspace = true }
 base64 = { workspace = true }
 jsonwebtoken = { workspace = true }
 serde_json = { workspace = true }
+regex = { workspace = true }
 tower-http = { workspace = true }
 reqwest = { workspace = true }
 which = { workspace = true }
@@ -42,9 +43,12 @@ chrono = { workspace = true }
 rcgen = { workspace = true }
 axum-server = { workspace = true }
 rustls = { workspace = true }
+moka = { workspace = true }
+dashmap = { workspace = true }
 rust-embed = { workspace = true, optional = true }
 mime_guess = { workspace = true, optional = true }
 
 [features]
 default = ["embed-ui"]
 embed-ui = ["dep:rust-embed", "dep:mime_guess"]
+s3 = ["paracord-media/s3"]

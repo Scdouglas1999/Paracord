@@ -1,8 +1,10 @@
+use futures_util::TryStreamExt;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const LIVEKIT_TOKEN_TTL_SECONDS: u64 = 7_200;
+const LIVEKIT_API_BODY_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct LiveKitConfig {
@@ -349,11 +351,54 @@ impl LiveKitConfig {
     }
 
     /// Build a reqwest client with a standard timeout for LiveKit API calls.
-    fn api_client() -> reqwest::Client {
+    fn api_client() -> Result<reqwest::Client, reqwest::Error> {
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
+    }
+
+    async fn response_body(resp: reqwest::Response) -> Result<Vec<u8>, String> {
+        if resp
+            .content_length()
+            .is_some_and(|len| len > u64::try_from(LIVEKIT_API_BODY_LIMIT).unwrap_or(u64::MAX))
+        {
+            return Err(format!(
+                "response body exceeded {LIVEKIT_API_BODY_LIMIT} bytes"
+            ));
+        }
+
+        let mut body = Vec::new();
+        let mut stream = resp.bytes_stream();
+        loop {
+            let chunk = match stream.try_next().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(err) => return Err(format!("failed to read response body: {err}")),
+            };
+            if body.len().saturating_add(chunk.len()) > LIVEKIT_API_BODY_LIMIT {
+                return Err(format!(
+                    "response body exceeded {LIVEKIT_API_BODY_LIMIT} bytes"
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        Ok(body)
+    }
+
+    async fn error_body(resp: reqwest::Response) -> String {
+        match Self::response_body(resp).await {
+            Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+            Err(err) => err,
+        }
+    }
+
+    async fn json_body(resp: reqwest::Response) -> Result<serde_json::Value, anyhow::Error> {
+        let body = Self::response_body(resp)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        serde_json::from_slice(&body).map_err(anyhow::Error::from)
     }
 
     /// Create a room via LiveKit API.
@@ -365,7 +410,7 @@ impl LiveKitConfig {
     ) -> Result<(), anyhow::Error> {
         let admin_token = self.generate_admin_token(VideoGrant::admin())?;
 
-        let client = Self::api_client();
+        let client = Self::api_client()?;
         let resp = client
             .post(format!(
                 "{}/twirp/livekit.RoomService/CreateRoom",
@@ -385,7 +430,7 @@ impl LiveKitConfig {
             .await?;
 
         if !resp.status().is_success() {
-            let err = resp.text().await?;
+            let err = Self::error_body(resp).await;
             anyhow::bail!("Failed to create LiveKit room: {}", err);
         }
 
@@ -396,7 +441,7 @@ impl LiveKitConfig {
     pub async fn delete_room(&self, room_name: &str) -> Result<(), anyhow::Error> {
         let admin_token = self.generate_admin_token(VideoGrant::admin())?;
 
-        let client = Self::api_client();
+        let client = Self::api_client()?;
         let resp = client
             .post(format!(
                 "{}/twirp/livekit.RoomService/DeleteRoom",
@@ -411,7 +456,7 @@ impl LiveKitConfig {
             .await?;
 
         if !resp.status().is_success() {
-            let err = resp.text().await?;
+            let err = Self::error_body(resp).await;
             anyhow::bail!("Failed to delete LiveKit room: {}", err);
         }
 
@@ -425,7 +470,7 @@ impl LiveKitConfig {
     ) -> Result<Vec<serde_json::Value>, anyhow::Error> {
         let admin_token = self.generate_room_admin_token(room_name)?;
 
-        let client = Self::api_client();
+        let client = Self::api_client()?;
         let resp = client
             .post(format!(
                 "{}/twirp/livekit.RoomService/ListParticipants",
@@ -440,11 +485,11 @@ impl LiveKitConfig {
             .await?;
 
         if !resp.status().is_success() {
-            let err = resp.text().await?;
+            let err = Self::error_body(resp).await;
             anyhow::bail!("Failed to list participants: {}", err);
         }
 
-        let body: serde_json::Value = resp.json().await?;
+        let body = Self::json_body(resp).await?;
         let participants = body
             .get("participants")
             .and_then(|p| p.as_array())
@@ -461,7 +506,7 @@ impl LiveKitConfig {
     pub async fn check_health(&self) -> Result<(), anyhow::Error> {
         let admin_token = self.generate_admin_token(VideoGrant::admin())?;
 
-        let client = Self::api_client();
+        let client = Self::api_client()?;
         let resp = client
             .post(format!(
                 "{}/twirp/livekit.RoomService/ListRooms",
@@ -475,7 +520,7 @@ impl LiveKitConfig {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = Self::error_body(resp).await;
             anyhow::bail!(
                 "LiveKit admin API check failed (HTTP {}): {}. \
                  This usually means the api_key/api_secret in paracord.toml \
@@ -498,7 +543,7 @@ impl LiveKitConfig {
     ) -> Result<(), anyhow::Error> {
         let admin_token = self.generate_room_admin_token(room_name)?;
 
-        let client = Self::api_client();
+        let client = Self::api_client()?;
         let resp = client
             .post(format!(
                 "{}/twirp/livekit.RoomService/MutePublishedTrack",
@@ -516,7 +561,7 @@ impl LiveKitConfig {
             .await?;
 
         if !resp.status().is_success() {
-            let err = resp.text().await?;
+            let err = Self::error_body(resp).await;
             anyhow::bail!("Failed to mute participant: {}", err);
         }
 
@@ -542,7 +587,7 @@ impl LiveKitConfig {
         }
         permission.insert("canPublishData".to_string(), serde_json::Value::Bool(true));
 
-        let client = Self::api_client();
+        let client = Self::api_client()?;
         let resp = client
             .post(format!(
                 "{}/twirp/livekit.RoomService/UpdateParticipant",
@@ -559,7 +604,7 @@ impl LiveKitConfig {
             .await?;
 
         if !resp.status().is_success() {
-            let err = resp.text().await?;
+            let err = Self::error_body(resp).await;
             anyhow::bail!("Failed to update participant: {}", err);
         }
 
@@ -574,7 +619,7 @@ impl LiveKitConfig {
     ) -> Result<(), anyhow::Error> {
         let admin_token = self.generate_room_admin_token(room_name)?;
 
-        let client = Self::api_client();
+        let client = Self::api_client()?;
         let resp = client
             .post(format!(
                 "{}/twirp/livekit.RoomService/RemoveParticipant",
@@ -590,7 +635,7 @@ impl LiveKitConfig {
             .await?;
 
         if !resp.status().is_success() {
-            let err = resp.text().await?;
+            let err = Self::error_body(resp).await;
             anyhow::bail!("Failed to remove participant: {}", err);
         }
 
@@ -603,5 +648,15 @@ impl LiveKitConfig {
     pub fn parse_webhook_event(&self, body: &str) -> Result<WebhookEvent, anyhow::Error> {
         let event: WebhookEvent = serde_json::from_str(body)?;
         Ok(event)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LiveKitConfig;
+
+    #[test]
+    fn livekit_api_client_builds_with_release_hardening() {
+        let _ = LiveKitConfig::api_client().expect("LiveKit API client should build");
     }
 }

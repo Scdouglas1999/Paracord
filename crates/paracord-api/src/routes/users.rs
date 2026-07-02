@@ -6,6 +6,9 @@ use axum::{
 use paracord_core::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::OnceLock;
+use std::time::Instant;
+use url::Url;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
@@ -15,6 +18,37 @@ const MAX_DISPLAY_NAME_LEN: usize = 64;
 const MAX_BIO_LEN: usize = 512;
 const MAX_CUSTOM_STATUS_LEN: usize = 128;
 const MAX_CUSTOM_CSS_LEN: usize = 10 * 1024;
+const MAX_PROFILE_PRONOUNS_LEN: usize = 64;
+const MAX_PROFILE_LINKED_ACCOUNTS: usize = 8;
+const MAX_PROFILE_LINKED_LABEL_LEN: usize = 64;
+const MAX_PROFILE_LINKED_URL_LEN: usize = 256;
+const TRACE_ID_HEADER: &str = "x-paracord-trace-id";
+static SETTINGS_ROUTE_STAGE_TRACE: OnceLock<bool> = OnceLock::new();
+static SETTINGS_ROUTE_SLOW_MS: OnceLock<u64> = OnceLock::new();
+
+fn settings_route_stage_trace_enabled() -> bool {
+    *SETTINGS_ROUTE_STAGE_TRACE.get_or_init(|| {
+        std::env::var("PARACORD_HTTP_STAGE_TRACE")
+            .ok()
+            .map(|raw| {
+                matches!(
+                    raw.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn settings_route_slow_ms() -> u64 {
+    *SETTINGS_ROUTE_SLOW_MS.get_or_init(|| {
+        std::env::var("PARACORD_HTTP_SLOW_MS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(500)
+    })
+}
 
 fn contains_dangerous_markup(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
@@ -47,6 +81,81 @@ fn sanitize_custom_css(value: &str) -> Result<Option<String>, ApiError> {
     Ok(Some(trimmed.to_string()))
 }
 
+fn profile_pronouns_from_notifications(
+    notifications: Option<&serde_json::Value>,
+) -> Option<String> {
+    notifications
+        .and_then(|n| n.get("profilePronouns"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(MAX_PROFILE_PRONOUNS_LEN).collect())
+}
+
+fn profile_linked_accounts_from_notifications(
+    notifications: Option<&serde_json::Value>,
+) -> Vec<Value> {
+    let Some(accounts) = notifications
+        .and_then(|n| n.get("profileLinkedAccounts"))
+        .and_then(|v| v.as_array())
+    else {
+        return Vec::new();
+    };
+
+    accounts
+        .iter()
+        .filter_map(|entry| {
+            let label = entry
+                .get("label")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            let url = entry
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+
+            let url = safe_profile_linked_account_url(url)?;
+
+            Some(json!({
+                "label": label.chars().take(MAX_PROFILE_LINKED_LABEL_LEN).collect::<String>(),
+                "url": url,
+            }))
+        })
+        .take(MAX_PROFILE_LINKED_ACCOUNTS)
+        .collect()
+}
+
+fn safe_profile_linked_account_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_PROFILE_LINKED_URL_LEN {
+        return None;
+    }
+    let parsed = Url::parse(trimmed).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    let normalized = parsed.to_string();
+    if normalized.len() > MAX_PROFILE_LINKED_URL_LEN {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn profile_extras_from_settings(
+    settings: Option<&paracord_db::users::UserSettingsRow>,
+) -> (Option<String>, Vec<Value>) {
+    let notifications = settings.map(|s| &s.notifications);
+    (
+        profile_pronouns_from_notifications(notifications),
+        profile_linked_accounts_from_notifications(notifications),
+    )
+}
+
 pub async fn get_me(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -55,6 +164,10 @@ pub async fn get_me(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+    let settings = paracord_db::users::get_user_settings(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let (pronouns, linked_accounts) = profile_extras_from_settings(settings.as_ref());
 
     Ok(Json(json!({
         "id": user.id.to_string(),
@@ -68,7 +181,10 @@ pub async fn get_me(
         "flags": user.flags,
         "bot": paracord_core::is_bot(user.flags),
         "system": false,
+        "pronouns": pronouns,
+        "linked_accounts": linked_accounts,
         "created_at": user.created_at.to_rfc3339(),
+        "email_verified": user.email_verified,
     })))
 }
 
@@ -133,10 +249,45 @@ pub async fn update_me(
 pub async fn get_settings(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
+    let route_started = Instant::now();
+    let trace_id = headers
+        .get(TRACE_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("-");
+    let db_started = Instant::now();
     let settings = paracord_db::users::get_user_settings(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let db_ms = db_started.elapsed().as_millis() as u64;
+    let total_ms = route_started.elapsed().as_millis() as u64;
+    let slow_threshold_ms = settings_route_slow_ms();
+    if settings_route_stage_trace_enabled() || total_ms >= slow_threshold_ms {
+        if total_ms >= slow_threshold_ms {
+            tracing::warn!(
+                target: "perf",
+                trace_id,
+                route = "GET /api/v1/users/@me/settings",
+                user_id = auth.user_id,
+                total_ms,
+                db_ms,
+                has_settings = settings.is_some(),
+                "user_settings_get_timing"
+            );
+        } else {
+            tracing::info!(
+                target: "perf",
+                trace_id,
+                route = "GET /api/v1/users/@me/settings",
+                user_id = auth.user_id,
+                total_ms,
+                db_ms,
+                has_settings = settings.is_some(),
+                "user_settings_get_timing"
+            );
+        }
+    }
 
     if let Some(s) = settings {
         Ok(Json(json!({
@@ -186,9 +337,17 @@ pub async fn update_settings(
     headers: HeaderMap,
     Json(body): Json<UpdateSettingsRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let route_started = Instant::now();
+    let trace_id = headers
+        .get(TRACE_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("-");
+
+    let load_existing_started = Instant::now();
     let existing = paracord_db::users::get_user_settings(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let load_existing_ms = load_existing_started.elapsed().as_millis() as u64;
 
     let theme = body
         .theme
@@ -233,6 +392,7 @@ pub async fn update_settings(
         existing.as_ref().and_then(|s| s.custom_css.clone())
     };
 
+    let upsert_started = Instant::now();
     let settings = paracord_db::users::upsert_user_settings(
         &state.db,
         auth.user_id,
@@ -246,6 +406,7 @@ pub async fn update_settings(
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let upsert_ms = upsert_started.elapsed().as_millis() as u64;
 
     if let Some(enabled) = body.crypto_auth_enabled {
         security::log_security_event(
@@ -258,6 +419,34 @@ pub async fn update_settings(
             Some(json!({ "crypto_auth_enabled": enabled })),
         )
         .await;
+    }
+
+    let total_ms = route_started.elapsed().as_millis() as u64;
+    let slow_threshold_ms = settings_route_slow_ms();
+    if settings_route_stage_trace_enabled() || total_ms >= slow_threshold_ms {
+        if total_ms >= slow_threshold_ms {
+            tracing::warn!(
+                target: "perf",
+                trace_id,
+                route = "PATCH /api/v1/users/@me/settings",
+                user_id = auth.user_id,
+                total_ms,
+                load_existing_ms,
+                upsert_ms,
+                "user_settings_patch_timing"
+            );
+        } else {
+            tracing::info!(
+                target: "perf",
+                trace_id,
+                route = "PATCH /api/v1/users/@me/settings",
+                user_id = auth.user_id,
+                total_ms,
+                load_existing_ms,
+                upsert_ms,
+                "user_settings_patch_timing"
+            );
+        }
     }
 
     Ok(Json(json!({
@@ -305,7 +494,7 @@ pub async fn export_my_data(
     let settings = paracord_db::users::get_user_settings(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let guilds = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id)
+    let guilds = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into())
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let dms = paracord_db::dms::list_user_dm_channels(&state.db, auth.user_id)
@@ -321,9 +510,37 @@ pub async fn export_my_data(
         paracord_db::sessions::list_user_sessions(&state.db, auth.user_id, chrono::Utc::now())
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let messages = paracord_db::messages::list_messages_by_author(&state.db, auth.user_id, 50_000)
+    let messages =
+        paracord_db::messages::list_messages_for_user_export(&state.db, auth.user_id, 200_000)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let message_ids = messages.iter().map(|msg| msg.id).collect::<Vec<_>>();
+    let attachments =
+        paracord_db::attachments::get_attachments_for_message_ids(&state.db, &message_ids, 100_000)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let signed_prekey = paracord_db::prekeys::get_signed_prekey(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let one_time_prekeys = paracord_db::prekeys::list_one_time_prekeys(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let mut memberships = Vec::new();
+    for guild in &guilds {
+        let member = paracord_db::members::get_member(&state.db, auth.user_id, guild.id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let role_rows = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild.id)
+            .await
+            .unwrap_or_default();
+        memberships.push(json!({
+            "guild_id": guild.id.to_string(),
+            "nick": member.as_ref().and_then(|m| m.nick.clone()),
+            "joined_at": member.map(|m| m.joined_at.to_rfc3339()),
+            "role_ids": role_rows.into_iter().map(|role| role.id.to_string()).collect::<Vec<_>>(),
+        }));
+    }
+    let user_public_key = user.public_key.clone();
 
     Ok(Json(json!({
         "exported_at": chrono::Utc::now().to_rfc3339(),
@@ -338,7 +555,8 @@ pub async fn export_my_data(
             "bio": user.bio,
             "flags": user.flags,
             "created_at": user.created_at.to_rfc3339(),
-            "public_key": user.public_key,
+            "public_key": user_public_key.clone(),
+            "email_verified": user.email_verified,
         },
         "settings": settings.map(|s| json!({
             "theme": s.theme,
@@ -358,6 +576,7 @@ pub async fn export_my_data(
             "owner_id": g.owner_id.to_string(),
             "created_at": g.created_at.to_rfc3339(),
         })).collect::<Vec<Value>>(),
+        "guild_memberships": memberships,
         "dms": dms.into_iter().map(|dm| json!({
             "channel_id": dm.id.to_string(),
             "recipient_id": dm.recipient_id.to_string(),
@@ -389,14 +608,42 @@ pub async fn export_my_data(
         "messages": messages.into_iter().map(|msg| json!({
             "id": msg.id.to_string(),
             "channel_id": msg.channel_id.to_string(),
+            "author_id": msg.author_id.to_string(),
             "content": msg.content,
             "type": msg.message_type,
             "flags": msg.flags,
             "reference_id": msg.reference_id.map(|id| id.to_string()),
             "pinned": msg.pinned,
+            "e2ee_header": msg.e2ee_header,
             "created_at": msg.created_at.to_rfc3339(),
             "edited_at": msg.edited_at.map(|dt| dt.to_rfc3339()),
         })).collect::<Vec<Value>>(),
+        "attachments": attachments.into_iter().map(|attachment| json!({
+            "id": attachment.id.to_string(),
+            "message_id": attachment.message_id.map(|id| id.to_string()),
+            "filename": attachment.filename,
+            "content_type": attachment.content_type,
+            "size": attachment.size,
+            "url": attachment.url,
+            "width": attachment.width,
+            "height": attachment.height,
+            "content_hash": attachment.content_hash,
+            "uploaded_at": attachment.upload_created_at.to_rfc3339(),
+        })).collect::<Vec<Value>>(),
+        "encryption_keys": {
+            "public_key": user_public_key,
+            "signed_prekey": signed_prekey.map(|row| json!({
+                "id": row.id.to_string(),
+                "public_key": row.public_key,
+                "signature": row.signature,
+                "created_at": row.created_at,
+            })),
+            "one_time_prekeys": one_time_prekeys.into_iter().map(|row| json!({
+                "id": row.id.to_string(),
+                "public_key": row.public_key,
+                "created_at": row.created_at,
+            })).collect::<Vec<Value>>(),
+        },
     })))
 }
 
@@ -409,6 +656,10 @@ pub async fn get_user_profile(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+    let target_settings = paracord_db::users::get_user_settings(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let (pronouns, linked_accounts) = profile_extras_from_settings(target_settings.as_ref());
 
     let mutual_guilds = paracord_db::users::get_mutual_guilds(&state.db, auth.user_id, user_id)
         .await
@@ -455,6 +706,8 @@ pub async fn get_user_profile(
             "flags": user.flags,
             "bot": paracord_core::is_bot(user.flags),
             "system": false,
+            "pronouns": pronouns,
+            "linked_accounts": linked_accounts,
             "created_at": user.created_at.to_rfc3339(),
         },
         "roles": roles,

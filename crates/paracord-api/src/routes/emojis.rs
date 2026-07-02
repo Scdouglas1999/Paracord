@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
+use crate::routes::audit;
 
 const MAX_EMOJI_NAME_LEN: usize = 32;
 const MAX_EMOJI_IMAGE_SIZE: usize = 256 * 1024; // 256 KB
@@ -189,6 +190,19 @@ pub async fn create_emoji(
         }),
         Some(guild_id),
     );
+    audit::log_action(
+        &state,
+        guild_id,
+        auth.user_id,
+        audit::ACTION_EMOJI_CREATE,
+        Some(emoji.id),
+        None,
+        Some(json!({
+            "name": emoji.name,
+            "animated": emoji.animated,
+        })),
+    )
+    .await;
 
     Ok((StatusCode::CREATED, Json(emoji_json)))
 }
@@ -236,6 +250,18 @@ pub async fn update_emoji(
         }),
         Some(guild_id),
     );
+    audit::log_action(
+        &state,
+        guild_id,
+        auth.user_id,
+        audit::ACTION_EMOJI_UPDATE,
+        Some(updated.id),
+        None,
+        Some(json!({
+            "name": updated.name,
+        })),
+    )
+    .await;
 
     Ok(Json(emoji_json))
 }
@@ -276,14 +302,30 @@ pub async fn delete_emoji(
         }),
         Some(guild_id),
     );
+    audit::log_action(
+        &state,
+        guild_id,
+        auth.user_id,
+        audit::ACTION_EMOJI_DELETE,
+        Some(emoji_id),
+        None,
+        Some(json!({
+            "name": existing.name,
+            "animated": existing.animated,
+        })),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn get_emoji_image(
     State(state): State<AppState>,
+    auth: AuthUser,
     Path((guild_id, emoji_id)): Path<(i64, i64)>,
 ) -> Result<axum::response::Response, ApiError> {
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+
     let emoji = paracord_db::emojis::get_emoji(&state.db, emoji_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -319,6 +361,10 @@ pub async fn get_emoji_image(
             (
                 header::CACHE_CONTROL,
                 axum::http::HeaderValue::from_static("public, max-age=31536000, immutable"),
+            ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                axum::http::HeaderValue::from_static("nosniff"),
             ),
         ],
         data,

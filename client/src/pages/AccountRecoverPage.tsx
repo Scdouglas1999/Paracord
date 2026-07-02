@@ -18,11 +18,12 @@ export function AccountRecoverPage() {
     setError('');
 
     const words = phrase.trim().split(/\s+/);
+    const normalizedUsername = username.trim();
     if (words.length !== 24) {
       setError('Recovery phrase must be exactly 24 words.');
       return;
     }
-    if (username.length < 2 || username.length > 32) {
+    if (normalizedUsername.length < 2 || normalizedUsername.length > 32) {
       setError('Username must be between 2 and 32 characters.');
       return;
     }
@@ -37,7 +38,7 @@ export function AccountRecoverPage() {
 
     setLoading(true);
     try {
-      await recover(phrase.trim(), username, password);
+      await recover(phrase.trim(), normalizedUsername, password);
       navigate('/app');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Recovery failed. Check your phrase and try again.');
@@ -57,7 +58,7 @@ export function AccountRecoverPage() {
         </div>
 
         {error && (
-          <div className="mb-4 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2.5 text-sm font-medium text-accent-danger">
+          <div role="alert" className="mb-4 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2.5 text-sm font-medium text-accent-danger">
             {error}
           </div>
         )}
@@ -88,6 +89,7 @@ export function AccountRecoverPage() {
               required
               className="input-field mt-2"
               placeholder="Choose a username"
+              autoComplete="username"
             />
           </label>
 
@@ -103,6 +105,7 @@ export function AccountRecoverPage() {
               minLength={MIN_PASSWORD_LENGTH}
               className="input-field mt-2"
               placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+              autoComplete="new-password"
             />
           </label>
 
@@ -117,6 +120,7 @@ export function AccountRecoverPage() {
               required
               className="input-field mt-2"
               placeholder="Type your password again"
+              autoComplete="new-password"
             />
           </label>
         </div>

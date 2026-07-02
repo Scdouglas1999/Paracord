@@ -3,7 +3,12 @@ name = "paracord-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
+
+[features]
+default = ["native-media", "backup"]
+native-media = ["dep:paracord-relay", "dep:paracord-transport"]
+backup = ["dep:rusqlite", "dep:flate2", "dep:tar", "dep:tempfile"]
 
 [dependencies]
 paracord-models = { workspace = true }
@@ -11,8 +16,8 @@ paracord-db = { workspace = true }
 paracord-util = { workspace = true }
 paracord-media = { workspace = true }
 paracord-federation = { workspace = true }
-paracord-relay = { path = "../paracord-relay" }
-paracord-transport = { path = "../paracord-transport" }
+paracord-relay = { workspace = true, optional = true }
+paracord-transport = { workspace = true, optional = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -25,7 +30,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 moka = { workspace = true }
 dashmap = { workspace = true }
-rusqlite = { version = "0.32", features = ["bundled"] }
-flate2 = "1"
-tar = "0.4"
-tempfile = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+flate2 = { version = "1", optional = true }
+tar = { version = "0.4", optional = true }
+tempfile = { workspace = true, optional = true }

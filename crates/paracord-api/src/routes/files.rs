@@ -534,9 +534,12 @@ pub async fn upload_file(
     hasher.update(&data);
     let content_hash = format!("{:x}", hasher.finalize());
 
-    // Check guild-level upload policy (file size, quota, type restrictions)
-    let resolved_ct = normalized_content_type(&filename, claimed_content_type.as_deref());
-    check_guild_upload_policy(&state, channel_id, size, &resolved_ct).await?;
+    // Check guild-level upload policy against the type that will be stored,
+    // after active-content downgrades. Otherwise a forged Content-Type could
+    // bypass an allowlist before being persisted as application/octet-stream.
+    let content_type =
+        resolve_stored_content_type(&filename, claimed_content_type.as_deref(), &data);
+    check_guild_upload_policy(&state, channel_id, size, &content_type).await?;
 
     // Store file via storage backend
     let attachment_id = paracord_util::snowflake::generate(1);
@@ -565,8 +568,6 @@ pub async fn upload_file(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     let url = format!("/api/v1/attachments/{}", attachment_id);
-    let content_type =
-        resolve_stored_content_type(&filename, claimed_content_type.as_deref(), &data);
     let expires_at = Utc::now() + Duration::minutes(PENDING_ATTACHMENT_TTL_MINUTES);
 
     let attachment = paracord_db::attachments::create_attachment(
@@ -820,9 +821,10 @@ pub async fn process_uploaded_file(
     hasher.update(data);
     let content_hash = format!("{:x}", hasher.finalize());
 
-    // Check guild-level upload policy
-    let resolved_ct = normalized_content_type(filename, claimed_content_type);
-    check_guild_upload_policy(state, channel_id, size, &resolved_ct).await?;
+    // Check guild-level upload policy against the type that will be stored,
+    // after active-content downgrades.
+    let content_type = resolve_stored_content_type(filename, claimed_content_type, data);
+    check_guild_upload_policy(state, channel_id, size, &content_type).await?;
 
     let attachment_id = paracord_util::snowflake::generate(1);
     scan_upload_with_malware_hook(data, filename, &state.config.storage_path, attachment_id)
@@ -850,7 +852,6 @@ pub async fn process_uploaded_file(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     let url = format!("/api/v1/attachments/{}", attachment_id);
-    let content_type = resolve_stored_content_type(filename, claimed_content_type, data);
     let expires_at = Utc::now() + Duration::minutes(PENDING_ATTACHMENT_TTL_MINUTES);
 
     let attachment = paracord_db::attachments::create_attachment(
@@ -923,8 +924,10 @@ pub async fn upload_token(
         return Err(ApiError::BadRequest("File too large".into()));
     }
 
-    // 2b. Check guild-level upload policy (size, quota, type restrictions)
-    let resolved_ct = normalized_content_type(&req.filename, Some(&req.content_type));
+    // 2b. Check guild-level upload policy (size, quota, type restrictions).
+    // The token path cannot inspect bytes yet, but it can still apply the
+    // same extension/claimed-type active-content downgrades used at storage.
+    let resolved_ct = resolve_stored_content_type(&req.filename, Some(&req.content_type), &[]);
     check_guild_upload_policy(&state, channel_id, req.size, &resolved_ct).await?;
 
     // 3. Generate transfer ID
@@ -1009,6 +1012,38 @@ pub async fn download_federated_file(
         return Err(ApiError::Forbidden);
     }
 
+    let server = paracord_db::federation::get_federated_server(&state.db, &origin_server)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    let service = crate::routes::federation::build_federation_service();
+    let client = crate::routes::federation::build_signed_federation_client(&service)
+        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("federation client unavailable")))?;
+
+    let room_id = space_mappings
+        .first()
+        .map(|m| format!("!{}:{}", m.remote_space_id, m.origin_server))
+        .unwrap_or_default();
+    let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let user_id = format!("@{}:{}", user.username, service.domain());
+
+    let token_resp = client
+        .request_file_token(
+            &server.federation_endpoint,
+            &paracord_federation::client::FederationFileTokenRequest {
+                origin_server: service.server_name().to_string(),
+                attachment_id: attachment_id.clone(),
+                room_id,
+                user_id,
+            },
+        )
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("failed to get file token: {}", e)))?;
+
     // Check federation file cache for a cached copy
     if let Ok(Some(cached)) = paracord_db::federation_file_cache::get_cached_file(
         &state.db,
@@ -1065,39 +1100,6 @@ pub async fn download_federated_file(
             ));
         }
     }
-
-    // Not cached -- look up origin server's federation endpoint
-    let server = paracord_db::federation::get_federated_server(&state.db, &origin_server)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::NotFound)?;
-
-    let service = crate::routes::federation::build_federation_service();
-    let client = crate::routes::federation::build_signed_federation_client(&service)
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("federation client unavailable")))?;
-
-    let room_id = space_mappings
-        .first()
-        .map(|m| format!("!{}:{}", m.remote_space_id, m.origin_server))
-        .unwrap_or_default();
-    let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::NotFound)?;
-    let user_id = format!("@{}:{}", user.username, service.domain());
-
-    let token_resp = client
-        .request_file_token(
-            &server.federation_endpoint,
-            &paracord_federation::client::FederationFileTokenRequest {
-                origin_server: service.server_name().to_string(),
-                attachment_id: attachment_id.clone(),
-                room_id,
-                user_id,
-            },
-        )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("failed to get file token: {}", e)))?;
 
     // Download the file from origin
     let full_download_url = if token_resp.download_url.starts_with("http") {

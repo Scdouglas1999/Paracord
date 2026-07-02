@@ -28,6 +28,35 @@ const DM_E2EE_V1 = 1;
 const DM_E2EE_V2 = 2;
 const AES_GCM_NONCE_BYTES = 12;
 const DM_E2EE_CONTEXT_PREFIX = 'paracord:dm-e2ee:v1:';
+const DM_E2EE_ALLOW_V1_FALLBACK = import.meta.env.VITE_DM_E2EE_ALLOW_V1_FALLBACK === 'true';
+let hasWarnedV1Fallback = false;
+
+function warnV1Fallback(path: string): void {
+  if (hasWarnedV1Fallback) {
+    return;
+  }
+  hasWarnedV1Fallback = true;
+  console.warn(
+    `[dm-e2ee] Legacy V1 fallback was used via ${path}. V1 is deprecated and will be removed; migrate conversations to Signal V2 sessions.`,
+  );
+}
+
+export type DmE2eeErrorCode =
+  | 'SESSION_REQUIRED'
+  | 'PEER_ID_REQUIRED'
+  | 'PEER_BUNDLE_UNAVAILABLE';
+
+export class DmE2eeError extends Error {
+  public readonly code: DmE2eeErrorCode;
+  public readonly cause: unknown;
+
+  constructor(code: DmE2eeErrorCode, message: string, cause?: unknown) {
+    super(message);
+    this.name = 'DmE2eeError';
+    this.code = code;
+    this.cause = cause;
+  }
+}
 
 function deriveConversationKeyMaterial(
   channelId: string,
@@ -115,7 +144,11 @@ async function decryptV1(
 /**
  * Fetch a peer's prekey bundle from the server and parse it into typed form.
  */
-async function fetchPeerBundle(peerUserId: string): Promise<PrekeyBundle | null> {
+async function fetchPeerBundle(peerUserId: string): Promise<PrekeyBundle> {
+  if (!peerUserId.trim()) {
+    throw new DmE2eeError('PEER_ID_REQUIRED', 'Unable to encrypt DM: recipient identity is unavailable');
+  }
+
   try {
     const { data } = await keysApi.getBundle(peerUserId);
     const identityKey = hexToBytes(data.identity_key);
@@ -137,8 +170,12 @@ async function fetchPeerBundle(peerUserId: string): Promise<PrekeyBundle | null>
       },
       oneTimePrekey,
     };
-  } catch {
-    return null;
+  } catch (err) {
+    throw new DmE2eeError(
+      'PEER_BUNDLE_UNAVAILABLE',
+      'Unable to encrypt DM: recipient has no usable Signal prekey bundle',
+      err,
+    );
   }
 }
 
@@ -150,7 +187,7 @@ function getMyPublicKeyHex(myPrivateKeyEd25519: Uint8Array): string {
 // ── Public API ───────────────────────────────────────────────────
 
 /**
- * Encrypt a DM message using Signal v2 if possible, falling back to v1.
+ * Encrypt a DM message using Signal v2 from an existing session.
  */
 export async function encryptDmMessage(
   channelId: string,
@@ -164,9 +201,14 @@ export async function encryptDmMessage(
   let session = await loadSession(myPubHex, peerPublicKeyEd25519Hex);
 
   if (!session) {
-    // No session exists — fall back to v1 (use encryptDmMessageV2 with peerUserId
-    // to enable X3DH session initiation)
-    return encryptV1(channelId, plaintext, myPrivateKeyEd25519, peerPublicKeyEd25519Hex);
+    if (DM_E2EE_ALLOW_V1_FALLBACK) {
+      warnV1Fallback('encryptDmMessage');
+      return encryptV1(channelId, plaintext, myPrivateKeyEd25519, peerPublicKeyEd25519Hex);
+    }
+    throw new DmE2eeError(
+      'SESSION_REQUIRED',
+      'Unable to encrypt DM: no Signal session exists for this peer',
+    );
   }
 
   // Encrypt with the existing session
@@ -198,9 +240,15 @@ export async function encryptDmMessageV2(
 
   if (!session) {
     // No session — initiate via X3DH
-    const bundle = await fetchPeerBundle(peerUserId);
+    const bundle = await fetchPeerBundle(peerUserId).catch((err) => {
+      if (DM_E2EE_ALLOW_V1_FALLBACK) {
+        warnV1Fallback('encryptDmMessageV2:bundle-fetch');
+        return null;
+      }
+      throw err;
+    });
     if (!bundle) {
-      // Peer has no prekey bundle — fall back to v1
+      warnV1Fallback('encryptDmMessageV2:legacy-encrypt');
       return encryptV1(channelId, plaintext, myPrivateKeyEd25519, peerPublicKeyEd25519Hex);
     }
 
@@ -250,6 +298,7 @@ export async function decryptDmMessage(
   peerPublicKeyEd25519Hex: string,
 ): Promise<string> {
   if (payload.version === DM_E2EE_V1 || !payload.header) {
+    warnV1Fallback('decryptDmMessage');
     return decryptV1(channelId, payload, myPrivateKeyEd25519, peerPublicKeyEd25519Hex);
   }
 

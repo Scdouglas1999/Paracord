@@ -1,5 +1,6 @@
 use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use paracord_models::id::{ChannelId, MessageId, UserId};
 use paracord_models::permissions::Permissions;
 use sqlx::Row;
 
@@ -17,6 +18,10 @@ pub struct MessageRow {
     pub reference_id: Option<i64>,
     pub e2ee_header: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// JSON-serialized array of embeds (OpenGraph / rich link previews).
+    pub embeds: Option<String>,
+    /// JSON-serialized array of bot/application message components.
+    pub components: Option<String>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MessageRow {
@@ -39,10 +44,13 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MessageRow {
             reference_id: row.try_get("reference_id")?,
             e2ee_header: row.try_get("e2ee_header")?,
             created_at: datetime_from_db_text(&created_at_raw)?,
+            embeds: row.try_get("embeds").ok(),
+            components: row.try_get("components").ok(),
         })
     }
 }
 
+/// Raw i64 shim kept for API compat.
 pub async fn create_message(
     pool: &DbPool,
     id: i64,
@@ -67,23 +75,81 @@ pub async fn create_message(
     .await
 }
 
-pub async fn create_message_with_meta(
+/// Core implementation using newtype IDs.
+pub async fn create_message_typed(
     pool: &DbPool,
-    id: i64,
-    channel_id: i64,
-    author_id: i64,
+    id: MessageId,
+    channel_id: ChannelId,
+    author_id: UserId,
     content: &str,
     message_type: i16,
-    reference_id: Option<i64>,
+    reference_id: Option<MessageId>,
+) -> Result<MessageRow, DbError> {
+    create_message_with_meta_typed(
+        pool,
+        id,
+        channel_id,
+        author_id,
+        content,
+        message_type,
+        reference_id,
+        0,
+        None,
+        None,
+    )
+    .await
+}
+
+/// Core implementation using newtype IDs.
+pub async fn create_message_with_meta_typed(
+    pool: &DbPool,
+    id: MessageId,
+    channel_id: ChannelId,
+    author_id: UserId,
+    content: &str,
+    message_type: i16,
+    reference_id: Option<MessageId>,
     flags: i32,
     nonce: Option<&str>,
     e2ee_header: Option<&str>,
 ) -> Result<MessageRow, DbError> {
+    create_message_with_payload_typed(
+        pool,
+        id,
+        channel_id,
+        author_id,
+        content,
+        message_type,
+        reference_id,
+        flags,
+        nonce,
+        e2ee_header,
+        None,
+        None,
+    )
+    .await
+}
+
+/// Core implementation using newtype IDs, including optional rich payload JSON.
+pub async fn create_message_with_payload_typed(
+    pool: &DbPool,
+    id: MessageId,
+    channel_id: ChannelId,
+    author_id: UserId,
+    content: &str,
+    message_type: i16,
+    reference_id: Option<MessageId>,
+    flags: i32,
+    nonce: Option<&str>,
+    e2ee_header: Option<&str>,
+    components_json: Option<&str>,
+    embeds_json: Option<&str>,
+) -> Result<MessageRow, DbError> {
     let normalized_nonce = nonce.map(str::trim).filter(|value| !value.is_empty());
     let row = match sqlx::query_as::<_, MessageRow>(
-        "INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags, reference_id, e2ee_header)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at",
+        "INSERT INTO messages (id, channel_id, author_id, content, nonce, message_type, flags, reference_id, e2ee_header, components, embeds)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components",
     )
     .bind(id)
     .bind(channel_id)
@@ -94,13 +160,15 @@ pub async fn create_message_with_meta(
     .bind(flags)
     .bind(reference_id)
     .bind(e2ee_header)
+    .bind(components_json)
+    .bind(embeds_json)
     .fetch_one(pool)
     .await
     {
         Ok(row) => row,
         Err(err) if normalized_nonce.is_some() && is_nonce_dedup_unique_violation(&err) => {
             let existing =
-                get_message_by_channel_author_nonce(pool, channel_id, author_id, normalized_nonce.unwrap())
+                get_message_by_channel_author_nonce_typed(pool, channel_id, author_id, normalized_nonce.unwrap())
                     .await?;
             if let Some(existing) = existing {
                 return Ok(existing);
@@ -120,6 +188,66 @@ pub async fn create_message_with_meta(
     Ok(row)
 }
 
+/// Raw i64 shim kept for API compat.
+pub async fn create_message_with_meta(
+    pool: &DbPool,
+    id: i64,
+    channel_id: i64,
+    author_id: i64,
+    content: &str,
+    message_type: i16,
+    reference_id: Option<i64>,
+    flags: i32,
+    nonce: Option<&str>,
+    e2ee_header: Option<&str>,
+) -> Result<MessageRow, DbError> {
+    create_message_with_meta_typed(
+        pool,
+        MessageId::new(id),
+        ChannelId::new(channel_id),
+        UserId::new(author_id),
+        content,
+        message_type,
+        reference_id.map(MessageId::new),
+        flags,
+        nonce,
+        e2ee_header,
+    )
+    .await
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn create_message_with_payload(
+    pool: &DbPool,
+    id: i64,
+    channel_id: i64,
+    author_id: i64,
+    content: &str,
+    message_type: i16,
+    reference_id: Option<i64>,
+    flags: i32,
+    nonce: Option<&str>,
+    e2ee_header: Option<&str>,
+    components_json: Option<&str>,
+    embeds_json: Option<&str>,
+) -> Result<MessageRow, DbError> {
+    create_message_with_payload_typed(
+        pool,
+        MessageId::new(id),
+        ChannelId::new(channel_id),
+        UserId::new(author_id),
+        content,
+        message_type,
+        reference_id.map(MessageId::new),
+        flags,
+        nonce,
+        e2ee_header,
+        components_json,
+        embeds_json,
+    )
+    .await
+}
+
 fn is_nonce_dedup_unique_violation(err: &sqlx::Error) -> bool {
     let sqlx::Error::Database(db_err) = err else {
         return false;
@@ -135,14 +263,14 @@ fn is_nonce_dedup_unique_violation(err: &sqlx::Error) -> bool {
     message.contains("idx_messages_nonce_dedup_unique")
 }
 
-async fn get_message_by_channel_author_nonce(
+async fn get_message_by_channel_author_nonce_typed(
     pool: &DbPool,
-    channel_id: i64,
-    author_id: i64,
+    channel_id: ChannelId,
+    author_id: UserId,
     nonce: &str,
 ) -> Result<Option<MessageRow>, DbError> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
          FROM messages
          WHERE channel_id = $1
            AND author_id = $2
@@ -158,9 +286,13 @@ async fn get_message_by_channel_author_nonce(
     Ok(row)
 }
 
-pub async fn get_message(pool: &DbPool, id: i64) -> Result<Option<MessageRow>, DbError> {
+/// Core implementation using newtype ID.
+pub async fn get_message_typed(
+    pool: &DbPool,
+    id: MessageId,
+) -> Result<Option<MessageRow>, DbError> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
          FROM messages WHERE id = $1",
     )
     .bind(id)
@@ -169,17 +301,23 @@ pub async fn get_message(pool: &DbPool, id: i64) -> Result<Option<MessageRow>, D
     Ok(row)
 }
 
-pub async fn get_channel_messages(
+/// Raw i64 shim kept for API compat.
+pub async fn get_message(pool: &DbPool, id: i64) -> Result<Option<MessageRow>, DbError> {
+    get_message_typed(pool, MessageId::new(id)).await
+}
+
+/// Core implementation using newtype ID.
+pub async fn get_channel_messages_typed(
     pool: &DbPool,
-    channel_id: i64,
-    before: Option<i64>,
-    after: Option<i64>,
+    channel_id: ChannelId,
+    before: Option<MessageId>,
+    after: Option<MessageId>,
     limit: i64,
 ) -> Result<Vec<MessageRow>, DbError> {
     let rows = match (before, after) {
         (Some(before_id), _) => {
             sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
                  FROM messages WHERE channel_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3",
             )
             .bind(channel_id)
@@ -190,7 +328,7 @@ pub async fn get_channel_messages(
         }
         (None, Some(after_id)) => {
             sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
                  FROM messages WHERE channel_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3",
             )
             .bind(channel_id)
@@ -201,7 +339,7 @@ pub async fn get_channel_messages(
         }
         (None, None) => {
             sqlx::query_as::<_, MessageRow>(
-                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
                  FROM messages WHERE channel_id = $1 ORDER BY id DESC LIMIT $2",
             )
             .bind(channel_id)
@@ -213,11 +351,34 @@ pub async fn get_channel_messages(
     Ok(rows)
 }
 
-pub async fn update_message(pool: &DbPool, id: i64, content: &str) -> Result<MessageRow, DbError> {
+/// Raw i64 shim kept for API compat.
+pub async fn get_channel_messages(
+    pool: &DbPool,
+    channel_id: i64,
+    before: Option<i64>,
+    after: Option<i64>,
+    limit: i64,
+) -> Result<Vec<MessageRow>, DbError> {
+    get_channel_messages_typed(
+        pool,
+        ChannelId::new(channel_id),
+        before.map(MessageId::new),
+        after.map(MessageId::new),
+        limit,
+    )
+    .await
+}
+
+/// Core implementation using newtype ID.
+pub async fn update_message_typed(
+    pool: &DbPool,
+    id: MessageId,
+    content: &str,
+) -> Result<MessageRow, DbError> {
     let row = sqlx::query_as::<_, MessageRow>(
         "UPDATE messages SET content = $2, edited_at = datetime('now')
          WHERE id = $1
-         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at",
+         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components",
     )
     .bind(id)
     .bind(content)
@@ -226,6 +387,12 @@ pub async fn update_message(pool: &DbPool, id: i64, content: &str) -> Result<Mes
     Ok(row)
 }
 
+/// Raw i64 shim kept for API compat.
+pub async fn update_message(pool: &DbPool, id: i64, content: &str) -> Result<MessageRow, DbError> {
+    update_message_typed(pool, MessageId::new(id), content).await
+}
+
+/// Raw i64 shim kept for API compat.
 pub async fn update_message_authorized(
     pool: &DbPool,
     id: i64,
@@ -236,11 +403,12 @@ pub async fn update_message_authorized(
     update_message_authorized_with_meta(pool, id, channel_id, actor_id, content, None, None).await
 }
 
-pub async fn update_message_authorized_with_meta(
+/// Core implementation using newtype IDs.
+pub async fn update_message_authorized_typed(
     pool: &DbPool,
-    id: i64,
-    channel_id: i64,
-    actor_id: i64,
+    id: MessageId,
+    channel_id: ChannelId,
+    actor_id: UserId,
     content: &str,
     nonce: Option<&str>,
     flags: Option<i32>,
@@ -283,7 +451,7 @@ pub async fn update_message_authorized_with_meta(
          WHERE id = $1
            AND channel_id = $2
            AND (author_id = $3 OR EXISTS (SELECT 1 FROM actor_can_manage))
-         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at",
+         RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components",
     )
     .bind(id)
     .bind(channel_id)
@@ -298,7 +466,30 @@ pub async fn update_message_authorized_with_meta(
     Ok(row)
 }
 
-pub async fn delete_message(pool: &DbPool, id: i64) -> Result<(), DbError> {
+/// Raw i64 shim kept for API compat.
+pub async fn update_message_authorized_with_meta(
+    pool: &DbPool,
+    id: i64,
+    channel_id: i64,
+    actor_id: i64,
+    content: &str,
+    nonce: Option<&str>,
+    flags: Option<i32>,
+) -> Result<Option<MessageRow>, DbError> {
+    update_message_authorized_typed(
+        pool,
+        MessageId::new(id),
+        ChannelId::new(channel_id),
+        UserId::new(actor_id),
+        content,
+        nonce,
+        flags,
+    )
+    .await
+}
+
+/// Core implementation using newtype ID.
+pub async fn delete_message_typed(pool: &DbPool, id: MessageId) -> Result<(), DbError> {
     sqlx::query("DELETE FROM messages WHERE id = $1")
         .bind(id)
         .execute(pool)
@@ -306,11 +497,17 @@ pub async fn delete_message(pool: &DbPool, id: i64) -> Result<(), DbError> {
     Ok(())
 }
 
-pub async fn delete_message_authorized(
+/// Raw i64 shim kept for API compat.
+pub async fn delete_message(pool: &DbPool, id: i64) -> Result<(), DbError> {
+    delete_message_typed(pool, MessageId::new(id)).await
+}
+
+/// Core implementation using newtype IDs.
+pub async fn delete_message_authorized_typed(
     pool: &DbPool,
-    id: i64,
-    channel_id: i64,
-    actor_id: i64,
+    id: MessageId,
+    channel_id: ChannelId,
+    actor_id: UserId,
 ) -> Result<bool, DbError> {
     let manage_messages = Permissions::MANAGE_MESSAGES.bits();
     let administrator = Permissions::ADMINISTRATOR.bits();
@@ -357,12 +554,29 @@ pub async fn delete_message_authorized(
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn get_pinned_messages(
+/// Raw i64 shim kept for API compat.
+pub async fn delete_message_authorized(
     pool: &DbPool,
+    id: i64,
     channel_id: i64,
+    actor_id: i64,
+) -> Result<bool, DbError> {
+    delete_message_authorized_typed(
+        pool,
+        MessageId::new(id),
+        ChannelId::new(channel_id),
+        UserId::new(actor_id),
+    )
+    .await
+}
+
+/// Core implementation using newtype ID.
+pub async fn get_pinned_messages_typed(
+    pool: &DbPool,
+    channel_id: ChannelId,
 ) -> Result<Vec<MessageRow>, DbError> {
     let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
          FROM messages WHERE channel_id = $1 AND pinned = TRUE ORDER BY id ASC",
     )
     .bind(channel_id)
@@ -371,7 +585,20 @@ pub async fn get_pinned_messages(
     Ok(rows)
 }
 
-pub async fn pin_message(pool: &DbPool, id: i64, channel_id: i64) -> Result<bool, DbError> {
+/// Raw i64 shim kept for API compat.
+pub async fn get_pinned_messages(
+    pool: &DbPool,
+    channel_id: i64,
+) -> Result<Vec<MessageRow>, DbError> {
+    get_pinned_messages_typed(pool, ChannelId::new(channel_id)).await
+}
+
+/// Core implementation using newtype IDs.
+pub async fn pin_message_typed(
+    pool: &DbPool,
+    id: MessageId,
+    channel_id: ChannelId,
+) -> Result<bool, DbError> {
     let result = sqlx::query("UPDATE messages SET pinned = TRUE WHERE id = $1 AND channel_id = $2")
         .bind(id)
         .bind(channel_id)
@@ -380,7 +607,17 @@ pub async fn pin_message(pool: &DbPool, id: i64, channel_id: i64) -> Result<bool
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn unpin_message(pool: &DbPool, id: i64, channel_id: i64) -> Result<bool, DbError> {
+/// Raw i64 shim kept for API compat.
+pub async fn pin_message(pool: &DbPool, id: i64, channel_id: i64) -> Result<bool, DbError> {
+    pin_message_typed(pool, MessageId::new(id), ChannelId::new(channel_id)).await
+}
+
+/// Core implementation using newtype IDs.
+pub async fn unpin_message_typed(
+    pool: &DbPool,
+    id: MessageId,
+    channel_id: ChannelId,
+) -> Result<bool, DbError> {
     let result =
         sqlx::query("UPDATE messages SET pinned = FALSE WHERE id = $1 AND channel_id = $2")
             .bind(id)
@@ -390,10 +627,16 @@ pub async fn unpin_message(pool: &DbPool, id: i64, channel_id: i64) -> Result<bo
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn bulk_delete_messages(
+/// Raw i64 shim kept for API compat.
+pub async fn unpin_message(pool: &DbPool, id: i64, channel_id: i64) -> Result<bool, DbError> {
+    unpin_message_typed(pool, MessageId::new(id), ChannelId::new(channel_id)).await
+}
+
+/// Core implementation using newtype ID. ids remain i64 since they're a bulk slice.
+pub async fn bulk_delete_messages_typed(
     pool: &DbPool,
-    channel_id: i64,
-    ids: &[i64],
+    channel_id: ChannelId,
+    ids: &[MessageId],
 ) -> Result<u64, DbError> {
     const MAX_BULK_MESSAGE_IDS: usize = 500;
     if ids.is_empty() {
@@ -413,11 +656,21 @@ pub async fn bulk_delete_messages(
     );
     let mut query = sqlx::query(&sql);
     for id in ids {
-        query = query.bind(id);
+        query = query.bind(*id);
     }
     query = query.bind(channel_id);
     let result = query.execute(pool).await?;
     Ok(result.rows_affected())
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn bulk_delete_messages(
+    pool: &DbPool,
+    channel_id: i64,
+    ids: &[i64],
+) -> Result<u64, DbError> {
+    let typed_ids: Vec<MessageId> = ids.iter().map(|&id| MessageId::new(id)).collect();
+    bulk_delete_messages_typed(pool, ChannelId::new(channel_id), &typed_ids).await
 }
 
 pub async fn count_messages(pool: &DbPool) -> Result<i64, DbError> {
@@ -427,34 +680,142 @@ pub async fn count_messages(pool: &DbPool) -> Result<i64, DbError> {
     Ok(row.0)
 }
 
+/// Core implementation using newtype IDs.
+pub async fn search_messages_typed(
+    pool: &DbPool,
+    channel_id: ChannelId,
+    query: &str,
+    limit: i64,
+    author_id: Option<UserId>,
+    after: Option<DateTime<Utc>>,
+    before: Option<DateTime<Utc>>,
+) -> Result<Vec<MessageRow>, DbError> {
+    const MESSAGE_FLAG_DM_E2EE: i32 = 1 << 0;
+    let after_text = after.map(datetime_to_db_text);
+    let before_text = before.map(datetime_to_db_text);
+    match crate::active_database_engine() {
+        crate::DatabaseEngine::Postgres => {
+            let rows = sqlx::query_as::<_, MessageRow>(
+                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
+                 FROM messages
+                 WHERE channel_id = $1
+                   AND search_vector @@ plainto_tsquery('english', $2)
+                   AND ($3 IS NULL OR author_id = $3)
+                   AND ($4 IS NULL OR created_at >= $4)
+                   AND ($5 IS NULL OR created_at <= $5)
+                   AND (flags & $7) = 0
+                 ORDER BY ts_rank(search_vector, plainto_tsquery('english', $2)) DESC
+                 LIMIT $6",
+            )
+            .bind(channel_id)
+            .bind(query)
+            .bind(author_id)
+            .bind(after_text.as_deref())
+            .bind(before_text.as_deref())
+            .bind(limit)
+            .bind(MESSAGE_FLAG_DM_E2EE)
+            .fetch_all(pool)
+            .await?;
+            Ok(rows)
+        }
+        crate::DatabaseEngine::Sqlite => {
+            // Use FTS5 for full-text search, falling back to LIKE if FTS table
+            // is not yet available (e.g. migration hasn't run).
+            let fts_query = sanitize_fts5_query(query);
+            let fts_result = sqlx::query_as::<_, MessageRow>(
+                "SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.message_type, m.flags, m.edited_at, CASE WHEN m.pinned THEN 1 ELSE 0 END AS pinned, m.reference_id, m.e2ee_header, m.created_at, m.embeds, m.components
+                 FROM messages m
+                 JOIN messages_fts ON messages_fts.rowid = m.id
+                 WHERE messages_fts MATCH $1
+                   AND messages_fts.channel_id = $2
+                   AND ($3 IS NULL OR m.author_id = $3)
+                   AND ($4 IS NULL OR m.created_at >= $4)
+                   AND ($5 IS NULL OR m.created_at <= $5)
+                   AND (m.flags & $7) = 0
+                 ORDER BY rank
+                 LIMIT $6",
+            )
+            .bind(&fts_query)
+            .bind(channel_id)
+            .bind(author_id)
+            .bind(after_text.as_deref())
+            .bind(before_text.as_deref())
+            .bind(limit)
+            .bind(MESSAGE_FLAG_DM_E2EE)
+            .fetch_all(pool)
+            .await;
+
+            match fts_result {
+                Ok(rows) => Ok(rows),
+                Err(_) => {
+                    // Fallback to LIKE search if FTS table doesn't exist
+                    let escaped = query
+                        .replace('\\', "\\\\")
+                        .replace('%', "\\%")
+                        .replace('_', "\\_");
+                    let pattern = format!("%{}%", escaped);
+                    let rows = sqlx::query_as::<_, MessageRow>(
+                        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
+                         FROM messages
+                         WHERE channel_id = $1
+                           AND content LIKE $2 ESCAPE '\\'
+                           AND ($3 IS NULL OR author_id = $3)
+                           AND ($4 IS NULL OR created_at >= $4)
+                           AND ($5 IS NULL OR created_at <= $5)
+                           AND (flags & $7) = 0
+                         ORDER BY id DESC
+                         LIMIT $6",
+                    )
+                    .bind(channel_id)
+                    .bind(pattern)
+                    .bind(author_id)
+                    .bind(after_text.as_deref())
+                    .bind(before_text.as_deref())
+                    .bind(limit)
+                    .bind(MESSAGE_FLAG_DM_E2EE)
+                    .fetch_all(pool)
+                    .await?;
+                    Ok(rows)
+                }
+            }
+        }
+    }
+}
+
+/// Raw i64 shim kept for API compat.
 pub async fn search_messages(
     pool: &DbPool,
     channel_id: i64,
     query: &str,
     limit: i64,
+    author_id: Option<i64>,
+    after: Option<DateTime<Utc>>,
+    before: Option<DateTime<Utc>>,
 ) -> Result<Vec<MessageRow>, DbError> {
-    const MESSAGE_FLAG_DM_E2EE: i32 = 1 << 0;
-    let escaped = query
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    let pattern = format!("%{}%", escaped);
-    let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
-         FROM messages
-         WHERE channel_id = $1
-           AND content LIKE $2 ESCAPE '\\'
-           AND (flags & $4) = 0
-         ORDER BY id DESC
-         LIMIT $3",
+    search_messages_typed(
+        pool,
+        ChannelId::new(channel_id),
+        query,
+        limit,
+        author_id.map(UserId::new),
+        after,
+        before,
     )
-    .bind(channel_id)
-    .bind(pattern)
-    .bind(limit)
-    .bind(MESSAGE_FLAG_DM_E2EE)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
+    .await
+}
+
+/// Sanitize user input for FTS5 MATCH queries. Wraps each word in double quotes
+/// to prevent FTS5 syntax errors from special characters.
+fn sanitize_fts5_query(input: &str) -> String {
+    input
+        .split_whitespace()
+        .filter(|w| !w.is_empty())
+        .map(|word| {
+            let escaped = word.replace('"', "\"\"");
+            format!("\"{}\"", escaped)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub async fn get_message_ids_older_than(
@@ -476,13 +837,60 @@ pub async fn get_message_ids_older_than(
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-pub async fn list_messages_by_author(
+/// Core implementation using newtype ID.
+pub async fn get_channel_message_ids_older_than_typed(
     pool: &DbPool,
-    author_id: i64,
+    channel_id: ChannelId,
+    older_than: DateTime<Utc>,
+    limit: i64,
+) -> Result<Vec<MessageId>, DbError> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT id
+         FROM messages
+         WHERE channel_id = $1
+           AND created_at <= $2
+         ORDER BY created_at ASC
+         LIMIT $3",
+    )
+    .bind(channel_id)
+    .bind(datetime_to_db_text(older_than))
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| MessageId::new(id)).collect())
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn get_channel_message_ids_older_than(
+    pool: &DbPool,
+    channel_id: i64,
+    older_than: DateTime<Utc>,
+    limit: i64,
+) -> Result<Vec<i64>, DbError> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT id
+         FROM messages
+         WHERE channel_id = $1
+           AND created_at <= $2
+         ORDER BY created_at ASC
+         LIMIT $3",
+    )
+    .bind(channel_id)
+    .bind(datetime_to_db_text(older_than))
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Core implementation using newtype ID.
+pub async fn list_messages_by_author_typed(
+    pool: &DbPool,
+    author_id: UserId,
     limit: i64,
 ) -> Result<Vec<MessageRow>, DbError> {
     let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
          FROM messages
          WHERE author_id = $1
          ORDER BY id DESC
@@ -493,6 +901,139 @@ pub async fn list_messages_by_author(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn list_messages_by_author(
+    pool: &DbPool,
+    author_id: i64,
+    limit: i64,
+) -> Result<Vec<MessageRow>, DbError> {
+    list_messages_by_author_typed(pool, UserId::new(author_id), limit).await
+}
+
+/// Export helper: list all messages visible to a user across guild channels and DMs.
+/// Core implementation using newtype ID.
+pub async fn list_messages_for_user_export_typed(
+    pool: &DbPool,
+    user_id: UserId,
+    limit: i64,
+) -> Result<Vec<MessageRow>, DbError> {
+    let rows = sqlx::query_as::<_, MessageRow>(
+        "SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.message_type, m.flags,
+                m.edited_at, CASE WHEN m.pinned THEN 1 ELSE 0 END AS pinned, m.reference_id,
+                m.e2ee_header, m.created_at, m.embeds, m.components
+         FROM messages m
+         WHERE m.author_id = $1
+            OR EXISTS (
+                SELECT 1
+                FROM dm_recipients dp
+                WHERE dp.channel_id = m.channel_id
+                  AND dp.user_id = $1
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM channels c
+                INNER JOIN members mem
+                   ON mem.guild_id = c.space_id
+                  AND mem.user_id = $1
+                WHERE c.id = m.channel_id
+            )
+         ORDER BY m.id DESC
+         LIMIT $2",
+    )
+    .bind(user_id)
+    .bind(limit.clamp(1, 200_000))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn list_messages_for_user_export(
+    pool: &DbPool,
+    user_id: i64,
+    limit: i64,
+) -> Result<Vec<MessageRow>, DbError> {
+    list_messages_for_user_export_typed(pool, UserId::new(user_id), limit).await
+}
+
+pub async fn count_guild_messages_by_author(
+    pool: &DbPool,
+    guild_id: i64,
+    author_id: i64,
+) -> Result<i64, DbError> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)
+         FROM messages m
+         INNER JOIN channels c ON c.id = m.channel_id
+         WHERE c.guild_id = $1
+           AND m.author_id = $2",
+    )
+    .bind(guild_id)
+    .bind(author_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Returns the created_at timestamp of the most recent message sent by `author_id` in `channel_id`,
+/// or `None` if they have never sent a message there. Used to enforce slowmode.
+/// Core implementation using newtype IDs.
+pub async fn get_last_user_message_time_typed(
+    pool: &DbPool,
+    channel_id: ChannelId,
+    author_id: UserId,
+) -> Result<Option<DateTime<Utc>>, DbError> {
+    let row: Option<String> = sqlx::query_scalar(
+        "SELECT created_at FROM messages WHERE channel_id = $1 AND author_id = $2 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(channel_id)
+    .bind(author_id)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        Some(ts) => Ok(Some(datetime_from_db_text(&ts)?)),
+        None => Ok(None),
+    }
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn get_last_user_message_time(
+    pool: &DbPool,
+    channel_id: i64,
+    author_id: i64,
+) -> Result<Option<DateTime<Utc>>, DbError> {
+    get_last_user_message_time_typed(pool, ChannelId::new(channel_id), UserId::new(author_id)).await
+}
+
+/// Core implementation using newtype ID.
+pub async fn count_channel_messages_since_typed(
+    pool: &DbPool,
+    channel_id: ChannelId,
+    since: DateTime<Utc>,
+) -> Result<i64, DbError> {
+    let since_text = datetime_to_db_text(since);
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)
+         FROM messages
+         WHERE channel_id = $1
+           AND created_at >= $2",
+    )
+    .bind(channel_id)
+    .bind(since_text)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn count_channel_messages_since(
+    pool: &DbPool,
+    channel_id: i64,
+    since: DateTime<Utc>,
+) -> Result<i64, DbError> {
+    count_channel_messages_since_typed(pool, ChannelId::new(channel_id), since).await
 }
 
 pub async fn delete_messages_by_ids(pool: &DbPool, ids: &[i64]) -> Result<u64, DbError> {
@@ -516,6 +1057,140 @@ pub async fn delete_messages_by_ids(pool: &DbPool, ids: &[i64]) -> Result<u64, D
     }
     let result = query.execute(pool).await?;
     Ok(result.rows_affected())
+}
+
+#[derive(Debug, Clone)]
+pub struct EditHistoryRow {
+    pub id: i64,
+    pub message_id: i64,
+    pub content: String,
+    pub edited_at: DateTime<Utc>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for EditHistoryRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let edited_at_raw: String = row.try_get("edited_at")?;
+        Ok(Self {
+            id: row.try_get("id")?,
+            message_id: row.try_get("message_id")?,
+            content: row.try_get("content")?,
+            edited_at: datetime_from_db_text(&edited_at_raw)?,
+        })
+    }
+}
+
+/// Save a snapshot of the old message content before an edit.
+pub async fn save_edit_snapshot_typed(
+    pool: &DbPool,
+    message_id: MessageId,
+    old_content: &str,
+) -> Result<(), DbError> {
+    sqlx::query("INSERT INTO message_edits (message_id, content) VALUES ($1, $2)")
+        .bind(message_id)
+        .bind(old_content)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn save_edit_snapshot(
+    pool: &DbPool,
+    message_id: i64,
+    old_content: &str,
+) -> Result<(), DbError> {
+    save_edit_snapshot_typed(pool, MessageId::new(message_id), old_content).await
+}
+
+/// Get the edit history for a message, ordered oldest first.
+pub async fn get_edit_history_typed(
+    pool: &DbPool,
+    message_id: MessageId,
+) -> Result<Vec<EditHistoryRow>, DbError> {
+    let rows = sqlx::query_as::<_, EditHistoryRow>(
+        "SELECT id, message_id, content, edited_at FROM message_edits WHERE message_id = $1 ORDER BY id ASC",
+    )
+    .bind(message_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn get_edit_history(
+    pool: &DbPool,
+    message_id: i64,
+) -> Result<Vec<EditHistoryRow>, DbError> {
+    get_edit_history_typed(pool, MessageId::new(message_id)).await
+}
+
+/// Store serialized embeds JSON on a message. Does not update `edited_at`.
+pub async fn update_message_embeds_typed(
+    pool: &DbPool,
+    id: MessageId,
+    embeds_json: &str,
+) -> Result<(), DbError> {
+    sqlx::query("UPDATE messages SET embeds = $1 WHERE id = $2")
+        .bind(embeds_json)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn update_message_embeds(
+    pool: &DbPool,
+    id: i64,
+    embeds_json: &str,
+) -> Result<(), DbError> {
+    update_message_embeds_typed(pool, MessageId::new(id), embeds_json).await
+}
+
+/// Store serialized component JSON on a message. Does not update `edited_at`.
+pub async fn update_message_components_typed(
+    pool: &DbPool,
+    id: MessageId,
+    components_json: &str,
+) -> Result<(), DbError> {
+    sqlx::query("UPDATE messages SET components = $1 WHERE id = $2")
+        .bind(components_json)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn update_message_components(
+    pool: &DbPool,
+    id: i64,
+    components_json: &str,
+) -> Result<(), DbError> {
+    update_message_components_typed(pool, MessageId::new(id), components_json).await
+}
+
+/// Fetch a message with rich payload columns included.
+pub async fn get_message_with_embeds_typed(
+    pool: &DbPool,
+    id: MessageId,
+) -> Result<Option<MessageRow>, DbError> {
+    let row = sqlx::query_as::<_, MessageRow>(
+        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
+         FROM messages WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn get_message_with_embeds(
+    pool: &DbPool,
+    id: i64,
+) -> Result<Option<MessageRow>, DbError> {
+    get_message_with_embeds_typed(pool, MessageId::new(id)).await
 }
 
 #[cfg(test)]
@@ -548,9 +1223,17 @@ mod tests {
     async fn test_create_message() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        let msg = create_message(&pool, 1000, channel_id, user_id, "Hello!", 0, None)
-            .await
-            .unwrap();
+        let msg = create_message_typed(
+            &pool,
+            MessageId::new(1000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "Hello!",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(msg.id, 1000);
         assert_eq!(msg.channel_id, channel_id);
         assert_eq!(msg.author_id, user_id);
@@ -565,12 +1248,28 @@ mod tests {
     async fn test_create_message_with_reference() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        create_message(&pool, 1000, channel_id, user_id, "Original", 0, None)
-            .await
-            .unwrap();
-        let reply = create_message(&pool, 1001, channel_id, user_id, "Reply", 0, Some(1000))
-            .await
-            .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(1000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "Original",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        let reply = create_message_typed(
+            &pool,
+            MessageId::new(1001),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "Reply",
+            0,
+            Some(MessageId::new(1000)),
+        )
+        .await
+        .unwrap();
         assert_eq!(reply.reference_id, Some(1000));
     }
 
@@ -578,17 +1277,30 @@ mod tests {
     async fn test_get_message() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        create_message(&pool, 2000, channel_id, user_id, "Find me", 0, None)
+        create_message_typed(
+            &pool,
+            MessageId::new(2000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "Find me",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        let msg = get_message_typed(&pool, MessageId::new(2000))
             .await
+            .unwrap()
             .unwrap();
-        let msg = get_message(&pool, 2000).await.unwrap().unwrap();
         assert_eq!(msg.content.as_deref(), Some("Find me"));
     }
 
     #[tokio::test]
     async fn test_get_message_not_found() {
         let pool = test_pool().await;
-        let msg = get_message(&pool, 9999).await.unwrap();
+        let msg = get_message_typed(&pool, MessageId::new(9999))
+            .await
+            .unwrap();
         assert!(msg.is_none());
     }
 
@@ -597,11 +1309,11 @@ mod tests {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
         for i in 0..5 {
-            create_message(
+            create_message_typed(
                 &pool,
-                3000 + i,
-                channel_id,
-                user_id,
+                MessageId::new(3000 + i),
+                ChannelId::new(channel_id),
+                UserId::new(user_id),
                 &format!("msg {}", i),
                 0,
                 None,
@@ -609,9 +1321,10 @@ mod tests {
             .await
             .unwrap();
         }
-        let messages = get_channel_messages(&pool, channel_id, None, None, 50)
-            .await
-            .unwrap();
+        let messages =
+            get_channel_messages_typed(&pool, ChannelId::new(channel_id), None, None, 50)
+                .await
+                .unwrap();
         assert_eq!(messages.len(), 5);
         // Default ordering is DESC by id
         assert!(messages[0].id > messages[1].id);
@@ -622,11 +1335,11 @@ mod tests {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
         for i in 0..5 {
-            create_message(
+            create_message_typed(
                 &pool,
-                4000 + i,
-                channel_id,
-                user_id,
+                MessageId::new(4000 + i),
+                ChannelId::new(channel_id),
+                UserId::new(user_id),
                 &format!("msg {}", i),
                 0,
                 None,
@@ -634,9 +1347,15 @@ mod tests {
             .await
             .unwrap();
         }
-        let messages = get_channel_messages(&pool, channel_id, Some(4003), None, 50)
-            .await
-            .unwrap();
+        let messages = get_channel_messages_typed(
+            &pool,
+            ChannelId::new(channel_id),
+            Some(MessageId::new(4003)),
+            None,
+            50,
+        )
+        .await
+        .unwrap();
         assert_eq!(messages.len(), 3); // 4000, 4001, 4002
         assert!(messages.iter().all(|m| m.id < 4003));
     }
@@ -646,11 +1365,11 @@ mod tests {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
         for i in 0..5 {
-            create_message(
+            create_message_typed(
                 &pool,
-                5000 + i,
-                channel_id,
-                user_id,
+                MessageId::new(5000 + i),
+                ChannelId::new(channel_id),
+                UserId::new(user_id),
                 &format!("msg {}", i),
                 0,
                 None,
@@ -658,9 +1377,15 @@ mod tests {
             .await
             .unwrap();
         }
-        let messages = get_channel_messages(&pool, channel_id, None, Some(5002), 50)
-            .await
-            .unwrap();
+        let messages = get_channel_messages_typed(
+            &pool,
+            ChannelId::new(channel_id),
+            None,
+            Some(MessageId::new(5002)),
+            50,
+        )
+        .await
+        .unwrap();
         assert_eq!(messages.len(), 2); // 5003, 5004
         assert!(messages.iter().all(|m| m.id > 5002));
     }
@@ -670,11 +1395,11 @@ mod tests {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
         for i in 0..10 {
-            create_message(
+            create_message_typed(
                 &pool,
-                6000 + i,
-                channel_id,
-                user_id,
+                MessageId::new(6000 + i),
+                ChannelId::new(channel_id),
+                UserId::new(user_id),
                 &format!("msg {}", i),
                 0,
                 None,
@@ -682,7 +1407,7 @@ mod tests {
             .await
             .unwrap();
         }
-        let messages = get_channel_messages(&pool, channel_id, None, None, 3)
+        let messages = get_channel_messages_typed(&pool, ChannelId::new(channel_id), None, None, 3)
             .await
             .unwrap();
         assert_eq!(messages.len(), 3);
@@ -692,10 +1417,20 @@ mod tests {
     async fn test_update_message() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        create_message(&pool, 7000, channel_id, user_id, "Before", 0, None)
+        create_message_typed(
+            &pool,
+            MessageId::new(7000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "Before",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        let updated = update_message_typed(&pool, MessageId::new(7000), "After")
             .await
             .unwrap();
-        let updated = update_message(&pool, 7000, "After").await.unwrap();
         assert_eq!(updated.content.as_deref(), Some("After"));
         assert!(updated.edited_at.is_some());
     }
@@ -704,11 +1439,23 @@ mod tests {
     async fn test_delete_message() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        create_message(&pool, 8000, channel_id, user_id, "Bye", 0, None)
+        create_message_typed(
+            &pool,
+            MessageId::new(8000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "Bye",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        delete_message_typed(&pool, MessageId::new(8000))
             .await
             .unwrap();
-        delete_message(&pool, 8000).await.unwrap();
-        let msg = get_message(&pool, 8000).await.unwrap();
+        let msg = get_message_typed(&pool, MessageId::new(8000))
+            .await
+            .unwrap();
         assert!(msg.is_none());
     }
 
@@ -716,18 +1463,50 @@ mod tests {
     async fn test_search_messages() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        create_message(&pool, 9000, channel_id, user_id, "hello world", 0, None)
-            .await
-            .unwrap();
-        create_message(&pool, 9001, channel_id, user_id, "goodbye world", 0, None)
-            .await
-            .unwrap();
-        create_message(&pool, 9002, channel_id, user_id, "hello again", 0, None)
-            .await
-            .unwrap();
-        let results = search_messages(&pool, channel_id, "hello", 50)
-            .await
-            .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(9000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "hello world",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(9001),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "goodbye world",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(9002),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "hello again",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        let results = search_messages_typed(
+            &pool,
+            ChannelId::new(channel_id),
+            "hello",
+            50,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -735,10 +1514,28 @@ mod tests {
     async fn test_search_messages_no_results() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        create_message(&pool, 9100, channel_id, user_id, "nothing here", 0, None)
-            .await
-            .unwrap();
-        let results = search_messages(&pool, channel_id, "xyz", 50).await.unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(9100),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "nothing here",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        let results = search_messages_typed(
+            &pool,
+            ChannelId::new(channel_id),
+            "xyz",
+            50,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(results.is_empty());
     }
 
@@ -746,21 +1543,38 @@ mod tests {
     async fn test_pin_and_unpin_message() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        create_message(&pool, 10000, channel_id, user_id, "Pin me", 0, None)
+        create_message_typed(
+            &pool,
+            MessageId::new(10000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "Pin me",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let pinned = pin_message_typed(&pool, MessageId::new(10000), ChannelId::new(channel_id))
             .await
             .unwrap();
-
-        let pinned = pin_message(&pool, 10000, channel_id).await.unwrap();
         assert!(pinned);
 
-        let pinned_msgs = get_pinned_messages(&pool, channel_id).await.unwrap();
+        let pinned_msgs = get_pinned_messages_typed(&pool, ChannelId::new(channel_id))
+            .await
+            .unwrap();
         assert_eq!(pinned_msgs.len(), 1);
         assert_eq!(pinned_msgs[0].id, 10000);
 
-        let unpinned = unpin_message(&pool, 10000, channel_id).await.unwrap();
+        let unpinned =
+            unpin_message_typed(&pool, MessageId::new(10000), ChannelId::new(channel_id))
+                .await
+                .unwrap();
         assert!(unpinned);
 
-        let pinned_msgs = get_pinned_messages(&pool, channel_id).await.unwrap();
+        let pinned_msgs = get_pinned_messages_typed(&pool, ChannelId::new(channel_id))
+            .await
+            .unwrap();
         assert!(pinned_msgs.is_empty());
     }
 
@@ -769,11 +1583,11 @@ mod tests {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
         for i in 0..5 {
-            create_message(
+            create_message_typed(
                 &pool,
-                11000 + i,
-                channel_id,
-                user_id,
+                MessageId::new(11000 + i),
+                ChannelId::new(channel_id),
+                UserId::new(user_id),
                 &format!("msg {}", i),
                 0,
                 None,
@@ -781,21 +1595,32 @@ mod tests {
             .await
             .unwrap();
         }
-        let deleted = bulk_delete_messages(&pool, channel_id, &[11000, 11001, 11002])
-            .await
-            .unwrap();
+        let deleted = bulk_delete_messages_typed(
+            &pool,
+            ChannelId::new(channel_id),
+            &[
+                MessageId::new(11000),
+                MessageId::new(11001),
+                MessageId::new(11002),
+            ],
+        )
+        .await
+        .unwrap();
         assert_eq!(deleted, 3);
 
-        let remaining = get_channel_messages(&pool, channel_id, None, None, 50)
-            .await
-            .unwrap();
+        let remaining =
+            get_channel_messages_typed(&pool, ChannelId::new(channel_id), None, None, 50)
+                .await
+                .unwrap();
         assert_eq!(remaining.len(), 2);
     }
 
     #[tokio::test]
     async fn test_bulk_delete_empty_ids() {
         let pool = test_pool().await;
-        let deleted = bulk_delete_messages(&pool, 1, &[]).await.unwrap();
+        let deleted = bulk_delete_messages_typed(&pool, ChannelId::new(1), &[])
+            .await
+            .unwrap();
         assert_eq!(deleted, 0);
     }
 
@@ -804,12 +1629,28 @@ mod tests {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
         assert_eq!(count_messages(&pool).await.unwrap(), 0);
-        create_message(&pool, 12000, channel_id, user_id, "a", 0, None)
-            .await
-            .unwrap();
-        create_message(&pool, 12001, channel_id, user_id, "b", 0, None)
-            .await
-            .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(12000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "a",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(12001),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "b",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(count_messages(&pool).await.unwrap(), 2);
     }
 
@@ -817,11 +1658,11 @@ mod tests {
     async fn test_create_message_with_meta() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        let msg = create_message_with_meta(
+        let msg = create_message_with_meta_typed(
             &pool,
-            13000,
-            channel_id,
-            user_id,
+            MessageId::new(13000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
             "meta msg",
             0,
             None,
@@ -839,11 +1680,11 @@ mod tests {
     async fn test_create_message_with_meta_dedupes_by_nonce() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        let first = create_message_with_meta(
+        let first = create_message_with_meta_typed(
             &pool,
-            13010,
-            channel_id,
-            user_id,
+            MessageId::new(13010),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
             "first",
             0,
             None,
@@ -853,11 +1694,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let second = create_message_with_meta(
+        let second = create_message_with_meta_typed(
             &pool,
-            13011,
-            channel_id,
-            user_id,
+            MessageId::new(13011),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
             "second",
             0,
             None,
@@ -876,13 +1717,31 @@ mod tests {
     async fn test_list_messages_by_author() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        create_message(&pool, 14000, channel_id, user_id, "mine", 0, None)
+        create_message_typed(
+            &pool,
+            MessageId::new(14000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "mine",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(14001),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "also mine",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        let msgs = list_messages_by_author_typed(&pool, UserId::new(user_id), 50)
             .await
             .unwrap();
-        create_message(&pool, 14001, channel_id, user_id, "also mine", 0, None)
-            .await
-            .unwrap();
-        let msgs = list_messages_by_author(&pool, user_id, 50).await.unwrap();
         assert_eq!(msgs.len(), 2);
     }
 
@@ -890,9 +1749,17 @@ mod tests {
     async fn test_updates_last_message_id_on_channel() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
-        create_message(&pool, 15000, channel_id, user_id, "latest", 0, None)
-            .await
-            .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(15000),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "latest",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
         let ch = crate::channels::get_channel(&pool, channel_id)
             .await
             .unwrap()

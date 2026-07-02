@@ -13,6 +13,7 @@ use paracord_federation::{
 use paracord_models::permissions::Permissions;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 
 use crate::error::ApiError;
 use crate::middleware::AdminUser;
@@ -66,10 +67,6 @@ fn federation_service_from_state(state: &AppState) -> FederationService {
         .federation_service
         .clone()
         .unwrap_or_else(build_federation_service)
-}
-
-fn federation_service() -> FederationService {
-    build_federation_service()
 }
 
 /// Maximum serialized content size for inbound federation events (1 MB).
@@ -343,7 +340,21 @@ fn parse_federation_allowed_guild_ids() -> Vec<i64> {
         .unwrap_or_default()
 }
 
+fn all_federation_guilds_allowed() -> bool {
+    std::env::var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .any(|value| matches!(value, "*" | "all" | "ALL"))
+        })
+        .unwrap_or(false)
+}
+
 fn ensure_federation_guild_allowed(guild_id: i64) -> Result<(), ApiError> {
+    if all_federation_guilds_allowed() {
+        return Ok(());
+    }
     let allowlist = parse_federation_allowed_guild_ids();
     if allowlist.iter().any(|allowed| *allowed == guild_id) {
         return Ok(());
@@ -357,6 +368,7 @@ struct FederationTransportHeaders {
     key_id: String,
     timestamp_ms: i64,
     signature_hex: String,
+    protocol_version: String,
 }
 
 fn parse_transport_headers(headers: &HeaderMap) -> Result<FederationTransportHeaders, ApiError> {
@@ -386,11 +398,19 @@ fn parse_transport_headers(headers: &HeaderMap) -> Result<FederationTransportHea
         .filter(|v| !v.is_empty())
         .ok_or(ApiError::Unauthorized)?
         .to_string();
+    let protocol_version = headers
+        .get("x-paracord-fed-version")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(paracord_federation::FEDERATION_PROTOCOL_VERSION_V1)
+        .to_string();
     Ok(FederationTransportHeaders {
         origin,
         key_id,
         timestamp_ms,
         signature_hex,
+        protocol_version,
     })
 }
 
@@ -405,6 +425,13 @@ async fn verify_transport_request(
     enforce_replay_protection: bool,
 ) -> Result<FederationTransportHeaders, ApiError> {
     let transport = parse_transport_headers(headers)?;
+    if !paracord_federation::is_supported_protocol_version(&transport.protocol_version) {
+        return Err(ApiError::UpgradeRequired(format!(
+            "Unsupported federation protocol version '{}'. Supported versions: {}",
+            transport.protocol_version,
+            paracord_federation::FEDERATION_PROTOCOL_SUPPORTED.join(", ")
+        )));
+    }
     if let Some(expected) = expected_origin {
         if transport.origin != expected {
             return Err(ApiError::Forbidden);
@@ -520,7 +547,7 @@ async fn ensure_remote_user_mapping(
             .await
             .unwrap_or(0);
             if count > limit as i64 {
-                return Err(ApiError::RateLimited);
+                return Err(ApiError::RateLimited(0));
             }
         }
     }
@@ -716,14 +743,18 @@ async fn ingest_verified_payload(
 
 // ── Discovery & Key Exchange ────────────────────────────────────────────────
 
-pub async fn well_known() -> Result<Json<Value>, ApiError> {
-    let service = federation_service();
+pub async fn well_known(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let service = federation_service_from_state(&state);
+    if !service.is_enabled() || !service.allow_discovery() {
+        return Err(ApiError::NotFound);
+    }
     Ok(Json(json!({
         "server_name": service.server_name(),
         "domain": service.domain(),
         "federation_endpoint": "/_paracord/federation/v1",
         "enabled": service.is_enabled(),
-        "version": "federation-v1",
+        "version": paracord_federation::FEDERATION_PROTOCOL_DEFAULT,
+        "supported_versions": paracord_federation::FEDERATION_PROTOCOL_SUPPORTED,
     })))
 }
 
@@ -800,7 +831,7 @@ pub async fn ingest_event(
             .await
             .unwrap_or(0);
             if count > limit as i64 {
-                return Err(ApiError::RateLimited);
+                return Err(ApiError::RateLimited(0));
             }
         }
     }
@@ -986,30 +1017,21 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
                     payload.event_id,
                     e
                 );
-                if !ensure_federated_system_user(state).await {
-                    tracing::error!(
-                        "federation: cannot store inbound message from event {} because no fallback system user exists",
-                        payload.event_id,
-                    );
-                    return;
-                }
-                0
+                return;
             }
         },
         None => {
-            if !ensure_federated_system_user(state).await {
-                tracing::error!(
-                    "federation: cannot store inbound message from event {} because sender identity is invalid and fallback user is unavailable",
-                    payload.event_id
-                );
-                return;
-            }
-            0
+            tracing::warn!(
+                "federation: cannot store inbound message from event {} because sender identity is invalid: {}",
+                payload.event_id,
+                payload.sender
+            );
+            return;
         }
     };
 
     // Store the federated message in the local messages table.
-    // Author ID may be a mapped remote pseudo-user. Falls back to user 0.
+    // Author ID is always a mapped remote pseudo-user.
     match paracord_db::messages::create_message(
         &state.db,
         local_msg_id,
@@ -2492,6 +2514,9 @@ pub async fn add_server(
             "server_name, domain, and federation_endpoint are required".to_string(),
         ));
     }
+    paracord_federation::client::validate_public_federation_url_with_dns(&body.federation_endpoint)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     let mut public_key = body.public_key_hex.clone();
     let mut key_id = body.key_id.clone();
@@ -2583,19 +2608,284 @@ pub async fn delete_server(
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ModerationListEntry {
+    #[serde(alias = "server", alias = "domain")]
+    pub server_name: String,
+    pub action: String,
+    pub reason: Option<String>,
+    pub quarantine_minutes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApplyModerationListRequest {
+    pub source: String,
+    #[serde(default)]
+    pub entries: Vec<ModerationListEntry>,
+}
+
+fn normalize_moderation_action(action: &str) -> Option<&'static str> {
+    let normalized = action.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "allow" | "unblock" => Some("allow"),
+        "block" | "deny" => Some("block"),
+        "quarantine" => Some("quarantine"),
+        _ => None,
+    }
+}
+
+async fn apply_moderation_entries(
+    state: &AppState,
+    source: &str,
+    entries: &[ModerationListEntry],
+) -> Result<usize, ApiError> {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut applied = 0usize;
+    for entry in entries {
+        let server = entry.server_name.trim().to_ascii_lowercase();
+        if server.is_empty() {
+            continue;
+        }
+        let Some(mode) = normalize_moderation_action(&entry.action) else {
+            continue;
+        };
+        let quarantined_until_ms = if mode == "quarantine" {
+            let minutes = entry
+                .quarantine_minutes
+                .unwrap_or(60)
+                .clamp(1, 60 * 24 * 30);
+            Some(now_ms + minutes.saturating_mul(60_000))
+        } else {
+            None
+        };
+        let reason = entry
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("[{source}] {value}"));
+        paracord_db::federation::upsert_peer_trust_state(
+            &state.db,
+            &server,
+            mode,
+            reason.as_deref(),
+            quarantined_until_ms,
+            now_ms,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        applied += 1;
+    }
+    Ok(applied)
+}
+
+pub async fn apply_moderation_list(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Json(body): Json<ApplyModerationListRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let source = body.source.trim();
+    if source.is_empty() {
+        return Err(ApiError::BadRequest(
+            "source must be provided for moderation list auditability".to_string(),
+        ));
+    }
+    let applied = apply_moderation_entries(&state, source, &body.entries).await?;
+    Ok(Json(json!({
+        "source": source,
+        "applied": applied,
+    })))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpsertModerationSubscriptionRequest {
+    pub source_url: String,
+    pub source_server: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+pub async fn upsert_moderation_subscription(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Json(body): Json<UpsertModerationSubscriptionRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let source_url = body.source_url.trim();
+    if source_url.is_empty() {
+        return Err(ApiError::BadRequest("source_url is required".to_string()));
+    }
+    let parsed = reqwest::Url::parse(source_url)
+        .map_err(|_| ApiError::BadRequest("source_url must be a valid URL".to_string()))?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return Err(ApiError::BadRequest(
+            "source_url must use http or https".to_string(),
+        ));
+    }
+    paracord_federation::client::validate_public_federation_url_with_dns(source_url)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    let id = paracord_util::snowflake::generate(1);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let normalized_source_server = body
+        .source_server
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    paracord_db::federation::upsert_moderation_subscription(
+        &state.db,
+        id,
+        normalized_source_server.as_deref(),
+        source_url,
+        body.enabled.unwrap_or(true),
+        now_ms,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id.to_string(),
+            "source_url": source_url,
+            "source_server": normalized_source_server,
+            "enabled": body.enabled.unwrap_or(true),
+        })),
+    ))
+}
+
+pub async fn list_moderation_subscriptions(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let subscriptions = paracord_db::federation::list_moderation_subscriptions(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    Ok(Json(json!({
+        "subscriptions": subscriptions,
+    })))
+}
+
+pub async fn delete_moderation_subscription(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Path(subscription_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let removed =
+        paracord_db::federation::delete_moderation_subscription_by_id(&state.db, subscription_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if removed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound)
+    }
+}
+
+pub async fn list_peer_trust_state(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let states = paracord_db::federation::list_peer_trust_states(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    Ok(Json(json!({ "states": states })))
+}
+
+fn parse_remote_mod_entries(payload: &Value) -> Vec<ModerationListEntry> {
+    let entries = payload
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .or_else(|| payload.get("servers").and_then(|v| v.as_array()))
+        .cloned()
+        .unwrap_or_default();
+    entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value::<ModerationListEntry>(entry).ok())
+        .collect()
+}
+
+pub async fn sync_moderation_lists_once(state: &AppState) {
+    let subscriptions =
+        match paracord_db::federation::list_moderation_subscriptions(&state.db).await {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|row| row.enabled)
+                .collect::<Vec<_>>(),
+            Err(_) => return,
+        };
+    if subscriptions.is_empty() {
+        return;
+    }
+
+    let http = match paracord_federation::client::ssrf_checked_http_client(
+        "Paracord-Federation-Moderation/1.0",
+        Duration::from_secs(10),
+    ) {
+        Ok(client) => client,
+        Err(_) => return,
+    };
+
+    for subscription in subscriptions {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let source_label = subscription
+            .source_server
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| subscription.source_url.clone());
+
+        let result = async {
+            paracord_federation::client::validate_public_federation_url_with_dns(
+                &subscription.source_url,
+            )
+            .await
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+            let response = http
+                // Revalidate at fetch time so old subscriptions created before
+                // SSRF checks cannot keep targeting private infrastructure.
+                .get(&subscription.source_url)
+                .send()
+                .await
+                .map_err(|err| anyhow::anyhow!("request failed: {err}"))?;
+            if !response.status().is_success() {
+                return Err(anyhow::anyhow!(
+                    "source returned status {}",
+                    response.status()
+                ));
+            }
+            let payload: Value = response
+                .json()
+                .await
+                .map_err(|err| anyhow::anyhow!("invalid moderation list payload: {err}"))?;
+            let entries = parse_remote_mod_entries(&payload);
+            apply_moderation_entries(state, &source_label, &entries).await?;
+            Ok::<usize, anyhow::Error>(entries.len())
+        }
+        .await;
+
+        let last_error = result.err().map(|err| err.to_string());
+        let _ = paracord_db::federation::update_moderation_subscription_fetch_status(
+            &state.db,
+            &subscription.source_url,
+            now_ms,
+            last_error.as_deref(),
+            now_ms,
+        )
+        .await;
+    }
+}
+
 // ── Federation file sharing ─────────────────────────────────────────────────
 
-/// Compute a keyed SHA256 hash for federation file tokens.
-///
-/// Uses `SHA256(key || ":" || message)` as a simple keyed-hash construction.
-/// For short-lived internal tokens this is adequate.
-fn federation_file_hmac(key: &str, message: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(key.as_bytes());
-    hasher.update(b":");
-    hasher.update(message.as_bytes());
-    paracord_federation::hex_encode(&hasher.finalize())
+fn federation_file_hmac(key: &str, message: &str) -> Result<Vec<u8>, ApiError> {
+    use hmac::{Hmac, Mac};
+    type HmacSha256 = Hmac<sha2::Sha256>;
+
+    let mut mac = HmacSha256::new_from_slice(key.as_bytes())
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    mac.update(message.as_bytes());
+    Ok(mac.finalize().into_bytes().to_vec())
 }
 
 fn mint_federation_file_token(
@@ -2605,7 +2895,8 @@ fn mint_federation_file_token(
 ) -> (String, i64) {
     let exp = chrono::Utc::now().timestamp() + 300;
     let payload = format!("{}:{}:{}", attachment_id, requester_server, exp);
-    let mac = federation_file_hmac(jwt_secret, &payload);
+    let mac = federation_file_hmac(jwt_secret, &payload).unwrap_or_default();
+    let mac = paracord_federation::hex_encode(&mac);
     let token = format!("{}.{}", payload, mac);
     (token, exp)
 }
@@ -2619,9 +2910,17 @@ fn validate_federation_file_token(
     let payload = &token[..dot_pos];
     let mac = &token[dot_pos + 1..];
 
-    let expected_mac = federation_file_hmac(jwt_secret, payload);
-    if mac != expected_mac {
-        return Err(ApiError::Unauthorized);
+    let presented_mac = paracord_federation::hex_decode(mac).ok_or(ApiError::Unauthorized)?;
+    {
+        use hmac::{Hmac, Mac};
+        type HmacSha256 = Hmac<sha2::Sha256>;
+
+        let mut verifier = HmacSha256::new_from_slice(jwt_secret.as_bytes())
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        verifier.update(payload.as_bytes());
+        verifier
+            .verify_slice(&presented_mac)
+            .map_err(|_| ApiError::Unauthorized)?;
     }
 
     let parts: Vec<&str> = payload.splitn(3, ':').collect();
@@ -2629,6 +2928,9 @@ fn validate_federation_file_token(
         return Err(ApiError::Unauthorized);
     }
     let attachment_id: i64 = parts[0].parse().map_err(|_| ApiError::Unauthorized)?;
+    if parts[1].trim().is_empty() {
+        return Err(ApiError::Unauthorized);
+    }
     let exp: i64 = parts[2].parse().map_err(|_| ApiError::Unauthorized)?;
 
     if attachment_id != expected_attachment_id {
@@ -2871,6 +3173,14 @@ mod tests {
         std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "10,20,30");
         assert!(ensure_federation_guild_allowed(20).is_ok());
         assert!(ensure_federation_guild_allowed(99).is_err());
+        std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
+    }
+
+    #[test]
+    fn federation_guild_allowlist_accepts_explicit_wildcard() {
+        let _guard = env_lock().lock().expect("env lock");
+        std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "*");
+        assert!(ensure_federation_guild_allowed(99).is_ok());
         std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
     }
 

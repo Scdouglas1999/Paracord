@@ -12,6 +12,9 @@ pub enum CoreError {
     BadRequest(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    /// Slowmode rate limit. The value is seconds until the user can send again.
+    #[error("rate limited")]
+    RateLimited(i64),
     #[error("database error: {0}")]
     Database(#[from] paracord_db::DbError),
     #[error("internal error: {0}")]

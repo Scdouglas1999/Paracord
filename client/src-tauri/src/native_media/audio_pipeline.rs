@@ -26,8 +26,8 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
     let mut screen_audio_rx = session.screen_audio_rx.take();
 
     let conn_inner = session.connection.inner().clone();
-    let key_epoch = session.key_epoch;
-    let sender_key = session.sender_key;
+    let current_key_epoch = session.current_key_epoch.clone();
+    let frame_encryptor = session.frame_encryptor.clone();
 
     let handle = tokio::spawn(async move {
         // Per-task codec instances (avoids borrowing from session across await)
@@ -39,9 +39,6 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
             }
         };
         let mut noise_suppressor = paracord_codec::audio::noise::NoiseSuppressor::new();
-        let mut frame_encryptor = paracord_codec::crypto::FrameEncryptor::new();
-        frame_encryptor.set_key(key_epoch, &sender_key);
-
         let mut seq: u16 = 0;
         let mut timestamp: u32 = 0;
         let mut latest_screen_frame: Option<Vec<f32>> = None;
@@ -114,6 +111,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                     header.sequence = seq;
                     header.timestamp = timestamp;
                     header.audio_level = audio_level;
+                    let key_epoch = current_key_epoch.load(Ordering::SeqCst);
                     header.key_epoch = key_epoch;
 
                     // Serialize header for AAD
@@ -124,17 +122,26 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                         .expect("header is 16 bytes");
 
                     // Encrypt
-                    let encrypted = match frame_encryptor.encrypt(
-                        &header_bytes,
-                        local_ssrc,
-                        key_epoch,
-                        seq,
-                        &opus_data,
-                    ) {
-                        Ok(data) => data,
-                        Err(e) => {
-                            tracing::warn!("encrypt error: {e:?}");
-                            continue;
+                    let encrypted = {
+                        let encryptor = match frame_encryptor.lock() {
+                            Ok(encryptor) => encryptor,
+                            Err(_) => {
+                                tracing::warn!("audio send task: frame encryptor lock poisoned");
+                                continue;
+                            }
+                        };
+                        match encryptor.encrypt(
+                            &header_bytes,
+                            local_ssrc,
+                            key_epoch,
+                            seq,
+                            &opus_data,
+                        ) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                tracing::warn!("encrypt error: {e:?}");
+                                continue;
+                            }
                         }
                     };
 
@@ -165,14 +172,9 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
     let remote_audio = session.remote_audio.clone();
     let deafened = session.deafened.clone();
     let conn_inner = session.connection.inner().clone();
-    let key_epoch = session.key_epoch;
-    let sender_key = session.sender_key;
+    let frame_decryptor = session.frame_decryptor.clone();
 
     let handle = tokio::spawn(async move {
-        let mut frame_decryptor = paracord_codec::crypto::FrameDecryptor::new();
-        // Seed with our own key for initial testing; remote keys arrive via KeyDeliver.
-        frame_decryptor.set_key(key_epoch, &sender_key);
-
         let start_time = Instant::now();
 
         loop {
@@ -201,15 +203,21 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                         .try_into()
                         .expect("header is 16 bytes");
 
-                    let decrypted = match frame_decryptor.decrypt(
-                        &header_bytes,
-                        header.ssrc,
-                        header.key_epoch,
-                        header.sequence,
-                        payload,
-                    ) {
-                        Ok(data) => data,
-                        Err(_) => continue,
+                    let decrypted = {
+                        let decryptor = match frame_decryptor.lock() {
+                            Ok(decryptor) => decryptor,
+                            Err(_) => continue,
+                        };
+                        match decryptor.decrypt(
+                            &header_bytes,
+                            header.ssrc,
+                            header.key_epoch,
+                            header.sequence,
+                            payload,
+                        ) {
+                            Ok(data) => data,
+                            Err(_) => continue,
+                        }
                     };
 
                     match header.track_type {

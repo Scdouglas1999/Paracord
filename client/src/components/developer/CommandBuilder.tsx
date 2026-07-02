@@ -8,6 +8,7 @@ import {
   type CommandOptionChoice,
 } from '../../types/commands';
 import { commandApi, type CreateCommandRequest } from '../../api/commands';
+import { extractApiError } from '../../api/client';
 import { cn } from '../../lib/utils';
 
 interface CommandBuilderProps {
@@ -116,6 +117,7 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
       <div className="flex items-center gap-2">
         <button
           type="button"
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} option ${index + 1}`}
           className="text-text-muted hover:text-text-primary"
           onClick={() => setExpanded(!expanded)}
         >
@@ -129,6 +131,7 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
         )}
         <button
           type="button"
+          aria-label={`Remove option ${index + 1}`}
           className="ml-auto text-accent-danger hover:text-accent-danger/80"
           onClick={onRemove}
         >
@@ -227,6 +230,7 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
                   />
                   <button
                     type="button"
+                    aria-label={`Remove choice ${ci + 1} from option ${index + 1}`}
                     className="text-accent-danger hover:text-accent-danger/80"
                     onClick={() => removeChoice(ci)}
                   >
@@ -320,8 +324,9 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
         await commandApi.createGlobalCommand(appId, payload);
       }
       onSaved();
-    } catch {
-      setError(editingCommand ? 'Failed to update command' : 'Failed to create command');
+    } catch (err) {
+      const action = editingCommand ? 'Failed to update command' : 'Failed to create command';
+      setError(`${action}: ${extractApiError(err)}`);
     } finally {
       setSaving(false);
     }
@@ -334,7 +339,7 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
       </h3>
 
       {error && (
-        <div className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-xs font-medium text-accent-danger">
+        <div role="alert" className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-xs font-medium text-accent-danger">
           {error}
         </div>
       )}
@@ -345,6 +350,7 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
             Name
           </label>
           <input
+            aria-label="Command name"
             className={cn(
               'input-field text-sm',
               name.length > 0 && !nameValid && 'border-accent-danger/60',
@@ -365,6 +371,7 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
             Description
           </label>
           <input
+            aria-label="Command description"
             className="input-field text-sm"
             placeholder="A brief description"
             value={description}
@@ -378,6 +385,7 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
             Type
           </label>
           <select
+            aria-label="Command type"
             className="input-field text-sm"
             value={type}
             onChange={(e) => setType(Number(e.target.value) as ApplicationCommandType)}

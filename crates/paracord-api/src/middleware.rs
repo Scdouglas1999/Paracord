@@ -1,6 +1,6 @@
 use axum::{
     extract::FromRequestParts,
-    http::{header, request::Parts, Uri},
+    http::{header, request::Parts, Method, Uri},
 };
 use chrono::Utc;
 use paracord_core::AppState;
@@ -59,15 +59,43 @@ fn get_query_token(uri: &Uri) -> Option<String> {
     })
 }
 
+fn allows_query_token_fallback(parts: &Parts) -> bool {
+    let path = parts.uri.path();
+    if parts.method == Method::GET && path == "/api/v2/rt/events" {
+        return true;
+    }
+    if parts.method == Method::GET
+        && (path.starts_with("/api/v1/attachments/")
+            || path.starts_with("/api/v1/federated-files/"))
+    {
+        return true;
+    }
+    if parts.method == Method::GET
+        && path.starts_with("/api/v1/guilds/")
+        && path.ends_with("/image")
+        && (path.contains("/emojis/") || path.contains("/stickers/"))
+    {
+        return true;
+    }
+    false
+}
+
 async fn validate_auth(
     parts: &Parts,
     state: &AppState,
 ) -> Result<paracord_core::auth::Claims, ApiError> {
     let token = match extract_auth_scheme(parts) {
         Some(AuthScheme::Bearer(t)) => t.to_string(),
-        _ => get_cookie_value(parts, ACCESS_COOKIE_NAME)
-            .or_else(|| get_query_token(&parts.uri))
-            .ok_or(ApiError::Unauthorized)?,
+        _ => {
+            let query_token = if allows_query_token_fallback(parts) {
+                get_query_token(&parts.uri)
+            } else {
+                None
+            };
+            get_cookie_value(parts, ACCESS_COOKIE_NAME)
+                .or(query_token)
+                .ok_or(ApiError::Unauthorized)?
+        }
     };
 
     let claims = paracord_core::auth::validate_token(&token, &state.config.jwt_secret)
@@ -165,5 +193,79 @@ impl FromRequestParts<AppState> for AdminUser {
         Ok(AdminUser {
             user_id: claims.sub,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::allows_query_token_fallback;
+    use axum::http::Request;
+
+    #[test]
+    fn allows_query_token_for_realtime_events() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/v2/rt/events?token=abc")
+            .body(())
+            .expect("request");
+        let (parts, _) = request.into_parts();
+        assert!(allows_query_token_fallback(&parts));
+    }
+
+    #[test]
+    fn allows_query_token_for_attachment_downloads_only() {
+        let get_request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/attachments/123?token=abc")
+            .body(())
+            .expect("request");
+        let (get_parts, _) = get_request.into_parts();
+        assert!(allows_query_token_fallback(&get_parts));
+
+        let delete_request = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/attachments/123?token=abc")
+            .body(())
+            .expect("request");
+        let (delete_parts, _) = delete_request.into_parts();
+        assert!(!allows_query_token_fallback(&delete_parts));
+    }
+
+    #[test]
+    fn allows_query_token_for_guild_image_assets_only() {
+        let emoji_request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/guilds/1/emojis/2/image?token=abc")
+            .body(())
+            .expect("request");
+        let (emoji_parts, _) = emoji_request.into_parts();
+        assert!(allows_query_token_fallback(&emoji_parts));
+
+        let sticker_request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/guilds/1/stickers/2/image?token=abc")
+            .body(())
+            .expect("request");
+        let (sticker_parts, _) = sticker_request.into_parts();
+        assert!(allows_query_token_fallback(&sticker_parts));
+
+        let list_request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/guilds/1/emojis?token=abc")
+            .body(())
+            .expect("request");
+        let (list_parts, _) = list_request.into_parts();
+        assert!(!allows_query_token_fallback(&list_parts));
+    }
+
+    #[test]
+    fn rejects_query_token_for_unlisted_paths() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/channels/1/messages?token=abc")
+            .body(())
+            .expect("request");
+        let (parts, _) = request.into_parts();
+        assert!(!allows_query_token_fallback(&parts));
     }
 }

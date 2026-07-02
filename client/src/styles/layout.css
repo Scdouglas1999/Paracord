@@ -1,0 +1,500 @@
+/* Re-enable selection in content areas */
+input, textarea, [contenteditable="true"],
+.message-content, .markdown-content, pre, code,
+[data-selectable] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+html[data-theme='light'],
+html[data-theme='light'] body,
+html[data-theme='light'] #root {
+  color-scheme: light;
+}
+
+html[data-theme='amoled'],
+html[data-theme='amoled'] body,
+html[data-theme='amoled'] #root {
+  color-scheme: dark;
+}
+
+html[data-theme='high-contrast'],
+html[data-theme='high-contrast'] body,
+html[data-theme='high-contrast'] #root {
+  color-scheme: dark;
+}
+
+::selection {
+  color: var(--text-primary);
+  background: rgba(126, 175, 255, 0.34);
+}
+
+/* Skeleton loading animation */
+@keyframes skeleton-pulse {
+
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+
+  50% {
+    opacity: 0.8;
+  }
+}
+
+/* Focus styles */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Transitions */
+.transition-colors {
+  transition:
+    color var(--duration-normal) var(--ease-out),
+    background-color var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out);
+}
+
+/* Architect v2 shell primitives */
+.workspace-canvas {
+  height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  background:
+    var(--noise-texture),
+    radial-gradient(110% 90% at 0% 0%, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0) 55%),
+    radial-gradient(90% 80% at 100% 0%, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 45%),
+    var(--bg-primary);
+  background-blend-mode: overlay, normal, normal, normal;
+}
+
+.workspace-stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 16px;
+  padding: 12px 16px 16px 16px;
+}
+
+.dock-stage {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.stage-grid {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  gap: 16px;
+  height: 100%;
+}
+
+.panel-surface {
+  background-color: var(--bg-secondary);
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 64%, transparent);
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, 0.34),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.dock-surface {
+  background-color: var(--bg-nav, rgba(10, 14, 23, 0.65));
+  color: #fff;
+  border-radius: 36px;
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.nav-panel {
+  width: 260px;
+  min-width: 260px;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 20px;
+}
+
+.nav-panel-collapsible {
+  transition: width var(--duration-normal) var(--ease-out), min-width var(--duration-normal) var(--ease-out);
+}
+
+.nav-panel-expanded {
+  width: 260px;
+  min-width: 260px;
+}
+
+.nav-panel-collapsed {
+  width: 52px;
+  min-width: 52px;
+}
+
+.content-panel {
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.stage-panel {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.member-panel {
+  width: var(--member-list-width);
+  min-width: var(--member-list-width);
+  height: 100%;
+  overflow: hidden;
+  border-radius: 20px;
+}
+
+.mobile-sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: stretch;
+}
+
+.mobile-nav-panel {
+  width: min(88vw, 19rem);
+  height: 100%;
+  border-radius: 0 20px 20px 0;
+  border-left: none;
+  overflow: hidden;
+}
+
+.settings-route-shell {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  padding: 12px;
+  background:
+    var(--noise-texture),
+    var(--bg-primary);
+  background-blend-mode: overlay, normal;
+}
+
+.architect-eyebrow {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: color-mix(in srgb, var(--text-muted) 88%, white 12%);
+}
+
+.architect-context-title {
+  font-size: 1.65rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.architect-group-label {
+  margin-bottom: 0.36rem;
+  padding: 0 0.7rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.architect-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.62rem;
+  width: 100%;
+  padding: 0.58rem 0.72rem;
+  border-radius: 0.74rem;
+  color: var(--text-secondary);
+  transition:
+    color var(--duration-normal) var(--ease-out),
+    background-color var(--duration-normal) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.architect-nav-item:hover {
+  background-color: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+}
+
+.architect-nav-item-active {
+  background-color: color-mix(in srgb, var(--accent-primary) 84%, #ffffff 16%);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 70%, #ffffff 30%);
+  box-shadow: 0 8px 18px rgba(var(--accent-primary-rgb), 0.28);
+  color: #0a0c10;
+}
+
+.architect-top-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.65rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  transition:
+    color var(--duration-normal) var(--ease-out),
+    background-color var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.architect-top-icon:hover {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-subtle);
+}
+
+.architect-top-icon-active {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-subtle);
+}
+
+.architect-input-shell {
+  background-color: color-mix(in srgb, var(--bg-primary) 92%, white 8%);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.38);
+}
+
+/* ─── Crystalline Depth System ──────────────────────────────────
+   Depth levels: dock/rail (closest, heaviest blur) → panels → modals/tooltips (lightest blur, sharper borders)
+   Active panels receive a subtle accent glow on box-shadow keyed to keyboard focus. */
+
+.glass-rail {
+  background: var(--bg-nav, rgba(10, 14, 23, 0.65));
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(28px) saturate(150%);
+}
+
+.glass-sidebar {
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  backdrop-filter: blur(28px) saturate(160%);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
+}
+
+.sidebar-item-active {
+  box-shadow: 0 0 0 2px var(--sidebar-active-indicator), 0 4px 12px rgba(var(--accent-primary-rgb, 235, 77, 75), 0.36);
+}
+
+.glass-panel {
+  background: var(--bg-panel, var(--bg-secondary));
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(18px) saturate(130%);
+}
+
+/* Active panel glow — applied to the focused panel */
+.glass-panel:focus-within {
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 1px rgba(var(--accent-primary-rgb), 0.12),
+    0 0 32px rgba(var(--accent-primary-rgb), 0.06);
+}
+
+.glass-modal {
+  background: var(--bg-floating, rgba(20, 28, 42, 0.95));
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-xl);
+  backdrop-filter: blur(12px) saturate(120%);
+}
+
+/* Tooltips and context menus — lightest blur, sharper borders */
+.context-menu,
+.sidebar-tooltip::after {
+  backdrop-filter: blur(12px) saturate(115%);
+}
+
+:root[data-theme='amoled'] :where(.glass-rail, .glass-panel, .glass-modal) {
+  backdrop-filter: blur(10px) saturate(105%);
+}
+
+:root[data-theme='amoled'] .glass-panel:focus-within {
+  box-shadow: var(--shadow-md);
+}
+
+:root[data-theme='high-contrast'] :where(.glass-rail, .glass-panel, .glass-modal) {
+  backdrop-filter: none;
+  border-width: 2px;
+}
+
+:root[data-theme='high-contrast'] .glass-panel:focus-within {
+  box-shadow: var(--shadow-md), 0 0 0 2px var(--accent-primary);
+}
+
+.panel-divider {
+  border-color: var(--border-subtle);
+  box-shadow: inset 0 1px 0 var(--panel-divider-glint);
+}
+
+.command-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.375rem;
+  height: 2.375rem;
+  border-radius: 0.75rem;
+  line-height: 1;
+  color: var(--interactive-normal);
+  border: 1px solid transparent;
+  background: transparent;
+  transition:
+    background-color var(--duration-normal) var(--ease-out),
+    color var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.command-icon-btn:hover {
+  color: var(--interactive-hover);
+  background: var(--bg-mod-subtle);
+  border-color: var(--border-subtle);
+}
+
+.command-icon-btn:active {
+  transform: scale(0.96);
+}
+
+.control-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.56rem;
+  height: 2.625rem;
+  padding: 0 1rem;
+  border-radius: 0.9rem;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-mod-subtle);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+  transition:
+    background-color var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out),
+    color var(--duration-normal) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.control-pill-btn:hover {
+  background: var(--bg-mod-strong);
+  border-color: var(--border-strong);
+}
+
+.control-pill-btn:active {
+  transform: scale(0.97);
+}
+
+:where(.card-surface,
+  div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-secondary/60"],
+  div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-secondary/60"],
+  div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-primary/60"],
+  div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-primary/60"],
+  section[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  section[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  li[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  li[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"]) {
+  position: relative;
+  isolation: isolate;
+  border-color: color-mix(in srgb, var(--border-strong) 68%, var(--border-subtle) 32%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--border-strong) 58%, transparent) inset,
+    0 10px 20px rgba(2, 8, 18, 0.22),
+    0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+:root[data-theme='light'] :where(.card-surface,
+  div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-secondary/60"],
+  div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-secondary/60"],
+  div[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-primary/60"],
+  div[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-primary/60"],
+  section[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  section[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  li[class*="rounded-xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"],
+  li[class*="rounded-2xl"][class*="border-border-subtle"][class*="bg-bg-mod-subtle"]) {
+  border-color: color-mix(in srgb, var(--border-strong) 74%, var(--border-subtle) 26%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--border-strong) 60%, transparent) inset,
+    0 10px 20px rgba(28, 49, 84, 0.14),
+    0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+/* Universal fallback for missing bottom margins on text elements before UI components */
+:where(p, h1, h2, h3, h4, h5, h6, label, span, div[class*="text-"]):not([class*="mb-"], [class*="my-"], [class*="m-"], [class*="pb-"], [class*="py-"], [class*="p-"], .mb-0, .my-0, .m-0) 
+  + :is(.card-surface, .card-stack, .card-stack-relaxed, .card-stack-roomy, .settings-surface-card, button, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .input-field, .select-field, select, input, .settings-action-row) {
+  margin-top: 1rem;
+}
+
+.card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.card-stack-relaxed {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.card-stack-roomy {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.settings-action-row {
+  margin-top: 1.15rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid color-mix(in srgb, var(--border-strong) 50%, transparent);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.settings-action-row.align-end {
+  justify-content: flex-end;
+}
+
+/* Modal overlay */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-backdrop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: overlay-enter 0.15s ease-out;
+}
+
+.modal-backdrop {
+  background: var(--overlay-backdrop);
+}
+

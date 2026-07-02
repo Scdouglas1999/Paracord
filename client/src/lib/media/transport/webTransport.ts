@@ -5,13 +5,16 @@ export interface ControlMessage {
   [key: string]: unknown;
 }
 
+export interface StreamControlMessage {
+  type: string;
+  [key: string]: unknown;
+}
+
 export class WebTransportManager {
   private transport: WebTransport | null = null;
-  private controlWriter: WritableStreamDefaultWriter<Uint8Array> | null = null;
-  private controlReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
   private datagramCallbacks: Array<(data: Uint8Array) => void> = [];
-  private controlCallbacks: Array<(msg: ControlMessage) => void> = [];
+  private streamControlCallbacks: Array<(msg: StreamControlMessage) => void> = [];
   private closeCallbacks: Array<(reason: string) => void> = [];
 
   private reconnectAttempts = 0;
@@ -57,17 +60,29 @@ export class WebTransportManager {
 
       // Send auth on first bidirectional stream
       const controlStream = await this.transport.createBidirectionalStream();
-      this.controlWriter = controlStream.writable.getWriter();
-      this.controlReader = controlStream.readable.getReader();
+      const writer = controlStream.writable.getWriter();
+      const reader = controlStream.readable.getReader();
+      try {
+        const payload = new TextEncoder().encode(JSON.stringify({ type: 'auth', token }));
+        const frame = new Uint8Array(4 + payload.byteLength);
+        new DataView(frame.buffer).setUint32(0, payload.byteLength, false);
+        frame.set(payload, 4);
+        await writer.write(frame);
 
-      // Send auth token as first control message
-      await this.sendControl({ type: 'auth', token });
+        const { value } = await reader.read();
+        if (!value || value.byteLength < 4) {
+          throw new Error('Missing auth acknowledgement');
+        }
+      } finally {
+        writer.releaseLock();
+        reader.releaseLock();
+      }
 
       this.reconnectAttempts = 0;
 
       // Start reading datagrams and control messages
       this.readDatagrams();
-      this.readControl();
+      this.readIncomingStreamControls();
 
       // Handle connection close
       this.transport.closed
@@ -95,14 +110,6 @@ export class WebTransportManager {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.controlWriter) {
-      try { this.controlWriter.releaseLock(); } catch { /* ignore */ }
-      this.controlWriter = null;
-    }
-    if (this.controlReader) {
-      try { this.controlReader.releaseLock(); } catch { /* ignore */ }
-      this.controlReader = null;
-    }
     if (this.transport) {
       try {
         this.transport.close({ closeCode: 0, reason: 'Client disconnect' });
@@ -121,14 +128,23 @@ export class WebTransportManager {
     this.datagramCallbacks.push(cb);
   }
 
-  async sendControl(msg: ControlMessage): Promise<void> {
-    if (!this.controlWriter) return;
-    const encoded = new TextEncoder().encode(JSON.stringify(msg) + '\n');
-    await this.controlWriter.write(encoded);
+  onStreamControl(cb: (msg: StreamControlMessage) => void): void {
+    this.streamControlCallbacks.push(cb);
   }
 
-  onControl(cb: (msg: ControlMessage) => void): void {
-    this.controlCallbacks.push(cb);
+  async sendStreamControl(msg: StreamControlMessage): Promise<void> {
+    if (!this.transport) return;
+    const stream = await this.transport.createBidirectionalStream();
+    const writer = stream.writable.getWriter();
+    try {
+      const json = new TextEncoder().encode(JSON.stringify(msg));
+      const frame = new Uint8Array(4 + json.byteLength);
+      new DataView(frame.buffer).setUint32(0, json.byteLength, false);
+      frame.set(json, 4);
+      await writer.write(frame);
+    } finally {
+      writer.releaseLock();
+    }
   }
 
   onClose(cb: (reason: string) => void): void {
@@ -155,42 +171,58 @@ export class WebTransportManager {
     }
   }
 
-  private async readControl(): Promise<void> {
-    if (!this.controlReader) return;
-    const decoder = new TextDecoder();
-    let buffer = '';
+  private async readIncomingStreamControls(): Promise<void> {
+    if (!this.transport?.incomingBidirectionalStreams) return;
+    const reader = this.transport.incomingBidirectionalStreams.getReader();
     try {
       while (true) {
-        const { value, done } = await this.controlReader.read();
+        const { value, done } = await reader.read();
         if (done) break;
-        if (value) {
-          buffer += decoder.decode(value, { stream: true });
-          // Process newline-delimited JSON messages
-          let newlineIdx: number;
-          while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
-            const line = buffer.slice(0, newlineIdx).trim();
-            buffer = buffer.slice(newlineIdx + 1);
-            if (line.length === 0) continue;
-            try {
-              const msg = JSON.parse(line) as ControlMessage;
-              for (const cb of this.controlCallbacks) {
-                cb(msg);
-              }
-            } catch {
-              // Skip malformed messages
-            }
-          }
-        }
+        if (!value) continue;
+        void this.handleIncomingControlStream(value);
       }
     } catch {
       // Stream closed
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  private async handleIncomingControlStream(stream: WebTransportBidirectionalStream): Promise<void> {
+    const reader = stream.readable.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        chunks.push(value);
+        total += value.byteLength;
+      }
+      if (total < 4) return;
+      const combined = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      const length = new DataView(combined.buffer, combined.byteOffset, 4).getUint32(0, false);
+      if (length === 0 || total < 4 + length) return;
+      const payload = combined.slice(4, 4 + length);
+      const message = JSON.parse(new TextDecoder().decode(payload)) as StreamControlMessage;
+      for (const cb of this.streamControlCallbacks) {
+        cb(message);
+      }
+    } catch {
+      // Ignore malformed/closed control streams
+    } finally {
+      reader.releaseLock();
     }
   }
 
   private handleClose(reason: string): void {
     this.transport = null;
-    this.controlWriter = null;
-    this.controlReader = null;
 
     if (this.shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
       this.scheduleReconnect();

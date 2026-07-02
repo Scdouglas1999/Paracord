@@ -1,7 +1,21 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { Mic, MicOff, Headphones, HeadphoneOff, Monitor, PhoneOff, Signal, MonitorOff, Video, VideoOff } from 'lucide-react';
 import { useVoice } from '../../hooks/useVoice';
 import { useChannelStore } from '../../stores/channelStore';
+import { useVoiceStore } from '../../stores/voiceStore';
+import { ScreenSharePickerModal } from './ScreenSharePickerModal';
+import type { ScreenShareSource } from '../../lib/media/mediaEngine';
+import { logVoiceDiagnostic } from '../../lib/desktopDiagnostics';
+
+function thumbnailToDataUrl(thumbnail: { dataUrl: string } | null): string | null {
+  return thumbnail?.dataUrl ?? null;
+}
+
+function getPickerErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  return 'Unable to start stream.';
+}
 
 export function VoiceControls() {
   const {
@@ -19,15 +33,48 @@ export function VoiceControls() {
     toggleVideo,
   } = useVoice();
   const channels = useChannelStore((s) => s.channels);
+  const mediaEngine = useVoiceStore((s) => s.mediaEngine);
   const [startingStream, setStartingStream] = useState(false);
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
+  const [screenSources, setScreenSources] = useState<ScreenShareSource[]>([]);
+  const [pickerError, setPickerError] = useState<string | null>(null);
   const channelName = useMemo(
     () => channels.find((c) => c.id === channelId)?.name ?? 'Voice Channel',
     [channels, channelId]
   );
 
+  const loadScreenSources = useCallback(async () => {
+    if (!mediaEngine || !mediaEngine.supportsNativeSourcePicker()) return;
+    setSourcesLoading(true);
+    setPickerError(null);
+    try {
+      const sources = await mediaEngine.listScreenShareSources();
+      setScreenSources(sources);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : typeof error === 'string' ? error : 'Failed to load screen share sources.';
+      setPickerError(message);
+    } finally {
+      setSourcesLoading(false);
+    }
+  }, [mediaEngine]);
+
+  const loadThumbnail = useCallback(async (sourceId: string): Promise<string | null> => {
+    if (!mediaEngine || !mediaEngine.supportsNativeSourcePicker()) return null;
+    const thumbnail = await mediaEngine.getScreenShareSourceThumbnail(sourceId);
+    return thumbnailToDataUrl(thumbnail);
+  }, [mediaEngine]);
+
+  const openSourcePicker = useCallback(async () => {
+    setShowSourcePicker(true);
+    await loadScreenSources();
+  }, [loadScreenSources]);
+
   if (!connected) return null;
 
   return (
+    <>
     <div className="px-4 py-3">
       <div
         className="rounded-xl border border-border-subtle/60 overflow-hidden"
@@ -92,13 +139,17 @@ export function VoiceControls() {
               if (selfStream) {
                 stopStream();
               } else {
-                setStartingStream(true);
-                try {
-                  await startStream();
-                } catch {
-                  // Error is surfaced in the voice panel / stream viewer
-                } finally {
-                  setStartingStream(false);
+                if (mediaEngine?.supportsNativeSourcePicker()) {
+                  await openSourcePicker();
+                } else {
+                  setStartingStream(true);
+                  try {
+                    await startStream();
+                  } catch {
+                    // Error is surfaced in the voice panel / stream viewer
+                  } finally {
+                    setStartingStream(false);
+                  }
                 }
               }
             }}
@@ -129,5 +180,33 @@ export function VoiceControls() {
         </div>
       </div>
     </div>
+    {showSourcePicker && !selfStream && (
+      <ScreenSharePickerModal
+        sources={screenSources}
+        loading={sourcesLoading}
+        error={pickerError}
+        loadThumbnail={loadThumbnail}
+        onClose={() => {
+          if (!startingStream) {
+            setShowSourcePicker(false);
+          }
+        }}
+        onRefresh={() => { void loadScreenSources(); }}
+        onSelect={async (source) => {
+          setPickerError(null);
+          setStartingStream(true);
+          try {
+            logVoiceDiagnostic('[picker] start stream requested', { sourceId: source.id });
+            await startStream(undefined, source.id);
+            setShowSourcePicker(false);
+          } catch (error) {
+            setPickerError(getPickerErrorMessage(error));
+          } finally {
+            setStartingStream(false);
+          }
+        }}
+      />
+    )}
+    </>
   );
 }

@@ -3,11 +3,11 @@ name = "paracord-relay"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [dependencies]
 # Workspace crates
-paracord-transport = { path = "../paracord-transport" }
+paracord-transport = { workspace = true }
 paracord-models = { workspace = true }
 
 # QUIC (for ConnectionHandle wrapping quinn::Connection)
@@ -34,4 +34,4 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 
 # Bytes
-bytes = "1"
+bytes = { workspace = true }

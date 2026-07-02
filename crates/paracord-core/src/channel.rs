@@ -68,6 +68,7 @@ pub async fn delete_channel(
 }
 
 /// Update a channel, requires MANAGE_CHANNELS.
+#[allow(clippy::too_many_arguments)]
 pub async fn update_channel(
     pool: &DbPool,
     channel_id: i64,
@@ -75,6 +76,10 @@ pub async fn update_channel(
     name: Option<&str>,
     topic: Option<&str>,
     required_role_ids: Option<&str>,
+    rate_limit_per_user: Option<i32>,
+    bitrate: Option<i32>,
+    user_limit: Option<i32>,
+    nsfw: Option<bool>,
 ) -> Result<paracord_db::channels::ChannelRow, CoreError> {
     let channel = paracord_db::channels::get_channel(pool, channel_id)
         .await?
@@ -92,8 +97,17 @@ pub async fn update_channel(
     let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
     permissions::require_permission(perms, Permissions::MANAGE_CHANNELS)?;
 
-    let updated =
-        paracord_db::channels::update_channel(pool, channel_id, name, topic, required_role_ids)
-            .await?;
+    let updated = paracord_db::channels::update_channel(
+        pool,
+        channel_id,
+        name,
+        topic,
+        required_role_ids,
+        rate_limit_per_user,
+        bitrate,
+        user_limit,
+        nsfw,
+    )
+    .await?;
     Ok(updated)
 }

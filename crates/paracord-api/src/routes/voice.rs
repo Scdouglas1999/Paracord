@@ -8,12 +8,21 @@ use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use paracord_core::AppState;
 use paracord_federation::client::{FederationMediaRelayRequest, FederationMediaTokenRequest};
 use paracord_models::permissions::Permissions;
+use paracord_relay::participant::MediaParticipant;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
+
+pub fn first_forwarded_value_pub(headers: &HeaderMap, name: &str) -> Option<String> {
+    first_forwarded_value(headers, name)
+}
+
+pub fn livekit_url_candidates_pub(headers: &HeaderMap, fallback: &str) -> Vec<String> {
+    livekit_url_candidates(headers, fallback)
+}
 
 fn first_forwarded_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
@@ -237,7 +246,7 @@ pub async fn join_voice(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    if channel.channel_type != 2 {
+    if channel.channel_type != 2 && channel.channel_type != 13 {
         return Err(ApiError::BadRequest("Not a voice channel".into()));
     }
 
@@ -259,6 +268,23 @@ pub async fn join_voice(
     .await?;
     paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
     paracord_core::permissions::require_permission(perms, Permissions::CONNECT)?;
+
+    // Enforce user_limit: count current participants; 0 means unlimited.
+    if let Some(limit) = channel.user_limit {
+        if limit > 0 {
+            let participants = state.voice.get_room_participants(channel_id).await;
+            // The joining user may already be tracked (re-join); don't count them twice.
+            let already_in = participants.iter().any(|p| p.user_id == auth.user_id);
+            let effective_count = if already_in {
+                participants.len()
+            } else {
+                participants.len() + 1
+            };
+            if effective_count > limit as usize {
+                return Err(ApiError::BadRequest("Voice channel is full".into()));
+            }
+        }
+    }
 
     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
         .await
@@ -286,6 +312,15 @@ pub async fn join_voice(
                 if current.is_empty() {
                     empty_channels.push(existing.channel_id);
                 }
+            }
+            if let (Some(native_media), Some(existing_guild_id)) =
+                (state.native_media.as_ref(), existing.guild_id())
+            {
+                let _ = native_media.rooms.leave_room(
+                    existing_guild_id,
+                    existing.channel_id,
+                    auth.user_id,
+                );
             }
         }
         if !empty_channels.is_empty() {
@@ -409,14 +444,37 @@ pub async fn join_voice(
     let requesting_livekit_fallback = query.fallback.as_deref() == Some("livekit");
     if state.config.native_media_enabled && !requesting_livekit_fallback {
         let session_id = uuid::Uuid::new_v4().to_string();
-        let _ = paracord_db::voice_states::upsert_voice_state(
+        paracord_db::voice_states::upsert_voice_state(
             &state.db,
             auth.user_id,
             channel.guild_id(),
             channel_id,
             &session_id,
         )
-        .await;
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+        if let Some(native_media) = state.native_media.as_ref() {
+            if let Err(err) = native_media.rooms.join_room(
+                guild_id,
+                channel_id,
+                MediaParticipant::new(auth.user_id, session_id.clone()),
+            ) {
+                let _ = paracord_db::voice_states::remove_voice_state_if_session(
+                    &state.db,
+                    auth.user_id,
+                    channel.guild_id(),
+                    &session_id,
+                )
+                .await;
+                return Err(match err {
+                    paracord_relay::room::RoomError::RoomFull(_) => {
+                        ApiError::BadRequest("Voice channel is full".into())
+                    }
+                    other => ApiError::Internal(anyhow::anyhow!(other.to_string())),
+                });
+            }
+        }
 
         state.event_bus.dispatch(
             "VOICE_STATE_UPDATE",
@@ -590,7 +648,7 @@ pub async fn start_stream(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    if channel.channel_type != 2 {
+    if channel.channel_type != 2 && channel.channel_type != 13 {
         return Err(ApiError::BadRequest("Not a voice channel".into()));
     }
 
@@ -870,7 +928,7 @@ pub async fn stop_stream(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    if channel.channel_type != 2 {
+    if channel.channel_type != 2 && channel.channel_type != 13 {
         return Err(ApiError::BadRequest("Not a voice channel".into()));
     }
 
@@ -979,7 +1037,7 @@ pub async fn leave_voice(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    if channel.channel_type != 2 {
+    if channel.channel_type != 2 && channel.channel_type != 13 {
         return Err(ApiError::BadRequest("Not a voice channel".into()));
     }
 
@@ -1009,6 +1067,11 @@ pub async fn leave_voice(
         return Ok(StatusCode::NO_CONTENT);
     }
     let _participants = state.voice.leave_room(channel_id, auth.user_id).await;
+    if let (Some(native_media), Some(guild_id)) = (state.native_media.as_ref(), guild_id) {
+        let _ = native_media
+            .rooms
+            .leave_room(guild_id, channel_id, auth.user_id);
+    }
     // Don't eagerly delete the LiveKit room when the last participant leaves.
     // Rapid leave→rejoin cycles cause a race between the delete_room API call
     // and the subsequent create_room, leading to "could not establish pc
@@ -1097,16 +1160,26 @@ pub async fn livekit_webhook(
 
         // Check if the participant actually reconnected to the LiveKit room.
         // Query LiveKit directly — this is the ground truth for connection status.
-        if state_clone
+        match state_clone
             .voice
             .is_participant_in_livekit_room(channel_id, guild_id, user_id)
             .await
         {
-            tracing::debug!(
-                "LiveKit participant_left grace period expired: user {} still in LiveKit room for channel {}, skipping removal",
-                user_id, channel_id
-            );
-            return;
+            Some(true) => {
+                tracing::debug!(
+                    "LiveKit participant_left grace period expired: user {} still in LiveKit room for channel {}, skipping removal",
+                    user_id, channel_id
+                );
+                return;
+            }
+            None => {
+                tracing::warn!(
+                    "LiveKit participant_left grace period expired: presence unknown for user {} channel {}, skipping removal",
+                    user_id, channel_id
+                );
+                return;
+            }
+            Some(false) => {}
         }
 
         tracing::info!(

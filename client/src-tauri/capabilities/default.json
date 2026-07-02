@@ -5,7 +5,9 @@
   "permissions": [
     "core:default",
     "core:window:allow-show",
+    "core:window:allow-hide",
     "core:window:allow-set-focus",
+    "core:tray:default",
     "os:default",
     "notification:default",
     "updater:default"

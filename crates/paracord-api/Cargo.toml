@@ -3,7 +3,7 @@ name = "paracord-api"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [dependencies]
 paracord-core = { workspace = true }
@@ -12,6 +12,7 @@ paracord-media = { workspace = true }
 paracord-db = { workspace = true }
 paracord-util = { workspace = true }
 paracord-federation = { workspace = true }
+paracord-relay = { workspace = true }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 tower = { workspace = true }
@@ -31,11 +32,17 @@ jsonwebtoken = { workspace = true }
 mime_guess = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
+hmac = { workspace = true }
+totp-rs = { workspace = true }
+base64 = { workspace = true }
 tokio-util = "0.7"
 futures-util = "0.3"
 url = "2"
 dashmap = { workspace = true }
+moka = { workspace = true }
+lettre = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tower = { workspace = true, features = ["util"] }
+sqlx = { workspace = true }

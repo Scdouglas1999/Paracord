@@ -148,6 +148,33 @@ pub async fn ensure_guild_member(
     Ok(())
 }
 
+/// If the user is a bot account, intersect the given permissions with the
+/// bot's install-time permissions for the guild.  Returns the capped
+/// permissions, or the original permissions unchanged for non-bot users.
+pub async fn cap_bot_install_permissions(
+    pool: &DbPool,
+    guild_id: i64,
+    user_id: i64,
+    perms: Permissions,
+) -> Result<Permissions, CoreError> {
+    let user = paracord_db::users::get_user_by_id(pool, user_id).await?;
+    let Some(user) = user else {
+        return Ok(perms);
+    };
+    if !crate::is_bot(user.flags) {
+        return Ok(perms);
+    }
+    // Look up the bot's install-time permissions for this guild
+    let install_perms =
+        paracord_db::bot_applications::get_bot_install_permissions_by_user(pool, user_id, guild_id)
+            .await?;
+    match install_perms {
+        Some(bits) => Ok(perms & Permissions::from_bits_truncate(bits)),
+        // Bot is not installed in this guild -- deny all
+        None => Ok(Permissions::empty()),
+    }
+}
+
 pub async fn compute_channel_permissions(
     pool: &DbPool,
     guild_id: i64,
@@ -158,7 +185,8 @@ pub async fn compute_channel_permissions(
     let roles = paracord_db::roles::get_member_roles(pool, user_id, guild_id).await?;
     let mut perms = compute_permissions_from_roles(&roles, guild_owner_id, user_id);
     if perms.contains(Permissions::ADMINISTRATOR) || user_id == guild_owner_id {
-        return Ok(Permissions::all());
+        // Still cap bots even if they somehow have ADMINISTRATOR from roles
+        return cap_bot_install_permissions(pool, guild_id, user_id, Permissions::all()).await;
     }
 
     let channel = paracord_db::channels::get_channel(pool, channel_id)
@@ -170,13 +198,13 @@ pub async fn compute_channel_permissions(
         paracord_db::channels::parse_required_role_ids(&channel.required_role_ids);
     if !required_role_ids.is_empty() && !required_role_ids.iter().any(|id| role_ids.contains(id)) {
         perms.remove(Permissions::VIEW_CHANNEL);
-        return Ok(perms);
+        return cap_bot_install_permissions(pool, guild_id, user_id, perms).await;
     }
 
     let overwrites =
         paracord_db::channel_overwrites::get_channel_overwrites(pool, channel_id).await?;
     if overwrites.is_empty() {
-        return Ok(perms);
+        return cap_bot_install_permissions(pool, guild_id, user_id, perms).await;
     }
 
     if let Some(everyone) = overwrites
@@ -211,7 +239,7 @@ pub async fn compute_channel_permissions(
         perms |= allow;
     }
 
-    Ok(perms)
+    cap_bot_install_permissions(pool, guild_id, user_id, perms).await
 }
 
 /// Compute channel permissions for multiple channels in a single batch.

@@ -209,7 +209,7 @@ pub async fn restore_backup(
         })
         .await
         .map_err(|e| CoreError::Internal(format!("pg_restore task failed: {e}")))?
-        .map_err(|e| CoreError::Internal(e))?;
+        .map_err(CoreError::Internal)?;
     } else {
         let db_path = parse_sqlite_path(db_url)?;
         let db_path_clone = db_path.clone();
@@ -227,7 +227,7 @@ pub async fn restore_backup(
         })
         .await
         .map_err(|e| CoreError::Internal(format!("DB replace task failed: {e}")))?
-        .map_err(|e| CoreError::Internal(e))?;
+        .map_err(CoreError::Internal)?;
     }
 
     // Restore media files if included
@@ -252,7 +252,7 @@ pub async fn restore_backup(
             })
             .await
             .map_err(|e| CoreError::Internal(format!("Media restore task failed: {e}")))?
-            .map_err(|e| CoreError::Internal(e))?;
+            .map_err(CoreError::Internal)?;
         }
     }
 
@@ -425,4 +425,81 @@ fn parse_backup_timestamp(name: &str) -> Option<String> {
         &time[2..4],
         &time[4..6],
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[tokio::test]
+    async fn sqlite_backup_restore_round_trip_includes_media() -> TestResult {
+        let temp = tempfile::tempdir()?;
+        let db_path = temp.path().join("paracord.db");
+        let backups = temp.path().join("backups");
+        let uploads = temp.path().join("uploads");
+        let media = temp.path().join("files");
+
+        std::fs::create_dir_all(uploads.join("avatars"))?;
+        std::fs::create_dir_all(media.join("clips"))?;
+        std::fs::write(uploads.join("avatars").join("avatar.txt"), b"avatar-before")?;
+        std::fs::write(media.join("clips").join("clip.txt"), b"clip-before")?;
+
+        {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            conn.execute_batch(
+                "CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO marker (id, value) VALUES (1, 'before');",
+            )?;
+        }
+
+        let db_url = format!("sqlite://{}", db_path.display());
+        let backup_name = create_backup(
+            &db_url,
+            backups.to_str().unwrap(),
+            uploads.to_str().unwrap(),
+            media.to_str().unwrap(),
+            true,
+        )
+        .await?;
+
+        let listed = list_backups(backups.to_str().unwrap()).await?;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, backup_name);
+        assert!(listed[0].size_bytes > 0);
+
+        {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            conn.execute("UPDATE marker SET value = 'after' WHERE id = 1", [])?;
+        }
+        std::fs::remove_dir_all(&uploads)?;
+        std::fs::remove_dir_all(&media)?;
+
+        restore_backup(
+            &backup_name,
+            backups.to_str().unwrap(),
+            &db_url,
+            uploads.to_str().unwrap(),
+            media.to_str().unwrap(),
+        )
+        .await?;
+
+        {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            let value: String =
+                conn.query_row("SELECT value FROM marker WHERE id = 1", [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(value, "before");
+        }
+
+        let restored_upload = std::fs::read(uploads.join("avatars").join("avatar.txt"))?;
+        let restored_media = std::fs::read(media.join("clips").join("clip.txt"))?;
+        assert_eq!(restored_upload, b"avatar-before");
+        assert_eq!(restored_media, b"clip-before");
+        assert!(Path::new(&format!("{}.pre-restore", db_path.display())).exists());
+
+        Ok(())
+    }
 }

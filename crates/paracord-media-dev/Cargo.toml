@@ -3,7 +3,7 @@ name = "paracord-media-dev"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [[bin]]
 name = "paracord-media-dev"
@@ -11,8 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace crates
-paracord-transport = { path = "../paracord-transport" }
-paracord-relay = { path = "../paracord-relay" }
+paracord-transport = { workspace = true }
+paracord-relay = { workspace = true }
 paracord-models = { workspace = true }
 
 # QUIC
@@ -25,7 +25,7 @@ tower-http = { workspace = true }
 
 # Async
 tokio = { workspace = true }
-futures-util = "0.3"
+futures-util = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -50,4 +50,4 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 
 # Bytes
-bytes = "1"
+bytes = { workspace = true }

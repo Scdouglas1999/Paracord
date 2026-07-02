@@ -9,9 +9,15 @@
 <p align="center">
   <a href="../../releases/latest">Download</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
+  <a href="SELF_HOSTING_DEPLOYMENT_GUIDE.md">Deployment Guide</a> &bull;
   <a href="#features">Features</a> &bull;
   <a href="#docker">Docker</a> &bull;
-  <a href="#development">Development</a>
+  <a href="#development">Development</a> &bull;
+  <a href="docs/known-limitations.md">Known Limitations</a>
+</p>
+
+<p align="center">
+  Current release candidate: <strong>v0.9.0</strong>
 </p>
 
 ---
@@ -26,7 +32,7 @@ On February 9th, 2026, Discord's CEO announced that they would be starting to ro
 
 Guilds, channels, and DMs with the full messaging experience — send, edit, delete, reply, pin, react with emoji, attach files via drag-and-drop, and see who's typing in real-time. Images embed inline with a lightbox viewer (zoom, pan, keyboard navigation), files show name and size, and messages group by author just like you'd expect. Full-text message search with author and date filters. Markdown toolbar with keyboard shortcuts (Ctrl+B, Ctrl+I, etc.) and right-click context menus for quick actions.
 
-<img width="1848" height="1187" alt="Screenshot 2026-02-22 114840" src="https://github.com/user-attachments/assets/4e684d00-6607-4e5b-9626-181bd6922254" />
+![Paracord text chat screenshot](docs/screenshots/text-chat-current.png)
 
 ### Threads
 
@@ -42,24 +48,18 @@ Dedicated forum-style channels with tag support for organizing longer-form discu
 
 ### Voice Chat
 
-WebRTC voice powered by a bundled LiveKit SFU. Mute, deafen, pick your mic and speakers, and toggle noise suppression, echo cancellation, and noise gate. Speaking indicators light up in real-time, and join/leave sounds play when people hop in and out of channels. Configurable keybinds for mute, deafen, and push-to-talk. Split-pane layout for viewing streams while staying in the voice channel.
-
-<img width="1848" height="1187" alt="Screenshot 2026-02-22 115020" src="https://github.com/user-attachments/assets/9ef26482-ec43-4e5d-a0f9-5ff486b87908" />
+WebRTC voice is available through LiveKit, with an optional native media transport under active validation. Mute, deafen, pick your mic and speakers, and toggle noise suppression, echo cancellation, and noise gate. Speaking indicators light up in real-time, and join/leave sounds play when people hop in and out of channels. Configurable keybinds for mute, deafen, and push-to-talk. Split-pane layout for viewing streams while staying in the voice channel.
 
 ### Live Streaming
 
-Share your screen or a specific window at up to 4K/100Mbps with six quality presets. System audio is captured natively on Windows (WASAPI loopback) and Linux (PulseAudio monitor) so viewers actually hear your game or movie audio — not just silence. The stream viewer has quality selection, volume control, a fullscreen button, and an elapsed time counter.
+Share your screen or a specific window using the same named quality presets enforced by the server. Native system-audio capture support varies by platform and is still part of the release validation pass; see [known limitations](docs/known-limitations.md) before treating it as production-ready. The stream viewer has quality selection, volume control, a fullscreen button, and an elapsed time counter.
 
 | Preset | Resolution | FPS | Bitrate |
 |--------|-----------|-----|---------|
-| 720p 30 | 1280x720 | 30 | 5 Mbps |
-| 1080p 60 | 1920x1080 | 60 | 15 Mbps |
-| 1440p 60 | 2560x1440 | 60 | 25 Mbps |
-| 4K 60 | 3840x2160 | 60 | 40 Mbps |
-| Movie 50 | 3840x2160 | 60 | 50 Mbps |
-| Movie 100 | 3840x2160 | 60 | 100 Mbps |
-
-<img width="1848" height="1187" alt="Screenshot 2026-02-22 115046" src="https://github.com/user-attachments/assets/d637d00c-1b92-4fe3-bbe6-28aba493388b" />
+| 720p 30 | 1280x720 | 30 | 2.5 Mbps |
+| 1080p 60 | 1920x1080 | 60 | 6 Mbps |
+| 1440p 60 | 2560x1440 | 60 | 10 Mbps |
+| 4K 60 | 3840x2160 | 60 | 20 Mbps |
 
 ### Roles & Permissions
 
@@ -83,7 +83,7 @@ A full bot platform with a developer dashboard, OAuth2 authorization flow, and b
 
 ### Server Discovery
 
-Browse public guilds with categories and search. Server owners can list their guilds for discovery so new users can find communities without needing an invite link.
+Browse public guilds with categories and search. New guilds are private by default; server owners can explicitly list their guilds for discovery so new users can find communities without needing an invite link.
 
 ### Moderation
 
@@ -107,9 +107,23 @@ Paracord takes security seriously. The server ships with:
 - **Audit trail** — security events logged for all sensitive operations
 - **Cryptographic identity** — Ed25519 keypair authentication with BIP39 recovery phrases
 
+#### Production Hardening Checklist
+
+For internet-facing deployments, use this baseline:
+
+1. Terminate TLS at your edge (nginx/caddy/traefik) and keep upstream Paracord on a private network.
+2. Set `public_url` to your canonical HTTPS origin and enable secure cookies with `PARACORD_COOKIE_SECURE=true`.
+3. If using a reverse proxy, set `PARACORD_TRUST_PROXY=true` and restrict `PARACORD_TRUSTED_PROXY_IPS` to exact proxy IPs only.
+4. Keep auth and global rate limits enabled (defaults: global `120/s`, auth `60/min`, bot `300/min`, bot writes `5/s`) and tune only upward after observing production traffic.
+5. Configure malware scanning (`PARACORD_MALWARE_SCAN_BIN`) for file uploads in untrusted communities.
+6. Treat federation as an explicit trust model: only add vetted peer servers and rotate signing keys on compromise.
+7. Back up and protect encryption material (JWT secret, at-rest encryption key, federation signing key) separately from database/file backups.
+
+Minimal reverse proxy headers (example): `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`.
+
 ### Federation
 
-Server-to-server federation is in active development with the transport layer already in place:
+Server-to-server federation is in active development with the transport layer already in place. It is disabled by default for new installs and should only be enabled after configuring trusted peer servers and key rotation procedures:
 
 - Ed25519 HTTP signature verification for all federated requests
 - `.well-known/paracord/server` discovery protocol
@@ -124,7 +138,7 @@ One binary, one SQLite database, zero external dependencies. Run the server and 
 
 ### Desktop Client
 
-Native app built with Tauri v2 for Windows and Linux. Auto-trusts self-signed server certificates so you don't have to click through browser warnings. Captures system audio natively for streams (WASAPI on Windows, PulseAudio on Linux). Configurable keybinds for mute, deafen, and push-to-talk. Built-in auto-updater so you always get the latest version. Activity detection broadcasts what you're running as rich presence.
+Native app built with Tauri v2 for Windows and Linux. Auto-trusts self-signed server certificates so you don't have to click through browser warnings. Native system-audio capture for streams is platform-specific and still under release validation; macOS system audio capture is not yet supported. Configurable keybinds for mute, deafen, and push-to-talk. Official signed releases can use the built-in updater when updater artifacts are published. Activity detection broadcasts what you're running as rich presence.
 
 ### Multi-Server
 
@@ -205,10 +219,13 @@ This starts the Paracord server and a LiveKit SFU instance. See `docker-compose.
 The server auto-generates `config/paracord.toml` on first run with:
 - Random JWT secret and LiveKit API credentials
 - SQLite database in `./data/`
+- Local upload storage in `./data/uploads/`
 - TLS certificates in `./data/certs/`
 - Manual port forwarding for internet exposure
 
 All settings can be overridden via environment variables prefixed with `PARACORD_`. See `paracord.example.toml` in the server package for the full reference.
+
+Uploads use the local filesystem by default; Paracord does not require AWS or any cloud storage service. Operators who want object storage can enable the optional S3-compatible backend for MinIO, Cloudflare R2, DigitalOcean Spaces, or AWS S3 by building with the `s3` feature and setting `storage_type = "s3"`. See [the deployment guide](SELF_HOSTING_DEPLOYMENT_GUIDE.md#8-optional-object-storage-configuration) for the explicit opt-in configuration.
 
 <details>
 <summary><h3>Using PostgreSQL Instead of SQLite</h3></summary>
@@ -397,9 +414,34 @@ statement_timeout_secs = 30
 
 # Kill transactions that sit idle for over 60 seconds (0 = no limit)
 idle_in_transaction_timeout_secs = 60
+
+# Per-connection sort/hash memory for PostgreSQL (0 = server default)
+work_mem_mb = 16
+
+# Per-connection maintenance memory (0 = server default)
+maintenance_work_mem_mb = 64
 ```
 
 Paracord also automatically sets `lock_timeout = 10s` and `timezone = UTC` on every connection.
+
+**Pool sizing guidance:**
+- Small deployments (< 200 concurrent users): `max_connections = 20` is usually fine.
+- Medium deployments (200-1000 concurrent users): start at `max_connections = 50`.
+- Large deployments (> 1000 concurrent users): plan for `max_connections = 75-100` and tune with DB monitoring.
+
+**When to move from SQLite to PostgreSQL:**
+- Sustained > 500 concurrent users.
+- Message history reaching ~1M+ records.
+- Frequent SQLite `busy_timeout` warnings or write stalls under peak load.
+- Need for external DB tooling (replicas, managed backups, query observability).
+
+**Permission cache sizing:**
+```toml
+[server]
+permission_cache_max_entries = 10000
+```
+Raise this for large guild/channel footprints to reduce permission recomputation churn.
+Environment variable: `PARACORD_PERMISSION_CACHE_MAX_ENTRIES`.
 
 **Environment variable equivalents:**
 | Config Key | Environment Variable |
@@ -409,6 +451,8 @@ Paracord also automatically sets `lock_timeout = 10s` and `timezone = UTC` on ev
 | `max_connections` | `PARACORD_DATABASE_MAX_CONNECTIONS` |
 | `statement_timeout_secs` | `PARACORD_DATABASE_STATEMENT_TIMEOUT_SECS` |
 | `idle_in_transaction_timeout_secs` | `PARACORD_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_SECS` |
+| `work_mem_mb` | `PARACORD_DATABASE_WORK_MEM_MB` |
+| `maintenance_work_mem_mb` | `PARACORD_DATABASE_MAINTENANCE_WORK_MEM_MB` |
 
 #### Connection String Reference
 
@@ -486,7 +530,7 @@ cd client && npm install && npm run build && cd ..
 # Build server with embedded web UI
 cargo build --release --bin paracord-server
 
-# The binary includes the web UI — no --web-dir needed
+# The binary includes the web UI; no --web-dir needed
 ./target/release/paracord-server
 ```
 
@@ -498,32 +542,32 @@ npm install
 npx tauri build
 ```
 
-Produces `.exe` + `.msi` on Windows, `.deb` + `.AppImage` on Linux.
+Produces an Inno Setup `.exe` installer plus a Tauri `.msi` on Windows, and `.deb` plus `.AppImage` bundles on Linux in the release workflow.
 
 ## Project Structure
 
 ```
 paracord/
-├── crates/                 # Rust server workspace
-│   ├── paracord-server/    # Binary entry point, TLS, LiveKit management
-│   ├── paracord-api/       # REST API routes (90+ endpoints)
-│   ├── paracord-ws/        # WebSocket gateway (events, presence, typing)
-│   ├── paracord-core/      # Business logic, permissions engine, event bus
-│   ├── paracord-db/        # SQLite via SQLx (26 migrations)
-│   ├── paracord-federation/# Server-to-server federation (Ed25519 signed transport)
-│   ├── paracord-models/    # Shared types and data structures
-│   ├── paracord-media/     # File storage (local + S3) + LiveKit voice/streaming
-│   └── paracord-util/      # Snowflake IDs, validation, at-rest encryption
-├── client/                 # Tauri v2 + React client
-│   ├── src/                # React TypeScript frontend
-│   │   ├── components/     # UI (chat, voice, guilds, threads, polls, forums, bots)
-│   │   ├── stores/         # 17 Zustand state stores
-│   │   ├── gateway/        # WebSocket connection + event dispatch
-│   │   └── pages/          # 20 route pages
-│   ├── src-tauri/          # Native Rust backend (system audio, TLS, auto-updater)
-│   └── e2e/                # Playwright E2E tests
-├── docs/                   # Design specs, security docs, API contracts
-└── docker-compose.yml      # Docker deployment with LiveKit
+|-- crates/                 # Rust server workspace
+|   |-- paracord-server/    # Binary entry point, TLS, LiveKit management
+|   |-- paracord-api/       # REST API routes (90+ endpoints)
+|   |-- paracord-ws/        # WebSocket gateway (events, presence, typing)
+|   |-- paracord-core/      # Business logic, permissions engine, event bus
+|   |-- paracord-db/        # SQLite/PostgreSQL via SQLx
+|   |-- paracord-federation/# Server-to-server federation (Ed25519 signed transport)
+|   |-- paracord-models/    # Shared types and data structures
+|   |-- paracord-media/     # File storage (local + optional object storage) + LiveKit voice/streaming
+|   `-- paracord-util/      # Snowflake IDs, validation, at-rest encryption
+|-- client/                 # Tauri v2 + React client
+|   |-- src/                # React TypeScript frontend
+|   |   |-- components/     # UI (chat, voice, guilds, threads, polls, forums, bots)
+|   |   |-- stores/         # 17 Zustand state stores
+|   |   |-- gateway/        # WebSocket connection + event dispatch
+|   |   `-- pages/          # 20 route pages
+|   |-- src-tauri/          # Native Rust backend (system audio, TLS, signed updater support)
+|   `-- e2e/                # Playwright E2E tests
+|-- docs/                   # Design specs, security docs, API contracts
+`-- docker-compose.yml      # Docker deployment with LiveKit
 ```
 
 ## License

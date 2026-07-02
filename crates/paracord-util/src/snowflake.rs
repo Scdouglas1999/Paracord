@@ -1,6 +1,8 @@
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use paracord_models::id::{ChannelId, EmojiId, GuildId, MessageId, RoleId, UserId};
+
 /// Custom epoch: 2024-01-01T00:00:00Z
 const PARACORD_EPOCH: u64 = 1_704_067_200_000;
 
@@ -47,6 +49,36 @@ pub fn generate(worker_id: u16) -> i64 {
     let seq = state.sequence;
     let id = (timestamp << 22) | ((worker_id as u64 & 0x3FF) << 12) | seq;
     id as i64
+}
+
+#[inline]
+pub fn generate_user_id(worker_id: u16) -> UserId {
+    UserId::from(generate(worker_id))
+}
+
+#[inline]
+pub fn generate_guild_id(worker_id: u16) -> GuildId {
+    GuildId::from(generate(worker_id))
+}
+
+#[inline]
+pub fn generate_channel_id(worker_id: u16) -> ChannelId {
+    ChannelId::from(generate(worker_id))
+}
+
+#[inline]
+pub fn generate_message_id(worker_id: u16) -> MessageId {
+    MessageId::from(generate(worker_id))
+}
+
+#[inline]
+pub fn generate_role_id(worker_id: u16) -> RoleId {
+    RoleId::from(generate(worker_id))
+}
+
+#[inline]
+pub fn generate_emoji_id(worker_id: u16) -> EmojiId {
+    EmojiId::from(generate(worker_id))
 }
 
 /// Extract the Unix timestamp (ms) from a snowflake.

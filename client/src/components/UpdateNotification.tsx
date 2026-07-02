@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { safeExternalUrl } from '../lib/security';
 import { isTauri } from '../lib/tauriEnv';
 
 const GITHUB_OWNER = (import.meta.env.VITE_GITHUB_OWNER as string | undefined)?.trim() || 'Scoduglas1999';
@@ -95,10 +96,11 @@ function extractUpdateInfo(update: Update, target: string | null): AvailableUpda
     typeof rawJson.tag_name === 'string' && rawJson.tag_name.length > 0
       ? rawJson.tag_name
       : `v${version}`;
-  const htmlUrl =
+  const rawHtmlUrl =
     typeof rawJson.html_url === 'string' && rawJson.html_url.length > 0
       ? rawJson.html_url
       : releaseUrl(releaseTag);
+  const htmlUrl = safeExternalUrl(rawHtmlUrl) ?? releaseUrl(releaseTag);
   const publishedAt =
     typeof rawJson.pub_date === 'string'
       ? rawJson.pub_date

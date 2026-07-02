@@ -11,6 +11,7 @@ pub struct WebhookRow {
     pub creator_id: Option<i64>,
     pub name: String,
     pub token: String,
+    pub github_secret: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -24,6 +25,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for WebhookRow {
             creator_id: row.try_get("creator_id")?,
             name: row.try_get("name")?,
             token: row.try_get("token")?,
+            github_secret: row.try_get("github_secret").ok().flatten(),
             created_at: datetime_from_db_text(&created_at_raw)?,
         })
     }
@@ -66,7 +68,7 @@ pub async fn create_webhook(
     let row = sqlx::query_as::<_, WebhookRow>(
         "INSERT INTO webhooks (id, space_id, channel_id, name, token, creator_id)
          VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, space_id, channel_id, creator_id, name, token, created_at",
+         RETURNING id, space_id, channel_id, creator_id, name, token, github_secret, created_at",
     )
     .bind(id)
     .bind(space_id)
@@ -81,7 +83,7 @@ pub async fn create_webhook(
 
 pub async fn get_webhook(pool: &DbPool, id: i64) -> Result<Option<WebhookRow>, DbError> {
     let row = sqlx::query_as::<_, WebhookRow>(
-        "SELECT id, space_id, channel_id, creator_id, name, token, created_at
+        "SELECT id, space_id, channel_id, creator_id, name, token, github_secret, created_at
          FROM webhooks WHERE id = $1",
     )
     .bind(id)
@@ -97,7 +99,7 @@ pub async fn get_webhook_by_id_and_token(
 ) -> Result<Option<WebhookRow>, DbError> {
     let token_hash = normalize_token_hash(token);
     let row = sqlx::query_as::<_, WebhookRow>(
-        "SELECT id, space_id, channel_id, creator_id, name, token, created_at
+        "SELECT id, space_id, channel_id, creator_id, name, token, github_secret, created_at
          FROM webhooks WHERE id = $1 AND (token = $2 OR token = $3)",
     )
     .bind(id)
@@ -113,7 +115,7 @@ pub async fn get_channel_webhooks(
     channel_id: i64,
 ) -> Result<Vec<WebhookRow>, DbError> {
     let rows = sqlx::query_as::<_, WebhookRow>(
-        "SELECT id, space_id, channel_id, creator_id, name, token, created_at
+        "SELECT id, space_id, channel_id, creator_id, name, token, github_secret, created_at
          FROM webhooks WHERE channel_id = $1 ORDER BY created_at",
     )
     .bind(channel_id)
@@ -124,7 +126,7 @@ pub async fn get_channel_webhooks(
 
 pub async fn get_guild_webhooks(pool: &DbPool, space_id: i64) -> Result<Vec<WebhookRow>, DbError> {
     let rows = sqlx::query_as::<_, WebhookRow>(
-        "SELECT id, space_id, channel_id, creator_id, name, token, created_at
+        "SELECT id, space_id, channel_id, creator_id, name, token, github_secret, created_at
          FROM webhooks WHERE space_id = $1 ORDER BY created_at",
     )
     .bind(space_id)
@@ -141,10 +143,27 @@ pub async fn update_webhook(
     let row = sqlx::query_as::<_, WebhookRow>(
         "UPDATE webhooks SET name = COALESCE($2, name)
          WHERE id = $1
-         RETURNING id, space_id, channel_id, creator_id, name, token, created_at",
+         RETURNING id, space_id, channel_id, creator_id, name, token, github_secret, created_at",
     )
     .bind(id)
     .bind(name)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn update_webhook_github_secret(
+    pool: &DbPool,
+    id: i64,
+    github_secret: Option<&str>,
+) -> Result<WebhookRow, DbError> {
+    let row = sqlx::query_as::<_, WebhookRow>(
+        "UPDATE webhooks SET github_secret = $2
+         WHERE id = $1
+         RETURNING id, space_id, channel_id, creator_id, name, token, github_secret, created_at",
+    )
+    .bind(id)
+    .bind(github_secret)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -156,4 +175,38 @@ pub async fn delete_webhook(pool: &DbPool, id: i64) -> Result<(), DbError> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn link_webhook_message(
+    pool: &DbPool,
+    webhook_id: i64,
+    message_id: i64,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "INSERT INTO webhook_messages (message_id, webhook_id)
+         VALUES ($1, $2)
+         ON CONFLICT (message_id) DO UPDATE SET webhook_id = EXCLUDED.webhook_id",
+    )
+    .bind(message_id)
+    .bind(webhook_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn webhook_owns_message(
+    pool: &DbPool,
+    webhook_id: i64,
+    message_id: i64,
+) -> Result<bool, DbError> {
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT 1
+         FROM webhook_messages
+         WHERE webhook_id = $1 AND message_id = $2",
+    )
+    .bind(webhook_id)
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(exists.is_some())
 }

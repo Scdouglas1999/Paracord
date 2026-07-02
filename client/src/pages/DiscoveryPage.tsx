@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Compass, Search, Users, ArrowLeft } from 'lucide-react';
-import { apiClient } from '../api/client';
+import { apiClient, extractApiError } from '../api/client';
 import { useGuildStore } from '../stores/guildStore';
 import { useChannelStore } from '../stores/channelStore';
 import { inviteApi } from '../api/invites';
 import { toast } from '../stores/toastStore';
 import { cn } from '../lib/utils';
-import { isSafeImageDataUrl } from '../lib/security';
+import { safeStoredImageDataUrl } from '../lib/security';
 
 interface DiscoverableGuild {
   id: string;
@@ -57,6 +57,7 @@ export function DiscoveryPage() {
   const [guilds, setGuilds] = useState<DiscoverableGuild[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [joiningId, setJoiningId] = useState<string | null>(null);
@@ -75,9 +76,11 @@ export function DiscoveryPage() {
       );
       setGuilds(data.guilds);
       setTotal(data.total);
-    } catch {
+      setLoadError(null);
+    } catch (err) {
       setGuilds([]);
       setTotal(0);
+      setLoadError(`Failed to load public servers: ${extractApiError(err)}`);
     } finally {
       setLoading(false);
     }
@@ -110,6 +113,7 @@ export function DiscoveryPage() {
       // Discovery join: the server should have a public invite or direct join API.
       // We try creating an invite-less join via the guild endpoint first.
       // If that fails, we look for any public invites.
+      let inviteError: unknown = null;
       try {
         const invitesRes = await apiClient.get(`/guilds/${guild.id}/invites`);
         const invites = invitesRes.data as Array<{ code: string }>;
@@ -129,12 +133,16 @@ export function DiscoveryPage() {
           }
           return;
         }
-      } catch {
-        // Ignore - no available invites
+      } catch (err) {
+        inviteError = err;
       }
-      toast.error('No public invite available for this server.');
-    } catch {
-      toast.error('Failed to join server');
+      if (inviteError) {
+        toast.error(`Failed to join server: ${extractApiError(inviteError)}`);
+      } else {
+        toast.error('No public invite available for this server.');
+      }
+    } catch (err) {
+      toast.error(`Failed to join server: ${extractApiError(err)}`);
     } finally {
       setJoiningId(null);
     }
@@ -146,6 +154,8 @@ export function DiscoveryPage() {
       <div className="panel-divider flex min-h-[var(--spacing-header-height)] flex-col gap-3 border-b px-4 py-3 sm:px-6 sm:py-4">
         <div className="flex items-center gap-3.5">
           <button
+            type="button"
+            aria-label="Back to home"
             onClick={() => navigate('/app')}
             className="flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
           >
@@ -162,8 +172,12 @@ export function DiscoveryPage() {
 
         {/* Search */}
         <div className="relative">
+          <label htmlFor="discovery-search" className="sr-only">
+            Search public servers
+          </label>
           <Search size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted" />
           <input
+            id="discovery-search"
             type="text"
             placeholder="Search servers..."
             value={search}
@@ -175,6 +189,7 @@ export function DiscoveryPage() {
         {/* Category tags */}
         <div className="flex flex-wrap gap-2">
           <button
+            type="button"
             onClick={() => setSelectedTag(null)}
             className={cn(
               'rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors',
@@ -187,6 +202,7 @@ export function DiscoveryPage() {
           </button>
           {CATEGORIES.map((cat) => (
             <button
+              type="button"
               key={cat}
               onClick={() => setSelectedTag(selectedTag === cat ? null : cat)}
               className={cn(
@@ -213,6 +229,24 @@ export function DiscoveryPage() {
               />
             ))}
           </div>
+        ) : loadError ? (
+          <div
+            role="alert"
+            className="flex flex-col items-center justify-center py-20 text-center"
+          >
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle">
+              <Compass size={28} className="text-text-muted" />
+            </div>
+            <p className="text-sm font-semibold text-text-secondary">{loadError}</p>
+            <p className="mt-1 text-xs text-text-muted">Check your connection and try again.</p>
+            <button
+              type="button"
+              onClick={() => void fetchDiscovery(search, selectedTag)}
+              className="mt-4 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+            >
+              Retry
+            </button>
+          </div>
         ) : guilds.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle">
@@ -230,11 +264,7 @@ export function DiscoveryPage() {
             {guilds.map((guild) => {
               const isMember = myGuildIds.has(guild.id);
               const isJoining = joiningId === guild.id;
-              const iconSrc = guild.icon_hash
-                ? guild.icon_hash.startsWith('data:')
-                  ? isSafeImageDataUrl(guild.icon_hash) ? guild.icon_hash : null
-                  : `/api/v1/guilds/${guild.id}/icon`
-                : null;
+              const iconSrc = safeStoredImageDataUrl(guild.icon_hash);
 
               return (
                 <div
@@ -302,6 +332,7 @@ export function DiscoveryPage() {
                       </div>
 
                       <button
+                        type="button"
                         onClick={() => void handleJoin(guild)}
                         disabled={isJoining}
                         className={cn(

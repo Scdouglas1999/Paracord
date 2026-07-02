@@ -17,6 +17,8 @@ export function InvitePage() {
   const [loadingPreview, setLoadingPreview] = useState(true);
   const [invitePreview, setInvitePreview] = useState<Invite | null>(null);
   const [error, setError] = useState('');
+  const [verificationAck, setVerificationAck] = useState(true);
+  const [verificationAnswers, setVerificationAnswers] = useState('');
 
   useEffect(() => {
     if (!code) return;
@@ -37,7 +39,14 @@ export function InvitePage() {
     setLoading(true);
     setError('');
     try {
-      const { data } = await inviteApi.accept(code!);
+      const answers = verificationAnswers
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      const { data } = await inviteApi.accept(code!, {
+        verification_ack: verificationAck,
+        verification_answers: answers.length ? answers : undefined,
+      });
       const guild = 'guild' in data ? data.guild : data;
       useGuildStore.getState().addGuild(guild);
       // Fetch channels so the sidebar isn't empty
@@ -56,7 +65,7 @@ export function InvitePage() {
         useUIStore.getState().setGuildSettingsId(guild.id);
         navigate(`/app`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(extractApiError(err) || 'Failed to accept invite');
     } finally {
       setLoading(false);
@@ -103,7 +112,29 @@ export function InvitePage() {
           </div>
         )}
 
-        <button onClick={handleAccept} disabled={loading || loadingPreview || !invitePreview} className="btn-primary w-full">
+        <div className="mb-4 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 p-3 text-left">
+          <label className="flex items-center gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={verificationAck}
+              onChange={(e) => setVerificationAck(e.target.checked)}
+            />
+            I acknowledge this server's rules and verification requirements.
+          </label>
+          <textarea
+            className="input-field mt-2 min-h-[72px] text-sm"
+            placeholder="Verification answers (one per line, if required by this server)"
+            value={verificationAnswers}
+            onChange={(e) => setVerificationAnswers(e.target.value)}
+          />
+        </div>
+
+        <button
+          onClick={handleAccept}
+          disabled={loading || loadingPreview || !invitePreview}
+          aria-label={loading ? 'Joining server' : 'Accept invite'}
+          className="btn-primary w-full"
+        >
           {loading ? 'Joining...' : 'Accept Invite'}
           {!loading && <ArrowRight size={16} />}
         </button>

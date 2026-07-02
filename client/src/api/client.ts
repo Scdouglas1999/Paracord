@@ -1,9 +1,101 @@
 import axios, { type AxiosError, type AxiosInstance } from 'axios';
 import { resolveApiBaseUrl } from '../lib/apiBaseUrl';
-import { clearLegacyPersistedAuth, getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from '../lib/authToken';
+import { getTauriAdapter } from '../lib/tauriAxiosAdapter';
+import {
+  clearLegacyPersistedAuth,
+  getAccessToken,
+  getCsrfToken,
+  getRefreshToken,
+  setAccessToken,
+  setRefreshToken,
+} from '../lib/authToken';
 import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { toast } from '../stores/toastStore';
+
+const API_SLOW_REQUEST_MS = 800;
+const API_TIMING_VERBOSE =
+  import.meta.env.VITE_API_TIMING_TRACE === '1' ||
+  import.meta.env.VITE_API_TIMING_TRACE === 'true';
+const API_LOG_REDACTED = '[redacted]';
+const API_LOG_SENSITIVE_QUERY_RE =
+  /([?&](?:token|access_token|refresh_token|media_token|session_id|csrf|secret|password|webhook_token)=)[^&#\s]+/gi;
+const API_LOG_WEBHOOK_TOKEN_PATH_RE =
+  /(\/webhooks\/[^/?#\s]+\/)([^/?#\s]+)(?=(?:\/messages\/|[/?#\s]|$))/gi;
+const API_LOG_INTERACTION_TOKEN_PATH_RE =
+  /(\/interactions\/[^/?#\s]+\/)([^/?#\s]+)(?=(?:\/(?:callback|messages|followup)|[/?#\s]|$))/gi;
+
+let apiRequestSequence = 0;
+
+type TimedRequestConfig = {
+  _pcStartMs?: number;
+  _pcRequestId?: string;
+  _pcAttempt?: number;
+  method?: string;
+  url?: string;
+};
+
+function nowMs(): number {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function nextRequestId(): string {
+  apiRequestSequence += 1;
+  return `api-${Date.now().toString(36)}-${apiRequestSequence.toString(36)}`;
+}
+
+function startTiming(config: TimedRequestConfig): void {
+  config._pcStartMs = nowMs();
+  config._pcRequestId = config._pcRequestId ?? nextRequestId();
+  config._pcAttempt = (config._pcAttempt ?? 0) + 1;
+}
+
+function elapsedMs(config: TimedRequestConfig): number | null {
+  if (typeof config._pcStartMs !== 'number') return null;
+  return Math.max(0, Math.round(nowMs() - config._pcStartMs));
+}
+
+export function redactApiLogUrl(url: string): string {
+  return url
+    .replace(API_LOG_SENSITIVE_QUERY_RE, `$1${API_LOG_REDACTED}`)
+    .replace(API_LOG_WEBHOOK_TOKEN_PATH_RE, `$1${API_LOG_REDACTED}`)
+    .replace(API_LOG_INTERACTION_TOKEN_PATH_RE, `$1${API_LOG_REDACTED}`);
+}
+
+function requestLabel(config: TimedRequestConfig): string {
+  const method = (config.method ?? 'GET').toUpperCase();
+  const url = redactApiLogUrl(config.url ?? '(unknown-url)');
+  return `${method} ${url}`;
+}
+
+function readTraceIdFromHeaders(headers: unknown): string | null {
+  if (!headers || typeof headers !== 'object') return null;
+
+  const maybeGet = (headers as { get?: (name: string) => unknown }).get;
+  if (typeof maybeGet === 'function') {
+    const fromGet = maybeGet('x-paracord-trace-id');
+    if (typeof fromGet === 'string' && fromGet.trim().length > 0) {
+      return fromGet.trim();
+    }
+  }
+
+  const raw = (headers as Record<string, unknown>)['x-paracord-trace-id']
+    ?? (headers as Record<string, unknown>)['X-Paracord-Trace-Id'];
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    return raw.trim();
+  }
+
+  return null;
+}
+
+function shouldAttachCsrf(method?: string): boolean {
+  if (!method) return false;
+  const normalized = method.toUpperCase();
+  return normalized === 'POST' || normalized === 'PUT' || normalized === 'PATCH' || normalized === 'DELETE';
+}
 
 /** Standardized API error response shape from the server. */
 export interface ApiErrorResponse {
@@ -63,6 +155,7 @@ export const apiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
   withCredentials: true,
   timeout: 15_000, // 15s default timeout to avoid indefinite hangs.
+  adapter: getTauriAdapter(),
 });
 
 const clearPersistedAuth = () => {
@@ -81,7 +174,14 @@ function markActiveServerApiReachable(reachable: boolean): void {
 apiClient.interceptors.request.use((config) => {
   // Resolve at request time so "Add Server" updates apply without full reload.
   config.baseURL = resolveApiBaseUrl();
+  startTiming(config as TimedRequestConfig);
   const token = getAccessToken();
+  if (shouldAttachCsrf(config.method)) {
+    const csrf = getCsrfToken();
+    if (csrf) {
+      config.headers['X-Paracord-CSRF'] = csrf;
+    }
+  }
   if (token && token !== 'null' && token !== 'undefined') {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -91,11 +191,47 @@ apiClient.interceptors.request.use((config) => {
 // Error interceptor for legacy client
 apiClient.interceptors.response.use(
   (res) => {
+    const cfg = res.config as TimedRequestConfig;
+    const tookMs = elapsedMs(cfg);
+    if (tookMs != null && (API_TIMING_VERBOSE || tookMs >= API_SLOW_REQUEST_MS)) {
+      const traceId = readTraceIdFromHeaders(res.headers);
+      console.info('[api] response', {
+        requestId: cfg._pcRequestId ?? null,
+        attempt: cfg._pcAttempt ?? null,
+        request: requestLabel(cfg),
+        status: res.status,
+        tookMs,
+        traceId,
+      });
+    }
     markActiveServerApiReachable(true);
     return res;
   },
   async (err) => {
-    const original = err.config as { _retry?: boolean; url?: string; headers?: Record<string, string> };
+    const original = err.config as ({
+      _retry?: boolean;
+      url?: string;
+      headers?: Record<string, string>;
+    } & TimedRequestConfig);
+    const tookMs = elapsedMs(original ?? {});
+    const traceId = readTraceIdFromHeaders(err.response?.headers);
+    if (
+      API_TIMING_VERBOSE ||
+      tookMs == null ||
+      tookMs >= API_SLOW_REQUEST_MS ||
+      !err.response
+    ) {
+      console.warn('[api] error', {
+        requestId: original?._pcRequestId ?? null,
+        attempt: original?._pcAttempt ?? null,
+        request: requestLabel(original ?? {}),
+        status: err.response?.status ?? null,
+        tookMs,
+        traceId,
+        code: err.code ?? null,
+        message: err.message,
+      });
+    }
     if (err.response) {
       // HTTP response means transport was reachable (even for 4xx/5xx).
       markActiveServerApiReachable(true);
@@ -153,11 +289,19 @@ export function createApiClient(
     headers: { 'Content-Type': 'application/json' },
     withCredentials: true,
     timeout: 15_000,
+    adapter: getTauriAdapter(),
   });
 
   // Auth interceptor
   client.interceptors.request.use((config) => {
+    startTiming(config as TimedRequestConfig);
     const token = getToken();
+    if (shouldAttachCsrf(config.method)) {
+      const csrf = getCsrfToken();
+      if (csrf) {
+        config.headers['X-Paracord-CSRF'] = csrf;
+      }
+    }
     if (token && token !== 'null' && token !== 'undefined') {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -167,11 +311,47 @@ export function createApiClient(
   // Error + refresh interceptor
   client.interceptors.response.use(
     (res) => {
+      const cfg = res.config as TimedRequestConfig;
+      const tookMs = elapsedMs(cfg);
+      if (tookMs != null && (API_TIMING_VERBOSE || tookMs >= API_SLOW_REQUEST_MS)) {
+        const traceId = readTraceIdFromHeaders(res.headers);
+        console.info('[api] response', {
+          requestId: cfg._pcRequestId ?? null,
+          attempt: cfg._pcAttempt ?? null,
+          request: requestLabel(cfg),
+          status: res.status,
+          tookMs,
+          traceId,
+        });
+      }
       onApiReachabilityChanged?.(true);
       return res;
     },
     async (err) => {
-      const original = err.config as { _retry?: boolean; url?: string; headers?: Record<string, string> };
+      const original = err.config as ({
+        _retry?: boolean;
+        url?: string;
+        headers?: Record<string, string>;
+      } & TimedRequestConfig);
+      const tookMs = elapsedMs(original ?? {});
+      const traceId = readTraceIdFromHeaders(err.response?.headers);
+      if (
+        API_TIMING_VERBOSE ||
+        tookMs == null ||
+        tookMs >= API_SLOW_REQUEST_MS ||
+        !err.response
+      ) {
+        console.warn('[api] error', {
+          requestId: original?._pcRequestId ?? null,
+          attempt: original?._pcAttempt ?? null,
+          request: requestLabel(original ?? {}),
+          status: err.response?.status ?? null,
+          tookMs,
+          traceId,
+          code: err.code ?? null,
+          message: err.message,
+        });
+      }
       if (err.response) {
         onApiReachabilityChanged?.(true);
       }

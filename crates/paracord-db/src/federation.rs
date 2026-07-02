@@ -106,6 +106,42 @@ pub struct FederatedChannelMapRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
+pub struct FederationPeerTrustStateRow {
+    pub server_name: String,
+    pub mode: String,
+    pub reason: Option<String>,
+    pub quarantined_until_ms: Option<i64>,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FederationModerationSubscriptionRow {
+    pub id: i64,
+    pub source_server: Option<String>,
+    pub source_url: String,
+    pub enabled: bool,
+    pub last_fetch_at_ms: Option<i64>,
+    pub last_error: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for FederationModerationSubscriptionRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            source_server: row.try_get("source_server")?,
+            source_url: row.try_get("source_url")?,
+            enabled: bool_from_any_row(row, "enabled")?,
+            last_fetch_at_ms: row.try_get("last_fetch_at_ms")?,
+            last_error: row.try_get("last_error")?,
+            created_at_ms: row.try_get("created_at_ms")?,
+            updated_at_ms: row.try_get("updated_at_ms")?,
+        })
+    }
+}
+
 /// Insert or update a known federated server.
 pub async fn upsert_federated_server(
     pool: &DbPool,
@@ -145,7 +181,7 @@ pub async fn get_federated_server(
     server_name: &str,
 ) -> Result<Option<FederatedServerRow>, sqlx::Error> {
     sqlx::query_as::<_, FederatedServerRow>(
-        "SELECT id, server_name, domain, federation_endpoint, public_key_hex, key_id, trusted, last_seen_at, created_at
+        "SELECT id, server_name, domain, federation_endpoint, public_key_hex, key_id, CASE WHEN trusted THEN 1 ELSE 0 END AS trusted, last_seen_at, created_at
          FROM federated_servers WHERE server_name = $1",
     )
     .bind(server_name)
@@ -159,7 +195,7 @@ pub async fn get_federated_server_by_id(
     id: i64,
 ) -> Result<Option<FederatedServerRow>, sqlx::Error> {
     sqlx::query_as::<_, FederatedServerRow>(
-        "SELECT id, server_name, domain, federation_endpoint, public_key_hex, key_id, trusted, last_seen_at, created_at
+        "SELECT id, server_name, domain, federation_endpoint, public_key_hex, key_id, CASE WHEN trusted THEN 1 ELSE 0 END AS trusted, last_seen_at, created_at
          FROM federated_servers WHERE id = $1",
     )
     .bind(id)
@@ -170,7 +206,7 @@ pub async fn get_federated_server_by_id(
 /// List all known federated servers.
 pub async fn list_federated_servers(pool: &DbPool) -> Result<Vec<FederatedServerRow>, sqlx::Error> {
     sqlx::query_as::<_, FederatedServerRow>(
-        "SELECT id, server_name, domain, federation_endpoint, public_key_hex, key_id, trusted, last_seen_at, created_at
+        "SELECT id, server_name, domain, federation_endpoint, public_key_hex, key_id, CASE WHEN trusted THEN 1 ELSE 0 END AS trusted, last_seen_at, created_at
          FROM federated_servers ORDER BY created_at ASC",
     )
     .fetch_all(pool)
@@ -182,7 +218,7 @@ pub async fn list_trusted_federated_servers(
     pool: &DbPool,
 ) -> Result<Vec<FederatedServerRow>, sqlx::Error> {
     sqlx::query_as::<_, FederatedServerRow>(
-        "SELECT id, server_name, domain, federation_endpoint, public_key_hex, key_id, trusted, last_seen_at, created_at
+        "SELECT id, server_name, domain, federation_endpoint, public_key_hex, key_id, CASE WHEN trusted THEN 1 ELSE 0 END AS trusted, last_seen_at, created_at
          FROM federated_servers WHERE trusted = TRUE ORDER BY created_at ASC",
     )
     .fetch_all(pool)
@@ -207,6 +243,131 @@ pub async fn touch_federated_server(pool: &DbPool, server_name: &str) -> Result<
         "UPDATE federated_servers SET last_seen_at = datetime('now') WHERE server_name = $1",
     )
     .bind(server_name)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn upsert_peer_trust_state(
+    pool: &DbPool,
+    server_name: &str,
+    mode: &str,
+    reason: Option<&str>,
+    quarantined_until_ms: Option<i64>,
+    updated_at_ms: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO federation_peer_trust_state (server_name, mode, reason, quarantined_until_ms, updated_at_ms)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (server_name) DO UPDATE SET
+             mode = EXCLUDED.mode,
+             reason = EXCLUDED.reason,
+             quarantined_until_ms = EXCLUDED.quarantined_until_ms,
+             updated_at_ms = EXCLUDED.updated_at_ms",
+    )
+    .bind(server_name)
+    .bind(mode)
+    .bind(reason)
+    .bind(quarantined_until_ms)
+    .bind(updated_at_ms)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_peer_trust_states(
+    pool: &DbPool,
+) -> Result<Vec<FederationPeerTrustStateRow>, sqlx::Error> {
+    sqlx::query_as::<_, FederationPeerTrustStateRow>(
+        "SELECT server_name, mode, reason, quarantined_until_ms, updated_at_ms
+         FROM federation_peer_trust_state
+         ORDER BY updated_at_ms DESC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn upsert_moderation_subscription(
+    pool: &DbPool,
+    id: i64,
+    source_server: Option<&str>,
+    source_url: &str,
+    enabled: bool,
+    updated_at_ms: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO federation_moderation_subscriptions (
+             id, source_server, source_url, enabled, updated_at_ms
+         ) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (source_url) DO UPDATE SET
+             source_server = EXCLUDED.source_server,
+             enabled = EXCLUDED.enabled,
+             updated_at_ms = EXCLUDED.updated_at_ms",
+    )
+    .bind(id)
+    .bind(source_server)
+    .bind(source_url)
+    .bind(enabled)
+    .bind(updated_at_ms)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_moderation_subscriptions(
+    pool: &DbPool,
+) -> Result<Vec<FederationModerationSubscriptionRow>, sqlx::Error> {
+    sqlx::query_as::<_, FederationModerationSubscriptionRow>(
+        "SELECT id, source_server, source_url, CASE WHEN enabled THEN 1 ELSE 0 END AS enabled, last_fetch_at_ms, last_error, created_at_ms, updated_at_ms
+         FROM federation_moderation_subscriptions
+         ORDER BY created_at_ms ASC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn delete_moderation_subscription(
+    pool: &DbPool,
+    source_url: &str,
+) -> Result<bool, sqlx::Error> {
+    let result =
+        sqlx::query("DELETE FROM federation_moderation_subscriptions WHERE source_url = $1")
+            .bind(source_url)
+            .execute(pool)
+            .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn delete_moderation_subscription_by_id(
+    pool: &DbPool,
+    id: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM federation_moderation_subscriptions WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn update_moderation_subscription_fetch_status(
+    pool: &DbPool,
+    source_url: &str,
+    last_fetch_at_ms: i64,
+    last_error: Option<&str>,
+    updated_at_ms: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE federation_moderation_subscriptions
+         SET
+             last_fetch_at_ms = $2,
+             last_error = $3,
+             updated_at_ms = $4
+         WHERE source_url = $1",
+    )
+    .bind(source_url)
+    .bind(last_fetch_at_ms)
+    .bind(last_error)
+    .bind(updated_at_ms)
     .execute(pool)
     .await?;
     Ok(())
@@ -312,12 +473,12 @@ pub async fn enqueue_outbound_event(
     .bind(origin_server)
     .bind(origin_ts)
     .bind(serde_json::to_string(content).map_err(|e| {
-        sqlx::Error::Protocol(format!("invalid federation content json: {e}").into())
+        sqlx::Error::Protocol(format!("invalid federation content json: {e}"))
     })?)
     .bind(depth)
     .bind(state_key)
     .bind(serde_json::to_string(signatures).map_err(|e| {
-        sqlx::Error::Protocol(format!("invalid federation signatures json: {e}").into())
+        sqlx::Error::Protocol(format!("invalid federation signatures json: {e}"))
     })?)
     .bind(now_ms)
     .execute(pool)
@@ -616,7 +777,7 @@ pub async fn list_room_member_servers(
     pool: &DbPool,
     room_id: &str,
 ) -> Result<Vec<String>, sqlx::Error> {
-    let rows: Vec<(String,)> = sqlx::query_as(
+    let member_rows: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT remote_user_id
          FROM federation_room_memberships
          WHERE room_id = $1",
@@ -626,7 +787,7 @@ pub async fn list_room_member_servers(
     .await?;
 
     let mut servers = Vec::new();
-    for (remote_user_id,) in rows {
+    for (remote_user_id,) in member_rows {
         if let Some((_, server)) = remote_user_id.rsplit_once(':') {
             let trimmed = server.trim();
             if !trimmed.is_empty() {
@@ -634,9 +795,88 @@ pub async fn list_room_member_servers(
             }
         }
     }
+
+    let synced_peer_rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT da.destination_server
+         FROM federation_delivery_attempts da
+         JOIN federation_events fe ON fe.event_id = da.event_id
+         WHERE fe.room_id = $1
+           AND fe.event_type IN ('m.member.join', 'm.member.leave')
+           AND da.success = TRUE",
+    )
+    .bind(room_id)
+    .fetch_all(pool)
+    .await?;
+    for (server_name,) in synced_peer_rows {
+        let trimmed = server_name.trim();
+        if !trimmed.is_empty() {
+            servers.push(trimmed.to_string());
+        }
+    }
+
     servers.sort();
     servers.dedup();
     Ok(servers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_pool() -> DbPool {
+        let pool = crate::create_pool("sqlite::memory:", 1).await.unwrap();
+        crate::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn list_room_member_servers_includes_peers_that_accepted_membership_events() {
+        let pool = test_pool().await;
+        let room_id = "!guild:node-a.test";
+        let event_id = "$join-1:node-a.test";
+
+        crate::users::create_user(
+            &pool,
+            1001,
+            "remote_guest",
+            1,
+            "remote@example.test",
+            "hash",
+        )
+        .await
+        .unwrap();
+        crate::guilds::create_guild(&pool, 2001, "Remote Guild", 1001, None)
+            .await
+            .unwrap();
+        upsert_room_membership(&pool, room_id, "@guest_one:node-a.test", 1001, 2001)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO federation_events
+                (event_id, room_id, event_type, sender, origin_server, origin_ts, content, depth, state_key, signatures)
+             VALUES ($1, $2, 'm.member.join', '@guest_one:node-a.test', 'node-a.test', 1, '{}', 1, NULL, '{}')",
+        )
+        .bind(event_id)
+        .bind(room_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        record_delivery_attempt(
+            &pool,
+            "node-c.test",
+            event_id,
+            true,
+            Some(202),
+            None,
+            Some(5),
+            10,
+        )
+        .await
+        .unwrap();
+
+        let servers = list_room_member_servers(&pool, room_id).await.unwrap();
+        assert_eq!(servers, vec!["node-a.test", "node-c.test"]);
+    }
 }
 
 pub async fn upsert_space_mapping(

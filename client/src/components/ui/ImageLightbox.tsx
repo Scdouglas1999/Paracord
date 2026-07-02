@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, ChevronLeft, ChevronRight, Download, ZoomIn, ZoomOut } from 'lucide-react';
 import { useLightboxStore } from '../../stores/lightboxStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { safeClientResourceUrl } from '../../lib/security';
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
@@ -20,6 +21,7 @@ export function ImageLightbox() {
   const backdropRef = useRef<HTMLDivElement>(null);
 
   const currentImage = images[currentIndex];
+  const safeImageSrc = currentImage ? safeClientResourceUrl(currentImage.src) : null;
   const hasNext = currentIndex < images.length - 1;
   const hasPrev = currentIndex > 0;
 
@@ -78,14 +80,14 @@ export function ImageLightbox() {
   );
 
   const handleDownload = useCallback(() => {
-    if (!currentImage) return;
+    if (!currentImage || !safeImageSrc) return;
     const a = document.createElement('a');
-    a.href = currentImage.src;
+    a.href = safeImageSrc;
     a.download = currentImage.filename;
     a.click();
-  }, [currentImage]);
+  }, [currentImage, safeImageSrc]);
 
-  if (!isOpen || !currentImage) return null;
+  if (!isOpen || !currentImage || !safeImageSrc) return null;
 
   return createPortal(
     <div
@@ -179,7 +181,7 @@ export function ImageLightbox() {
         onWheel={handleWheel}
       >
         <img
-          src={currentImage.src}
+          src={safeImageSrc}
           alt={currentImage.alt}
           draggable={false}
           style={{

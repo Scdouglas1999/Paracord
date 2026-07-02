@@ -1,13 +1,20 @@
-import { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Headphones, HeadphoneOff, MonitorUp, PhoneOff, ChevronUp, AlertTriangle, MonitorOff, MessageSquare } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Mic, MicOff, Headphones, HeadphoneOff, MonitorUp, PhoneOff, ChevronUp, AlertTriangle, MonitorOff, MessageSquare, Radio } from 'lucide-react';
 import { useVoice } from '../../hooks/useVoice';
 import { useStream } from '../../hooks/useStream';
 import { useVoiceStore } from '../../stores/voiceStore';
+import { useAuthStore } from '../../stores/authStore';
 import { cn } from '../../lib/utils';
 import { Tooltip } from '../ui/Tooltip';
+import { ScreenSharePickerModal } from './ScreenSharePickerModal';
+import type { ScreenShareSource } from '../../lib/media/mediaEngine';
+import { logVoiceDiagnostic } from '../../lib/desktopDiagnostics';
+
+function thumbnailToDataUrl(thumbnail: { dataUrl: string } | null): string | null {
+    return thumbnail?.dataUrl ?? null;
+}
 
 function getStreamErrorMessage(error: unknown): string {
-    console.error('[stream] getStreamErrorMessage raw error:', error, 'type:', typeof error);
     const err = error as { name?: string; message?: string };
     const name = err?.name || '';
     // Tauri IPC errors are thrown as plain strings; handle both Error objects and strings.
@@ -55,12 +62,19 @@ export function VoiceControlBar({
     const { selfMute, selfDeaf, toggleMute, toggleDeaf, leaveChannel } = useVoice();
     const { selfStream, startStream, stopStream } = useStream();
     const streamAudioWarning = useVoiceStore((s) => s.streamAudioWarning);
+    const mediaEngine = useVoiceStore((s) => s.mediaEngine);
+    const pttEngaged = useVoiceStore((s) => s.pttEngaged);
+    const rawNotifications = useAuthStore((s) => s.settings?.notifications as Record<string, unknown> | undefined);
+    const isPttMode = (rawNotifications?.['voiceInputMode'] ?? 'voice_activity') === 'push_to_talk';
 
     const [streamStarting, setStreamStarting] = useState(false);
     const [streamError, setStreamError] = useState<string | null>(null);
     const [captureQuality, setCaptureQuality] = useState('1080p60');
     const [showStreamMenu, setShowStreamMenu] = useState(false);
     const [showError, setShowError] = useState(false);
+    const [showSourcePicker, setShowSourcePicker] = useState(false);
+    const [screenSources, setScreenSources] = useState<ScreenShareSource[]>([]);
+    const [sourcesLoading, setSourcesLoading] = useState(false);
 
     const streamMenuRef = useRef<HTMLDivElement>(null);
 
@@ -76,46 +90,102 @@ export function VoiceControlBar({
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    const handleStartStream = async () => {
+    const loadScreenSources = useCallback(async () => {
+        if (!mediaEngine || !mediaEngine.supportsNativeSourcePicker()) return;
+        setSourcesLoading(true);
+        setStreamError(null);
+        try {
+            const sources = await mediaEngine.listScreenShareSources();
+            setScreenSources(sources);
+        } catch (error) {
+            setStreamError(getStreamErrorMessage(error));
+        } finally {
+            setSourcesLoading(false);
+        }
+    }, [mediaEngine]);
+
+    const loadThumbnail = useCallback(async (sourceId: string): Promise<string | null> => {
+        if (!mediaEngine || !mediaEngine.supportsNativeSourcePicker()) return null;
+        const thumbnail = await mediaEngine.getScreenShareSourceThumbnail(sourceId);
+        return thumbnailToDataUrl(thumbnail);
+    }, [mediaEngine]);
+
+    const handleStartStream = useCallback(async (sourceId?: string) => {
         setShowStreamMenu(false);
         setStreamError(null);
         setShowError(false);
         setStreamStarting(true);
         try {
-            await startStream(captureQuality);
+            logVoiceDiagnostic('[picker] start stream requested', { sourceId: sourceId ?? null });
+            await startStream(captureQuality, sourceId);
+            setShowSourcePicker(false);
         } catch (error) {
             setStreamError(getStreamErrorMessage(error));
             setShowError(true);
         } finally {
             setStreamStarting(false);
         }
-    };
+    }, [captureQuality, startStream]);
 
     const handleStopStream = () => {
         stopStream();
         setStreamError(null);
         setShowError(false);
         setShowStreamMenu(false);
+        setShowSourcePicker(false);
     };
 
+    const openSourcePicker = useCallback(async () => {
+        setShowStreamMenu(false);
+        setShowError(false);
+        setShowSourcePicker(true);
+        await loadScreenSources();
+    }, [loadScreenSources]);
+
     return (
+        <>
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-full border border-border-strong bg-bg-primary/80 px-4 py-2.5 shadow-2xl backdrop-blur-xl">
-            <Tooltip content={selfMute ? 'Unmute' : 'Mute'} side="top">
+            <Tooltip
+                content={
+                    isPttMode
+                        ? pttEngaged ? 'Transmitting (PTT)' : 'Push to Talk (muted)'
+                        : selfMute ? 'Unmute' : 'Mute'
+                }
+                side="top"
+            >
                 <button
-                    onClick={() => toggleMute()}
+                    aria-label={
+                        isPttMode
+                            ? pttEngaged ? 'Transmitting with push to talk' : 'Push to talk muted'
+                            : selfMute ? 'Unmute microphone' : 'Mute microphone'
+                    }
+                    onClick={() => { if (!isPttMode) toggleMute(); }}
                     className={cn(
                         'flex h-12 w-12 items-center justify-center rounded-full transition-all group',
-                        selfMute
-                            ? 'bg-accent-danger/20 text-accent-danger hover:bg-accent-danger/30'
-                            : 'bg-bg-mod-strong text-text-primary hover:bg-bg-mod-subtle'
+                        isPttMode
+                            ? pttEngaged
+                                ? 'bg-accent-success/20 text-accent-success ring-2 ring-accent-success/50'
+                                : 'bg-accent-danger/20 text-accent-danger'
+                            : selfMute
+                                ? 'bg-accent-danger/20 text-accent-danger hover:bg-accent-danger/30'
+                                : 'bg-bg-mod-strong text-text-primary hover:bg-bg-mod-subtle'
                     )}
+                    style={{ cursor: isPttMode ? 'default' : undefined }}
                 >
-                    {selfMute ? <MicOff size={22} className="group-hover:scale-110 transition-transform" /> : <Mic size={22} className="group-hover:scale-110 transition-transform" />}
+                    {isPttMode
+                        ? pttEngaged
+                            ? <Radio size={22} className="animate-pulse" />
+                            : <MicOff size={22} />
+                        : selfMute
+                            ? <MicOff size={22} className="group-hover:scale-110 transition-transform" />
+                            : <Mic size={22} className="group-hover:scale-110 transition-transform" />
+                    }
                 </button>
             </Tooltip>
 
             <Tooltip content={selfDeaf ? 'Undeafen' : 'Deafen'} side="top">
                 <button
+                    aria-label={selfDeaf ? 'Undeafen audio' : 'Deafen audio'}
                     onClick={() => toggleDeaf()}
                     className={cn(
                         'flex h-12 w-12 items-center justify-center rounded-full transition-all group',
@@ -135,8 +205,15 @@ export function VoiceControlBar({
                 <div className="flex bg-bg-mod-strong rounded-full overflow-hidden hover:bg-bg-mod-subtle transition-colors">
                     <Tooltip content={selfStream ? 'Stop Streaming' : 'Share Screen'} side="top">
                         <button
+                            aria-label={selfStream ? 'Stop streaming' : streamStarting ? 'Starting screen share' : 'Share screen'}
                             disabled={streamStarting}
-                            onClick={selfStream ? handleStopStream : handleStartStream}
+                            onClick={selfStream ? handleStopStream : () => {
+                                if (mediaEngine?.supportsNativeSourcePicker()) {
+                                    void openSourcePicker();
+                                    return;
+                                }
+                                void handleStartStream();
+                            }}
                             className={cn(
                                 'flex h-12 items-center gap-2 px-4 transition-all group',
                                 selfStream
@@ -159,6 +236,7 @@ export function VoiceControlBar({
 
                     {!selfStream && (
                         <button
+                            aria-label={showStreamMenu ? 'Hide stream quality menu' : 'Show stream quality menu'}
                             onClick={() => setShowStreamMenu(!showStreamMenu)}
                             className="flex items-center justify-center px-2 border-l border-border-strong hover:bg-white/10 transition-colors"
                         >
@@ -234,6 +312,7 @@ export function VoiceControlBar({
                 <Tooltip content={isChatOpen ? 'Hide Chat' : 'Show Chat'} side="top">
                     <button
                         onClick={onToggleChat}
+                        aria-label={isChatOpen ? 'Hide voice chat' : 'Show voice chat'}
                         className={cn(
                             'flex h-12 w-12 items-center justify-center rounded-full transition-all group',
                             isChatOpen
@@ -248,6 +327,7 @@ export function VoiceControlBar({
 
             <Tooltip content="Disconnect" side="top">
                 <button
+                    aria-label="Disconnect from voice"
                     onClick={() => void leaveChannel()}
                     className="flex h-12 items-center justify-center gap-2 rounded-full bg-accent-danger px-5 text-white shadow-lg transition-all hover:bg-accent-danger/90 group"
                 >
@@ -256,5 +336,21 @@ export function VoiceControlBar({
                 </button>
             </Tooltip>
         </div>
+        {showSourcePicker && !selfStream && (
+            <ScreenSharePickerModal
+                sources={screenSources}
+                loading={sourcesLoading}
+                error={streamError}
+                loadThumbnail={loadThumbnail}
+                onClose={() => {
+                    if (!streamStarting) {
+                        setShowSourcePicker(false);
+                    }
+                }}
+                onRefresh={() => { void loadScreenSources(); }}
+                onSelect={(source) => { void handleStartStream(source.id); }}
+            />
+        )}
+        </>
     );
 }

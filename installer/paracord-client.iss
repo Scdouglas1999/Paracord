@@ -1,6 +1,6 @@
 ; Paracord Client Installer - Inno Setup Script
 ; Requires Inno Setup 6+
-; Build with: ISCC.exe /DAppVersion=0.6.0 paracord-client.iss
+; Build with: ISCC.exe /DAppVersion=0.9.0 paracord-client.iss
 
 #ifndef AppVersion
   #define AppVersion "0.6.0"
@@ -36,7 +36,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; Main application binary from Tauri build
-Source: "..\client\src-tauri\target\release\paracord-desktop.exe"; DestDir: "{app}"; DestName: "Paracord.exe"; Flags: ignoreversion
+Source: "..\target\release\paracord-desktop.exe"; DestDir: "{app}"; DestName: "Paracord.exe"; Flags: ignoreversion
 
 ; WebView2 bootstrapper (for systems without Edge/WebView2)
 Source: "MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall dontcopy; Check: NeedsWebView2

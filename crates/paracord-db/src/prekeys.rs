@@ -114,6 +114,23 @@ pub async fn count_one_time_prekeys(pool: &DbPool, user_id: i64) -> Result<i64, 
     Ok(row.0)
 }
 
+/// List one-time prekeys for a user (oldest first). Used for data export.
+pub async fn list_one_time_prekeys(
+    pool: &DbPool,
+    user_id: i64,
+) -> Result<Vec<OneTimePrekeyRow>, DbError> {
+    let rows = sqlx::query_as::<_, OneTimePrekeyRow>(
+        "SELECT id, user_id, public_key, created_at
+         FROM one_time_prekeys
+         WHERE user_id = $1
+         ORDER BY created_at ASC, id ASC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Delete all prekeys (signed and one-time) for a user.
 pub async fn delete_all_prekeys(pool: &DbPool, user_id: i64) -> Result<(), DbError> {
     sqlx::query("DELETE FROM signed_prekeys WHERE user_id = $1")

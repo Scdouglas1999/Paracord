@@ -211,6 +211,56 @@ pub async fn create_message_with_options(
         .await?;
         permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
         permissions::require_permission(perms, Permissions::SEND_MESSAGES)?;
+
+        // Enforce slowmode for non-admins, including optional per-role exemptions and adaptive
+        // slowmode settings.
+        let now = chrono::Utc::now();
+        let is_admin_bypass = perms.contains(Permissions::MANAGE_MESSAGES)
+            || perms.contains(Permissions::MANAGE_GUILD);
+        let feature_settings =
+            paracord_db::channel_features::get_or_default(pool, channel_id).await?;
+        let exempt_role_ids = paracord_db::channels::parse_required_role_ids(
+            &feature_settings.slowmode_exempt_role_ids,
+        );
+        let exempt_by_role = if exempt_role_ids.is_empty() {
+            false
+        } else {
+            let member_roles =
+                paracord_db::roles::get_member_roles(pool, author_id, guild_id).await?;
+            member_roles
+                .iter()
+                .any(|role| exempt_role_ids.contains(&role.id))
+        };
+
+        let mut effective_rate_limit = i64::from(channel.rate_limit_per_user.max(0));
+        if feature_settings.adaptive_slowmode_enabled {
+            let window_seconds =
+                i64::from(feature_settings.adaptive_slowmode_window_seconds.max(5));
+            let threshold = i64::from(feature_settings.adaptive_slowmode_threshold.max(1));
+            let step_seconds = i64::from(feature_settings.adaptive_slowmode_step_seconds.max(1));
+            let since = now - chrono::Duration::seconds(window_seconds);
+            let recent_count =
+                paracord_db::messages::count_channel_messages_since(pool, channel_id, since)
+                    .await?;
+            if recent_count >= threshold {
+                let overload = recent_count - threshold + 1;
+                let tiers = ((overload - 1) / threshold) + 1;
+                effective_rate_limit += tiers * step_seconds;
+            }
+        }
+
+        if effective_rate_limit > 0 && !is_admin_bypass && !exempt_by_role {
+            if let Some(last_sent) =
+                paracord_db::messages::get_last_user_message_time(pool, channel_id, author_id)
+                    .await?
+            {
+                let elapsed = now.signed_duration_since(last_sent).num_seconds();
+                if elapsed < effective_rate_limit {
+                    let retry_after = effective_rate_limit - elapsed;
+                    return Err(CoreError::RateLimited(retry_after));
+                }
+            }
+        }
     } else {
         if !paracord_db::dms::is_dm_recipient(pool, channel_id, author_id).await? {
             return Err(CoreError::Forbidden);
@@ -337,6 +387,11 @@ pub async fn edit_message_with_options(
                 "Content must be between 1 and 2000 characters".into(),
             ));
         }
+    }
+
+    // Save the old content as an edit history snapshot before updating
+    if let Some(old_content) = msg.content.as_deref() {
+        let _ = paracord_db::messages::save_edit_snapshot(pool, message_id, old_content).await;
     }
 
     let updated = paracord_db::messages::update_message_authorized_with_meta(

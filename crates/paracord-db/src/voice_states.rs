@@ -78,8 +78,13 @@ pub async fn get_channel_voice_states(
     channel_id: i64,
 ) -> Result<Vec<VoiceStateRow>, DbError> {
     let rows = sqlx::query_as::<_, VoiceStateRow>(
-        "SELECT user_id, space_id, channel_id, session_id, self_mute, self_deaf, self_stream, self_video, suppress
-         FROM voice_states WHERE channel_id = $1"
+        "SELECT user_id, space_id, channel_id, session_id,
+                CASE WHEN self_mute THEN 1 ELSE 0 END AS self_mute,
+                CASE WHEN self_deaf THEN 1 ELSE 0 END AS self_deaf,
+                CASE WHEN self_stream THEN 1 ELSE 0 END AS self_stream,
+                CASE WHEN self_video THEN 1 ELSE 0 END AS self_video,
+                CASE WHEN suppress THEN 1 ELSE 0 END AS suppress
+         FROM voice_states WHERE channel_id = $1",
     )
     .bind(channel_id)
     .fetch_all(pool)
@@ -93,8 +98,13 @@ pub async fn get_user_voice_state(
     space_id: Option<i64>,
 ) -> Result<Option<VoiceStateRow>, DbError> {
     let row = sqlx::query_as::<_, VoiceStateRow>(
-        "SELECT user_id, space_id, channel_id, session_id, self_mute, self_deaf, self_stream, self_video, suppress
-         FROM voice_states WHERE user_id = $1 AND COALESCE(space_id, 0) = COALESCE($2, 0)"
+        "SELECT user_id, space_id, channel_id, session_id,
+                CASE WHEN self_mute THEN 1 ELSE 0 END AS self_mute,
+                CASE WHEN self_deaf THEN 1 ELSE 0 END AS self_deaf,
+                CASE WHEN self_stream THEN 1 ELSE 0 END AS self_stream,
+                CASE WHEN self_video THEN 1 ELSE 0 END AS self_video,
+                CASE WHEN suppress THEN 1 ELSE 0 END AS suppress
+         FROM voice_states WHERE user_id = $1 AND COALESCE(space_id, 0) = COALESCE($2, 0)",
     )
     .bind(user_id)
     .bind(space_id)
@@ -124,7 +134,12 @@ pub async fn get_all_user_voice_states(
     user_id: i64,
 ) -> Result<Vec<VoiceStateRow>, DbError> {
     let rows = sqlx::query_as::<_, VoiceStateRow>(
-        "SELECT user_id, space_id, channel_id, session_id, self_mute, self_deaf, self_stream, self_video, suppress
+        "SELECT user_id, space_id, channel_id, session_id,
+                CASE WHEN self_mute THEN 1 ELSE 0 END AS self_mute,
+                CASE WHEN self_deaf THEN 1 ELSE 0 END AS self_deaf,
+                CASE WHEN self_stream THEN 1 ELSE 0 END AS self_stream,
+                CASE WHEN self_video THEN 1 ELSE 0 END AS self_video,
+                CASE WHEN suppress THEN 1 ELSE 0 END AS suppress
          FROM voice_states WHERE user_id = $1",
     )
     .bind(user_id)
@@ -233,10 +248,16 @@ pub async fn get_space_voice_states(
     space_id: i64,
 ) -> Result<Vec<VoiceStateWithUser>, DbError> {
     let rows = sqlx::query_as::<_, VoiceStateWithUser>(
-        "SELECT vs.user_id, vs.space_id, vs.channel_id, vs.session_id, vs.self_mute, vs.self_deaf, vs.self_stream, vs.self_video, vs.suppress, u.username, u.avatar_hash
+        "SELECT vs.user_id, vs.space_id, vs.channel_id, vs.session_id,
+                CASE WHEN vs.self_mute THEN 1 ELSE 0 END AS self_mute,
+                CASE WHEN vs.self_deaf THEN 1 ELSE 0 END AS self_deaf,
+                CASE WHEN vs.self_stream THEN 1 ELSE 0 END AS self_stream,
+                CASE WHEN vs.self_video THEN 1 ELSE 0 END AS self_video,
+                CASE WHEN vs.suppress THEN 1 ELSE 0 END AS suppress,
+                u.username, u.avatar_hash
          FROM voice_states vs
          JOIN users u ON u.id = vs.user_id
-         WHERE vs.space_id = $1"
+         WHERE vs.space_id = $1",
     )
     .bind(space_id)
     .fetch_all(pool)
@@ -263,6 +284,24 @@ pub async fn update_voice_state(
     .bind(self_deaf)
     .bind(self_stream)
     .bind(self_video)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_suppress(
+    pool: &DbPool,
+    user_id: i64,
+    space_id: Option<i64>,
+    suppress: bool,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "UPDATE voice_states SET suppress = $3
+         WHERE user_id = $1 AND COALESCE(space_id, 0) = COALESCE($2, 0)",
+    )
+    .bind(user_id)
+    .bind(space_id)
+    .bind(suppress)
     .execute(pool)
     .await?;
     Ok(())

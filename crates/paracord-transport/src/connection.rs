@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::control::{ControlError, ControlMessage};
 
+const PRE_AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_AUTH_MESSAGE_SIZE: u32 = 8 * 1024;
+
 /// Connection type: client-to-server relay or peer-to-peer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionMode {
@@ -28,6 +31,8 @@ pub struct MediaClaims {
     pub iat: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
 }
 
 /// Metadata tracked for each authenticated connection.
@@ -35,6 +40,7 @@ pub struct MediaClaims {
 pub struct ConnectionMeta {
     pub user_id: i64,
     pub session_id: Option<String>,
+    pub room_id: Option<String>,
     pub remote_addr: SocketAddr,
     pub mode: ConnectionMode,
 }
@@ -80,56 +86,68 @@ impl MediaConnection {
         jwt_secret: &str,
         mode: ConnectionMode,
     ) -> Result<Self, ConnectionError> {
-        let remote_addr = conn.remote_address();
+        tokio::time::timeout(PRE_AUTH_TIMEOUT, async move {
+            let remote_addr = conn.remote_address();
 
-        // Accept the first bidirectional stream (control stream)
-        let (mut send, mut recv) = conn
-            .accept_bi()
-            .await
-            .map_err(ConnectionError::Connection)?;
+            // Accept the first bidirectional stream (control stream)
+            let (mut send, mut recv) = conn
+                .accept_bi()
+                .await
+                .map_err(ConnectionError::Connection)?;
 
-        // Read length prefix (4 bytes) + message
-        let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf)
-            .await
-            .map_err(ConnectionError::ReadError)?;
-        let len = u32::from_be_bytes(len_buf) as usize;
+            // Read length prefix (4 bytes) + message. Bound the pre-auth
+            // frame before allocating attacker-controlled memory.
+            let mut len_buf = [0u8; 4];
+            recv.read_exact(&mut len_buf)
+                .await
+                .map_err(ConnectionError::ReadError)?;
+            let len = u32::from_be_bytes(len_buf);
+            if len == 0 || len > MAX_AUTH_MESSAGE_SIZE || len > crate::control::MAX_MESSAGE_SIZE {
+                return Err(ConnectionError::Control(ControlError::MessageTooLarge {
+                    size: len,
+                }));
+            }
+            let len = len as usize;
 
-        let mut msg_buf = vec![0u8; len];
-        recv.read_exact(&mut msg_buf)
-            .await
-            .map_err(ConnectionError::ReadError)?;
+            let mut msg_buf = vec![0u8; len];
+            recv.read_exact(&mut msg_buf)
+                .await
+                .map_err(ConnectionError::ReadError)?;
 
-        let msg: ControlMessage =
-            serde_json::from_slice(&msg_buf).map_err(|e| ControlError::Json(e))?;
+            let msg: ControlMessage =
+                serde_json::from_slice(&msg_buf).map_err(ControlError::Json)?;
 
-        let token = match msg {
-            ControlMessage::Auth { token } => token,
-            _ => return Err(ConnectionError::NoAuthMessage),
-        };
+            let token = match msg {
+                ControlMessage::Auth { token } => token,
+                _ => return Err(ConnectionError::NoAuthMessage),
+            };
 
-        // Validate JWT
-        let validation = Validation::new(Algorithm::HS256);
-        let token_data = decode::<MediaClaims>(
-            &token,
-            &DecodingKey::from_secret(jwt_secret.as_bytes()),
-            &validation,
-        )
-        .map_err(|e| ConnectionError::AuthFailed(e.to_string()))?;
+            // Validate JWT
+            let validation = Validation::new(Algorithm::HS256);
+            let token_data = decode::<MediaClaims>(
+                &token,
+                &DecodingKey::from_secret(jwt_secret.as_bytes()),
+                &validation,
+            )
+            .map_err(|e| ConnectionError::AuthFailed(e.to_string()))?;
 
-        let claims = token_data.claims;
-        let meta = ConnectionMeta {
-            user_id: claims.sub,
-            session_id: claims.sid,
-            remote_addr,
-            mode,
-        };
+            let claims = token_data.claims;
+            let meta = ConnectionMeta {
+                user_id: claims.sub,
+                session_id: claims.sid,
+                room_id: claims.room,
+                remote_addr,
+                mode,
+            };
 
-        // Send back a Pong to acknowledge auth success
-        let ack = ControlMessage::Pong.encode()?;
-        send.write_all(&ack).await?;
+            // Send back a Pong to acknowledge auth success
+            let ack = ControlMessage::Pong.encode()?;
+            send.write_all(&ack).await?;
 
-        Ok(Self { conn, meta })
+            Ok(Self { conn, meta })
+        })
+        .await
+        .map_err(|_| ConnectionError::AuthFailed("pre-auth timeout".to_string()))?
     }
 
     /// Connect to a remote endpoint and authenticate.
@@ -170,6 +188,7 @@ impl MediaConnection {
         let meta = ConnectionMeta {
             user_id: 0,
             session_id: None,
+            room_id: None,
             remote_addr,
             mode,
         };
@@ -249,10 +268,41 @@ mod tests {
             exp: 9999999999,
             iat: 1000000000,
             sid: Some("session-1".to_string()),
+            room: Some("guild:1:channel:2".to_string()),
         };
         let json = serde_json::to_string(&claims).unwrap();
         let parsed: MediaClaims = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.sub, 42);
         assert_eq!(parsed.sid.as_deref(), Some("session-1"));
+        assert_eq!(parsed.room.as_deref(), Some("guild:1:channel:2"));
+    }
+
+    #[test]
+    fn expired_media_claims_are_rejected() {
+        let secret = b"media-secret";
+        let claims = MediaClaims {
+            sub: 42,
+            exp: 1,
+            iat: 0,
+            sid: Some("session-1".to_string()),
+            room: Some("1:2".to_string()),
+        };
+        let token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(Algorithm::HS256),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(secret),
+        )
+        .unwrap();
+
+        let err = decode::<MediaClaims>(
+            &token,
+            &DecodingKey::from_secret(secret),
+            &Validation::new(Algorithm::HS256),
+        )
+        .expect_err("expired media tokens must not authenticate");
+        assert_eq!(
+            err.kind(),
+            &jsonwebtoken::errors::ErrorKind::ExpiredSignature
+        );
     }
 }

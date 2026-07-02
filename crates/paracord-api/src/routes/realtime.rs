@@ -9,6 +9,7 @@ use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::time::Duration;
 use uuid::Uuid;
@@ -37,6 +38,7 @@ struct VoiceStateCommandPayload {
     channel_id: Option<String>,
     self_mute: Option<bool>,
     self_deaf: Option<bool>,
+    self_video: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -67,7 +69,7 @@ async fn build_ready_payload(state: &AppState, user_id: i64, session_id: &str) -
         })
     };
 
-    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, user_id)
+    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, user_id.into())
         .await
         .unwrap_or_default();
     let mut guilds_json = Vec::with_capacity(guild_rows.len());
@@ -132,6 +134,59 @@ struct RealtimeStreamState {
     sequence: u64,
     ready_payload: Option<String>,
     receiver: tokio::sync::broadcast::Receiver<paracord_core::events::ServerEvent>,
+    /// Cached guild_id -> owner_id mapping for permission checks.
+    guild_owner_ids: HashMap<i64, i64>,
+}
+
+/// Extract the channel_id from a guild event payload, checking both
+/// `channel_id` field and the `id` field for channel lifecycle events.
+fn extract_channel_id_from_event(event_type: &str, payload: &Value) -> Option<i64> {
+    if let Some(raw) = payload.get("channel_id").and_then(|v| v.as_str()) {
+        if let Ok(channel_id) = raw.parse::<i64>() {
+            return Some(channel_id);
+        }
+    }
+
+    if matches!(
+        event_type,
+        "CHANNEL_CREATE"
+            | "CHANNEL_UPDATE"
+            | "CHANNEL_DELETE"
+            | "THREAD_CREATE"
+            | "THREAD_UPDATE"
+            | "THREAD_DELETE"
+    ) {
+        return payload
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|raw| raw.parse::<i64>().ok());
+    }
+
+    None
+}
+
+/// Check whether this SSE session user can see a channel within a guild.
+async fn can_receive_channel_event(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: i64,
+    owner_id: i64,
+    user_id: i64,
+) -> bool {
+    let Ok(perms) = paracord_core::permissions::compute_channel_permissions_cached(
+        &state.permission_cache,
+        &state.db,
+        guild_id,
+        channel_id,
+        owner_id,
+        user_id,
+    )
+    .await
+    else {
+        return false;
+    };
+
+    perms.contains(Permissions::VIEW_CHANNEL)
 }
 
 impl Drop for RealtimeStreamState {
@@ -150,7 +205,7 @@ pub async fn create_session(
         .session_id
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let guild_ids: Vec<i64> = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id)
+    let guild_ids: Vec<i64> = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into())
         .await
         .unwrap_or_default()
         .iter()
@@ -174,12 +229,12 @@ pub async fn stream_events(
         .session_id
         .filter(|sid| !sid.trim().is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let guild_ids: Vec<i64> = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id)
+    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into())
         .await
-        .unwrap_or_default()
-        .iter()
-        .map(|g| g.id)
-        .collect();
+        .unwrap_or_default();
+    let guild_ids: Vec<i64> = guild_rows.iter().map(|g| g.id).collect();
+    let guild_owner_ids: HashMap<i64, i64> =
+        guild_rows.iter().map(|g| (g.id, g.owner_id)).collect();
     let receiver = state
         .event_bus
         .register_session(session_id.clone(), auth.user_id, &guild_ids);
@@ -194,6 +249,7 @@ pub async fn stream_events(
         sequence: start_sequence,
         ready_payload: Some(ready_payload),
         receiver,
+        guild_owner_ids,
     };
 
     let event_stream = stream::unfold(stream_state, |mut st| async move {
@@ -205,6 +261,27 @@ pub async fn stream_events(
         loop {
             match st.receiver.recv().await {
                 Ok(event) => {
+                    // ── Channel permission filtering (mirrors WS handler) ──
+                    if let Some(guild_id) = event.guild_id {
+                        if let Some(channel_id) =
+                            extract_channel_id_from_event(&event.event_type, &event.payload)
+                        {
+                            let owner_id = st.guild_owner_ids.get(&guild_id).copied().unwrap_or(0);
+                            if !can_receive_channel_event(
+                                &st.app_state,
+                                guild_id,
+                                channel_id,
+                                owner_id,
+                                st.user_id,
+                            )
+                            .await
+                            {
+                                continue;
+                            }
+                        }
+                    }
+
+                    // ── Dynamic guild scope updates ──
                     if event.event_type == "GUILD_MEMBER_ADD" {
                         if let Some(uid) = event.payload.get("user_id").and_then(|v| v.as_str()) {
                             if uid == st.user_id.to_string() {
@@ -214,6 +291,12 @@ pub async fn stream_events(
                                     .and_then(|v| v.as_str())
                                     .and_then(|s| s.parse::<i64>().ok())
                                 {
+                                    // Also cache the owner_id for permission checks
+                                    if let Ok(Some(guild)) =
+                                        paracord_db::guilds::get_guild(&st.app_state.db, gid).await
+                                    {
+                                        st.guild_owner_ids.insert(gid, guild.owner_id);
+                                    }
                                     st.app_state
                                         .event_bus
                                         .add_session_guild(&st.session_id, gid);
@@ -231,6 +314,7 @@ pub async fn stream_events(
                                     .and_then(|v| v.as_str())
                                     .and_then(|s| s.parse::<i64>().ok())
                                 {
+                                    st.guild_owner_ids.remove(&gid);
                                     st.app_state
                                         .event_bus
                                         .remove_session_guild(&st.session_id, gid);
@@ -245,9 +329,21 @@ pub async fn stream_events(
                             .and_then(|v| v.as_str())
                             .and_then(|s| s.parse::<i64>().ok())
                         {
+                            st.guild_owner_ids.remove(&gid);
                             st.app_state
                                 .event_bus
                                 .remove_session_guild(&st.session_id, gid);
+                        }
+                    } else if event.event_type == "GUILD_UPDATE" {
+                        if let Some(gid) = event.guild_id {
+                            if let Some(new_owner) = event
+                                .payload
+                                .get("owner_id")
+                                .and_then(|v| v.as_str())
+                                .and_then(|s| s.parse::<i64>().ok())
+                            {
+                                st.guild_owner_ids.insert(gid, new_owner);
+                            }
                         }
                     }
                     st.sequence = st.sequence.saturating_add(1);
@@ -337,13 +433,12 @@ pub async fn post_command(
             });
             state
                 .user_presences
-                .write()
-                .await
                 .insert(auth.user_id, presence_payload.clone());
 
             let mut recipients: std::collections::HashSet<i64> = std::collections::HashSet::new();
             recipients.insert(auth.user_id);
-            if let Ok(guilds) = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id).await
+            if let Ok(guilds) =
+                paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into()).await
             {
                 for guild in guilds {
                     if let Ok(member_ids) =
@@ -373,6 +468,7 @@ pub async fn post_command(
             let channel_id = parse_i64_id(payload.channel_id.as_deref());
             let self_mute = payload.self_mute.unwrap_or(false);
             let self_deaf = payload.self_deaf.unwrap_or(false);
+            let self_video = payload.self_video.unwrap_or(false);
 
             if let Some(channel_id) = channel_id {
                 let channel = paracord_db::channels::get_channel(&state.db, channel_id)
@@ -428,6 +524,10 @@ pub async fn post_command(
                     .voice
                     .update_self_deaf(channel_id, auth.user_id, self_deaf)
                     .await;
+                state
+                    .voice
+                    .update_self_video(channel_id, auth.user_id, self_video)
+                    .await;
 
                 let current_self_stream = state
                     .voice
@@ -446,7 +546,7 @@ pub async fn post_command(
                         "self_mute": self_mute,
                         "self_deaf": self_deaf,
                         "self_stream": current_self_stream,
-                        "self_video": false,
+                        "self_video": self_video,
                         "suppress": false,
                         "mute": false,
                         "deaf": false,

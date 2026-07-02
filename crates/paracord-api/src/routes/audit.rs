@@ -14,6 +14,19 @@ pub const ACTION_ROLE_UPDATE: i16 = 31;
 pub const ACTION_ROLE_DELETE: i16 = 32;
 pub const ACTION_INVITE_CREATE: i16 = 40;
 pub const ACTION_INVITE_DELETE: i16 = 41;
+pub const ACTION_WEBHOOK_CREATE: i16 = 50;
+pub const ACTION_WEBHOOK_UPDATE: i16 = 51;
+pub const ACTION_WEBHOOK_DELETE: i16 = 52;
+pub const ACTION_EMOJI_CREATE: i16 = 60;
+pub const ACTION_EMOJI_UPDATE: i16 = 61;
+pub const ACTION_EMOJI_DELETE: i16 = 62;
+pub const ACTION_MESSAGE_EDIT: i16 = 71;
+pub const ACTION_MESSAGE_DELETE: i16 = 72;
+pub const ACTION_MESSAGE_BULK_DELETE: i16 = 73;
+pub const ACTION_BOT_ADD: i16 = 80;
+pub const ACTION_BOT_REMOVE: i16 = 81;
+pub const ACTION_REPORT_CREATE: i16 = 90;
+pub const ACTION_REPORT_RESOLVE: i16 = 91;
 
 pub async fn log_action(
     state: &AppState,

@@ -1,6 +1,7 @@
 import type { Activity, Presence } from '../types';
+import { getVersionedJson, setVersionedJson } from './versionedStorage';
 
-const KNOWN_APPS_STORAGE_KEY = 'paracord:activity-known-apps';
+const KNOWN_APPS_STORAGE_KEY = 'activity-known-apps';
 
 function toTitleCase(value: string): string {
   return value
@@ -32,9 +33,7 @@ export function readStringArray(value: unknown): string[] {
 export function getKnownActivityAppsFromStorage(): string[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(KNOWN_APPS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = getVersionedJson<unknown>(KNOWN_APPS_STORAGE_KEY, [], ['activity-known-apps']);
     return readStringArray(parsed);
   } catch {
     return [];
@@ -47,7 +46,7 @@ export function saveKnownActivityAppsToStorage(apps: string[]): void {
     a.localeCompare(b, undefined, { sensitivity: 'base' })
   );
   try {
-    localStorage.setItem(KNOWN_APPS_STORAGE_KEY, JSON.stringify(deduped));
+    setVersionedJson(KNOWN_APPS_STORAGE_KEY, deduped);
   } catch {
     // ignore storage errors
   }

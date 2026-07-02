@@ -3,9 +3,9 @@ import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
 import { sanitizeCustomCss } from '../lib/security';
 
-type ThemeName = 'dark' | 'light' | 'amoled';
+type ThemeName = 'dark' | 'light' | 'amoled' | 'high-contrast';
 
-const ACCENT_PRESETS = {
+export const ACCENT_PRESETS = {
   red: '#eb4d4b',
   blue: '#4f7cff',
   emerald: '#22b07d',
@@ -193,6 +193,57 @@ const THEME_VARIABLES: Record<ThemeName, Record<string, string>> = {
     'ambient-glow-danger': 'transparent',
     'accent-primary-rgb': '235, 77, 75',
   },
+  'high-contrast': {
+    'color-bg-primary': '#000000',
+    'color-bg-secondary': '#0a0a0a',
+    'color-bg-tertiary': '#000000',
+    'color-bg-accent': '#1a1a1a',
+    'color-bg-floating': 'rgba(0, 0, 0, 0.98)',
+    'color-bg-mod-subtle': 'rgba(255, 255, 255, 0.1)',
+    'color-bg-mod-strong': 'rgba(255, 255, 255, 0.2)',
+    'color-text-primary': '#ffffff',
+    'color-text-secondary': '#e0e0e0',
+    'color-text-muted': '#b0b0b0',
+    'color-text-link': '#66ccff',
+    'color-accent-primary': '#66b3ff',
+    'color-accent-primary-hover': '#99ccff',
+    'color-accent-success': '#33ff99',
+    'color-accent-danger': '#ff4d4d',
+    'color-accent-warning': '#ffdd00',
+    'color-border-subtle': 'rgba(255, 255, 255, 0.4)',
+    'color-border-strong': 'rgba(255, 255, 255, 0.6)',
+    'color-scrollbar-track': 'rgba(255, 255, 255, 0.08)',
+    'color-scrollbar-thumb': 'rgba(255, 255, 255, 0.35)',
+    'color-channel-icon': '#cccccc',
+    'color-interactive-normal': '#cccccc',
+    'color-interactive-hover': '#ffffff',
+    'color-interactive-active': '#ffffff',
+    'color-interactive-muted': '#808080',
+    'color-status-online': '#33ff99',
+    'color-status-idle': '#ffdd00',
+    'color-status-dnd': '#ff4d4d',
+    'color-status-offline': '#808080',
+    'color-status-streaming': '#cc66ff',
+    'app-bg-layer-one': 'none',
+    'app-bg-layer-two': 'none',
+    'app-bg-base': '#000000',
+    'overlay-backdrop': 'rgba(0, 0, 0, 0.92)',
+    'glass-rail-fill-top': 'rgba(0, 0, 0, 0.95)',
+    'glass-rail-fill-bottom': 'rgba(0, 0, 0, 0.95)',
+    'glass-panel-fill-top': 'rgba(0, 0, 0, 0.92)',
+    'glass-panel-fill-bottom': 'rgba(0, 0, 0, 0.92)',
+    'glass-modal-fill-top': 'rgba(10, 10, 10, 0.98)',
+    'glass-modal-fill-bottom': 'rgba(5, 5, 5, 0.98)',
+    'panel-divider-glint': 'rgba(255, 255, 255, 0.08)',
+    'scrollbar-auto-thumb-hover': 'rgba(255, 255, 255, 0.5)',
+    'sidebar-bg': 'rgba(0, 0, 0, 0.95)',
+    'sidebar-border': 'rgba(255, 255, 255, 0.4)',
+    'sidebar-active-indicator': 'var(--color-accent-primary)',
+    'ambient-glow-primary': 'transparent',
+    'ambient-glow-success': 'transparent',
+    'ambient-glow-danger': 'transparent',
+    'accent-primary-rgb': '102, 179, 255',
+  },
 };
 
 const LEGACY_ALIASES: Record<string, string> = {
@@ -235,6 +286,7 @@ export function useTheme() {
   const accentPreset = useUIStore((s) => s.accentPreset);
   const setTheme = useUIStore((s) => s.setTheme);
   const compactMode = useUIStore((s) => s.compactMode);
+  const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const customCss = useUIStore((s) => s.customCss);
   const settings = useAuthStore((s) => s.settings);
   const initializedFromServer = useRef(false);
@@ -246,7 +298,7 @@ export function useTheme() {
       return;
     }
     if (!initializedFromServer.current) {
-      if (settings.theme === 'dark' || settings.theme === 'light' || settings.theme === 'amoled') {
+      if (settings.theme === 'dark' || settings.theme === 'light' || settings.theme === 'amoled' || settings.theme === 'high-contrast') {
         setTheme(settings.theme);
       }
       initializedFromServer.current = true;
@@ -255,7 +307,7 @@ export function useTheme() {
 
   const requestedTheme = theme;
   const activeTheme: ThemeName =
-    requestedTheme === 'light' || requestedTheme === 'amoled' || requestedTheme === 'dark'
+    requestedTheme === 'light' || requestedTheme === 'amoled' || requestedTheme === 'dark' || requestedTheme === 'high-contrast'
       ? requestedTheme
       : 'dark';
   const compactFromSettings = Boolean(settings?.message_display_compact);
@@ -290,6 +342,13 @@ export function useTheme() {
   useEffect(() => {
     document.documentElement.setAttribute('data-density', densityMode);
   }, [densityMode]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute(
+      'data-low-bandwidth',
+      lowBandwidthMode ? 'true' : 'false'
+    );
+  }, [lowBandwidthMode]);
 
   useEffect(() => {
     const id = 'paracord-custom-css';

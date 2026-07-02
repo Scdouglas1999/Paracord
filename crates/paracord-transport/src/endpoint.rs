@@ -9,6 +9,8 @@ use std::sync::Arc;
 use quinn::crypto::rustls::QuicServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
+use crate::ensure_rustls_provider;
+
 /// TLS configuration for a media endpoint.
 pub struct TlsConfig {
     pub cert_chain: Vec<CertificateDer<'static>>,
@@ -26,9 +28,11 @@ impl MediaEndpoint {
     /// The endpoint supports both accepting incoming connections (server mode)
     /// and initiating outgoing connections (client mode / P2P).
     pub fn bind(addr: SocketAddr, tls: TlsConfig) -> anyhow::Result<Self> {
-        let server_crypto = rustls::ServerConfig::builder()
+        ensure_rustls_provider();
+        let mut server_crypto = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(tls.cert_chain.clone(), tls.private_key.clone_key())?;
+        server_crypto.alpn_protocols = vec![b"paracord-media".to_vec()];
 
         let server_config =
             quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
@@ -37,6 +41,8 @@ impl MediaEndpoint {
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
             .with_no_client_auth();
+        let mut client_crypto = client_crypto;
+        client_crypto.alpn_protocols = vec![b"paracord-media".to_vec()];
 
         let client_config = quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
@@ -59,19 +65,22 @@ impl MediaEndpoint {
         tls: TlsConfig,
         alpn_protocols: Vec<Vec<u8>>,
     ) -> anyhow::Result<Self> {
+        ensure_rustls_provider();
         let mut server_crypto = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(tls.cert_chain.clone(), tls.private_key.clone_key())?;
 
+        let client_alpn_protocols = alpn_protocols.clone();
         server_crypto.alpn_protocols = alpn_protocols;
 
         let server_config =
             quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
 
-        let client_crypto = rustls::ClientConfig::builder()
+        let mut client_crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
             .with_no_client_auth();
+        client_crypto.alpn_protocols = client_alpn_protocols;
 
         let client_config = quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
@@ -85,6 +94,7 @@ impl MediaEndpoint {
 
     /// Create a client-only endpoint (no server config, for P2P initiators).
     pub fn client(addr: SocketAddr) -> anyhow::Result<Self> {
+        ensure_rustls_provider();
         let mut client_crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))

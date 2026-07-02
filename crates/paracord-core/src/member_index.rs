@@ -20,11 +20,7 @@ impl MemberIndex {
     pub fn from_memberships(rows: Vec<(i64, i64)>) -> Self {
         let index = Self::empty();
         for (guild_id, user_id) in rows {
-            index
-                .guilds
-                .entry(guild_id)
-                .or_insert_with(HashSet::new)
-                .insert(user_id);
+            index.guilds.entry(guild_id).or_default().insert(user_id);
         }
         tracing::info!(guilds = index.guilds.len(), "member index loaded");
         index
@@ -44,10 +40,7 @@ impl MemberIndex {
 
     /// Track a new member (called on GUILD_MEMBER_ADD).
     pub fn add_member(&self, guild_id: i64, user_id: i64) {
-        self.guilds
-            .entry(guild_id)
-            .or_insert_with(HashSet::new)
-            .insert(user_id);
+        self.guilds.entry(guild_id).or_default().insert(user_id);
     }
 
     /// Remove a member (called on GUILD_MEMBER_REMOVE).

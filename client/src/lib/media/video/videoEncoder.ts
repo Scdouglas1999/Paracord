@@ -15,6 +15,7 @@ export interface VideoEncoderConfig {
   height: number;
   frameRate: number;
   bitrate: number;
+  codec?: 'vp9' | 'av1' | 'h264' | string;
 }
 
 /** Predefined simulcast layer definitions (low, medium, high). */
@@ -26,6 +27,8 @@ export const SIMULCAST_LAYERS: readonly SimulcastLayerConfig[] = [
 
 /** VP9 codec string: Profile 0, Level 1.0, 8-bit. */
 const VP9_CODEC = 'vp09.00.10.08';
+const H264_CODEC = 'avc1.640028';
+const AV1_CODEC = 'av01.0.10M.08';
 
 /** Interval between forced keyframes, in seconds. */
 const KEYFRAME_INTERVAL_S = 5;
@@ -35,6 +38,7 @@ export interface EncodedVideoChunkWithMeta {
   chunk: EncodedVideoChunk;
   layerIndex: number;
   isKeyframe: boolean;
+  codec: 'vp9' | 'av1' | 'h264' | string;
 }
 
 /**
@@ -45,6 +49,7 @@ interface LayerState {
   encoder: VideoEncoder;
   config: SimulcastLayerConfig;
   layerIndex: number;
+  codec: 'vp9' | 'av1' | 'h264' | string;
   frameCount: number;
   frameDivisor: number;
   lastKeyframeTime: number;
@@ -66,8 +71,10 @@ export class MediaVideoEncoder {
   private closed = false;
   private activeLayerCount: number;
   private keyframeRequested: Set<number> = new Set();
+  private activeCodec: 'vp9' | 'av1' | 'h264' | string;
 
   constructor(_config: VideoEncoderConfig) {
+    this.activeCodec = this.normalizeCodec(_config.codec);
     // Determine how many simulcast layers to use based on input resolution.
     // Only enable layers whose resolution is <= the source resolution.
     this.activeLayerCount = SIMULCAST_LAYERS.filter(
@@ -90,6 +97,7 @@ export class MediaVideoEncoder {
     layerIndex: number,
     sourceFrameRate: number,
   ): void {
+    const codec = this.resolveLayerCodec(config);
     const encoder = new VideoEncoder({
       output: (chunk, metadata) => {
         if (this.closed) return;
@@ -101,6 +109,7 @@ export class MediaVideoEncoder {
           chunk,
           layerIndex,
           isKeyframe,
+          codec,
         };
 
         for (const cb of this.encodedCallbacks) {
@@ -112,15 +121,7 @@ export class MediaVideoEncoder {
       },
     });
 
-    encoder.configure({
-      codec: VP9_CODEC,
-      width: config.width,
-      height: config.height,
-      bitrate: config.bitrate,
-      framerate: config.frameRate,
-      latencyMode: 'realtime',
-      scalabilityMode: 'L1T1',
-    });
+    this.configureEncoder(encoder, config, codec);
 
     // Create an OffscreenCanvas for downscaling source frames to this layer's resolution.
     const scaleCanvas = new OffscreenCanvas(config.width, config.height);
@@ -136,6 +137,7 @@ export class MediaVideoEncoder {
       encoder,
       config,
       layerIndex,
+      codec,
       frameCount: 0,
       frameDivisor,
       lastKeyframeTime: 0,
@@ -216,6 +218,10 @@ export class MediaVideoEncoder {
     this.encodedCallbacks.push(cb);
   }
 
+  get codec(): 'vp9' | 'av1' | 'h264' | string {
+    return this.activeCodec;
+  }
+
   /** Request a keyframe on a specific simulcast layer (or all layers if index is omitted). */
   requestKeyframe(layerIndex?: number): void {
     if (layerIndex !== undefined) {
@@ -245,5 +251,79 @@ export class MediaVideoEncoder {
     this.layers = [];
     this.encodedCallbacks = [];
     this.keyframeRequested.clear();
+  }
+
+  private normalizeCodec(codec?: string): 'vp9' | 'av1' | 'h264' | string {
+    switch ((codec ?? 'vp9').trim().toLowerCase()) {
+      case 'av1':
+        return 'av1';
+      case 'h264':
+        return 'h264';
+      case 'vp9':
+      default:
+        return 'vp9';
+    }
+  }
+
+  private resolveLayerCodec(config: SimulcastLayerConfig): 'vp9' | 'av1' | 'h264' | string {
+    const requested = this.activeCodec;
+    if (requested === 'vp9') {
+      return requested;
+    }
+
+    const probe = new VideoEncoder({
+      output: () => {},
+      error: () => {},
+    });
+    try {
+      this.configureEncoder(probe, config, requested);
+      return requested;
+    } catch {
+      this.activeCodec = 'vp9';
+      return 'vp9';
+    } finally {
+      try {
+        probe.close();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private configureEncoder(
+    encoder: VideoEncoder,
+    config: SimulcastLayerConfig,
+    codec: 'vp9' | 'av1' | 'h264' | string,
+  ): void {
+    const baseConfig = {
+      width: config.width,
+      height: config.height,
+      bitrate: config.bitrate,
+      framerate: config.frameRate,
+      latencyMode: 'realtime' as const,
+      scalabilityMode: 'L1T1',
+    };
+    switch (codec) {
+      case 'h264':
+        encoder.configure({
+          ...baseConfig,
+          codec: H264_CODEC,
+          avc: { format: 'annexb' },
+        });
+        break;
+      case 'av1':
+        encoder.configure({
+          ...baseConfig,
+          codec: AV1_CODEC,
+        });
+        break;
+      case 'vp9':
+      default:
+        encoder.configure({
+          ...baseConfig,
+          codec: VP9_CODEC,
+        });
+        break;
+    }
   }
 }

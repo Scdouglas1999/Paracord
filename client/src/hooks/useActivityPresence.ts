@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { gateway, LOCAL_SERVER_ID } from '../gateway/manager';
 import { isTauri } from '../lib/tauriEnv';
 import {
@@ -14,6 +14,15 @@ import { useServerListStore } from '../stores/serverListStore';
 import type { Activity, Presence } from '../types';
 
 const POLL_INTERVAL_MS = 5000;
+const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const IDLE_CHECK_INTERVAL_MS = 30_000; // 30 seconds
+
+// Module-level timestamp shared across the app
+let lastActivityTimestamp = Date.now();
+
+function resetActivity(): void {
+  lastActivityTimestamp = Date.now();
+}
 
 interface ForegroundApplication {
   pid: number;
@@ -67,9 +76,64 @@ function publishPresence(status: Presence['status'], activities: Activity[]): vo
   }
 }
 
-export function useActivityPresence() {
-  const token = useAuthStore((state) => state.token);
+/** Returns true when the user has been inactive longer than the given timeout. */
+function isUserIdle(timeoutMs: number): boolean {
+  return Date.now() - lastActivityTimestamp > timeoutMs;
+}
 
+export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
+  const token = useAuthStore((state) => state.token);
+  const idleTimeout = options?.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const isIdleRef = useRef(false);
+
+  // --- Idle detection (works everywhere, including non-Tauri browsers) ---
+  useEffect(() => {
+    if (!token) return;
+
+    lastActivityTimestamp = Date.now();
+    isIdleRef.current = false;
+
+    const activityEvents: Array<keyof DocumentEventMap> = [
+      'mousemove',
+      'keydown',
+      'mousedown',
+      'touchstart',
+    ];
+    for (const event of activityEvents) {
+      document.addEventListener(event, resetActivity, { passive: true });
+    }
+
+    const idleTimer = setInterval(() => {
+      const settings = useAuthStore.getState().settings;
+      const userStatus = settings?.status;
+
+      // Only auto-idle users whose chosen status is 'online'.
+      // DND, invisible, and already-idle-by-choice users should not be touched.
+      if (userStatus !== 'online') {
+        isIdleRef.current = false;
+        return;
+      }
+
+      const idle = isUserIdle(idleTimeout);
+
+      if (idle && !isIdleRef.current) {
+        isIdleRef.current = true;
+        publishPresence('idle', []);
+      } else if (!idle && isIdleRef.current) {
+        isIdleRef.current = false;
+        publishPresence('online', []);
+      }
+    }, IDLE_CHECK_INTERVAL_MS);
+
+    return () => {
+      for (const event of activityEvents) {
+        document.removeEventListener(event, resetActivity);
+      }
+      clearInterval(idleTimer);
+    };
+  }, [token, idleTimeout]);
+
+  // --- Tauri foreground-app activity detection ---
   useEffect(() => {
     if (!token || !isTauri()) return;
 
@@ -99,7 +163,13 @@ export function useActivityPresence() {
         const settings = useAuthStore.getState().settings;
         const notifications = (settings?.notifications ?? {}) as Record<string, unknown>;
         const detectionEnabled = notifications['activityDetectionEnabled'] !== false;
-        const status = mapStatusForPresence(settings?.status);
+        let status = mapStatusForPresence(settings?.status);
+
+        // If the idle detector has flagged the user as idle, override to 'idle'
+        if (isIdleRef.current && status === 'online') {
+          status = 'idle';
+        }
+
         const nativeCaptureAllowed = detectionEnabled && status !== 'offline';
         await invoke('set_activity_sharing_enabled', { enabled: nativeCaptureAllowed });
 

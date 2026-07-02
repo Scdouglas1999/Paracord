@@ -7,6 +7,8 @@ import { AppProviders } from './lib/AppProviders';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { getDesktopDiagnosticsLogPath, logVoiceDiagnostic } from './lib/desktopDiagnostics';
 import { isTauri } from './lib/tauriEnv';
+import { syncTrustedHosts } from './lib/trustedHosts';
+import { useServerListStore } from './stores/serverListStore';
 
 // In Tauri, assets are embedded in the exe. The PWA service worker caches stale
 // assets in WebView2 storage that override the exe's embedded files, preventing
@@ -17,6 +19,16 @@ if (isTauri() && 'serviceWorker' in navigator) {
       reg.unregister();
     }
   });
+}
+
+// Desktop-only: ask Rust to verify and sync trusted server hosts on startup and whenever the list changes
+if (isTauri()) {
+  const syncHosts = () => {
+    const urls = useServerListStore.getState().servers.map((s) => s.url);
+    void syncTrustedHosts(urls);
+  };
+  syncHosts();
+  useServerListStore.subscribe(syncHosts);
 }
 
 // Desktop-only: block default context menu and drag navigation

@@ -107,7 +107,7 @@ impl FederationRelay {
             None => return, // Not a federated room
         };
 
-        for (origin, _users) in &room.remote_servers {
+        for origin in room.remote_servers.keys() {
             if let Some(conn) = self.pool.get(origin).await {
                 if let Err(e) = conn.send_datagram(packet.clone()) {
                     warn!(

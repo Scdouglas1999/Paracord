@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Download, FileText, X } from 'lucide-react';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 
 interface FilePreviewProps {
   url: string;
@@ -16,19 +18,37 @@ function formatFileSize(bytes: number): string {
 
 export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps) {
   const [lightbox, setLightbox] = useState(false);
+  const lightboxRef = useRef<HTMLDivElement>(null);
+  const closeLightbox = useCallback(() => setLightbox(false), []);
+  useFocusTrap(lightboxRef, lightbox, closeLightbox);
+  const safeUrl = safeClientResourceUrl(url);
+
+  if (!safeUrl) {
+    return (
+      <div className="mt-1 max-w-sm rounded-xl border border-border-subtle bg-bg-secondary p-3.5 text-sm text-text-muted">
+        Attachment link blocked.
+      </div>
+    );
+  }
 
   // Image preview
-  if (mimeType.startsWith('image/')) {
+  if (isAllowedImageMimeType(mimeType)) {
     return (
       <>
         <div className="mt-1 max-w-md">
-          <img
-            src={url}
-            alt={filename}
-            className="max-h-72 cursor-pointer rounded-xl object-contain"
+          <button
+            type="button"
+            aria-label={`Open image preview: ${filename}`}
+            className="block max-w-full rounded-xl p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
             style={{ border: '1px solid var(--border-subtle)' }}
             onClick={() => setLightbox(true)}
-          />
+          >
+            <img
+              src={safeUrl}
+              alt={filename}
+              className="max-h-72 rounded-xl object-contain"
+            />
+          </button>
           <div className="mt-2 flex items-center gap-2.5">
             <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{filename}</span>
             <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{formatFileSize(size)}</span>
@@ -38,12 +58,20 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
         {/* Lightbox */}
         {lightbox && (
           <div
+            ref={lightboxRef}
             className="fixed inset-0 z-50 flex items-center justify-center cursor-pointer"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Image preview: ${filename}`}
+            tabIndex={-1}
             style={{ backgroundColor: 'var(--overlay-backdrop)' }}
-            onClick={() => setLightbox(false)}
+            onClick={closeLightbox}
           >
             <button
+              type="button"
+              aria-label="Close image preview"
               className="absolute right-4 top-4 rounded-full p-2.5"
+              onClick={closeLightbox}
               style={{
                 backgroundColor: 'var(--bg-mod-strong)',
                 color: 'var(--text-primary)',
@@ -52,7 +80,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
             >
               <X size={20} />
             </button>
-            <img src={url} alt={filename} className="max-w-[90vw] max-h-[90vh] object-contain" />
+            <img src={safeUrl} alt={filename} className="max-w-[90vw] max-h-[90vh] object-contain" />
           </div>
         )}
       </>
@@ -64,7 +92,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
     return (
       <div className="mt-1 max-w-md">
         <video
-          src={url}
+          src={safeUrl}
           controls
           className="max-h-72 rounded-xl"
           style={{ border: '1px solid var(--border-subtle)' }}
@@ -84,7 +112,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
           className="flex items-center gap-3 rounded-xl p-3.5"
           style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}
         >
-          <audio src={url} controls className="h-9 flex-1" />
+          <audio src={safeUrl} controls className="h-9 flex-1" />
         </div>
         <div className="mt-2 flex items-center gap-2.5">
           <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{filename}</span>
@@ -97,7 +125,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
   return (
     <div className="mt-1 max-w-sm">
       <a
-        href={url}
+        href={safeUrl}
         download={filename}
         className="flex items-center gap-3.5 rounded-xl p-3.5 transition-colors no-underline"
         style={{

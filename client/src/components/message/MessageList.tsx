@@ -9,52 +9,77 @@ import { useAuthStore } from '../../stores/authStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useMemberStore } from '../../stores/memberStore';
+import { useUIStore } from '../../stores/uiStore';
 import { channelApi } from '../../api/channels';
 import { fileApi } from '../../api/files';
 import { extractApiError } from '../../api/client';
-import { MessageType, Permissions, hasPermission, type Channel, type Message } from '../../types';
+import { MessageType, Permissions, hasPermission, type Channel, type Member, type Message, type Role } from '../../types';
+import { guildApi } from '../../api/guilds';
 import { UserProfilePopup } from '../user/UserProfile';
 import { EmojiPicker } from '../ui/EmojiPicker';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { usePermissions } from '../../hooks/usePermissions';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { resolveResourceUrl } from '../../lib/apiBaseUrl';
 import { getAccessToken } from '../../lib/authToken';
+import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
 import { parseMarkdown } from '../../lib/markdown';
 import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from '../../lib/customEmoji';
+import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
 import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
 import { PollMessageCard } from './PollMessageCard';
+import { EphemeralMessage } from './EphemeralMessage';
 import { toast } from '../../stores/toastStore';
+import { LoadingSpinner } from '../ui/Feedback';
 
 const EMPTY_TYPING: string[] = [];
 const EMPTY_CHANNELS: Channel[] = [];
+const EMPTY_MEMBERS: Member[] = [];
+
+function roleColorToHex(color: number): string | undefined {
+  if (!color) return undefined;
+  return `#${color.toString(16).padStart(6, '0')}`;
+}
+
+function getHighestRoleColor(memberRoles: string[], roles: Role[]): string | undefined {
+  const matched = roles
+    .filter((r) => memberRoles.includes(r.id) && r.color !== 0)
+    .sort((a, b) => b.position - a.position);
+  if (matched.length === 0) return undefined;
+  return roleColorToHex(matched[0].color);
+}
 const MAX_REPLY_NEST_DEPTH = 6;
 const REPLY_INDENT_PX = 18;
 const THREAD_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const _threadHydratedAt = new Map<string, number>();
-const IMAGE_ATTACHMENT_EXTENSION_RE = /\.(png|jpe?g|gif|webp|avif|bmp|heic|heif)$/i;
+const IMAGE_ATTACHMENT_EXTENSION_RE = /\.(png|jpe?g|gif|webp)$/i;
 
 /**
  * Resolve an attachment URL for use in `<img>` src and similar browser-native
  * fetches.  Uses the dynamic API base and appends a token query parameter for
  * cross-origin requests where cookies won't be sent.
  */
-function resolveAttachmentUrl(url: string): string {
-  return resolveResourceUrl(url, getAccessToken());
+function resolveAttachmentUrl(url: string): string | null {
+  const safeRawUrl = safeClientResourceUrl(url);
+  if (!safeRawUrl) return null;
+  return safeClientResourceUrl(resolveResourceUrl(safeRawUrl, getAccessToken()));
 }
 
 /**
  * For federated attachments (those with origin_server), route the download
  * through the local federated-files proxy endpoint instead of the normal URL.
  */
-function resolveFederatedAttachmentUrl(att: { url: string; id: string; origin_server?: string }): string {
+function resolveFederatedAttachmentUrl(att: { url: string; id: string; origin_server?: string }): string | null {
   if (att.origin_server) {
-    return resolveResourceUrl(
-      `/api/v1/federated-files/${encodeURIComponent(att.origin_server)}/${att.id}`,
-      getAccessToken(),
+    return safeClientResourceUrl(
+      resolveResourceUrl(
+        `/api/v1/federated-files/${encodeURIComponent(att.origin_server)}/${att.id}`,
+        getAccessToken(),
+      ),
     );
   }
   return resolveAttachmentUrl(att.url);
@@ -62,7 +87,7 @@ function resolveFederatedAttachmentUrl(att: { url: string; id: string; origin_se
 
 function isImageAttachment(att: { content_type?: string; filename: string }): boolean {
   const contentType = (att.content_type || '').toLowerCase();
-  if (contentType.startsWith('image/')) return true;
+  if (contentType.startsWith('image/')) return isAllowedImageMimeType(contentType);
   return IMAGE_ATTACHMENT_EXTENSION_RE.test(att.filename);
 }
 
@@ -163,6 +188,7 @@ type VirtualRow =
   | { type: 'bottom-sentinel' };
 
 export function MessageList({ channelId, onReply }: MessageListProps) {
+  const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const navigate = useNavigate();
   const { messages, isLoading, hasMore, loadMore } = useMessages(channelId);
   const addReaction = useMessageStore((s) => s.addReaction);
@@ -174,9 +200,9 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const setMessages = useMessageStore((s) => s.setMessages);
   const decryptingIds = useMessageStore((s) => s.decryptingIds);
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
+  const activeChannel = useChannelStore((s) => s.channelsById[channelId]);
   const typingUsers = useTypingStore((s) => s.typingByChannel[channelId] ?? EMPTY_TYPING);
   const me = useAuthStore((s) => s.user?.id);
-  const activeChannel = Object.values(channelsByGuild).flat().find((channel) => channel.id === channelId);
   const activeGuildId = activeChannel?.guild_id || null;
   const activeGuildChannels = activeGuildId ? (channelsByGuild[activeGuildId] ?? EMPTY_CHANNELS) : EMPTY_CHANNELS;
   const { permissions, isAdmin } = usePermissions(activeGuildId);
@@ -211,35 +237,228 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const activeTyping = typingUsers.filter((id) => id !== me);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
-  const [menuMessageId, setMenuMessageId] = useState<string | null>(null);
-  const [profileUser, setProfileUser] = useState<Message['author'] | null>(null);
-  const [profilePos, setProfilePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [emojiPickerFor, setEmojiPickerFor] = useState<{ messageId: string; position: { x: number; y: number } } | null>(null);
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [editContent, setEditContent] = useState('');
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Popup/overlay state group
+  const [popupState, setPopupState] = useState<{
+    hoveredMessageId: string | null;
+    menuMessageId: string | null;
+    profileUser: Message['author'] | null;
+    profilePos: { x: number; y: number };
+    emojiPickerFor: { messageId: string; position: { x: number; y: number } } | null;
+    deleteConfirmId: string | null;
+    contextMenuAnchor: { x: number; y: number };
+  }>({
+    hoveredMessageId: null,
+    menuMessageId: null,
+    profileUser: null,
+    profilePos: { x: 0, y: 0 },
+    emojiPickerFor: null,
+    deleteConfirmId: null,
+    contextMenuAnchor: { x: 0, y: 0 },
+  });
+  const hoveredMessageId = popupState.hoveredMessageId;
+  const menuMessageId = popupState.menuMessageId;
+  const profileUser = popupState.profileUser;
+  const profilePos = popupState.profilePos;
+  const emojiPickerFor = popupState.emojiPickerFor;
+  const deleteConfirmId = popupState.deleteConfirmId;
+  const contextMenuAnchor = popupState.contextMenuAnchor;
+  const setHoveredMessageId = (hoveredMessageId: string | null) =>
+    setPopupState((s) => ({ ...s, hoveredMessageId }));
+  const setMenuMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
+    setPopupState((s) => ({ ...s, menuMessageId: typeof value === 'function' ? value(s.menuMessageId) : value }));
+  const setProfileUser = (profileUser: Message['author'] | null) =>
+    setPopupState((s) => ({ ...s, profileUser }));
+  const setProfilePos = (profilePos: { x: number; y: number }) =>
+    setPopupState((s) => ({ ...s, profilePos }));
+  const setEmojiPickerFor = (emojiPickerFor: { messageId: string; position: { x: number; y: number } } | null) =>
+    setPopupState((s) => ({ ...s, emojiPickerFor }));
+  const setDeleteConfirmId = (deleteConfirmId: string | null) =>
+    setPopupState((s) => ({ ...s, deleteConfirmId }));
+  const setContextMenuAnchor = (contextMenuAnchor: { x: number; y: number }) =>
+    setPopupState((s) => ({ ...s, contextMenuAnchor }));
+
+  const [editState, setEditState] = useState<{ editingMessageId: string | null; editContent: string }>({
+    editingMessageId: null,
+    editContent: '',
+  });
+  const editingMessageId = editState.editingMessageId;
+  const editContent = editState.editContent;
+  const setEditingMessageId = (editingMessageId: string | null) =>
+    setEditState((state) => ({ ...state, editingMessageId }));
+  const setEditContent = (editContent: string) =>
+    setEditState((state) => ({ ...state, editContent }));
+
+  // Report state group
+  const [reportState, setReportState] = useState<{
+    reportingMessage: Message | null;
+    reportReason: string;
+    reportEvidence: string;
+    reportSubmitting: boolean;
+  }>({
+    reportingMessage: null,
+    reportReason: '',
+    reportEvidence: '',
+    reportSubmitting: false,
+  });
+  const reportingMessage = reportState.reportingMessage;
+  const reportReason = reportState.reportReason;
+  const reportEvidence = reportState.reportEvidence;
+  const reportSubmitting = reportState.reportSubmitting;
+  const setReportingMessage = (reportingMessage: Message | null) =>
+    setReportState((s) => ({ ...s, reportingMessage }));
+  const setReportReason = (reportReason: string) =>
+    setReportState((s) => ({ ...s, reportReason }));
+  const setReportEvidence = (reportEvidence: string) =>
+    setReportState((s) => ({ ...s, reportEvidence }));
+  const setReportSubmitting = (reportSubmitting: boolean) =>
+    setReportState((s) => ({ ...s, reportSubmitting }));
+  const reportDialogRef = useRef<HTMLDivElement>(null);
+
   const { contextMenu, onContextMenu, closeContextMenu } = useContextMenu();
-  const [contextMenuAnchor, setContextMenuAnchor] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [threadModalForMessageId, setThreadModalForMessageId] = useState<string | null>(null);
-  const [threadName, setThreadName] = useState('');
-  const [threadCreateError, setThreadCreateError] = useState<string | null>(null);
-  const [bulkDeleteMode, setBulkDeleteMode] = useState(false);
-  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
-  const [bulkDeleting, setBulkDeleting] = useState(false);
-  const [attachmentBusyId, setAttachmentBusyId] = useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [threadCreateState, setThreadCreateState] = useState<{
+    threadModalForMessageId: string | null;
+    threadName: string;
+    threadCreateError: string | null;
+  }>({
+    threadModalForMessageId: null,
+    threadName: '',
+    threadCreateError: null,
+  });
+  const threadModalForMessageId = threadCreateState.threadModalForMessageId;
+  const threadName = threadCreateState.threadName;
+  const threadCreateError = threadCreateState.threadCreateError;
+  const setThreadModalForMessageId = (threadModalForMessageId: string | null) =>
+    setThreadCreateState((state) => ({ ...state, threadModalForMessageId }));
+  const setThreadName = (threadName: string) =>
+    setThreadCreateState((state) => ({ ...state, threadName }));
+  const setThreadCreateError = (threadCreateError: string | null) =>
+    setThreadCreateState((state) => ({ ...state, threadCreateError }));
+  const threadCreateDialogRef = useRef<HTMLDivElement>(null);
+  const closeThreadCreateDialog = useCallback(() => {
+    setThreadCreateState((state) => ({
+      ...state,
+      threadModalForMessageId: null,
+      threadCreateError: null,
+    }));
+  }, []);
+  const closeReportDialog = useCallback(() => {
+    setReportState((state) => ({ ...state, reportingMessage: null }));
+  }, []);
+  useFocusTrap(threadCreateDialogRef, Boolean(threadModalForMessageId), closeThreadCreateDialog);
+  useFocusTrap(reportDialogRef, Boolean(reportingMessage), closeReportDialog);
+
+  const [bulkDeleteState, setBulkDeleteState] = useState<{
+    bulkDeleteMode: boolean;
+    selectedMessageIds: string[];
+    bulkDeleting: boolean;
+  }>({
+    bulkDeleteMode: false,
+    selectedMessageIds: [],
+    bulkDeleting: false,
+  });
+  const bulkDeleteMode = bulkDeleteState.bulkDeleteMode;
+  const selectedMessageIds = bulkDeleteState.selectedMessageIds;
+  const bulkDeleting = bulkDeleteState.bulkDeleting;
+  const setBulkDeleteMode = (bulkDeleteMode: boolean) =>
+    setBulkDeleteState((state) => ({ ...state, bulkDeleteMode }));
+  const setSelectedMessageIds = (
+    value: string[] | ((current: string[]) => string[]),
+  ) =>
+    setBulkDeleteState((state) => ({
+      ...state,
+      selectedMessageIds:
+        typeof value === 'function' ? (value as (current: string[]) => string[])(state.selectedMessageIds) : value,
+    }));
+  const setBulkDeleting = (bulkDeleting: boolean) =>
+    setBulkDeleteState((state) => ({ ...state, bulkDeleting }));
+
+  const [attachmentState, setAttachmentState] = useState<{
+    attachmentBusyId: string | null;
+    downloadProgress: number | null;
+  }>({
+    attachmentBusyId: null,
+    downloadProgress: null,
+  });
+  const attachmentBusyId = attachmentState.attachmentBusyId;
+  const downloadProgress = attachmentState.downloadProgress;
+  const setAttachmentBusyId = (attachmentBusyId: string | null) =>
+    setAttachmentState((state) => ({ ...state, attachmentBusyId }));
+  const setDownloadProgress = (downloadProgress: number | null) =>
+    setAttachmentState((state) => ({ ...state, downloadProgress }));
+  // Edit history state group
+  const [editHistoryState, setEditHistoryState] = useState<{
+    editHistoryMsgId: string | null;
+    editHistoryPos: { x: number; y: number };
+    editHistoryData: { id: string; content: string; edited_at: string }[];
+    editHistoryLoading: boolean;
+  }>({
+    editHistoryMsgId: null,
+    editHistoryPos: { x: 0, y: 0 },
+    editHistoryData: [],
+    editHistoryLoading: false,
+  });
+  const editHistoryMsgId = editHistoryState.editHistoryMsgId;
+  const editHistoryPos = editHistoryState.editHistoryPos;
+  const editHistoryData = editHistoryState.editHistoryData;
+  const editHistoryLoading = editHistoryState.editHistoryLoading;
+  const setEditHistoryMsgId = (editHistoryMsgId: string | null) =>
+    setEditHistoryState((s) => ({ ...s, editHistoryMsgId }));
+  const setEditHistoryPos = (editHistoryPos: { x: number; y: number }) =>
+    setEditHistoryState((s) => ({ ...s, editHistoryPos }));
+  const setEditHistoryData = (editHistoryData: { id: string; content: string; edited_at: string }[]) =>
+    setEditHistoryState((s) => ({ ...s, editHistoryData }));
+  const setEditHistoryLoading = (editHistoryLoading: boolean) =>
+    setEditHistoryState((s) => ({ ...s, editHistoryLoading }));
   const [isCoarsePointer, setIsCoarsePointer] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(hover: none), (pointer: coarse)').matches;
   });
+  const [guildRoles, setGuildRoles] = useState<Role[]>([]);
   const hasHydratedChannelRef = useRef(false);
   const lastReadStateMessageIdRef = useRef<string | null>(null);
   const prevMessagesLenRef = useRef(0);
   const isLoadingMoreRef = useRef(false);
 
-  // Resolve typing user IDs to usernames
-  const allMembers = useMemberStore((s) => s.members);
+  const activeGuildMembers = useMemberStore(
+    useCallback(
+      (state) => {
+        if (!activeGuildId) return EMPTY_MEMBERS;
+        return state.members.get(activeGuildId) ?? EMPTY_MEMBERS;
+      },
+      [activeGuildId],
+    ),
+  );
+
+  // Build mention map: userId -> display name for @mention rendering.
+  // Select only the active guild membership list to avoid rebuilding on unrelated guild updates.
+  const mentionMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const member of activeGuildMembers) {
+      map.set(member.user.id, member.nick || member.user.username);
+    }
+    return map;
+  }, [activeGuildMembers]);
+
+  const activeGuildMemberById = useMemo(() => {
+    const map = new Map<string, Member>();
+    for (const member of activeGuildMembers) {
+      map.set(member.user.id, member);
+    }
+    return map;
+  }, [activeGuildMembers]);
+
+  useEffect(() => {
+    if (!activeGuildId) {
+      setGuildRoles([]);
+      return;
+    }
+    guildApi.getRoles(activeGuildId).then(({ data }) => {
+      setGuildRoles(data);
+    }).catch(() => {
+      // non-fatal, role colors will simply not show
+    });
+  }, [activeGuildId]);
 
   const messageById = useMemo(() => {
     const map = new Map<string, Message>();
@@ -526,8 +745,37 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     setEmojiPickerFor(null);
     try {
       await addReaction(channelId, msgId, emoji);
-    } catch {
-      // non-fatal
+    } catch (err) {
+      toast.error(`Failed to add reaction: ${extractApiError(err)}`);
+    }
+  };
+
+  const toggleReaction = async (
+    messageId: string,
+    reaction: { emoji: string; me: boolean },
+  ) => {
+    try {
+      if (reaction.me) {
+        await removeReaction(channelId, messageId, reaction.emoji);
+      } else {
+        await addReaction(channelId, messageId, reaction.emoji);
+      }
+    } catch (err) {
+      const action = reaction.me ? 'remove' : 'add';
+      toast.error(`Failed to ${action} reaction: ${extractApiError(err)}`);
+    }
+  };
+
+  const togglePin = async (message: Message) => {
+    try {
+      if (message.pinned) {
+        await unpinMessage(channelId, message.id);
+      } else {
+        await pinMessage(channelId, message.id);
+      }
+    } catch (err) {
+      const action = message.pinned ? 'unpin' : 'pin';
+      toast.error(`Failed to ${action} message: ${extractApiError(err)}`);
     }
   };
 
@@ -553,7 +801,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     }
     try {
       await editMessage(channelId, editingMessageId, trimmed);
-    } catch {
+    } catch (err) {
+      toast.error(`Failed to edit message: ${extractApiError(err)}`);
       // keep editing state so user can retry
       return;
     }
@@ -614,11 +863,84 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     setMenuMessageId(null);
   };
 
+  const openReportDialog = (msg: Message) => {
+    if (!activeGuildId) return;
+    setReportingMessage(msg);
+    setReportReason('');
+    setReportEvidence('');
+    setMenuMessageId(null);
+  };
+
+  const submitReport = async () => {
+    if (!activeGuildId || !reportingMessage) return;
+    const reason = reportReason.trim();
+    if (!reason) {
+      toast.error('Please provide a reason for the report.');
+      return;
+    }
+    const evidence = reportEvidence
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    setReportSubmitting(true);
+    try {
+      await guildApi.createReport(activeGuildId, {
+        target_type: 'message',
+        target_id: reportingMessage.id,
+        message_id: reportingMessage.id,
+        channel_id: reportingMessage.channel_id,
+        reported_user_id: reportingMessage.author.id,
+        reason,
+        evidence: evidence.length ? evidence : undefined,
+      });
+      toast.success('Report submitted.');
+      setReportingMessage(null);
+      setReportReason('');
+      setReportEvidence('');
+    } catch (err) {
+      toast.error(`Failed to submit report: ${extractApiError(err)}`);
+    } finally {
+      setReportSubmitting(false);
+    }
+  };
+
   const openAuthorProfile = (event: MouseEvent<HTMLElement>, msg: Message) => {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     setProfilePos({ x: rect.left, y: rect.top });
     setProfileUser(msg.author);
   };
+
+  const openEditHistory = async (event: MouseEvent<HTMLElement>, msgId: string) => {
+    event.stopPropagation();
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    setEditHistoryPos({ x: rect.left, y: rect.bottom + 4 });
+    setEditHistoryMsgId(msgId);
+    setEditHistoryLoading(true);
+    setEditHistoryData([]);
+    try {
+      const { data } = await channelApi.getEditHistory(channelId, msgId);
+      setEditHistoryData(data);
+    } catch {
+      setEditHistoryData([]);
+    } finally {
+      setEditHistoryLoading(false);
+    }
+  };
+
+  const handleMentionClick = useCallback((userId: string) => {
+    const member = activeGuildMemberById.get(userId);
+    if (member) {
+      setProfilePos({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+      setProfileUser({
+        id: member.user.id,
+        username: member.user.username,
+        discriminator: String(member.user.discriminator ?? '0'),
+        avatar_hash: member.user.avatar_hash || null,
+        bot: member.user.bot ?? false,
+        flags: member.user.flags ?? 0,
+      });
+    }
+  }, [activeGuildMemberById]);
 
   const openCreateThreadDialog = (msg: Message) => {
     if (!canCreateThreads) return;
@@ -760,16 +1082,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       items.push({
         label: msg.pinned ? 'Unpin Message' : 'Pin Message',
         icon: msg.pinned ? <PinOff size={14} /> : <Pin size={14} />,
-        action: async () => {
-          try {
-            if (msg.pinned) {
-              await unpinMessage(channelId, msg.id);
-            } else {
-              await pinMessage(channelId, msg.id);
-            }
-          } catch {
-            // non-fatal
-          }
+        action: () => {
+          void togglePin(msg);
         },
       });
     }
@@ -780,7 +1094,9 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       label: 'Copy Text',
       icon: <Copy size={14} />,
       action: () => {
-        navigator.clipboard?.writeText(msg.content || '');
+        void writeClipboardText(msg.content || '')
+          .then(() => toast.success('Message text copied.'))
+          .catch((err) => toast.error(`Failed to copy message text: ${extractApiError(err)}`));
       },
     });
 
@@ -788,9 +1104,19 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       label: 'Copy Message ID',
       icon: <Clipboard size={14} />,
       action: () => {
-        navigator.clipboard?.writeText(msg.id);
+        void writeClipboardText(msg.id)
+          .then(() => toast.success('Message ID copied.'))
+          .catch((err) => toast.error(`Failed to copy message ID: ${extractApiError(err)}`));
       },
     });
+
+    if (activeGuildId && msg.author.id !== me) {
+      items.push({
+        label: 'Report Message',
+        icon: <MessageSquare size={14} />,
+        action: () => openReportDialog(msg),
+      });
+    }
 
     if (canDeleteMsg) {
       items.push({ label: '', action: () => {}, divider: true });
@@ -861,7 +1187,9 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
     if (row.type === 'typing') {
       const guildId = activeChannel?.guild_id;
-      const guildMembers = guildId ? allMembers.get(guildId) : null;
+      const guildMembers = guildId === activeGuildId
+        ? activeGuildMembers
+        : (guildId ? (useMemberStore.getState().members.get(guildId) ?? null) : null);
       const resolveUsername = (userId: string): string => {
         if (guildMembers) {
           const member = guildMembers.find((m) => m.user.id === userId);
@@ -896,14 +1224,20 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     const canEditMessage = isOwnMessage;
     const canDeleteMessage = isOwnMessage || canManageMessages;
     const canPinMessage = canManageMessages || !activeChannel?.guild_id;
-    const canOpenMessageMenu = canEditMessage || canDeleteMessage || canPinMessage || canCreateThreads;
+    const canReportMessage = Boolean(activeGuildId) && msg.author.id !== me;
+    const canOpenMessageMenu =
+      canEditMessage || canDeleteMessage || canPinMessage || canCreateThreads || canReportMessage;
     const linkedThreads = linkedThreadsByStarterMessageId[msg.id] ?? [];
+    const authorGuildMember = activeGuildMemberById.get(msg.author.id);
+    const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
 
     return (
       <div
         id={`msg-${msg.id}`}
         role="article"
         aria-label={`Message from ${msg.author.username}`}
+        aria-posinset={row.messageIndex + 1}
+        aria-setsize={messages.length}
         className="group relative -mx-1.5 flex gap-3.5 rounded-2xl px-2.5 py-1.5 transition-colors sm:-mx-2.5 sm:gap-4 sm:px-3"
         style={{
           marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '1.35rem',
@@ -939,12 +1273,15 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             </span>
           </div>
         ) : (
-          <div className="flex h-12 w-12 flex-shrink-0 cursor-pointer items-center justify-center rounded-2xl text-sm font-semibold text-white shadow-sm"
+          <button
+            type="button"
+            aria-label={`Open profile for ${msg.author.username}`}
+            className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl border-0 p-0 text-sm font-semibold text-white shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
             style={{ backgroundColor: 'var(--accent-primary)' }}
             onClick={(e) => openAuthorProfile(e, msg)}
           >
             {msg.author.username.charAt(0).toUpperCase()}
-          </div>
+          </button>
         )}
 
         {bulkDeleteMode && canManageMessages && (
@@ -985,13 +1322,20 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           )}
           {!isGrouped && (
             <div className="flex items-baseline gap-2">
-              <span
-                className="cursor-pointer text-[15px] font-semibold hover:underline"
-                style={{ color: 'var(--text-primary)' }}
+              <button
+                type="button"
+                className="rounded px-0 text-left text-[15px] font-semibold hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
+                style={{ color: authorRoleColor ?? 'var(--text-primary)' }}
+                aria-label={`Open profile for ${msg.author.username}`}
                 onClick={(e) => openAuthorProfile(e, msg)}
               >
                 {msg.author.username}
-              </span>
+              </button>
+              {msg.anonymous?.is_anonymous && (
+                <span className="rounded-md border border-accent-warning/35 bg-accent-warning/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-warning">
+                  Anonymous
+                </span>
+              )}
               {msg.author.bot && (
                 <span className="rounded-md border border-accent-primary/35 bg-accent-primary/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
                   Bot
@@ -1001,8 +1345,24 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 {formatTimestamp(getTimestamp(msg))}
               </span>
               {(msg.edited_timestamp || msg.edited_at) && (
-                <span className="text-[11px]" style={{ color: 'var(--text-muted)' }} title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}>
+                <button
+                  type="button"
+                  className="rounded px-0 text-left text-[11px] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
+                  style={{ color: 'var(--text-muted)' }}
+                  title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}
+                  aria-label={`Show edit history for message ${msg.id}`}
+                  onClick={(e) => openEditHistory(e, msg.id)}
+                >
                   (edited)
+                </button>
+              )}
+              {msg.expires_at && (
+                <span
+                  className="text-[11px]"
+                  style={{ color: 'var(--text-muted)' }}
+                  title={`Expires ${formatTimestamp(msg.expires_at)}`}
+                >
+                  expires {formatTimestamp(msg.expires_at)}
                 </span>
               )}
             </div>
@@ -1046,18 +1406,38 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             </div>
           ) : (
             <>
-              {!msg.poll && decryptingIds.has(msg.id) ? (
+              {(msg.flags ?? 0) & 64 ? (
+                <EphemeralMessage>
+                  {!msg.poll && decryptingIds.has(msg.id) ? (
+                    <div className="flex flex-col gap-1.5 py-0.5" aria-label="Decrypting message">
+                      <div className="h-3.5 w-3/4 animate-pulse rounded bg-text-muted/10" />
+                      <div className="h-3.5 w-1/2 animate-pulse rounded bg-text-muted/10" />
+                    </div>
+                  ) : (
+                    <div className="break-words text-[15px]" style={{ lineHeight: '1.58rem' }}>
+                      {parseMarkdown(msg.content || '', activeGuildId || undefined, mentionMap, handleMentionClick)}
+                    </div>
+                  )}
+                </EphemeralMessage>
+              ) : !msg.poll && decryptingIds.has(msg.id) ? (
                 <div className="flex flex-col gap-1.5 py-0.5" aria-label="Decrypting message">
                   <div className="h-3.5 w-3/4 animate-pulse rounded bg-text-muted/10" />
                   <div className="h-3.5 w-1/2 animate-pulse rounded bg-text-muted/10" />
                 </div>
               ) : !msg.poll ? (
                 <div className="break-words text-[15px]" style={{ color: 'var(--text-primary)', lineHeight: '1.58rem' }}>
-                  {parseMarkdown(msg.content || '', activeGuildId || undefined)}
+                  {parseMarkdown(msg.content || '', activeGuildId || undefined, mentionMap, handleMentionClick)}
                   {isGrouped && (msg.edited_timestamp || msg.edited_at) && (
-                    <span className="ml-1 text-[11px]" style={{ color: 'var(--text-muted)' }} title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}>
+                    <button
+                      type="button"
+                      className="ml-1 rounded px-0 text-left text-[11px] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
+                      style={{ color: 'var(--text-muted)' }}
+                      title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}
+                      aria-label={`Show edit history for message ${msg.id}`}
+                      onClick={(e) => openEditHistory(e, msg.id)}
+                    >
                       (edited)
-                    </span>
+                    </button>
                   )}
                 </div>
               ) : (
@@ -1124,17 +1504,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 return (
                 <button
                   key={`${r.emoji}-${reactionIndex}`}
-                  onClick={async () => {
-                    try {
-                      if (r.me) {
-                        await removeReaction(channelId, msg.id, r.emoji);
-                      } else {
-                        await addReaction(channelId, msg.id, r.emoji);
-                      }
-                    } catch {
-                      // API errors are non-fatal for reactions
-                    }
-                  }}
+                  onClick={() => void toggleReaction(msg.id, r)}
                   className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs transition-colors hover:bg-bg-mod-subtle"
                   style={{
                     borderColor: r.me ? 'var(--accent-primary)' : 'var(--border-subtle)',
@@ -1160,6 +1530,40 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               )})}
             </div>
           )}
+          {msg.stickers && msg.stickers.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              {msg.stickers.map((sticker) => {
+                const stickerSrc = sticker.image_url ? resolveAttachmentUrl(sticker.image_url) : null;
+                return (
+                  <div
+                    key={sticker.id}
+                    className="relative inline-flex flex-col items-center gap-1"
+                    title={sticker.name}
+                  >
+                    {stickerSrc ? (
+                      <img
+                        src={stickerSrc}
+                        alt={sticker.name}
+                        className="rounded-lg object-contain"
+                        style={{ width: 128, height: 128 }}
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                          <polyline points="14 2 14 8 20 8" />
+                          <circle cx="10" cy="13" r="2" />
+                          <path d="m20 17-1.09-1.09a2 2 0 0 0-2.82 0L10 22" />
+                        </svg>
+                        {sticker.name}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {/* Attachments */}
           {msg.attachments && msg.attachments.length > 0 && (
             <div className="mt-1.5 flex flex-col gap-2">
@@ -1174,16 +1578,64 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                     Federated
                   </span>
                 ) : null;
-                const attachmentIsImage = isImageAttachment(att);
+                const attachmentIsImage = isImageAttachment(att) && Boolean(src);
                 if (attachmentIsImage) {
+                  if (lowBandwidthMode) {
+                    return (
+                      <div
+                        key={att.id}
+                        className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm"
+                        style={{ maxWidth: 'fit-content' }}
+                      >
+                        {federatedBadge}
+                        <span className="max-w-[20rem] truncate text-text-secondary">
+                          {att.filename}
+                        </span>
+                        <span className="rounded-md border border-border-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                          Preview Off
+                        </span>
+                        <button
+                          type="button"
+                          className="rounded-md border border-border-subtle px-2 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                          onClick={() => void downloadAttachment(att.id, att.filename)}
+                          disabled={attachmentBusyId === att.id}
+                        >
+                          {attachmentBusyId === att.id
+                            ? downloadProgress != null
+                              ? `${downloadProgress}%`
+                              : 'Downloading...'
+                            : 'Download'}
+                        </button>
+                        {isOwnMessage && !isFederated && (
+                          <button
+                            type="button"
+                            className="rounded-md border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
+                            onClick={() => void deleteAttachment(msg.id, att.id)}
+                            disabled={attachmentBusyId === att.id}
+                          >
+                            {attachmentBusyId === att.id ? 'Deleting...' : 'Delete'}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  }
                   const imageAttachments = msg.attachments!.filter(isImageAttachment);
                   const openImageLightbox = () => {
-                    const lightboxImages: LightboxImage[] = imageAttachments.map((imageAtt) => ({
-                      src: resolveFederatedAttachmentUrl(imageAtt),
-                      alt: imageAtt.filename,
-                      filename: imageAtt.filename,
-                    }));
-                    const imageIndex = imageAttachments.findIndex((a) => a.id === att.id);
+                    const safeImageAttachments = imageAttachments.flatMap((imageAtt) => {
+                      const imageSrc = resolveFederatedAttachmentUrl(imageAtt);
+                      if (!imageSrc) return [];
+                      return [{
+                        attachment: imageAtt,
+                        image: {
+                          src: imageSrc,
+                          alt: imageAtt.filename,
+                          filename: imageAtt.filename,
+                        } satisfies LightboxImage,
+                      }];
+                    });
+                    const lightboxImages = safeImageAttachments.map(({ image }) => image);
+                    if (lightboxImages.length === 0) return;
+                    const imageIndex = safeImageAttachments.findIndex(({ attachment }) => attachment.id === att.id);
                     useLightboxStore.getState().open(lightboxImages, imageIndex >= 0 ? imageIndex : 0);
                   };
                   return (
@@ -1194,7 +1646,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                         onClick={() => void openImageLightbox()}
                       >
                         <img
-                          src={src}
+                          src={src!}
                           alt={att.filename}
                           className="max-w-[min(100%,400px)] rounded-lg border border-border-subtle"
                           style={{ maxHeight: '300px', objectFit: 'contain' }}
@@ -1345,18 +1797,15 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 className="context-menu-item w-full text-left"
                 onClick={async () => {
                   setMenuMessageId(null);
-                  try {
-                    if (msg.pinned) {
-                      await unpinMessage(channelId, msg.id);
-                    } else {
-                      await pinMessage(channelId, msg.id);
-                    }
-                  } catch {
-                    // pin/unpin errors are non-fatal
-                  }
+                  await togglePin(msg);
                 }}
               >
                 {msg.pinned ? 'Unpin' : 'Pin'}
+              </button>
+            )}
+            {activeGuildId && msg.author.id !== me && (
+              <button className="context-menu-item w-full text-left" onClick={() => openReportDialog(msg)}>
+                Report
               </button>
             )}
             {canDeleteMessage && (
@@ -1400,7 +1849,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         className="h-full overflow-y-auto px-2.5 sm:px-5"
         onScroll={handleScroll}
         style={{ overscrollBehavior: 'contain' }}
-        role="log"
+        role="feed"
+        aria-busy={isLoading ? 'true' : 'false'}
         aria-live="polite"
         aria-label="Message history"
       >
@@ -1451,8 +1901,15 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
       {threadModalForMessageId && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg-tertiary/75 p-4 backdrop-blur-sm">
-          <div className="glass-modal w-full max-w-md rounded-2xl border border-border-subtle p-4 sm:p-5">
-            <h3 className="text-base font-semibold text-text-primary">Create Thread</h3>
+          <div
+            ref={threadCreateDialogRef}
+            className="glass-modal w-full max-w-md rounded-2xl border border-border-subtle p-4 sm:p-5"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-thread-dialog-title"
+            tabIndex={-1}
+          >
+            <h3 id="create-thread-dialog-title" className="text-base font-semibold text-text-primary">Create Thread</h3>
             <p className="mt-1 text-xs text-text-muted">
               Start a focused discussion from this message.
             </p>
@@ -1466,8 +1923,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void submitCreateThread();
                   if (e.key === 'Escape') {
-                    setThreadModalForMessageId(null);
-                    setThreadCreateError(null);
+                    closeThreadCreateDialog();
                   }
                 }}
                 autoFocus
@@ -1484,10 +1940,68 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               </button>
               <button
                 className="rounded-lg px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-                onClick={() => {
-                  setThreadModalForMessageId(null);
-                  setThreadCreateError(null);
-                }}
+                onClick={closeThreadCreateDialog}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reportingMessage && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg-tertiary/75 p-4 backdrop-blur-sm">
+          <div
+            ref={reportDialogRef}
+            className="glass-modal w-full max-w-lg rounded-2xl border border-border-subtle p-4 sm:p-5"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="report-message-dialog-title"
+            tabIndex={-1}
+          >
+            <h3 id="report-message-dialog-title" className="text-base font-semibold text-text-primary">Report Message</h3>
+            <p className="mt-1 text-xs text-text-muted">
+              Reports are reviewed by moderators. Include concise evidence when possible.
+            </p>
+            <div className="mt-3 rounded-lg border border-border-subtle bg-bg-mod-subtle/50 px-3 py-2 text-xs text-text-secondary">
+              <div className="font-semibold text-text-primary">
+                {reportingMessage.author.username} ({reportingMessage.author.id})
+              </div>
+              <div className="mt-1 line-clamp-4 break-words">
+                {reportingMessage.content || '[No text content]'}
+              </div>
+            </div>
+            <label className="mt-4 block">
+              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Reason</span>
+              <textarea
+                className="input-field mt-2 min-h-[96px] resize-y"
+                value={reportReason}
+                maxLength={512}
+                onChange={(e) => setReportReason(e.target.value)}
+                placeholder="Explain why this message should be reviewed..."
+              />
+            </label>
+            <label className="mt-3 block">
+              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Evidence (Optional)</span>
+              <textarea
+                className="input-field mt-2 min-h-[72px] resize-y"
+                value={reportEvidence}
+                onChange={(e) => setReportEvidence(e.target.value)}
+                placeholder="Add one link or note per line"
+              />
+            </label>
+            <div className="mt-4 flex flex-wrap items-center gap-2.5">
+              <button
+                className="btn-primary"
+                onClick={() => void submitReport()}
+                disabled={reportSubmitting}
+              >
+                {reportSubmitting ? 'Submitting...' : 'Submit Report'}
+              </button>
+              <button
+                className="rounded-lg px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                onClick={closeReportDialog}
+                disabled={reportSubmitting}
               >
                 Cancel
               </button>
@@ -1566,6 +2080,52 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           position={contextMenu.position}
           onClose={closeContextMenu}
         />
+      )}
+      {editHistoryMsgId && createPortal(
+        <div
+          className="fixed inset-0 z-[9999]"
+          onClick={() => setEditHistoryMsgId(null)}
+        >
+          <div
+            className="glass-modal absolute max-h-80 w-80 overflow-y-auto rounded-lg border border-border-subtle shadow-xl backdrop-blur-md"
+            style={{
+              left: Math.min(editHistoryPos.x, window.innerWidth - 340),
+              top: Math.min(editHistoryPos.y, window.innerHeight - 320),
+              boxShadow: 'var(--shadow-lg)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="border-b border-border-subtle px-3 py-2 text-sm font-semibold text-text-primary">
+              Edit History
+            </div>
+            {editHistoryLoading ? (
+              <div className="px-3 py-4">
+                <LoadingSpinner size="sm" />
+              </div>
+            ) : editHistoryData.length === 0 ? (
+              <div className="px-3 py-4 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                No previous versions found
+              </div>
+            ) : (
+              <div className="flex flex-col">
+                {editHistoryData.map((entry, i) => (
+                  <div
+                    key={entry.id}
+                    className="border-b border-border-subtle/50 px-3 py-2 last:border-b-0"
+                  >
+                    <div className="mb-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      Version {i + 1} -- {formatTimestamp(entry.edited_at)}
+                    </div>
+                    <div className="break-words text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      {entry.content}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

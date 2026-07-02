@@ -58,3 +58,22 @@ pub async fn update_read_state(
     .await?;
     Ok(row)
 }
+
+/// Increment the mention count for a user in a given channel.
+/// Creates the read_state row if it doesn't exist yet.
+pub async fn increment_mention_count(
+    pool: &DbPool,
+    user_id: i64,
+    channel_id: i64,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "INSERT INTO read_states (user_id, channel_id, last_message_id, mention_count)
+         VALUES ($1, $2, 0, 1)
+         ON CONFLICT (user_id, channel_id) DO UPDATE SET mention_count = read_states.mention_count + 1",
+    )
+    .bind(user_id)
+    .bind(channel_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

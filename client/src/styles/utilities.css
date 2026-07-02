@@ -1,0 +1,160 @@
+/* highlight.js theme overrides for code blocks */
+.hljs {
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  padding: 0 !important;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-link {
+  color: var(--accent-primary) !important;
+}
+
+.hljs-string,
+.hljs-title,
+.hljs-name,
+.hljs-type,
+.hljs-attribute,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition,
+.hljs-variable,
+.hljs-template-tag,
+.hljs-template-variable {
+  color: #b5cea8 !important;
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion,
+.hljs-meta {
+  color: var(--text-muted) !important;
+}
+
+.hljs-number {
+  color: #d19a66 !important;
+}
+
+.hljs-built_in,
+.hljs-class .hljs-title,
+.hljs-title.function_ {
+  color: #e5c07b !important;
+}
+
+.hljs-params {
+  color: var(--text-secondary) !important;
+}
+
+.hljs-attr {
+  color: #7ecbff !important;
+}
+
+/* =========================================================================
+   Global Scrollbar Styling (Webkit & Standard)
+   ========================================================================= */
+
+/* Standard syntax for Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-auto-thumb) transparent;
+}
+
+/* Webkit syntax for Chrome, Safari, Edge */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-auto-thumb);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-auto-thumb-hover);
+}
+
+/* Hide scrollbars completely when needed (e.g. some internal lists) */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  /* IE and Edge */
+  scrollbar-width: none;
+  /* Firefox */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .voice-connected-pulse,
+  .animation-scale-in,
+  .modal-content,
+  .popup-enter {
+    animation: none !important;
+  }
+
+  .nav-panel-collapsible {
+    transition: none !important;
+  }
+}
+
+/* Theme selector previews and accent swatches use tokenized classes (no inline styling). */
+.theme-preview-dark {
+  background: linear-gradient(145deg, #121212 0%, #1e1e1e 100%);
+}
+
+.theme-preview-light {
+  background: linear-gradient(145deg, #e8e8e6 0%, #fdfdfd 100%);
+}
+
+.theme-preview-amoled {
+  background: linear-gradient(145deg, #000000 0%, #050505 100%);
+}
+
+.theme-preview-high-contrast {
+  background: linear-gradient(145deg, #000000 0%, #111111 100%);
+}
+
+.theme-accent-chip {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+}
+
+.theme-accent-chip-red { background-color: #eb4d4b; }
+.theme-accent-chip-blue { background-color: #4f7cff; }
+.theme-accent-chip-emerald { background-color: #22b07d; }
+.theme-accent-chip-amber { background-color: #d1972f; }
+.theme-accent-chip-rose { background-color: #d95d7a; }
+.theme-accent-chip-violet { background-color: #7a6cff; }
+.theme-accent-chip-cyan { background-color: #21a9b7; }
+.theme-accent-chip-lime { background-color: #7ba72a; }
+.theme-accent-chip-orange { background-color: #d86d36; }
+.theme-accent-chip-slate { background-color: #7a879f; }
+
+.theme-accent-chip-selected {
+  border-color: var(--text-primary);
+}
+
+.theme-accent-chip-unselected {
+  border-color: transparent;
+}

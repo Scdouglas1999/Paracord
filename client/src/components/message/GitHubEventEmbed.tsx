@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 import { GitBranch, GitPullRequest, CircleDot, MessageCircle, Star, Tag, Trash2 } from 'lucide-react';
+import { safeExternalUrl } from '../../lib/security';
 
 // GitHub event type detection based on message content patterns
 type GitHubEventType = 'push' | 'pull_request' | 'issues' | 'issue_comment' | 'create' | 'delete' | 'star' | 'unknown';
@@ -90,6 +91,7 @@ export function GitHubEventEmbed({ content }: GitHubEventEmbedProps) {
   // Build GitHub repo URL
   const repoUrl = eventInfo.repo ? `https://github.com/${eventInfo.repo}` : null;
   const viewUrl = eventInfo.url || repoUrl;
+  const safeViewUrl = viewUrl ? safeExternalUrl(viewUrl) : null;
 
   return (
     <div
@@ -119,9 +121,9 @@ export function GitHubEventEmbed({ content }: GitHubEventEmbedProps) {
         </div>
 
         {/* View on GitHub link */}
-        {viewUrl && (
+        {safeViewUrl && (
           <a
-            href={viewUrl}
+            href={safeViewUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 self-start text-[11px] font-medium text-text-link hover:underline"

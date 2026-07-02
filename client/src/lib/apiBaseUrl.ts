@@ -4,11 +4,16 @@
  * Priority:
  *   1. `?api_base=<url>` query parameter (tab-scoped, explicit confirmation)
  *   2. `VITE_API_URL` env variable
- *   3. Stored server URL from the connect screen (`paracord:server-url`)
+ *   3. Stored server URL from the connect screen (versioned key `server-url`, migrated from `paracord:server-url`)
  *   4. Relative `/api/v1` (works with the Vite dev proxy and production alike)
  */
+import {
+  getVersionedStorageItem,
+  removeVersionedStorageItem,
+  setVersionedStorageItem,
+} from './versionedStorage';
 
-export const SERVER_URL_KEY = 'paracord:server-url';
+export const SERVER_URL_KEY = 'server-url';
 
 function normalizeServerBaseUrl(url: string): string {
   const trimmed = url.trim();
@@ -32,7 +37,7 @@ function normalizeServerBaseUrl(url: string): string {
 
 export function getStoredServerUrl(): string | null {
   try {
-    const value = window.localStorage.getItem(SERVER_URL_KEY);
+    const value = getVersionedStorageItem(SERVER_URL_KEY, ['server-url']);
     return value ? normalizeServerBaseUrl(value) : null;
   } catch {
     return null;
@@ -52,11 +57,11 @@ export function getCurrentOriginServerUrl(): string | null {
 }
 
 export function setStoredServerUrl(url: string): void {
-  window.localStorage.setItem(SERVER_URL_KEY, normalizeServerBaseUrl(url));
+  setVersionedStorageItem(SERVER_URL_KEY, normalizeServerBaseUrl(url));
 }
 
 export function clearStoredServerUrl(): void {
-  window.localStorage.removeItem(SERVER_URL_KEY);
+  removeVersionedStorageItem(SERVER_URL_KEY, ['server-url']);
 }
 
 function getRuntimeApiBaseUrl(): string | null {
@@ -146,6 +151,27 @@ export function resolveV2ApiUrl(path: string): string {
     origin = typeof window !== 'undefined' ? window.location.origin : '';
   }
   return `${origin}/api/v2${path}`;
+}
+
+/**
+ * Build an absolute URL for server-root endpoints that intentionally do not
+ * live under `/api/v1`, such as federation's well-known `/_paracord/...`
+ * routes.
+ */
+export function resolveServerRootUrl(path: string): string {
+  const base = resolveApiBaseUrl();
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  let origin: string;
+  if (base.startsWith('http')) {
+    try {
+      origin = new URL(base).origin;
+    } catch {
+      origin = typeof window !== 'undefined' ? window.location.origin : '';
+    }
+  } else {
+    origin = typeof window !== 'undefined' ? window.location.origin : '';
+  }
+  return `${origin}${normalizedPath}`;
 }
 
 /**

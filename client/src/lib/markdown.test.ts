@@ -127,4 +127,19 @@ describe('parseMarkdown', () => {
     expect(mark).not.toBeNull();
     expect(mark?.textContent).toBe('focus');
   });
+
+  it('renders only safe message autolinks', () => {
+    const { container } = render(
+      createElement(
+        'div',
+        null,
+        parseMarkdown('good https://example.com/path bad https://user:pass@example.com/secret'),
+      ),
+    );
+
+    const links = Array.from(container.querySelectorAll('a'));
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute('href')).toBe('https://example.com/path');
+    expect(container.textContent).toContain('https://user:pass@example.com/secret');
+  });
 });

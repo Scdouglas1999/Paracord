@@ -100,9 +100,7 @@ async fn ensure_app_owner(
     Ok(app)
 }
 
-fn command_row_to_json(
-    row: &paracord_db::application_commands::ApplicationCommandRow,
-) -> Value {
+fn command_row_to_json(row: &paracord_db::application_commands::ApplicationCommandRow) -> Value {
     let options: Value = row
         .options
         .as_deref()
@@ -280,11 +278,15 @@ pub async fn update_global_command(
         return Err(ApiError::NotFound);
     }
 
-    let name = body.name.as_deref().map(|n| {
-        let trimmed = n.trim().to_lowercase();
-        validate_command_name(&trimmed)?;
-        Ok::<String, ApiError>(trimmed)
-    }).transpose()?;
+    let name = body
+        .name
+        .as_deref()
+        .map(|n| {
+            let trimmed = n.trim().to_lowercase();
+            validate_command_name(&trimmed)?;
+            Ok::<String, ApiError>(trimmed)
+        })
+        .transpose()?;
 
     if let Some(ref desc) = body.description {
         validate_command_description(desc)?;
@@ -370,9 +372,10 @@ pub async fn bulk_overwrite_global_commands(
         let options_json = if cmd.options.is_empty() {
             None
         } else {
-            Some(serde_json::to_string(&cmd.options).map_err(|e| {
-                ApiError::Internal(anyhow::anyhow!("serialize options: {}", e))
-            })?)
+            Some(
+                serde_json::to_string(&cmd.options)
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("serialize options: {}", e)))?,
+            )
         };
         let default_member_permissions = cmd
             .default_member_permissions
@@ -458,10 +461,9 @@ pub async fn list_guild_commands(
 ) -> Result<Json<Value>, ApiError> {
     ensure_app_owner(&state, app_id, auth.user_id).await?;
 
-    let rows =
-        paracord_db::application_commands::list_guild_commands(&state.db, app_id, guild_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let rows = paracord_db::application_commands::list_guild_commands(&state.db, app_id, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     Ok(Json(json!(rows
         .iter()
@@ -488,9 +490,10 @@ pub async fn create_guild_command(
     }
 
     // Enforce max commands per scope
-    let existing = paracord_db::application_commands::list_guild_commands(&state.db, app_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let existing =
+        paracord_db::application_commands::list_guild_commands(&state.db, app_id, guild_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     if existing.len() >= MAX_COMMANDS_PER_SCOPE {
         return Err(ApiError::BadRequest(format!(
             "Maximum {MAX_COMMANDS_PER_SCOPE} commands per scope"
@@ -506,9 +509,10 @@ pub async fn create_guild_command(
     let options_json = if body.options.is_empty() {
         None
     } else {
-        Some(serde_json::to_string(&body.options).map_err(|e| {
-            ApiError::Internal(anyhow::anyhow!("serialize options: {}", e))
-        })?)
+        Some(
+            serde_json::to_string(&body.options)
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!("serialize options: {}", e)))?,
+        )
     };
     let default_member_permissions = body
         .default_member_permissions
@@ -585,11 +589,15 @@ pub async fn update_guild_command(
         return Err(ApiError::NotFound);
     }
 
-    let name = body.name.as_deref().map(|n| {
-        let trimmed = n.trim().to_lowercase();
-        validate_command_name(&trimmed)?;
-        Ok::<String, ApiError>(trimmed)
-    }).transpose()?;
+    let name = body
+        .name
+        .as_deref()
+        .map(|n| {
+            let trimmed = n.trim().to_lowercase();
+            validate_command_name(&trimmed)?;
+            Ok::<String, ApiError>(trimmed)
+        })
+        .transpose()?;
 
     if let Some(ref desc) = body.description {
         validate_command_description(desc)?;
@@ -694,9 +702,10 @@ pub async fn bulk_overwrite_guild_commands(
         let options_json = if cmd.options.is_empty() {
             None
         } else {
-            Some(serde_json::to_string(&cmd.options).map_err(|e| {
-                ApiError::Internal(anyhow::anyhow!("serialize options: {}", e))
-            })?)
+            Some(
+                serde_json::to_string(&cmd.options)
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("serialize options: {}", e)))?,
+            )
         };
         let default_member_permissions = cmd
             .default_member_permissions
@@ -737,10 +746,7 @@ pub async fn bulk_overwrite_guild_commands(
         .collect();
 
     let rows = paracord_db::application_commands::bulk_overwrite_guild_commands(
-        &state.db,
-        app_id,
-        guild_id,
-        &refs,
+        &state.db, app_id, guild_id, &refs,
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;

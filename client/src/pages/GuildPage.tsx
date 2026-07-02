@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { EyeOff, Headphones, HeadphoneOff, LayoutList, MicOff, Monitor, PanelLeft, PictureInPicture2, Users, Video, MessageSquare, X } from 'lucide-react';
+import { EyeOff, Headphones, HeadphoneOff, LayoutList, Mic, MicOff, Monitor, PanelLeft, PictureInPicture2, Users, Video, MessageSquare, X } from 'lucide-react';
 import { RoomEvent, Track } from 'livekit-client';
 import { TopBar } from '../components/layout/TopBar';
 import { MessageList } from '../components/message/MessageList';
@@ -21,13 +21,24 @@ import { useVoice } from '../hooks/useVoice';
 import { useStream } from '../hooks/useStream';
 import { useWebcamTiles } from '../hooks/useWebcamTiles';
 import { useScreenShareSubscriptions } from '../hooks/useScreenShareSubscriptions';
+import { useMobile } from '../hooks/useMobile';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useAuthStore } from '../stores/authStore';
 import { SearchPanel } from '../components/message/SearchPanel';
-import { ConnectionStatusBar } from '../components/layout/ConnectionStatusBar';
+import { GuildEconomyPanel } from '../components/guild/GuildEconomyPanel';
+import { LoadingSpinner } from '../components/ui/Feedback';
+
 import { GuildWelcomeScreen } from '../components/guild/GuildWelcomeScreen';
+import { GuildOnboardingGate } from '../components/guild/GuildOnboardingGate';
 import { channelApi } from '../api/channels';
-import type { Message } from '../types';
+import { stageApi, type StageInstance } from '../api/stage';
+import { extractApiError } from '../api/client';
+import { usePermissions } from '../hooks/usePermissions';
+import { type Message, Permissions, hasPermission } from '../types';
+import {
+  getVersionedStorageItem,
+  setVersionedStorageItem,
+} from '../lib/versionedStorage';
 
 
 
@@ -65,6 +76,7 @@ export function GuildPage() {
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
   const [videoLayout, setVideoLayout] = useState<VideoLayout>('top');
   const [activeStreamers, setActiveStreamers] = useState<string[]>([]);
+  const isMobile = useMobile();
   const [isPhoneLayout, setIsPhoneLayout] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(max-width: 768px)').matches;
@@ -78,17 +90,25 @@ export function GuildPage() {
   const currentGuild = guilds.find(g => g.id === guildId);
   const [showWelcome, setShowWelcome] = useState(() => {
     if (!guildId) return false;
-    return !localStorage.getItem(`paracord:guild-welcomed:${guildId}`);
+    return !getVersionedStorageItem(
+      `guild-welcomed:${guildId}`,
+      [`guild-welcomed:${guildId}`],
+    );
   });
 
   const dismissWelcome = () => {
     if (guildId) {
-      localStorage.setItem(`paracord:guild-welcomed:${guildId}`, '1');
+      setVersionedStorageItem(`guild-welcomed:${guildId}`, '1');
     }
     setShowWelcome(false);
   };
 
   const [showVoiceChat, setShowVoiceChat] = useState(false);
+  const [stageInstance, setStageInstance] = useState<StageInstance | null>(null);
+  const [stageLoading, setStageLoading] = useState(false);
+  const [stageBusy, setStageBusy] = useState(false);
+  const [stageError, setStageError] = useState<string | null>(null);
+  const [stageTopicDraft, setStageTopicDraft] = useState('');
   // Split-pane state for Side mode
   const [splitState, setSplitState] = useState<{ left: PaneSource; right: PaneSource }>({
     left: { type: 'none' },
@@ -96,18 +116,39 @@ export function GuildPage() {
   });
 
   const webcamTiles = useWebcamTiles();
+  const { permissions, isAdmin: isGuildAdmin } = usePermissions(guildId || null);
 
-  const channelName = channel?.name || 'general';
+  const channelName = channel?.name || 'Unknown Channel';
   const isVoice = channel?.type === 2;
+  const isStage = channel?.type === 13 || channel?.channel_type === 13;
+  const isVoiceLike = isVoice || isStage;
   const isForum = channel?.type === 7 || channel?.channel_type === 7;
   const isThread = channel?.type === 6 || channel?.channel_type === 6;
   const parentChannelId = isThread ? channel?.parent_id ?? null : null;
   const parentChannel = parentChannelId ? channels.find((c) => c.id === parentChannelId) : null;
-  const showThreadSplit = Boolean(!isVoice && isThread && guildId && parentChannel);
-  const inSelectedVoiceChannel = Boolean(isVoice && voiceConnected && voiceChannelId === channelId);
-  const voiceJoinPending = Boolean(isVoice && voiceJoining && joiningChannelId === channelId);
+  const showThreadSplit = Boolean(!isVoiceLike && isThread && guildId && parentChannel);
+  const inSelectedVoiceChannel = Boolean(isVoiceLike && voiceConnected && voiceChannelId === channelId);
+  const voiceJoinPending = Boolean(isVoiceLike && voiceJoining && joiningChannelId === channelId);
   const voiceJoinError = connectionErrorChannelId === channelId ? connectionError : null;
   const participantCount = Array.from(participants.values()).filter((p) => p.channel_id === channelId).length;
+  const canManageStage = Boolean(
+    guildId && (isGuildAdmin || hasPermission(permissions, Permissions.MANAGE_CHANNELS)),
+  );
+  const stageParticipants = useMemo(
+    () =>
+      Array.from(participants.values()).filter(
+        (participant) => participant.channel_id === channelId,
+      ),
+    [participants, channelId],
+  );
+  const stageSpeakers = useMemo(
+    () => stageParticipants.filter((participant) => !participant.suppress),
+    [stageParticipants],
+  );
+  const stageAudience = useMemo(
+    () => stageParticipants.filter((participant) => participant.suppress),
+    [stageParticipants],
+  );
   const activeStreamerSet = useMemo(() => new Set(activeStreamers), [activeStreamers]);
   const ownStreamIssueMessage = selfStream ? streamAudioWarning : null;
   const watchedStreamerName = useMemo(() => {
@@ -142,12 +183,12 @@ export function GuildPage() {
       cancelMessageFetch(prevChannelId);
     }
 
-    if (channelId) {
+    if (channelId && channel) {
       selectChannel(channelId);
       setReplyingTo(null);
       setWatchedStreamer(null);
     }
-  }, [channelId, selectChannel, setWatchedStreamer]);
+  }, [channelId, channel, selectChannel, setWatchedStreamer]);
 
   useEffect(() => {
     if (!channelId) return;
@@ -160,6 +201,138 @@ export function GuildPage() {
         /* keep existing channel cache on failure */
       });
   }, [channelId]);
+
+  useEffect(() => {
+    if (!channelId || !isStage) {
+      setStageInstance(null);
+      setStageTopicDraft('');
+      setStageError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setStageLoading(true);
+    setStageError(null);
+
+    stageApi
+      .getForChannel(channelId)
+      .then(({ data }) => {
+        if (cancelled) return;
+        setStageInstance(data);
+        setStageTopicDraft(data.topic || '');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const status = (err as { response?: { status?: number } }).response?.status;
+        if (status === 404) {
+          setStageInstance(null);
+          setStageTopicDraft('');
+          return;
+        }
+        setStageError(extractApiError(err));
+      })
+      .finally(() => {
+        if (!cancelled) setStageLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [channelId, isStage]);
+
+  const refreshStageInstance = async () => {
+    if (!channelId || !isStage) {
+      setStageInstance(null);
+      return;
+    }
+    try {
+      const { data } = await stageApi.getForChannel(channelId);
+      setStageInstance(data);
+      setStageTopicDraft(data.topic || '');
+      setStageError(null);
+    } catch (err) {
+      const status = (err as { response?: { status?: number } }).response?.status;
+      if (status === 404) {
+        setStageInstance(null);
+        setStageTopicDraft('');
+        setStageError(null);
+        return;
+      }
+      setStageError(extractApiError(err));
+    }
+  };
+
+  const createStageInstance = async () => {
+    if (!channelId || !isStage) return;
+    setStageBusy(true);
+    try {
+      await stageApi.create({
+        channel_id: channelId,
+        topic: stageTopicDraft.trim() || channelName,
+        privacy_level: 2,
+      });
+      await refreshStageInstance();
+    } catch (err) {
+      setStageError(extractApiError(err));
+    } finally {
+      setStageBusy(false);
+    }
+  };
+
+  const updateStageInstance = async () => {
+    if (!stageInstance) return;
+    setStageBusy(true);
+    try {
+      await stageApi.update(stageInstance.id, {
+        topic: stageTopicDraft.trim(),
+        privacy_level: stageInstance.privacy_level,
+      });
+      await refreshStageInstance();
+    } catch (err) {
+      setStageError(extractApiError(err));
+    } finally {
+      setStageBusy(false);
+    }
+  };
+
+  const endStageInstance = async () => {
+    if (!stageInstance) return;
+    setStageBusy(true);
+    try {
+      await stageApi.remove(stageInstance.id);
+      setStageInstance(null);
+      setStageTopicDraft('');
+      setStageError(null);
+    } catch (err) {
+      setStageError(extractApiError(err));
+    } finally {
+      setStageBusy(false);
+    }
+  };
+
+  const inviteSpeaker = async (userId: string) => {
+    if (!stageInstance) return;
+    setStageBusy(true);
+    try {
+      await stageApi.inviteSpeaker(stageInstance.id, userId);
+    } catch (err) {
+      setStageError(extractApiError(err));
+    } finally {
+      setStageBusy(false);
+    }
+  };
+
+  const removeSpeaker = async (userId: string) => {
+    if (!stageInstance) return;
+    setStageBusy(true);
+    try {
+      await stageApi.removeSpeaker(stageInstance.id, userId);
+    } catch (err) {
+      setStageError(extractApiError(err));
+    } finally {
+      setStageBusy(false);
+    }
+  };
 
 
 
@@ -418,10 +591,31 @@ export function GuildPage() {
       <div className="flex h-full min-h-0 flex-col">
         <TopBar channelName="Loading..." />
         <div className="flex flex-1 items-center justify-center">
-          <div className="text-center">
-            <div className="w-8 h-8 border-2 rounded-full animate-spin mx-auto mb-3"
-              style={{ borderColor: 'var(--text-muted)', borderTopColor: 'var(--accent-primary)' }} />
-            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading channels...</p>
+          <LoadingSpinner label="Loading channels..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (channelId && !channel) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <TopBar channelName="Channel not found" />
+        <div className="flex flex-1 items-center justify-center px-4">
+          <div className="settings-surface-card w-full max-w-md text-center">
+            <h2 className="mb-3 text-xl font-semibold text-text-primary">Channel not found</h2>
+            <p className="mb-6 text-sm leading-6 text-text-muted">
+              This channel may have been deleted or you may not have access to it.
+            </p>
+            {guildId && (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => navigate(`/app/guilds/${guildId}`)}
+              >
+                Back to Server
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -455,10 +649,10 @@ export function GuildPage() {
       <TopBar
         channelName={channelName}
         channelTopic={channel?.topic}
-        isVoice={isVoice}
+        isVoice={isVoiceLike}
         isForum={isForum}
       />
-      <ConnectionStatusBar />
+
       {showWelcome && currentGuild && (
         <GuildWelcomeScreen
           guild={currentGuild}
@@ -466,7 +660,8 @@ export function GuildPage() {
           onDismiss={dismissWelcome}
         />
       )}
-      {isVoice ? (
+      {!showWelcome && guildId && <GuildOnboardingGate guildId={guildId} />}
+      {isVoiceLike ? (
         <div className="flex min-h-0 flex-1 flex-col relative text-text-muted">
           {inSelectedVoiceChannel && <VoiceControlBar onToggleChat={() => setShowVoiceChat(!showVoiceChat)} isChatOpen={showVoiceChat} />}
 
@@ -488,7 +683,7 @@ export function GuildPage() {
                     {voiceJoinError ? (
                       <>
                         <div className="w-full rounded-xl border border-accent-danger/40 bg-accent-danger/10 px-3.5 py-2.5 text-sm font-medium text-accent-danger sm:w-auto">
-                          Voice join failed: {voiceJoinError}
+                          {isStage ? 'Stage join failed' : 'Voice join failed'}: {voiceJoinError}
                         </div>
                         {channelId && guildId && (
                           <button
@@ -505,7 +700,7 @@ export function GuildPage() {
                     ) : (
                       <button
                         className="control-pill-btn w-full justify-center border-accent-primary/50 bg-accent-primary/15 text-text-primary hover:bg-accent-primary/25 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-                        disabled={voiceJoinPending || !channelId || !guildId}
+                        disabled={voiceJoinPending || !channelId || !guildId || (isStage && !stageInstance)}
                         onClick={() => {
                           if (channelId && guildId) {
                             void joinChannel(channelId, guildId);
@@ -520,40 +715,190 @@ export function GuildPage() {
                         ) : (
                           <>
                             <Headphones size={16} />
-                            Join Voice
+                            {isStage ? 'Join Stage' : 'Join Voice'}
                           </>
                         )}
                       </button>
                     )}
                   </div>
 
+                  {isStage && (
+                    <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/65 px-4 py-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+                            Stage Instance
+                          </div>
+                          {stageLoading ? (
+                            <div className="mt-1 text-sm text-text-secondary">Loading stage...</div>
+                          ) : stageInstance ? (
+                            <div className="mt-1 text-sm text-text-secondary">
+                              Live now: <span className="font-semibold text-text-primary">{stageInstance.topic || channelName}</span>
+                            </div>
+                          ) : (
+                            <div className="mt-1 text-sm text-text-secondary">
+                              No live stage session yet.
+                            </div>
+                          )}
+                          {stageError && (
+                            <div className="mt-2 rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-2.5 py-1.5 text-xs font-medium text-accent-danger">
+                              {stageError}
+                            </div>
+                          )}
+                        </div>
+                        {canManageStage && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            {!stageInstance ? (
+                              <button
+                                type="button"
+                                className="control-pill-btn"
+                                disabled={stageBusy || !channelId}
+                                onClick={() => {
+                                  void createStageInstance();
+                                }}
+                              >
+                                {stageBusy ? 'Starting...' : 'Start Stage'}
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="control-pill-btn"
+                                  disabled={stageBusy}
+                                  onClick={() => {
+                                    void updateStageInstance();
+                                  }}
+                                >
+                                  {stageBusy ? 'Saving...' : 'Save Topic'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="control-pill-btn border-accent-danger/40 bg-accent-danger/12 text-accent-danger hover:bg-accent-danger/20"
+                                  disabled={stageBusy}
+                                  onClick={() => {
+                                    void endStageInstance();
+                                  }}
+                                >
+                                  {stageBusy ? 'Ending...' : 'End Stage'}
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {canManageStage && (
+                        <label className="mt-3 block">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+                            Topic
+                          </span>
+                          <input
+                            type="text"
+                            className="mt-1.5 w-full rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none focus:border-border-strong"
+                            value={stageTopicDraft}
+                            onChange={(event) => setStageTopicDraft(event.target.value)}
+                            placeholder="Weekly sync, product launch, Q&A..."
+                            maxLength={160}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  )}
+
                   {/* Lobby: show who's already in the channel */}
                   {(() => {
                     const lobbyParticipants = channelId ? (channelParticipants.get(channelId) || []) : [];
                     if (lobbyParticipants.length === 0) return null;
+
+                    const lobbySpeakers = isStage ? lobbyParticipants.filter((p) => !p.suppress) : lobbyParticipants;
+                    const lobbyAudience = isStage ? lobbyParticipants.filter((p) => p.suppress) : [];
+
+                    const renderParticipant = (p: typeof lobbyParticipants[number]) => (
+                      <div key={p.user_id} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-xs font-semibold text-text-secondary">
+                          {(p.username || '?')[0].toUpperCase()}
+                        </div>
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+                          {p.username || p.user_id}
+                        </span>
+                        <div className="flex items-center gap-1.5 text-text-muted">
+                          {p.self_mute && <span title="Muted"><MicOff size={13} className="text-accent-danger" /></span>}
+                          {p.self_deaf && <span title="Deafened"><HeadphoneOff size={13} className="text-accent-danger" /></span>}
+                          {p.self_video && <span title="Camera on"><Video size={13} className="text-accent-primary" /></span>}
+                          {p.self_stream && <span title="Streaming"><Monitor size={13} className="text-accent-primary" /></span>}
+                        </div>
+                        {isStage && canManageStage && stageInstance && (
+                          <div className="ml-2 flex items-center gap-1.5">
+                            {p.suppress ? (
+                              <button
+                                type="button"
+                                className="rounded-md border border-accent-primary/35 bg-accent-primary/10 px-2 py-0.5 text-[11px] font-semibold text-accent-primary transition-colors hover:bg-accent-primary/20"
+                                disabled={stageBusy}
+                                onClick={() => {
+                                  void inviteSpeaker(p.user_id);
+                                }}
+                              >
+                                Invite Speaker
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="rounded-md border border-border-subtle bg-bg-primary px-2 py-0.5 text-[11px] font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong"
+                                disabled={stageBusy}
+                                onClick={() => {
+                                  void removeSpeaker(p.user_id);
+                                }}
+                              >
+                                Move Audience
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+
                     return (
                       <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-4 py-3">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
-                          In Channel — {lobbyParticipants.length}
-                        </div>
-                        <div className="flex flex-col gap-1.5">
-                          {lobbyParticipants.map((p) => (
-                            <div key={p.user_id} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
-                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-mod-strong text-xs font-semibold text-text-secondary">
-                                {(p.username || '?')[0].toUpperCase()}
+                        {isStage ? (
+                          <>
+                            {lobbySpeakers.length > 0 && (
+                              <div className="mb-3">
+                                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-text-muted">
+                                  <Mic size={12} />
+                                  On Stage — {lobbySpeakers.length}
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                  {lobbySpeakers.map(renderParticipant)}
+                                </div>
                               </div>
-                              <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-                                {p.username || p.user_id}
-                              </span>
-                              <div className="flex items-center gap-1.5 text-text-muted">
-                                {p.self_mute && <span title="Muted"><MicOff size={13} className="text-accent-danger" /></span>}
-                                {p.self_deaf && <span title="Deafened"><HeadphoneOff size={13} className="text-accent-danger" /></span>}
-                                {p.self_video && <span title="Camera on"><Video size={13} className="text-accent-primary" /></span>}
-                                {p.self_stream && <span title="Streaming"><Monitor size={13} className="text-accent-primary" /></span>}
+                            )}
+                            {lobbySpeakers.length > 0 && lobbyAudience.length > 0 && (
+                              <div className="my-2 border-t border-border-subtle/60" />
+                            )}
+                            {lobbyAudience.length > 0 && (
+                              <div>
+                                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-text-muted">
+                                  <Users size={12} />
+                                  Audience — {lobbyAudience.length}
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                  {lobbyAudience.map(renderParticipant)}
+                                </div>
                               </div>
+                            )}
+                            {lobbySpeakers.length === 0 && lobbyAudience.length === 0 && (
+                              <div className="text-xs text-text-muted">No participants yet.</div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
+                              In Channel — {lobbyParticipants.length}
                             </div>
-                          ))}
-                        </div>
+                            <div className="flex flex-col gap-1.5">
+                              {lobbyParticipants.map(renderParticipant)}
+                            </div>
+                          </>
+                        )}
                       </div>
                     );
                   })()}
@@ -565,7 +910,7 @@ export function GuildPage() {
             <div className="flex min-h-0 flex-1 relative bg-black">
               {/* Video Area */}
               <div className="flex min-h-0 flex-1 flex-col relative bg-black/40 group/video">
-                {(watchedStreamerId || videoLayout === 'side') && (
+                {!isStage && (watchedStreamerId || videoLayout === 'side') && (
                   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 rounded-xl bg-bg-primary/80 px-2 py-1.5 shadow-xl backdrop-blur-xl border border-white/5 opacity-0 group-hover/video:opacity-100 transition-opacity">
                     <span className="pl-1 text-xs font-semibold text-text-muted">View</span>
                     <div className="h-4 w-px bg-white/10 mx-1" />
@@ -578,6 +923,7 @@ export function GuildPage() {
                       <button
                         key={mode}
                         title={label}
+                        aria-label={`Use ${label} video layout`}
                         onClick={() => setVideoLayout(mode)}
                         className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${videoLayout === mode
                           ? 'bg-accent-primary text-white shadow-md'
@@ -652,14 +998,27 @@ export function GuildPage() {
                           <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-border-subtle bg-bg-primary/70 text-text-secondary">
                             <Monitor size={20} />
                           </div>
-                          <div className="text-base font-semibold text-text-primary">Choose a stream from the sidebar</div>
+                          <div className="text-base font-semibold text-text-primary">
+                            {isStage ? 'Stage discussion is live' : 'Choose a stream from the sidebar'}
+                          </div>
                           <div className="mt-1 text-sm text-text-secondary">
-                            Use the red <span className="font-semibold text-accent-danger">LIVE</span> buttons beside voice participants to switch streams.
+                            {isStage ? (
+                              <>
+                                Speakers: <span className="font-semibold text-text-primary">{stageSpeakers.length}</span> · Audience:{' '}
+                                <span className="font-semibold text-text-primary">{stageAudience.length}</span>
+                              </>
+                            ) : (
+                              <>
+                                Use the red <span className="font-semibold text-accent-danger">LIVE</span> buttons beside voice participants to switch streams.
+                              </>
+                            )}
                           </div>
                           <div className="mt-4 text-xs text-text-muted">
-                            {activeStreamers.length > 0
+                            {!isStage && activeStreamers.length > 0
                               ? `${activeStreamers.length} stream${activeStreamers.length === 1 ? '' : 's'} currently live`
-                              : 'No active streams right now'}
+                              : isStage
+                                ? `${stageParticipants.length} participant${stageParticipants.length === 1 ? '' : 's'} in this stage`
+                                : 'No active streams right now'}
                           </div>
                         </div>
                       </div>
@@ -668,30 +1027,65 @@ export function GuildPage() {
                 )}
               </div>
 
-              {/* Voice Chat Sidebar */}
+              {/* Voice Chat Sidebar / Mobile Overlay */}
               {showVoiceChat && (
-                <div className="flex w-[min(460px,42vw)] max-w-[40rem] shrink-0 flex-col border-l border-border-subtle bg-bg-primary shadow-[-8px_0_32px_rgba(0,0,0,0.5)] z-40 relative">
-                  <div className="flex shrink-0 items-center justify-between border-b border-border-subtle/70 px-4 py-3">
-                    <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-                      <MessageSquare size={16} className="text-text-muted" />
-                      Voice Channel Chat
+                isMobile ? (
+                  <div className="absolute inset-0 z-50 flex flex-col bg-bg-primary">
+                    <div className="flex shrink-0 items-center justify-between border-b border-border-subtle/70 px-4 py-3">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                        <MessageSquare size={16} className="text-text-muted" />
+                        {isStage ? 'Stage Chat' : 'Voice Channel Chat'}
+                      </div>
+                      <button
+                        onClick={() => setShowVoiceChat(false)}
+                        className="text-text-muted hover:text-text-primary transition-colors"
+                        aria-label="Close voice chat"
+                        title="Close voice chat"
+                      >
+                        <X size={18} />
+                      </button>
                     </div>
-                    <button onClick={() => setShowVoiceChat(false)} className="text-text-muted hover:text-text-primary transition-colors">
-                      <X size={18} />
-                    </button>
+                    <MessageList
+                      channelId={channelId!}
+                      onReply={(msg: Message) => setReplyingTo({ id: msg.id, author: msg.author.username, content: msg.content || '' })}
+                    />
+                    <MessageInput
+                      channelId={channelId!}
+                      guildId={guildId}
+                      channelName={channelName}
+                      replyingTo={replyingTo}
+                      onCancelReply={() => setReplyingTo(null)}
+                    />
                   </div>
-                  <MessageList
-                    channelId={channelId!}
-                    onReply={(msg: Message) => setReplyingTo({ id: msg.id, author: msg.author.username, content: msg.content || '' })}
-                  />
-                  <MessageInput
-                    channelId={channelId!}
-                    guildId={guildId}
-                    channelName={channelName}
-                    replyingTo={replyingTo}
-                    onCancelReply={() => setReplyingTo(null)}
-                  />
-                </div>
+                ) : (
+                  <div className="flex w-[min(460px,42vw)] max-w-[40rem] shrink-0 flex-col border-l border-border-subtle bg-bg-primary shadow-[-8px_0_32px_rgba(0,0,0,0.5)] z-40 relative">
+                    <div className="flex shrink-0 items-center justify-between border-b border-border-subtle/70 px-4 py-3">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                        <MessageSquare size={16} className="text-text-muted" />
+                        {isStage ? 'Stage Chat' : 'Voice Channel Chat'}
+                      </div>
+                      <button
+                        onClick={() => setShowVoiceChat(false)}
+                        className="text-text-muted hover:text-text-primary transition-colors"
+                        aria-label="Close voice chat"
+                        title="Close voice chat"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                    <MessageList
+                      channelId={channelId!}
+                      onReply={(msg: Message) => setReplyingTo({ id: msg.id, author: msg.author.username, content: msg.content || '' })}
+                    />
+                    <MessageInput
+                      channelId={channelId!}
+                      guildId={guildId}
+                      channelName={channelName}
+                      replyingTo={replyingTo}
+                      onCancelReply={() => setReplyingTo(null)}
+                    />
+                  </div>
+                )
               )}
             </div>
           )}
@@ -757,6 +1151,7 @@ export function GuildPage() {
             </div>
           )}
           {searchPanelOpen && !showThreadSplit && <SearchPanel />}
+          {!searchPanelOpen && !showThreadSplit && guildId && <GuildEconomyPanel guildId={guildId} />}
         </div>
       )
       }

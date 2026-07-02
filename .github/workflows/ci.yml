@@ -28,7 +28,7 @@ jobs:
           cache-dependency-path: client/package-lock.json
       - name: npm audit
         working-directory: client
-        run: npm ci && npm audit --audit-level=high
+        run: npm ci && npm audit --audit-level=moderate
       - name: Enforce P0 release gate
         run: python3 scripts/security_gate_check.py
 
@@ -38,13 +38,63 @@ jobs:
     needs: security-gate
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libglib2.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libasound2-dev \
+            libvpx-dev
+          if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
+            sudo apt-get install -y libayatana-appindicator3-dev
+          else
+            sudo apt-get install -y libappindicator3-dev
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.91"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: client/package-lock.json
       - name: Migration ordering and apply sanity
         run: python3 scripts/ci_migration_sanity.py
+      - name: Release version metadata
+        run: python3 scripts/check_release_version.py
+      - name: Release checklist status coverage
+        run: python3 scripts/validate_release_checklist_status.py
+      - name: SQLite upgrade from latest release tag
+        run: python3 scripts/release_sqlite_upgrade_from_tag_smoke.py v0.9.0
+      - name: SQLite query-plan smoke
+        run: python3 scripts/release_sqlite_query_plan_smoke.py
+      - name: Migration line-ending attributes
+        run: python3 scripts/check_migration_line_endings.py
+      - name: Python release helper syntax
+        run: python3 scripts/check_python_syntax.py
+      - name: Shell script syntax
+        run: bash -n scripts/setup.sh scripts/backup-db.sh scripts/restore-db.sh
+      - name: GitHub workflow lint
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}:/repo" -w /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            .github/workflows/ci.yml \
+            .github/workflows/release.yml \
+            .github/workflows/security-audit.yml \
+            .github/workflows/security-dast-fuzz.yml
       - name: Cargo check (no-default-features)
         run: cargo check --workspace --no-default-features
+      - name: Build client for embedded assets
+        working-directory: client
+        run: npm ci && npm run build
       - name: Cargo check (default features)
         run: cargo check --workspace
 
@@ -54,6 +104,24 @@ jobs:
     needs: migration-feature-sanity
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libglib2.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libasound2-dev \
+            libvpx-dev
+          if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
+            sudo apt-get install -y libayatana-appindicator3-dev
+          else
+            sudo apt-get install -y libappindicator3-dev
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.91"
@@ -77,6 +145,61 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+  postgres:
+    name: PostgreSQL Tests
+    runs-on: ubuntu-latest
+    needs: migration-feature-sanity
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: paracord_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d paracord_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PARACORD_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/paracord_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libglib2.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libasound2-dev \
+            libvpx-dev
+          if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
+            sudo apt-get install -y libayatana-appindicator3-dev
+          else
+            sudo apt-get install -y libappindicator3-dev
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install PostgreSQL Python client
+        run: python3 -m pip install psycopg2-binary
+      - name: PostgreSQL upgrade from latest release tag
+        run: python3 scripts/release_postgres_upgrade_from_tag_smoke.py v0.9.0
+      - name: Run PostgreSQL smoke tests (paracord-db)
+        run: cargo test -p paracord-db postgres_pool_and_migrations_smoke_when_configured -- --nocapture
+      - name: Run PostgreSQL query-plan smoke (paracord-db)
+        run: cargo test -p paracord-db postgres_query_plan_smoke_when_configured -- --nocapture
+      - name: Run paracord-api PostgreSQL route smoke
+        run: cargo test -p paracord-api --test postgres_route_smoke -- --nocapture
+
   client:
     name: Client Build
     runs-on: ubuntu-latest
@@ -94,12 +217,164 @@ jobs:
       - name: Type check
         working-directory: client
         run: npm run typecheck
+      - name: Static accessibility audit
+        working-directory: client
+        run: npm run test:a11y:static
+      - name: Contrast audit
+        working-directory: client
+        run: npm run test:contrast
       - name: Test
         working-directory: client
         run: npm run test --if-present
       - name: Build
         working-directory: client
         run: npm run build
+
+  cross-platform-smoke:
+    name: Cross-Platform Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: migration-feature-sanity
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux native dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libglib2.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libasound2-dev \
+            libvpx-dev
+          if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
+            sudo apt-get install -y libayatana-appindicator3-dev
+          else
+            sudo apt-get install -y libappindicator3-dev
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: client/package-lock.json
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+      - name: Client type check
+        working-directory: client
+        run: npm run typecheck
+      - name: Rust check (no default features)
+        run: cargo check --workspace --no-default-features
+
+  docker-image:
+    name: Docker Image
+    runs-on: ubuntu-latest
+    needs:
+      - rust
+      - client
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/paracord
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    needs:
+      - rust
+      - client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libglib2.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libasound2-dev \
+            libvpx-dev
+          if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
+            sudo apt-get install -y libayatana-appindicator3-dev
+          else
+            sudo apt-get install -y libappindicator3-dev
+          fi
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: client/package-lock.json
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+      - name: Build client for embedded assets
+        working-directory: client
+        run: npm run build
+      - name: Rust coverage (lcov + summary)
+        run: cargo llvm-cov --workspace --all-targets --lcov --output-path coverage/rust.lcov
+      - name: Client coverage
+        working-directory: client
+        run: npm run test:unit:coverage -- --reporter=dot
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            coverage/rust.lcov
+            client/coverage
+          if-no-files-found: error
 
   e2e:
     name: E2E Smoke

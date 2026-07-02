@@ -67,14 +67,14 @@ impl EventBus {
         for &gid in guild_ids {
             self.guild_sessions
                 .entry(gid)
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(sid.clone());
         }
 
         // Maintain user_sessions index
         self.user_sessions
             .entry(user_id)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(sid.clone());
 
         self.sessions.insert(sid, subscription);
@@ -114,7 +114,7 @@ impl EventBus {
         // Maintain guild_sessions index
         self.guild_sessions
             .entry(guild_id)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(session_id.to_string());
     }
 

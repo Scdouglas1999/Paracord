@@ -1,18 +1,33 @@
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
+pub mod anonymous_messages;
+pub mod application_commands;
 pub mod attachments;
 pub mod audit_log;
 pub mod bans;
 pub mod bot_applications;
+pub mod bot_reviews;
+pub mod channel_features;
+pub mod channel_follows;
 pub mod channel_overwrites;
 pub mod channels;
 pub mod dms;
+pub mod economy;
 pub mod emojis;
 pub mod federation;
 pub mod federation_file_cache;
+pub mod group_e2ee;
 pub mod guild_storage_policies;
+pub mod guild_templates;
 pub mod guilds;
+pub mod interaction_tokens;
 pub mod invites;
 pub mod members;
 pub mod messages;
+pub mod mfa;
+pub mod moderation_templates;
+pub mod onboarding;
+pub mod password_reset;
 pub mod polls;
 pub mod prekeys;
 pub mod rate_limits;
@@ -21,9 +36,12 @@ pub mod read_states;
 pub mod relationships;
 pub mod roles;
 pub mod scheduled_events;
+pub mod scheduled_messages;
 pub mod security_events;
 pub mod server_settings;
 pub mod sessions;
+pub mod stage_instances;
+pub mod stickers;
 pub mod users;
 pub mod voice_states;
 pub mod webhooks;
@@ -67,6 +85,10 @@ pub struct PgConnectOptions {
     pub statement_timeout_secs: u64,
     /// `idle_in_transaction_session_timeout` in seconds (0 = disabled).
     pub idle_in_transaction_timeout_secs: u64,
+    /// Per-connection `work_mem` in MB (0 = keep server default).
+    pub work_mem_mb: u32,
+    /// Per-connection `maintenance_work_mem` in MB (0 = keep server default).
+    pub maintenance_work_mem_mb: u32,
 }
 
 pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<DbPool, sqlx::Error> {
@@ -184,6 +206,13 @@ pub async fn create_pool_full(
                     sqlx::query("PRAGMA mmap_size = 67108864;")
                         .execute(&mut *conn)
                         .await?;
+                    sqlx::query("PRAGMA journal_size_limit = 67108864;")
+                        .execute(&mut *conn)
+                        .await?;
+                    // Slightly larger checkpoint interval to reduce checkpoint churn.
+                    sqlx::query("PRAGMA wal_autocheckpoint = 2000;")
+                        .execute(&mut *conn)
+                        .await?;
                 } else {
                     // Tune PostgreSQL connections.
                     if pg_opts.statement_timeout_secs > 0 {
@@ -197,6 +226,17 @@ pub async fn create_pool_full(
                         let sql = format!(
                             "SET idle_in_transaction_session_timeout = '{}s'",
                             pg_opts.idle_in_transaction_timeout_secs
+                        );
+                        sqlx::query(&sql).execute(&mut *conn).await?;
+                    }
+                    if pg_opts.work_mem_mb > 0 {
+                        let sql = format!("SET work_mem = '{}MB'", pg_opts.work_mem_mb);
+                        sqlx::query(&sql).execute(&mut *conn).await?;
+                    }
+                    if pg_opts.maintenance_work_mem_mb > 0 {
+                        let sql = format!(
+                            "SET maintenance_work_mem = '{}MB'",
+                            pg_opts.maintenance_work_mem_mb
                         );
                         sqlx::query(&sql).execute(&mut *conn).await?;
                     }
@@ -286,14 +326,15 @@ pub(crate) fn datetime_from_db_text(
         return Ok(Utc.from_utc_datetime(&naive));
     }
 
-    Err(sqlx::Error::Protocol(
-        format!("invalid datetime text '{}'", value).into(),
-    ))
+    Err(sqlx::Error::Protocol(format!(
+        "invalid datetime text '{}'",
+        value
+    )))
 }
 
 pub(crate) fn json_from_db_text(value: &str) -> Result<serde_json::Value, sqlx::Error> {
     serde_json::from_str(value)
-        .map_err(|e| sqlx::Error::Protocol(format!("invalid json text: {e}").into()))
+        .map_err(|e| sqlx::Error::Protocol(format!("invalid json text: {e}")))
 }
 
 pub(crate) fn bool_from_any_row(
@@ -373,6 +414,7 @@ mod tests {
         backfill_webhook_token_hashes, create_pool, create_pool_with_engine_and_sqlite_key,
         create_pool_with_sqlite_key, run_migrations, run_migrations_for_engine, DatabaseEngine,
     };
+    use sqlx::Row;
 
     #[tokio::test]
     async fn create_pool_supports_default_sqlite_mode() {
@@ -463,11 +505,12 @@ mod tests {
         let guild_id = user_id + 1;
         let channel_id = user_id + 2;
         let message_id = user_id + 3;
+        let username = format!("pg_smoke_{test_seed}");
 
         let user = crate::users::create_user(
             &pool,
             user_id,
-            "pg_smoke_user",
+            &username,
             1,
             &format!("pg-smoke-{test_seed}@example.com"),
             "hash",
@@ -523,5 +566,170 @@ mod tests {
             .expect("get message")
             .expect("message exists");
         assert_eq!(fetched.content.as_deref(), Some("postgres smoke"));
+    }
+
+    async fn assert_postgres_plan_uses_index(
+        pool: &sqlx::AnyPool,
+        label: &str,
+        sql: &str,
+        index_name: &str,
+    ) {
+        let mut conn = pool.acquire().await.expect("postgres connection");
+        sqlx::query("SET enable_seqscan = off")
+            .execute(&mut *conn)
+            .await
+            .expect("disable seqscan for deterministic index validation");
+
+        let rows = sqlx::query(&format!("EXPLAIN {sql}"))
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap_or_else(|err| panic!("{label}: explain failed: {err}"));
+        let plan = rows
+            .iter()
+            .map(|row| row.try_get::<String, _>(0).expect("query plan row"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            plan.to_lowercase().contains(&index_name.to_lowercase()),
+            "{label}: expected {index_name} in PostgreSQL query plan, got: {plan}"
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_query_plan_smoke_when_configured() {
+        let Some(url) = std::env::var("PARACORD_TEST_POSTGRES_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return;
+        };
+
+        let pool =
+            create_pool_with_engine_and_sqlite_key(&url, 5, Some(DatabaseEngine::Postgres), None)
+                .await
+                .expect("postgres pool");
+        run_migrations_for_engine(&pool, DatabaseEngine::Postgres)
+            .await
+            .expect("postgres migrations");
+
+        let mut tx = pool.begin().await.expect("seed query-plan rows");
+        sqlx::query(
+            "INSERT INTO users (id, username, discriminator, email, password_hash)
+             SELECT gs, 'plan_user_' || gs::text, gs % 9999, 'plan-' || gs::text || '@example.com', 'hash'
+             FROM generate_series(10000, 11049) AS gs
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("seed plan users");
+        sqlx::query(
+            "INSERT INTO spaces (id, name, owner_id)
+             VALUES (1001, 'plan-space', 10000)
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("seed plan space");
+        sqlx::query(
+            "INSERT INTO members (user_id, guild_id, nick)
+             SELECT gs, 1001, CASE WHEN gs BETWEEN 10010 AND 10019 THEN 'nick-' || gs::text ELSE 'other-' || gs::text END
+             FROM generate_series(10000, 11049) AS gs
+             ON CONFLICT (user_id, guild_id) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("seed plan members");
+        sqlx::query("ANALYZE members")
+            .execute(&mut *tx)
+            .await
+            .expect("analyze plan members");
+        tx.commit().await.expect("commit query-plan seed rows");
+
+        let checks = [
+            (
+                "message pagination latest",
+                "SELECT id FROM messages WHERE channel_id = 2001 ORDER BY id DESC LIMIT 100",
+                "idx_messages_channel_created",
+            ),
+            (
+                "message pagination before cursor",
+                "SELECT id FROM messages WHERE channel_id = 2001 AND id < 3001 ORDER BY id DESC LIMIT 100",
+                "idx_messages_channel_created",
+            ),
+            (
+                "attachment hydration",
+                "SELECT id FROM attachments WHERE message_id = 3001",
+                "idx_attachments_message_id",
+            ),
+            (
+                "scheduled message worker",
+                "SELECT id FROM scheduled_messages WHERE status = 0 AND send_at <= TIMESTAMPTZ '2026-05-16T00:00:00Z' ORDER BY send_at ASC LIMIT 100",
+                "idx_scheduled_messages_due",
+            ),
+            (
+                "scheduled event worker by status",
+                "SELECT id FROM scheduled_events WHERE status IN (1, 2) ORDER BY scheduled_start ASC LIMIT 100",
+                "idx_scheduled_events_status_start",
+            ),
+            (
+                "case-insensitive email login",
+                "SELECT id FROM users WHERE lower(email) = lower('USER@EXAMPLE.COM') LIMIT 1",
+                "idx_users_email_lower",
+            ),
+            (
+                "case-insensitive username prefix",
+                "SELECT id FROM users WHERE lower(username) LIKE 'releaseuser%' LIMIT 20",
+                "idx_users_username_lower_prefix",
+            ),
+            (
+                "bot reviews",
+                "SELECT bot_app_id FROM bot_reviews WHERE bot_app_id = 4001 ORDER BY updated_at DESC, id DESC LIMIT 20",
+                "idx_bot_reviews_bot_updated",
+            ),
+            (
+                "bot metric events",
+                "SELECT bot_app_id FROM bot_metric_events WHERE bot_app_id = 4001 ORDER BY created_at DESC LIMIT 30",
+                "idx_bot_metric_events_bot_created",
+            ),
+            (
+                "group e2ee sender keys",
+                "SELECT id FROM group_e2ee_sender_keys WHERE channel_id = 2001 AND recipient_id = 42 AND acknowledged = FALSE ORDER BY epoch ASC",
+                "idx_group_e2ee_sender_keys_recipient",
+            ),
+            (
+                "message slowmode lookup",
+                "SELECT created_at FROM messages WHERE channel_id = 2001 AND author_id = 42 ORDER BY id DESC LIMIT 1",
+                "idx_messages_channel_author_id",
+            ),
+            (
+                "message full-text search GIN index",
+                "SELECT id FROM messages WHERE search_vector @@ plainto_tsquery('english', 'hello') LIMIT 20",
+                "idx_messages_search",
+            ),
+            (
+                "member nick prefix search",
+                "SELECT user_id FROM members WHERE guild_id = 1001 AND lower(COALESCE(nick, '')) LIKE 'nick%' LIMIT 20",
+                "idx_members_guild_lower_nick_prefix",
+            ),
+            (
+                "pending attachment cleanup",
+                "SELECT id FROM attachments WHERE message_id IS NULL AND upload_expires_at IS NOT NULL AND upload_expires_at <= '2026-05-16T00:00:00Z' ORDER BY upload_expires_at ASC LIMIT 100",
+                "idx_attachments_pending_cleanup",
+            ),
+            (
+                "bot guild installs by guild",
+                "SELECT bot_app_id FROM bot_guild_installs WHERE guild_id = 1001 ORDER BY created_at LIMIT 100",
+                "idx_bot_guild_installs_guild",
+            ),
+            (
+                "forum active thread listing",
+                "SELECT id FROM channels WHERE parent_id = 2001 AND channel_type = 6 ORDER BY created_at DESC LIMIT 100",
+                "idx_channels_parent_thread_created",
+            ),
+        ];
+
+        for (label, sql, index_name) in checks {
+            assert_postgres_plan_uses_index(&pool, label, sql, index_name).await;
+        }
     }
 }

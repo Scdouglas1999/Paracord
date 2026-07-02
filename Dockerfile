@@ -21,6 +21,8 @@ WORKDIR /src
 # Copy workspace manifests first for dependency caching
 COPY Cargo.toml Cargo.lock* ./
 COPY crates/ crates/
+COPY client/src-tauri/ client/src-tauri/
+COPY third_party/ third_party/
 
 # Copy the built client dist into the expected location
 COPY --from=client-builder /src/client/dist/ client/dist/
@@ -55,6 +57,7 @@ ENV PARACORD_DATABASE_URL=sqlite:///data/paracord.db?mode=rwc
 ENV PARACORD_STORAGE_PATH=/data/uploads
 ENV PARACORD_MEDIA_STORAGE_PATH=/data/files
 ENV PARACORD_BACKUP_DIR=/data/backups
+ENV PARACORD_TLS_ENABLED=false
 
 EXPOSE 8090
 

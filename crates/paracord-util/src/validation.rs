@@ -93,6 +93,15 @@ pub fn validate_password(password: &str) -> Result<(), ValidationError> {
     if len > 128 {
         return Err(ValidationError::TooLong { max: 128, got: len });
     }
+    let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = password.chars().any(|c| c.is_ascii_lowercase());
+    let has_digit = password.chars().any(|c| c.is_ascii_digit());
+    let has_special = password
+        .chars()
+        .any(|c| c.is_ascii_punctuation() || (c.is_ascii() && !c.is_alphanumeric()));
+    if !has_upper || !has_lower || !has_digit || !has_special {
+        return Err(ValidationError::InvalidFormat);
+    }
     Ok(())
 }
 
@@ -266,25 +275,53 @@ mod tests {
 
     #[test]
     fn password_valid() {
-        assert!(validate_password("1234567890").is_ok());
+        assert!(validate_password("Abcdef123!").is_ok());
+        assert!(validate_password("P@ssw0rd!!").is_ok());
     }
 
     #[test]
     fn password_too_short() {
-        let err = validate_password("123456789").unwrap_err();
-        assert!(matches!(err, ValidationError::TooShort { min: 10, got: 9 }));
+        let err = validate_password("Ab1!").unwrap_err();
+        assert!(matches!(err, ValidationError::TooShort { min: 10, .. }));
     }
 
     #[test]
     fn password_too_long() {
-        let long = "a".repeat(129);
+        let long = format!("Aa1!{}", "x".repeat(125));
         let err = validate_password(&long).unwrap_err();
         assert!(matches!(err, ValidationError::TooLong { max: 128, .. }));
     }
 
     #[test]
+    fn password_missing_uppercase() {
+        let err = validate_password("abcdef123!").unwrap_err();
+        assert!(matches!(err, ValidationError::InvalidFormat));
+    }
+
+    #[test]
+    fn password_missing_lowercase() {
+        let err = validate_password("ABCDEF123!").unwrap_err();
+        assert!(matches!(err, ValidationError::InvalidFormat));
+    }
+
+    #[test]
+    fn password_missing_digit() {
+        let err = validate_password("Abcdefghi!").unwrap_err();
+        assert!(matches!(err, ValidationError::InvalidFormat));
+    }
+
+    #[test]
+    fn password_missing_special() {
+        let err = validate_password("Abcdefg123").unwrap_err();
+        assert!(matches!(err, ValidationError::InvalidFormat));
+    }
+
+    #[test]
     fn password_at_boundaries() {
-        assert!(validate_password(&"a".repeat(10)).is_ok());
-        assert!(validate_password(&"a".repeat(128)).is_ok());
+        // Exactly 10 chars with all required complexity
+        assert!(validate_password("Abcde123!x").is_ok());
+        // Exactly 128 chars with all required complexity
+        let long = format!("Aa1!{}", "x".repeat(124));
+        assert!(validate_password(&long).is_ok());
     }
 }

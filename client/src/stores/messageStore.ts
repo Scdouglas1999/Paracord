@@ -8,17 +8,46 @@ import type {
   SendMessageRequest,
 } from '../types';
 import { channelApi } from '../api/channels';
-import { apiClient, extractApiError } from '../api/client';
+import { extractApiError } from '../api/client';
 import { DEFAULT_MESSAGE_FETCH_LIMIT } from '../lib/constants';
-import { decryptDmMessage, encryptDmMessageV2 } from '../lib/dmE2ee';
+import { encryptDmMessageV2 } from '../lib/dmE2ee';
+import { decryptDmMessageOffthread } from '../lib/dmE2eeWorker';
 import { hasUnlockedPrivateKey, withUnlockedPrivateKey } from '../lib/accountSession';
+import { decryptGroupDmMessage, encryptGroupDmMessage } from '../lib/groupDmE2ee';
 import { useChannelStore } from './channelStore';
 import { toast } from './toastStore';
 import { usePollStore } from './pollStore';
+import { getVersionedJson, setVersionedJson } from '../lib/versionedStorage';
+import { useAuthStore } from './authStore';
 
 const ENCRYPTED_DM_PLACEHOLDER = '[Encrypted message]';
+const OFFLINE_QUEUE_STORAGE_KEY = 'offline-message-queue';
 
 const _messageFetchControllers = new Map<string, AbortController>();
+
+interface OfflineQueuedMessage {
+  id: string;
+  channelId: string;
+  content: string;
+  referencedMessageId?: string;
+  createdAt: string;
+}
+
+function loadOfflineQueue(): OfflineQueuedMessage[] {
+  return getVersionedJson<OfflineQueuedMessage[]>(OFFLINE_QUEUE_STORAGE_KEY, []);
+}
+
+function persistOfflineQueue(queue: OfflineQueuedMessage[]): void {
+  setVersionedJson(OFFLINE_QUEUE_STORAGE_KEY, queue);
+}
+
+function shouldQueueMessageError(err: unknown): boolean {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+  if (!axios.isAxiosError(err)) return false;
+  if (err.code === 'ERR_NETWORK' || err.code === 'ECONNABORTED') return true;
+  if (!err.response) return true;
+  return err.response.status >= 500;
+}
 
 /** Cancel any in-flight message fetch for the given channel. */
 export function cancelMessageFetch(channelId: string): void {
@@ -38,6 +67,12 @@ function findChannel(channelId: string) {
   return null;
 }
 
+function getChannelType(channelId: string): number | null {
+  const channel = findChannel(channelId);
+  if (!channel) return null;
+  return channel.channel_type ?? channel.type ?? null;
+}
+
 function getDmPeerPublicKey(channelId: string): string | null {
   const channel = findChannel(channelId);
   if (!channel) return null;
@@ -54,18 +89,72 @@ function getDmPeerUserId(channelId: string): string | null {
   return channel.recipient?.id || null;
 }
 
+function getGroupDmRecipients(channelId: string): Array<{ id: string; public_key?: string | null }> {
+  const channel = findChannel(channelId);
+  if (!channel) return [];
+  const channelType = channel.channel_type ?? channel.type;
+  if (channelType !== 3 || channel.guild_id) return [];
+  return (channel.recipients || []).map((recipient) => ({
+    id: recipient.id,
+    public_key: recipient.public_key,
+  }));
+}
+
+function isGroupDmChannel(channelId: string): boolean {
+  return getChannelType(channelId) === 3;
+}
+
 function isDmChannel(channelId: string): boolean {
   const channel = findChannel(channelId);
   if (!channel) return false;
   const channelType = channel.channel_type ?? channel.type;
-  return channelType === 1 && !channel.guild_id;
+  return (channelType === 1 || channelType === 3) && !channel.guild_id;
 }
 
 async function decryptMessageForChannel(channelId: string, message: Message): Promise<Message> {
   const payload = message.e2ee;
   if (!payload) return message;
+  if (!hasUnlockedPrivateKey()) {
+    return {
+      ...message,
+      content: message.content ?? ENCRYPTED_DM_PLACEHOLDER,
+    };
+  }
+
+  if (isGroupDmChannel(channelId)) {
+    const myUser = useAuthStore.getState().user;
+    if (!myUser?.id) {
+      return {
+        ...message,
+        content: ENCRYPTED_DM_PLACEHOLDER,
+      };
+    }
+    const recipients = getGroupDmRecipients(channelId);
+    const resolvePublicKey = (userId: string): string | null => {
+      if (userId === myUser.id) {
+        return myUser.public_key || null;
+      }
+      const found = recipients.find((recipient) => recipient.id === userId);
+      return found?.public_key || null;
+    };
+    try {
+      const plaintext = await withUnlockedPrivateKey((privateKey) =>
+        decryptGroupDmMessage(channelId, payload, myUser.id, privateKey, resolvePublicKey)
+      );
+      return {
+        ...message,
+        content: plaintext,
+      };
+    } catch {
+      return {
+        ...message,
+        content: ENCRYPTED_DM_PLACEHOLDER,
+      };
+    }
+  }
+
   const peerPublicKey = getDmPeerPublicKey(channelId);
-  if (!peerPublicKey || !hasUnlockedPrivateKey()) {
+  if (!peerPublicKey) {
     return {
       ...message,
       content: message.content ?? ENCRYPTED_DM_PLACEHOLDER,
@@ -73,7 +162,7 @@ async function decryptMessageForChannel(channelId: string, message: Message): Pr
   }
   try {
     const plaintext = await withUnlockedPrivateKey((privateKey) =>
-      decryptDmMessage(channelId, payload, privateKey, peerPublicKey)
+      decryptDmMessageOffthread(channelId, payload, privateKey, peerPublicKey)
     );
     return {
       ...message,
@@ -96,14 +185,36 @@ async function buildSendMessageRequest(
   content: string,
   referencedMessageId?: string,
   attachmentIds?: string[],
+  stickerIds?: string[],
 ): Promise<SendMessageRequest> {
   const normalizedContent = content.trim();
   const request: SendMessageRequest = {
     content: normalizedContent,
     referenced_message_id: referencedMessageId,
     attachment_ids: attachmentIds,
+    sticker_ids: stickerIds,
   };
   if (!isDmChannel(channelId) || normalizedContent.length === 0) {
+    return request;
+  }
+
+  if (isGroupDmChannel(channelId)) {
+    if (!hasUnlockedPrivateKey()) {
+      throw new Error('Unlock your account to send encrypted DMs');
+    }
+    const myUser = useAuthStore.getState().user;
+    if (!myUser?.id) {
+      throw new Error('Unable to encrypt this group DM: user identity is unavailable');
+    }
+    const recipients = getGroupDmRecipients(channelId);
+    if (recipients.length === 0) {
+      throw new Error('Unable to encrypt this group DM: recipient keys are unavailable');
+    }
+    const e2ee = await withUnlockedPrivateKey((privateKey) =>
+      encryptGroupDmMessage(channelId, normalizedContent, myUser.id, privateKey, recipients)
+    );
+    request.content = '';
+    request.e2ee = e2ee;
     return request;
   }
 
@@ -116,10 +227,11 @@ async function buildSendMessageRequest(
   }
 
   const peerUserId = getDmPeerUserId(channelId);
+  if (!peerUserId) {
+    throw new Error('Unable to encrypt this DM: recipient identity is unavailable');
+  }
   const e2ee = await withUnlockedPrivateKey((privateKey) =>
-    peerUserId
-      ? encryptDmMessageV2(channelId, normalizedContent, privateKey, peerPublicKey, peerUserId)
-      : encryptDmMessageV2(channelId, normalizedContent, privateKey, peerPublicKey, '')
+    encryptDmMessageV2(channelId, normalizedContent, privateKey, peerPublicKey, peerUserId)
   );
   request.content = '';
   request.e2ee = e2ee;
@@ -136,6 +248,26 @@ async function buildEditMessageRequest(channelId: string, content: string): Prom
     throw new Error('Encrypted DMs cannot be edited to empty content');
   }
 
+  if (isGroupDmChannel(channelId)) {
+    if (!hasUnlockedPrivateKey()) {
+      throw new Error('Unlock your account to edit encrypted DMs');
+    }
+    const myUser = useAuthStore.getState().user;
+    if (!myUser?.id) {
+      throw new Error('Unable to encrypt this group DM edit: user identity is unavailable');
+    }
+    const recipients = getGroupDmRecipients(channelId);
+    if (recipients.length === 0) {
+      throw new Error('Unable to encrypt this group DM edit: recipient keys are unavailable');
+    }
+    const e2ee: MessageE2eePayload = await withUnlockedPrivateKey((privateKey) =>
+      encryptGroupDmMessage(channelId, normalizedContent, myUser.id, privateKey, recipients)
+    );
+    request.content = '';
+    request.e2ee = e2ee;
+    return request;
+  }
+
   const peerPublicKey = getDmPeerPublicKey(channelId);
   if (!peerPublicKey) {
     throw new Error('Unable to encrypt this DM edit: recipient key is unavailable');
@@ -145,10 +277,11 @@ async function buildEditMessageRequest(channelId: string, content: string): Prom
   }
 
   const peerUserId = getDmPeerUserId(channelId);
+  if (!peerUserId) {
+    throw new Error('Unable to encrypt this DM edit: recipient identity is unavailable');
+  }
   const e2ee: MessageE2eePayload = await withUnlockedPrivateKey((privateKey) =>
-    peerUserId
-      ? encryptDmMessageV2(channelId, normalizedContent, privateKey, peerPublicKey, peerUserId)
-      : encryptDmMessageV2(channelId, normalizedContent, privateKey, peerPublicKey, '')
+    encryptDmMessageV2(channelId, normalizedContent, privateKey, peerPublicKey, peerUserId)
   );
   request.content = '';
   request.e2ee = e2ee;
@@ -166,14 +299,24 @@ interface MessageState {
   pins: Record<string, Message[]>;
   // Message IDs currently being decrypted (E2EE)
   decryptingIds: Set<string>;
+  // Messages composed while offline and awaiting retry
+  offlineQueue: OfflineQueuedMessage[];
 
   fetchMessages: (channelId: string, params?: PaginationParams) => Promise<void>;
   sendMessage: (
     channelId: string,
     content: string,
     referencedMessageId?: string,
-    attachmentIds?: string[]
+    attachmentIds?: string[],
+    stickerIds?: string[]
   ) => Promise<void>;
+  scheduleMessage: (
+    channelId: string,
+    content: string,
+    sendAtIso: string,
+    referencedMessageId?: string,
+  ) => Promise<void>;
+  flushOfflineQueue: () => Promise<void>;
   editMessage: (channelId: string, messageId: string, content: string) => Promise<void>;
   deleteMessage: (channelId: string, messageId: string) => Promise<void>;
   setMessages: (channelId: string, messages: Message[]) => void;
@@ -207,6 +350,7 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
   loading: {},
   pins: {},
   decryptingIds: new Set<string>(),
+  offlineQueue: loadOfflineQueue(),
 
   fetchMessages: async (channelId, params) => {
     if (get().loading[channelId]) return;
@@ -236,10 +380,10 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
             await new Promise((r) => setTimeout(r, RETRY_DELAY * attempt));
           }
           if (controller.signal.aborted) return;
-          const { data } = await apiClient.get<Message[]>(
-            `/channels/${channelId}/messages`,
+          const { data } = await channelApi.getMessages(
+            channelId,
+            { limit: DEFAULT_MESSAGE_FETCH_LIMIT, ...params },
             {
-              params: { limit: DEFAULT_MESSAGE_FETCH_LIMIT, ...params },
               timeout: REQUEST_TIMEOUT,
               signal: controller.signal,
             },
@@ -280,24 +424,110 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
     }
   },
 
-  sendMessage: async (channelId, content, referencedMessageId, attachmentIds) => {
+  sendMessage: async (channelId, content, referencedMessageId, attachmentIds, stickerIds) => {
+    const normalized = content.trim();
+    if (!normalized && !(attachmentIds && attachmentIds.length > 0) && !(stickerIds && stickerIds.length > 0)) {
+      return;
+    }
     const request = await buildSendMessageRequest(
       channelId,
       content,
       referencedMessageId,
       attachmentIds,
+      stickerIds,
     );
-    const { data } = await channelApi.sendMessage(channelId, request);
-    const decrypted = await decryptMessageForChannel(channelId, data);
-    if (decrypted.poll) {
-      usePollStore.getState().upsertPoll(decrypted.poll);
+    try {
+      const { data } = await channelApi.sendMessage(channelId, request);
+      const decrypted = await decryptMessageForChannel(channelId, data);
+      if (decrypted.poll) {
+        usePollStore.getState().upsertPoll(decrypted.poll);
+      }
+      // Optimistic: the gateway will also deliver MESSAGE_CREATE, addMessage dedupes
+      set((state) => {
+        const existing = state.messages[channelId] || [];
+        if (existing.some((m) => m.id === decrypted.id)) return state;
+        return { messages: { ...state.messages, [channelId]: [...existing, decrypted] } };
+      });
+    } catch (err) {
+      const networkQueueable = shouldQueueMessageError(err);
+      const hasAttachments = (attachmentIds?.length ?? 0) > 0;
+      if (!networkQueueable || hasAttachments || normalized.length === 0) {
+        throw err;
+      }
+      const queued: OfflineQueuedMessage = {
+        id: `offline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        channelId,
+        content: normalized,
+        referencedMessageId,
+        createdAt: new Date().toISOString(),
+      };
+      set((state) => {
+        const next = [...state.offlineQueue, queued];
+        persistOfflineQueue(next);
+        return { offlineQueue: next };
+      });
+      toast.info('Message queued and will send when reconnected.');
     }
-    // Optimistic: the gateway will also deliver MESSAGE_CREATE, addMessage dedupes
-    set((state) => {
-      const existing = state.messages[channelId] || [];
-      if (existing.some((m) => m.id === decrypted.id)) return state;
-      return { messages: { ...state.messages, [channelId]: [...existing, decrypted] } };
+  },
+
+  scheduleMessage: async (channelId, content, sendAtIso, referencedMessageId) => {
+    const normalized = content.trim();
+    if (!normalized) {
+      return;
+    }
+    const request = await buildSendMessageRequest(channelId, normalized, referencedMessageId);
+    await channelApi.createScheduledMessage(channelId, {
+      content: request.content || undefined,
+      e2ee: request.e2ee,
+      nonce: request.nonce,
+      send_at: sendAtIso,
     });
+  },
+
+  flushOfflineQueue: async () => {
+    const queue = [...get().offlineQueue];
+    if (queue.length === 0) return;
+
+    for (const queued of queue) {
+      try {
+        const request = await buildSendMessageRequest(
+          queued.channelId,
+          queued.content,
+          queued.referencedMessageId,
+        );
+        const { data } = await channelApi.sendMessage(queued.channelId, request);
+        const decrypted = await decryptMessageForChannel(queued.channelId, data);
+        if (decrypted.poll) {
+          usePollStore.getState().upsertPoll(decrypted.poll);
+        }
+        set((state) => {
+          const existing = state.messages[queued.channelId] || [];
+          const nextQueue = state.offlineQueue.filter((item) => item.id !== queued.id);
+          persistOfflineQueue(nextQueue);
+          if (existing.some((m) => m.id === decrypted.id)) {
+            return { offlineQueue: nextQueue };
+          }
+          return {
+            offlineQueue: nextQueue,
+            messages: {
+              ...state.messages,
+              [queued.channelId]: [...existing, decrypted],
+            },
+          };
+        });
+      } catch (err) {
+        if (shouldQueueMessageError(err)) {
+          // Still offline or server unavailable; keep remaining queue items.
+          return;
+        }
+        // Drop malformed/non-retryable queued item and continue.
+        set((state) => {
+          const nextQueue = state.offlineQueue.filter((item) => item.id !== queued.id);
+          persistOfflineQueue(nextQueue);
+          return { offlineQueue: nextQueue };
+        });
+      }
+    }
   },
 
   editMessage: async (channelId, messageId, content) => {

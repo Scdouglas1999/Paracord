@@ -49,6 +49,14 @@ export const voiceApi = {
         timeout: 30_000,
       },
     ),
+  joinDmChannel: (channelId: string, options?: { fallback?: 'livekit' }) =>
+    apiClient.post<VoiceJoinResponse>(
+      `/api/v1/dms/${channelId}/voice/join${options?.fallback ? '?fallback=livekit' : ''}`,
+      undefined,
+      { timeout: 30_000 },
+    ),
+  leaveDmChannel: (channelId: string) =>
+    apiClient.post(`/api/v1/dms/${channelId}/voice/leave`, undefined, { timeout: 10_000 }),
   leaveChannel: (
     channelId: string,
     options?: {
@@ -69,7 +77,11 @@ export const voiceApi = {
   ) => {
     const qs = options?.fallback ? '?fallback=livekit' : '';
     const { fallback: _fb, ...body } = options ?? {};
-    return apiClient.post<VoiceJoinResponse>(`/voice/${channelId}/stream${qs}`, Object.keys(body).length > 0 ? body : undefined);
+    return apiClient.post<VoiceJoinResponse>(
+      `/voice/${channelId}/stream${qs}`,
+      Object.keys(body).length > 0 ? body : undefined,
+      { timeout: 45_000 }
+    );
   },
   stopStream: (channelId: string) =>
     apiClient.post(`/voice/${channelId}/stream/stop`, undefined, {

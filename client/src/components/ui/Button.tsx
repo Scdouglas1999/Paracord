@@ -9,15 +9,12 @@ const buttonVariants = cva(
     {
         variants: {
             variant: {
-                default: "border border-white/10 bg-accent-primary text-white shadow-[0_8px_16px_rgba(111,134,255,0.25)] hover:-translate-y-0.5 hover:bg-accent-primary-hover hover:shadow-[0_12px_24px_rgba(111,134,255,0.35)]",
-                destructive:
-                    "border border-white/10 bg-accent-danger text-white shadow-[0_8px_16px_rgba(255,93,114,0.25)] hover:-translate-y-0.5 hover:bg-red-500 hover:shadow-[0_12px_24px_rgba(255,93,114,0.35)]",
-                outline:
-                    "border border-border-strong bg-bg-mod-subtle text-text-primary shadow-sm hover:bg-bg-mod-strong hover:border-border-glow",
-                secondary:
-                    "border border-white/10 bg-accent-success text-white shadow-[0_8px_16px_rgba(53,193,143,0.25)] hover:-translate-y-0.5 hover:bg-green-500 hover:shadow-[0_12px_24px_rgba(53,193,143,0.35)]",
-                ghost: "border border-transparent text-text-secondary hover:border-border-subtle hover:bg-bg-mod-subtle hover:text-text-primary hover:shadow-sm",
-                link: "text-text-link underline-offset-4 hover:underline",
+                default: "btn-primary",
+                destructive: "btn-danger",
+                outline: "border border-border-strong bg-bg-mod-subtle text-text-primary shadow-sm hover:bg-bg-mod-strong hover:border-border-glow",
+                secondary: "rounded-xl border border-accent-success/35 bg-accent-success/12 text-accent-success hover:bg-accent-success/20",
+                ghost: "btn-ghost",
+                link: "text-text-link underline-offset-4 hover:underline px-1 py-0",
             },
             size: {
                 default: "h-10 px-4 py-2",
@@ -41,10 +38,11 @@ export interface ButtonProps
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-    ({ className, variant, size, loading, children, disabled, ...props }, ref) => {
+    ({ className, variant, size, loading, children, disabled, type = "button", ...props }, ref) => {
         return (
             <motion.button
                 ref={ref}
+                type={type}
                 whileHover={{ scale: 1.01 }}
                 whileTap={{ scale: 0.97 }}
                 className={cn(buttonVariants({ variant, size, className }))}

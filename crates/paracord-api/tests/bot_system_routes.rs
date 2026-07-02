@@ -1,22 +1,15 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+mod common;
 
 use anyhow::Context;
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use chrono::{Duration, Utc};
-use paracord_core::{build_permission_cache, AppConfig, AppState, RuntimeSettings};
-use paracord_media::{
-    LiveKitConfig, LocalStorage, Storage, StorageConfig, StorageManager, VoiceManager,
+use common::{
+    build_json_request, build_test_app, create_authenticated_user_token, dispatch_json, TestApp,
+    TestAppOptions,
 };
 use serde_json::{json, Value};
-use tempfile::TempDir;
-use tokio::sync::{Notify, RwLock};
-use tower::ServiceExt;
-use uuid::Uuid;
 
 // ── Test context ────────────────────────────────────────────────────────────
 
@@ -24,97 +17,29 @@ struct TestContext {
     app: Router,
     token: String,
     db: paracord_db::DbPool,
-    _storage_dir: TempDir,
-    _media_dir: TempDir,
-    _backup_dir: TempDir,
+    _test_app: TestApp,
 }
 
 impl TestContext {
     async fn new() -> anyhow::Result<Self> {
-        let db = paracord_db::create_pool("sqlite::memory:", 1).await?;
-        paracord_db::run_migrations(&db).await?;
-
-        let storage_dir = tempfile::tempdir()?;
-        let media_dir = tempfile::tempdir()?;
-        let backup_dir = tempfile::tempdir()?;
-        let jwt_secret = "integration-test-secret".to_string();
-
-        let livekit = Arc::new(LiveKitConfig {
-            api_key: "lk-test-key".to_string(),
-            api_secret: "lk-test-secret".to_string(),
-            url: "ws://localhost:7880".to_string(),
-            http_url: "http://localhost:7880".to_string(),
-        });
-
-        let state = AppState {
-            db: db.clone(),
-            event_bus: paracord_core::events::EventBus::default(),
-            config: AppConfig {
-                jwt_secret: jwt_secret.clone(),
-                jwt_expiry_seconds: 3600,
-                registration_enabled: true,
-                allow_username_login: false,
-                require_email: true,
-                storage_path: storage_dir.path().to_string_lossy().into_owned(),
-                max_upload_size: 10 * 1024 * 1024,
-                livekit_api_key: livekit.api_key.clone(),
-                livekit_api_secret: livekit.api_secret.clone(),
-                livekit_url: livekit.url.clone(),
-                livekit_http_url: livekit.http_url.clone(),
-                livekit_public_url: livekit.url.clone(),
-                livekit_available: false,
-                public_url: None,
-                media_storage_path: media_dir.path().to_string_lossy().into_owned(),
-                media_max_file_size: 10 * 1024 * 1024,
-                media_p2p_threshold: 1024 * 1024,
-                file_cryptor: None,
-                backup_dir: backup_dir.path().to_string_lossy().into_owned(),
-                database_url: "sqlite::memory:".to_string(),
-                federation_max_events_per_peer_per_minute: None,
-                federation_max_user_creates_per_peer_per_hour: None,
-                native_media_enabled: false,
-                native_media_port: 8443,
-                native_media_max_participants: 50,
-                native_media_e2ee_required: false,
-                max_guild_storage_quota: 0,
-                federation_file_cache_enabled: false,
-                federation_file_cache_max_size: 0,
-                federation_file_cache_ttl_hours: 0,
-                tls_enabled: false,
-                livekit_local_candidate_url: None,
-            },
-            runtime: Arc::new(RwLock::new(RuntimeSettings::default())),
-            voice: Arc::new(VoiceManager::new(livekit)),
-            storage: Arc::new(StorageManager::new(StorageConfig {
-                base_path: media_dir.path().to_path_buf(),
-                max_file_size: 10 * 1024 * 1024,
-                p2p_threshold: 1024 * 1024,
-                allowed_extensions: None,
-            })),
-            storage_backend: Arc::new(Storage::Local(LocalStorage::new(storage_dir.path()))),
-            shutdown: Arc::new(Notify::new()),
-            online_users: Arc::new(RwLock::new(HashSet::new())),
-            user_presences: Arc::new(RwLock::new(HashMap::new())),
-            permission_cache: build_permission_cache(),
-            federation_service: None,
-            member_index: Arc::new(paracord_core::member_index::MemberIndex::empty()),
-            native_media: None,
-            presence_manager: Arc::new(paracord_core::presence_manager::PresenceManager::new()),
-        };
-
-        // Intentionally leave the global HTTP rate limiter disabled in this
-        // integration suite so tests can exercise bot/interaction flows
-        // without cross-test interference from shared global buckets.
-        let app = paracord_api::build_router().with_state(state);
-        let token = create_authenticated_user_token(&db, &jwt_secret).await?;
+        let test_app = build_test_app(TestAppOptions {
+            install_http_rate_limiter: false,
+            ..Default::default()
+        })
+        .await?;
+        let token = create_authenticated_user_token(
+            &test_app.db,
+            &test_app.jwt_secret,
+            "integration",
+            "IntegrationPass123!",
+        )
+        .await?;
 
         Ok(Self {
-            app,
+            app: test_app.app.clone(),
             token,
-            db,
-            _storage_dir: storage_dir,
-            _media_dir: media_dir,
-            _backup_dir: backup_dir,
+            db: test_app.db.clone(),
+            _test_app: test_app,
         })
     }
 
@@ -137,29 +62,8 @@ impl TestContext {
         body: Option<Value>,
         token: &str,
     ) -> anyhow::Result<(StatusCode, Value)> {
-        let mut builder = Request::builder()
-            .method(method)
-            .uri(path)
-            .header(header::AUTHORIZATION, format!("Bearer {}", token));
-
-        let request = if let Some(payload) = body {
-            builder = builder.header(header::CONTENT_TYPE, "application/json");
-            builder.body(Body::from(payload.to_string()))?
-        } else {
-            builder.body(Body::empty())?
-        };
-
-        let response = self.app.clone().oneshot(request).await?;
-        let status = response.status();
-        let body_bytes = to_bytes(response.into_body(), usize::MAX).await?;
-        let payload = if body_bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&body_bytes)
-                .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&body_bytes) }))
-        };
-
-        Ok((status, payload))
+        let request = build_json_request(method, path, body, Some(token))?;
+        dispatch_json(&self.app, request).await
     }
 
     /// Send a request with no auth header (for public endpoints / token-based auth).
@@ -169,71 +73,9 @@ impl TestContext {
         path: &str,
         body: Option<Value>,
     ) -> anyhow::Result<(StatusCode, Value)> {
-        let mut builder = Request::builder().method(method).uri(path);
-
-        let request = if let Some(payload) = body {
-            builder = builder.header(header::CONTENT_TYPE, "application/json");
-            builder.body(Body::from(payload.to_string()))?
-        } else {
-            builder.body(Body::empty())?
-        };
-
-        let response = self.app.clone().oneshot(request).await?;
-        let status = response.status();
-        let body_bytes = to_bytes(response.into_body(), usize::MAX).await?;
-        let payload = if body_bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&body_bytes)
-                .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&body_bytes) }))
-        };
-
-        Ok((status, payload))
+        let request = build_json_request(method, path, body, None)?;
+        dispatch_json(&self.app, request).await
     }
-}
-
-// ── Shared helpers ──────────────────────────────────────────────────────────
-
-async fn create_authenticated_user_token(
-    db: &paracord_db::DbPool,
-    jwt_secret: &str,
-) -> anyhow::Result<String> {
-    let user_id = paracord_util::snowflake::generate(1);
-    let nonce = Uuid::new_v4().simple().to_string();
-    let username = format!("integration_{nonce}");
-    let email = format!("{nonce}@example.com");
-    let password_hash = paracord_core::auth::hash_password("IntegrationPass123!")?;
-
-    let user =
-        paracord_db::users::create_user(db, user_id, &username, 1, &email, &password_hash).await?;
-
-    let session_id = format!("sess-{}", Uuid::new_v4().simple());
-    let jti = format!("jti-{}", Uuid::new_v4().simple());
-    let refresh_hash = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    paracord_db::sessions::create_session(
-        db,
-        &session_id,
-        user.id,
-        &refresh_hash,
-        &jti,
-        user.public_key.as_deref(),
-        None,
-        None,
-        None,
-        Utc::now() + Duration::days(1),
-    )
-    .await?;
-
-    let token = paracord_core::auth::create_session_token(
-        user.id,
-        user.public_key.as_deref(),
-        jwt_secret,
-        3600,
-        &session_id,
-        &jti,
-    )?;
-
-    Ok(token)
 }
 
 async fn create_guild(ctx: &TestContext, name: &str) -> anyhow::Result<String> {
@@ -513,7 +355,7 @@ async fn _debug_create_bot_app_steps_disabled() -> anyhow::Result<()> {
         Ok(u) => eprintln!("create_user succeeded: id={}", u.id),
         Err(e) => eprintln!("create_user FAILED: {e:?}"),
     }
-    let bot_user = bot_user_result?;
+    let _bot_user = bot_user_result?;
 
     let token_hash = paracord_db::bot_applications::hash_token("test_token_value");
     eprintln!("token_hash len={}", token_hash.len());
@@ -636,6 +478,8 @@ async fn update_bot_application_fields() -> anyhow::Result<()> {
                 "name": "RenamedBot",
                 "description": "New description",
                 "redirect_uri": "http://localhost:3000/callback",
+                "permissions": "4096",
+                "intents": 513,
             })),
         )
         .await?;
@@ -643,6 +487,8 @@ async fn update_bot_application_fields() -> anyhow::Result<()> {
     assert_eq!(updated["name"], "RenamedBot");
     assert_eq!(updated["description"], "New description");
     assert_eq!(updated["redirect_uri"], "http://localhost:3000/callback");
+    assert_eq!(updated["permissions"], "4096");
+    assert_eq!(updated["intents"], 513);
 
     Ok(())
 }
@@ -1234,7 +1080,13 @@ async fn list_guild_available_commands_requires_membership() -> anyhow::Result<(
     let guild_id = create_guild(&ctx, "MembershipGuild").await?;
 
     // Create a second user who is NOT a member of this guild
-    let token2 = create_authenticated_user_token(&ctx.db, "integration-test-secret").await?;
+    let token2 = create_authenticated_user_token(
+        &ctx.db,
+        "integration-test-secret",
+        "integration",
+        "IntegrationPass123!",
+    )
+    .await?;
 
     let (status, _payload) = ctx
         .request_json_with_token(
@@ -1288,6 +1140,14 @@ async fn interaction_callback_type4_creates_message() -> anyhow::Result<()> {
     let interaction_id = interaction["id"].as_str().unwrap();
 
     // Callback type 4: CHANNEL_MESSAGE_WITH_SOURCE
+    let components = json!([
+        {
+            "type": 1,
+            "components": [
+                { "type": 2, "label": "Click me", "custom_id": "btn1", "style": 1 }
+            ]
+        }
+    ]);
     let (status, result) = interaction_callback(
         &ctx,
         interaction_id,
@@ -1295,14 +1155,7 @@ async fn interaction_callback_type4_creates_message() -> anyhow::Result<()> {
         4,
         Some(json!({
             "content": "Hello from bot!",
-            "components": [
-                {
-                    "type": 1,
-                    "components": [
-                        { "type": 2, "label": "Click me", "custom_id": "btn1", "style": 1 }
-                    ]
-                }
-            ],
+            "components": components,
         })),
     )
     .await?;
@@ -1323,6 +1176,99 @@ async fn interaction_callback_type4_creates_message() -> anyhow::Result<()> {
     assert!(
         result.get("components").is_some(),
         "components should be in the response"
+    );
+    assert_eq!(result["components"], components);
+
+    let (status, messages) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "get messages failed: {messages}");
+    let persisted = messages
+        .as_array()
+        .and_then(|items| items.iter().find(|msg| msg["id"] == result["id"]))
+        .context("interaction response should be present in message history")?;
+    assert_eq!(
+        persisted["components"], components,
+        "interaction response components should survive a history reload"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn interaction_messages_reject_unsafe_component_urls() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let bot = create_bot_application(&ctx, "UnsafeComponentBot").await?;
+    let guild_id = create_guild(&ctx, "UnsafeComponentGuild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "chat").await?;
+    authorize_bot_in_guild(&ctx, &bot.app_id, &guild_id).await?;
+    create_global_command(&ctx, &bot.app_id, "unsafe", "Checks unsafe URLs").await?;
+
+    let (interaction, token) = invoke_slash_command(&ctx, "unsafe", &guild_id, &channel_id).await?;
+    let interaction_id = interaction["id"].as_str().unwrap();
+    let unsafe_components = json!([
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "label": "Unsafe",
+                    "style": 5,
+                    "url": "javascript:alert(1)"
+                }
+            ]
+        }
+    ]);
+
+    let (status, payload) = interaction_callback(
+        &ctx,
+        interaction_id,
+        &token,
+        4,
+        Some(json!({
+            "content": "This should be rejected",
+            "components": unsafe_components.clone(),
+        })),
+    )
+    .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unsafe callback components should be rejected: {payload}"
+    );
+    assert!(
+        payload["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("component URL must use http or https"),
+        "unexpected callback error payload: {payload}"
+    );
+
+    let (status, payload) = ctx
+        .request_json_no_auth(
+            Method::POST,
+            &format!("/api/v1/interactions/{}/{}/followup", bot.app_id, token),
+            Some(json!({
+                "content": "Followup should be rejected",
+                "components": unsafe_components,
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unsafe followup components should be rejected: {payload}"
+    );
+    assert!(
+        payload["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("component URL must use http or https"),
+        "unexpected followup error payload: {payload}"
     );
 
     Ok(())
@@ -1381,6 +1327,14 @@ async fn edit_original_response_uses_stored_message_id() -> anyhow::Result<()> {
     assert_eq!(status, StatusCode::OK);
 
     // Now edit the original response
+    let edited_components = json!([
+        {
+            "type": 1,
+            "components": [
+                { "type": 2, "label": "Edited", "custom_id": "edited_btn", "style": 1 }
+            ]
+        }
+    ]);
     let (status, edited) = ctx
         .request_json_no_auth(
             Method::PATCH,
@@ -1388,11 +1342,15 @@ async fn edit_original_response_uses_stored_message_id() -> anyhow::Result<()> {
                 "/api/v1/interactions/{}/{}/messages/@original",
                 bot.app_id, token
             ),
-            Some(json!({ "content": "Edited content!" })),
+            Some(json!({
+                "content": "Edited content!",
+                "components": edited_components,
+            })),
         )
         .await?;
     assert_eq!(status, StatusCode::OK, "edit original failed: {edited}");
     assert_eq!(edited["content"], "Edited content!");
+    assert_eq!(edited["components"], edited_components);
 
     Ok(())
 }
@@ -1468,11 +1426,22 @@ async fn create_followup_message_uses_bot_user_id() -> anyhow::Result<()> {
     assert_eq!(status, StatusCode::OK);
 
     // Create a followup message
+    let followup_components = json!([
+        {
+            "type": 1,
+            "components": [
+                { "type": 2, "label": "Follow", "custom_id": "follow_btn", "style": 1 }
+            ]
+        }
+    ]);
     let (status, followup) = ctx
         .request_json_no_auth(
             Method::POST,
             &format!("/api/v1/interactions/{}/{}/followup", bot.app_id, token),
-            Some(json!({ "content": "This is a followup!" })),
+            Some(json!({
+                "content": "This is a followup!",
+                "components": followup_components,
+            })),
         )
         .await?;
     assert_eq!(
@@ -1488,6 +1457,24 @@ async fn create_followup_message_uses_bot_user_id() -> anyhow::Result<()> {
     assert_eq!(
         followup["message_type"], 20,
         "should be APPLICATION_COMMAND type"
+    );
+    assert_eq!(followup["components"], followup_components);
+
+    let (status, messages) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "get messages failed: {messages}");
+    let persisted = messages
+        .as_array()
+        .and_then(|items| items.iter().find(|msg| msg["id"] == followup["id"]))
+        .context("followup should be present in message history")?;
+    assert_eq!(
+        persisted["components"], followup_components,
+        "followup components should survive a history reload"
     );
 
     Ok(())

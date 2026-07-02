@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::CoreError;
 
 /// Version of the identity bundle format.
-const BUNDLE_VERSION: u32 = 1;
+const BUNDLE_VERSION: u32 = 2;
 
 /// Maximum number of messages that can be exported.
 const MAX_EXPORT_MESSAGES: i64 = 50_000;
@@ -18,12 +18,16 @@ pub struct IdentityBundle {
     pub exported_at: DateTime<Utc>,
     pub origin_server: String,
     pub user: UserExport,
+    pub settings: Option<UserSettingsExport>,
     #[serde(default)]
     pub messages: Vec<MessageExport>,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentExport>,
     #[serde(default)]
     pub relationships: Vec<RelationshipExport>,
     #[serde(default)]
     pub guilds: Vec<GuildMembershipExport>,
+    pub prekeys: Option<PrekeyExport>,
     /// ed25519 signature of the canonical JSON payload (everything except this field).
     pub signature: String,
 }
@@ -39,6 +43,18 @@ pub struct UserExport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserSettingsExport {
+    pub theme: String,
+    pub locale: String,
+    pub message_display: String,
+    pub custom_css: Option<String>,
+    pub crypto_auth_enabled: bool,
+    pub notifications: serde_json::Value,
+    pub keybinds: serde_json::Value,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageExport {
     pub id: String,
     pub channel_id: String,
@@ -49,6 +65,20 @@ pub struct MessageExport {
     pub reference_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub edited_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentExport {
+    pub id: String,
+    pub message_id: Option<String>,
+    pub filename: String,
+    pub content_type: Option<String>,
+    pub size: i32,
+    pub url: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub content_hash: Option<String>,
+    pub uploaded_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,11 +97,36 @@ pub struct GuildMembershipExport {
     pub joined_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedPrekeyExport {
+    pub id: String,
+    pub public_key: String,
+    pub signature: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OneTimePrekeyExport {
+    pub id: String,
+    pub public_key: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrekeyExport {
+    pub signed_prekey: Option<SignedPrekeyExport>,
+    #[serde(default)]
+    pub one_time_prekeys: Vec<OneTimePrekeyExport>,
+}
+
 /// Result of an identity import operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportResult {
     pub profile_updated: bool,
+    pub settings_imported: bool,
     pub messages_imported: u64,
+    pub prekeys_imported: u64,
+    pub attachments_noted: u64,
     pub relationships_found: u64,
     pub guilds_noted: u64,
     pub warnings: Vec<String>,
@@ -86,20 +141,50 @@ struct SignablePayload<'a> {
     exported_at: &'a DateTime<Utc>,
     origin_server: &'a str,
     user: &'a UserExport,
+    settings: &'a Option<UserSettingsExport>,
+    messages: &'a [MessageExport],
+    attachments: &'a [AttachmentExport],
+    relationships: &'a [RelationshipExport],
+    guilds: &'a [GuildMembershipExport],
+    prekeys: &'a Option<PrekeyExport>,
+}
+
+#[derive(Serialize)]
+struct SignablePayloadV1<'a> {
+    version: u32,
+    exported_at: &'a DateTime<Utc>,
+    origin_server: &'a str,
+    user: &'a UserExport,
     messages: &'a [MessageExport],
     relationships: &'a [RelationshipExport],
     guilds: &'a [GuildMembershipExport],
 }
 
 fn build_signable_bytes(bundle: &IdentityBundle) -> Vec<u8> {
+    if bundle.version <= 1 {
+        let payload = SignablePayloadV1 {
+            version: bundle.version,
+            exported_at: &bundle.exported_at,
+            origin_server: &bundle.origin_server,
+            user: &bundle.user,
+            messages: &bundle.messages,
+            relationships: &bundle.relationships,
+            guilds: &bundle.guilds,
+        };
+        return serde_json::to_vec(&payload).unwrap_or_default();
+    }
+
     let payload = SignablePayload {
         version: bundle.version,
         exported_at: &bundle.exported_at,
         origin_server: &bundle.origin_server,
         user: &bundle.user,
+        settings: &bundle.settings,
         messages: &bundle.messages,
+        attachments: &bundle.attachments,
         relationships: &bundle.relationships,
         guilds: &bundle.guilds,
+        prekeys: &bundle.prekeys,
     };
     serde_json::to_vec(&payload).unwrap_or_default()
 }
@@ -127,6 +212,19 @@ pub async fn export_identity(
         created_at: user.created_at,
     };
 
+    let settings = paracord_db::users::get_user_settings(pool, user_id)
+        .await?
+        .map(|row| UserSettingsExport {
+            theme: row.theme,
+            locale: row.locale,
+            message_display: row.message_display,
+            custom_css: row.custom_css,
+            crypto_auth_enabled: row.crypto_auth_enabled,
+            notifications: row.notifications,
+            keybinds: row.keybinds,
+            updated_at: row.updated_at,
+        });
+
     // Fetch messages if requested
     let messages = if include_messages {
         let msg_rows =
@@ -150,6 +248,33 @@ pub async fn export_identity(
         vec![]
     };
 
+    let attachments = if messages.is_empty() {
+        Vec::new()
+    } else {
+        let message_ids: Vec<i64> = messages
+            .iter()
+            .filter_map(|msg| msg.id.parse::<i64>().ok())
+            .collect();
+        let attachment_rows =
+            paracord_db::attachments::get_attachments_for_message_ids(pool, &message_ids, 50_000)
+                .await?;
+        attachment_rows
+            .into_iter()
+            .map(|row| AttachmentExport {
+                id: row.id.to_string(),
+                message_id: row.message_id.map(|id| id.to_string()),
+                filename: row.filename,
+                content_type: row.content_type,
+                size: row.size,
+                url: row.url,
+                width: row.width,
+                height: row.height,
+                content_hash: row.content_hash,
+                uploaded_at: row.upload_created_at,
+            })
+            .collect()
+    };
+
     // Fetch relationships
     let rel_rows = paracord_db::relationships::get_relationships(pool, user_id).await?;
     let relationships: Vec<RelationshipExport> = rel_rows
@@ -163,7 +288,8 @@ pub async fn export_identity(
         .collect();
 
     // Fetch guild memberships
-    let guild_rows = paracord_db::guilds::get_user_guilds(pool, user_id).await?;
+    let guild_rows =
+        paracord_db::guilds::get_user_guilds(pool, paracord_models::id::UserId(user_id)).await?;
     let mut guilds = Vec::new();
     for g in guild_rows {
         let member = paracord_db::members::get_member(pool, user_id, g.id).await?;
@@ -175,6 +301,28 @@ pub async fn export_identity(
         });
     }
 
+    let signed_prekey = paracord_db::prekeys::get_signed_prekey(pool, user_id)
+        .await?
+        .map(|row| SignedPrekeyExport {
+            id: row.id.to_string(),
+            public_key: row.public_key,
+            signature: row.signature,
+            created_at: row.created_at,
+        });
+    let one_time_prekeys = paracord_db::prekeys::list_one_time_prekeys(pool, user_id)
+        .await?
+        .into_iter()
+        .map(|row| OneTimePrekeyExport {
+            id: row.id.to_string(),
+            public_key: row.public_key,
+            created_at: row.created_at,
+        })
+        .collect::<Vec<_>>();
+    let prekeys = Some(PrekeyExport {
+        signed_prekey,
+        one_time_prekeys,
+    });
+
     // Build unsigned bundle and sign it
     let now = Utc::now();
     let mut bundle = IdentityBundle {
@@ -182,9 +330,12 @@ pub async fn export_identity(
         exported_at: now,
         origin_server: origin_server.to_string(),
         user: user_export,
+        settings,
         messages,
+        attachments,
         relationships,
         guilds,
+        prekeys,
         signature: String::new(), // placeholder
     };
 
@@ -200,7 +351,7 @@ pub fn verify_identity_bundle(
     bundle: &IdentityBundle,
     server_public_key_hex: &str,
 ) -> Result<(), CoreError> {
-    if bundle.version != BUNDLE_VERSION {
+    if bundle.version != 1 && bundle.version != BUNDLE_VERSION {
         return Err(CoreError::BadRequest(format!(
             "unsupported bundle version: {}",
             bundle.version
@@ -235,6 +386,31 @@ pub async fn import_identity(
                 false
             }
         }
+    };
+
+    // 1b. Import user settings snapshot when available.
+    let settings_imported = if let Some(settings) = &bundle.settings {
+        match paracord_db::users::upsert_user_settings(
+            pool,
+            target_user_id,
+            &settings.theme,
+            &settings.locale,
+            &settings.message_display,
+            settings.custom_css.as_deref(),
+            Some(settings.crypto_auth_enabled),
+            Some(&settings.notifications),
+            Some(&settings.keybinds),
+        )
+        .await
+        {
+            Ok(_) => true,
+            Err(e) => {
+                warnings.push(format!("failed to import settings: {}", e));
+                false
+            }
+        }
+    } else {
+        false
     };
 
     // 2. Import messages as attributed records (mark as imported via flags)
@@ -275,6 +451,57 @@ pub async fn import_identity(
         }
     }
 
+    // 2b. Import prekeys for E2EE continuity.
+    let mut prekeys_imported: u64 = 0;
+    if let Some(prekeys) = &bundle.prekeys {
+        if let Some(spk) = &prekeys.signed_prekey {
+            let signed_id = spk
+                .id
+                .parse::<i64>()
+                .unwrap_or_else(|_| paracord_util::snowflake::generate(0));
+            match paracord_db::prekeys::upsert_signed_prekey(
+                pool,
+                signed_id,
+                target_user_id,
+                &spk.public_key,
+                &spk.signature,
+            )
+            .await
+            {
+                Ok(_) => prekeys_imported += 1,
+                Err(e) => warnings.push(format!("failed to import signed prekey: {}", e)),
+            }
+        }
+
+        let one_time = prekeys
+            .one_time_prekeys
+            .iter()
+            .map(|opk| {
+                (
+                    opk.id
+                        .parse::<i64>()
+                        .unwrap_or_else(|_| paracord_util::snowflake::generate(0)),
+                    opk.public_key.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if !one_time.is_empty() {
+            match paracord_db::prekeys::upload_one_time_prekeys(pool, target_user_id, &one_time)
+                .await
+            {
+                Ok(inserted) => prekeys_imported += inserted,
+                Err(e) => warnings.push(format!("failed to import one-time prekeys: {}", e)),
+            }
+        }
+    }
+
+    let attachments_noted = bundle.attachments.len() as u64;
+    if attachments_noted > 0 {
+        warnings.push(
+            "attachment metadata imported; binary files must be restored separately".to_string(),
+        );
+    }
+
     // 3. Note relationships (we can't re-create them without the target user existing)
     let relationships_found = bundle.relationships.len() as u64;
     if !bundle.relationships.is_empty() {
@@ -295,7 +522,10 @@ pub async fn import_identity(
 
     Ok(ImportResult {
         profile_updated,
+        settings_imported,
         messages_imported,
+        prekeys_imported,
+        attachments_noted,
         relationships_found,
         guilds_noted,
         warnings,

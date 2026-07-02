@@ -39,7 +39,10 @@ export function AccountSetupPage() {
     e.preventDefault();
     setError('');
 
-    if (username.length < 2 || username.length > 32) {
+    const normalizedUsername = username.trim();
+    const normalizedDisplayName = displayName.trim();
+
+    if (normalizedUsername.length < 2 || normalizedUsername.length > 32) {
       setError('Username must be between 2 and 32 characters.');
       return;
     }
@@ -54,7 +57,7 @@ export function AccountSetupPage() {
 
     setLoading(true);
     try {
-      await createAccount(username, password, displayName || undefined);
+      await createAccount(normalizedUsername, password, normalizedDisplayName || undefined);
 
       // In migration mode: attach the new public key to the existing server account
       if (isMigration) {
@@ -164,7 +167,7 @@ export function AccountSetupPage() {
         </div>
 
         {error && (
-          <div className="mb-4 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2.5 text-sm font-medium text-accent-danger">
+          <div role="alert" className="mb-4 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2.5 text-sm font-medium text-accent-danger">
             {error}
           </div>
         )}
@@ -183,6 +186,7 @@ export function AccountSetupPage() {
               maxLength={32}
               className="input-field mt-2"
               placeholder="Choose a username"
+              autoComplete="username"
               autoFocus
             />
           </label>
@@ -210,6 +214,7 @@ export function AccountSetupPage() {
               minLength={MIN_PASSWORD_LENGTH}
               className="input-field mt-2"
               placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+              autoComplete="new-password"
             />
             <p className="mt-1.5 text-xs text-text-muted">
               {isMigration
@@ -229,6 +234,7 @@ export function AccountSetupPage() {
               required
               className="input-field mt-2"
               placeholder="Type your password again"
+              autoComplete="new-password"
             />
           </label>
         </div>

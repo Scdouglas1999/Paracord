@@ -154,11 +154,11 @@ impl<T> JitterBuffer<T> {
         let next = self.next_seq?;
 
         // Before playout starts, wait until we have enough buffered
-        if !self.playing {
-            if self.packets.len() < self.target_depth as usize && !self.packets.contains_key(&next)
-            {
-                return None;
-            }
+        if !self.playing
+            && self.packets.len() < self.target_depth as usize
+            && !self.packets.contains_key(&next)
+        {
+            return None;
         }
 
         if let Some(packet) = self.packets.remove(&next) {

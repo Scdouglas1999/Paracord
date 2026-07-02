@@ -1,8 +1,13 @@
 import { useState } from 'react';
 import { Server, Shield, Users, Globe, ArrowRight, ArrowLeft } from 'lucide-react';
+import {
+  getVersionedStorageItem,
+  setVersionedStorageItem,
+} from '../../lib/versionedStorage';
 
 interface OnboardingWizardProps {
   onComplete: () => void;
+  onTryDemo?: () => void;
 }
 
 const STEPS = [
@@ -73,17 +78,17 @@ const STEPS = [
   },
 ];
 
-const STORAGE_KEY = 'paracord:onboarding-complete';
+const STORAGE_KEY = 'onboarding-complete';
 
 export function hasCompletedOnboarding(): boolean {
   try {
-    return localStorage.getItem(STORAGE_KEY) === '1';
+    return getVersionedStorageItem(STORAGE_KEY, ['onboarding-complete']) === '1';
   } catch {
     return false;
   }
 }
 
-export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
+export function OnboardingWizard({ onComplete, onTryDemo }: OnboardingWizardProps) {
   const [step, setStep] = useState(0);
   const isLast = step === STEPS.length - 1;
   const current = STEPS[step];
@@ -91,7 +96,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
   const handleComplete = () => {
     try {
-      localStorage.setItem(STORAGE_KEY, '1');
+      setVersionedStorageItem(STORAGE_KEY, '1');
     } catch {
       // localStorage unavailable
     }
@@ -126,7 +131,18 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           </div>
 
           {/* Content */}
-          <div>{current.content}</div>
+          <div className="space-y-4">
+            <div>{current.content}</div>
+            {step === 1 && onTryDemo && (
+              <button
+                type="button"
+                onClick={onTryDemo}
+                className="w-full rounded-xl border border-accent-primary/40 bg-accent-primary/10 px-4 py-2.5 text-sm font-semibold text-accent-primary transition-colors hover:bg-accent-primary/20"
+              >
+                Try a public demo server
+              </button>
+            )}
+          </div>
 
           {/* Navigation */}
           <div className="flex items-center gap-3 pt-2">

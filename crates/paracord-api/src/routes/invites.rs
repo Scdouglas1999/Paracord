@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use chrono::Utc;
 use paracord_core::AppState;
 use paracord_federation::client::{FederationInviteRequest, FederationJoinRequest};
 use paracord_models::permissions::Permissions;
@@ -21,11 +22,32 @@ pub struct CreateInviteRequest {
     pub max_age: i32,
 }
 
+#[derive(Deserialize, Default)]
+pub struct AcceptInviteRequest {
+    pub verification_ack: Option<bool>,
+    pub verification_answers: Option<Vec<String>>,
+}
+
 fn default_max_uses() -> i32 {
     0
 }
 fn default_max_age() -> i32 {
     86400
+}
+
+const MAX_INVITE_USES: i32 = 100;
+const MAX_INVITE_AGE_SECONDS: i32 = 604_800;
+
+fn parse_i64(value: Option<&Value>, default: i64) -> i64 {
+    match value {
+        Some(Value::Number(raw)) => raw.as_i64().unwrap_or(default),
+        Some(Value::String(raw)) => raw.parse::<i64>().unwrap_or(default),
+        _ => default,
+    }
+}
+
+fn parse_bool(value: Option<&Value>, default: bool) -> bool {
+    value.and_then(|v| v.as_bool()).unwrap_or(default)
 }
 
 async fn federation_send_join_rpc_for_mirrored_guild(
@@ -160,6 +182,17 @@ pub async fn create_invite(
     .await?;
     paracord_core::permissions::require_permission(perms, Permissions::CREATE_INSTANT_INVITE)?;
 
+    if !(0..=MAX_INVITE_USES).contains(&body.max_uses) {
+        return Err(ApiError::BadRequest(format!(
+            "max_uses must be between 0 and {MAX_INVITE_USES}"
+        )));
+    }
+    if !(0..=MAX_INVITE_AGE_SECONDS).contains(&body.max_age) {
+        return Err(ApiError::BadRequest(format!(
+            "max_age must be between 0 and {MAX_INVITE_AGE_SECONDS} seconds"
+        )));
+    }
+
     let code = paracord_core::guild::generate_invite_code(8);
 
     let invite = paracord_db::invites::create_invite(
@@ -251,7 +284,14 @@ pub async fn accept_invite(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(code): Path<String>,
+    body: Option<Json<AcceptInviteRequest>>,
 ) -> Result<Json<Value>, ApiError> {
+    use dashmap::DashMap;
+    use std::sync::OnceLock;
+
+    static RAID_JOIN_WINDOWS: OnceLock<DashMap<i64, Vec<i64>>> = OnceLock::new();
+    let raid_join_windows = RAID_JOIN_WINDOWS.get_or_init(DashMap::new);
+
     let preview = paracord_db::invites::get_invite(&state.db, &code)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -266,10 +306,203 @@ pub async fn accept_invite(
         "Invite target must be a guild/space channel".into(),
     ))?;
 
+    let guild = paracord_db::guilds::get_guild(&state.db, space_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    // Block users currently banned from this guild.
+    let banned = paracord_db::bans::get_ban(&state.db, auth.user_id, space_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .is_some();
+    if banned {
+        return Err(ApiError::Forbidden);
+    }
+
+    let accept_body = body.map(|value| value.0).unwrap_or_default();
+    let now_ms = Utc::now().timestamp_millis();
+    let mut bot_settings_json: Value = guild
+        .bot_settings
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_else(|| json!({}));
+
+    let anti_raid_config = bot_settings_json
+        .get("auto_mod")
+        .and_then(|value| value.get("anti_raid"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let anti_raid_enabled = parse_bool(anti_raid_config.get("enabled"), false);
+    if anti_raid_enabled {
+        let locked_until_ms = parse_i64(anti_raid_config.get("lockdown_until_ms"), 0);
+        if locked_until_ms > now_ms {
+            return Err(ApiError::BadRequest(
+                "Server is temporarily in raid lockdown".into(),
+            ));
+        }
+
+        let join_window_seconds =
+            parse_i64(anti_raid_config.get("join_window_seconds"), 30).clamp(5, 600);
+        let join_threshold =
+            parse_i64(anti_raid_config.get("join_threshold"), 10).clamp(2, 500) as usize;
+        let lockdown_minutes =
+            parse_i64(anti_raid_config.get("lockdown_minutes"), 10).clamp(1, 240);
+        let min_account_age_minutes =
+            parse_i64(anti_raid_config.get("min_account_age_minutes"), 0).max(0);
+        let auto_action = anti_raid_config
+            .get("auto_action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none")
+            .to_ascii_lowercase();
+
+        let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::Unauthorized)?;
+        let account_age_minutes = (Utc::now() - user.created_at).num_minutes().max(0);
+        if min_account_age_minutes > 0 && account_age_minutes < min_account_age_minutes {
+            if auto_action == "ban" {
+                let _ = paracord_db::bans::create_ban(
+                    &state.db,
+                    auth.user_id,
+                    space_id,
+                    Some("auto-raid age gate"),
+                    -2,
+                )
+                .await;
+                return Err(ApiError::Forbidden);
+            }
+            if auto_action == "kick" {
+                return Err(ApiError::Forbidden);
+            }
+        }
+
+        let mut recent = raid_join_windows
+            .get(&space_id)
+            .map(|value| value.clone())
+            .unwrap_or_default();
+        let cutoff = now_ms - (join_window_seconds * 1_000);
+        recent.retain(|entry| *entry >= cutoff);
+        recent.push(now_ms);
+        raid_join_windows.insert(space_id, recent.clone());
+
+        if recent.len() >= join_threshold {
+            let locked_until = now_ms + lockdown_minutes * 60 * 1_000;
+            if !bot_settings_json.is_object() {
+                bot_settings_json = json!({});
+            }
+            let root = bot_settings_json
+                .as_object_mut()
+                .expect("object checked above");
+            let auto_mod = root
+                .entry("auto_mod".to_string())
+                .or_insert_with(|| json!({}));
+            if !auto_mod.is_object() {
+                *auto_mod = json!({});
+            }
+            let auto_mod_obj = auto_mod.as_object_mut().expect("object enforced above");
+            let anti_raid = auto_mod_obj
+                .entry("anti_raid".to_string())
+                .or_insert_with(|| json!({}));
+            if !anti_raid.is_object() {
+                *anti_raid = json!({});
+            }
+            anti_raid
+                .as_object_mut()
+                .expect("object enforced above")
+                .insert("lockdown_until_ms".to_string(), json!(locked_until));
+
+            let serialized =
+                serde_json::to_string(&bot_settings_json).unwrap_or_else(|_| "{}".to_string());
+            let _ = paracord_db::guilds::update_guild(
+                &state.db,
+                space_id,
+                None,
+                None,
+                None,
+                None,
+                Some(&serialized),
+            )
+            .await;
+            return Err(ApiError::BadRequest(
+                "Raid protection triggered temporary lockdown".into(),
+            ));
+        }
+    }
+
+    let verification_gate = bot_settings_json
+        .get("auto_mod")
+        .and_then(|value| value.get("verification_gate"))
+        .or_else(|| bot_settings_json.get("verification_gate"));
+
     let already_member = paracord_db::members::get_member(&state.db, auth.user_id, space_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .is_some();
+
+    if !already_member {
+        if let Some(config) = verification_gate {
+            let enabled = parse_bool(config.get("enabled"), false);
+            if enabled {
+                let require_ack = parse_bool(config.get("require_ack"), true);
+                if require_ack && accept_body.verification_ack != Some(true) {
+                    return Err(ApiError::BadRequest(
+                        "Verification acknowledgement is required before joining".into(),
+                    ));
+                }
+
+                let waiting_period_minutes =
+                    parse_i64(config.get("waiting_period_minutes"), 0).max(0);
+                if waiting_period_minutes > 0 {
+                    let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+                        .await
+                        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                        .ok_or(ApiError::Unauthorized)?;
+                    let account_age_minutes = (Utc::now() - user.created_at).num_minutes().max(0);
+                    if account_age_minutes < waiting_period_minutes {
+                        return Err(ApiError::BadRequest(format!(
+                            "Account must be at least {waiting_period_minutes} minutes old to join this server"
+                        )));
+                    }
+                }
+
+                let expected_questions = config
+                    .get("questions")
+                    .and_then(|value| value.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if !expected_questions.is_empty() {
+                    let answers = accept_body.verification_answers.clone().unwrap_or_default();
+                    if answers.len() < expected_questions.len() {
+                        return Err(ApiError::BadRequest(
+                            "Verification answers are required".into(),
+                        ));
+                    }
+                    for (idx, question) in expected_questions.iter().enumerate() {
+                        let expected = question
+                            .get("answer")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or_default()
+                            .trim()
+                            .to_ascii_lowercase();
+                        if expected.is_empty() {
+                            continue;
+                        }
+                        let received = answers
+                            .get(idx)
+                            .map(|value| value.trim().to_ascii_lowercase())
+                            .unwrap_or_default();
+                        if received != expected {
+                            return Err(ApiError::BadRequest(
+                                "Verification answers did not pass".into(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let invite_state = if already_member {
         Some(preview.clone())
@@ -305,11 +538,6 @@ pub async fn accept_invite(
     {
         tracing::warn!("Failed to assign Member role: {e}");
     }
-
-    let guild = paracord_db::guilds::get_guild(&state.db, space_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::NotFound)?;
 
     let channels = paracord_db::channels::get_guild_channels(&state.db, space_id)
         .await
@@ -389,7 +617,10 @@ pub async fn list_guild_invites(
         guild.owner_id,
         auth.user_id,
     );
-    paracord_core::permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
+    let can_manage_invites = perms.contains(Permissions::MANAGE_GUILD);
+    if !can_manage_invites && !guild.visibility.eq_ignore_ascii_case("public") {
+        return Err(ApiError::Forbidden);
+    }
 
     let invites = paracord_db::invites::get_guild_invites(&state.db, guild_id)
         .await

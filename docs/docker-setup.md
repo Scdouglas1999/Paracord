@@ -4,10 +4,10 @@
 
 ```bash
 # Build and start all services
-docker-compose up -d
+docker compose up -d --build
 
 # View logs
-docker-compose logs -f paracord
+docker compose logs -f paracord
 ```
 
 The server will be available at `http://localhost:8090`.
@@ -28,22 +28,25 @@ All configuration can be overridden via environment variables in `docker-compose
 | `PARACORD_STORAGE_PATH` | `/data/uploads` | File upload storage path |
 | `PARACORD_MEDIA_STORAGE_PATH` | `/data/files` | Media file storage path |
 | `PARACORD_BACKUP_DIR` | `/data/backups` | Backup storage directory |
+| `PARACORD_TLS_ENABLED` | `false` | Disable built-in TLS for the container HTTP quick start; terminate TLS at a reverse proxy in production |
 | `PARACORD_LIVEKIT_URL` | `ws://livekit:7880` | Internal LiveKit WebSocket URL |
 | `PARACORD_LIVEKIT_HTTP_URL` | `http://livekit:7880` | Internal LiveKit HTTP URL |
 | `PARACORD_LIVEKIT_PUBLIC_URL` | (derived from server) | Public LiveKit URL for clients |
-| `PARACORD_LIVEKIT_API_KEY` | (auto-generated) | LiveKit API key |
-| `PARACORD_LIVEKIT_API_SECRET` | (auto-generated) | LiveKit API secret |
+| `PARACORD_LIVEKIT_API_KEY` | `paracordlocal` in compose | Local LiveKit API key; must match the LiveKit service |
+| `PARACORD_LIVEKIT_API_SECRET` | `localcompose_livekit_secret_0123456789abcdef` in compose | Local LiveKit API secret; must match the LiveKit service |
 
 ## Volume Mounts
 
 | Volume | Container Path | Description |
 |---|---|---|
-| `paracord-data` | `/data` | Database, uploads, media, backups |
-| `paracord-config` | `/data/config` | Configuration files |
+| `paracord-data` | `/data` | Config file, database, uploads, media, backups |
 
 ## LiveKit (Voice/Video)
 
 The `docker-compose.yml` includes an optional LiveKit service for voice and video chat.
+It pins `livekit/livekit-server:v1.9.11`, matching the bundled LiveKit version
+used by release packaging. Change the tag intentionally when validating a
+newer LiveKit release.
 
 ### Ports
 
@@ -55,7 +58,7 @@ The `docker-compose.yml` includes an optional LiveKit service for voice and vide
 
 ### Production LiveKit Configuration
 
-For production, set strong credentials:
+The Compose defaults are local-only credentials chosen to satisfy server startup validation. For production, set your own strong credentials:
 
 ```yaml
 environment:
@@ -69,7 +72,7 @@ And update the LiveKit service:
 ```yaml
 livekit:
   environment:
-    - LIVEKIT_KEYS=your-strong-api-key: your-strong-64-char-secret
+    - "LIVEKIT_KEYS=your-strong-api-key: your-strong-64-char-secret"
 ```
 
 ## Building Only the Server Image
@@ -82,6 +85,8 @@ docker run -p 8090:8090 -v paracord-data:/data paracord
 ## Reverse Proxy (nginx)
 
 When running behind a reverse proxy, disable TLS in Paracord and terminate TLS at the proxy:
+
+The provided Dockerfile and `docker-compose.yml` already set `PARACORD_TLS_ENABLED=false` for this topology.
 
 ```nginx
 server {

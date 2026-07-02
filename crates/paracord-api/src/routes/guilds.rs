@@ -1,18 +1,51 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::routes::audit;
 
+const MAX_VANITY_CODE_LEN: usize = 32;
+
 const MAX_GUILD_DESCRIPTION_LEN: usize = 1_024;
+const MAX_DISCOVERY_TAGS: usize = 10;
+const MAX_DISCOVERY_TAG_LEN: usize = 32;
+const TRACE_ID_HEADER: &str = "x-paracord-trace-id";
+static CHANNEL_ROUTE_STAGE_TRACE: OnceLock<bool> = OnceLock::new();
+static CHANNEL_ROUTE_SLOW_MS: OnceLock<u64> = OnceLock::new();
+
+fn channel_route_stage_trace_enabled() -> bool {
+    *CHANNEL_ROUTE_STAGE_TRACE.get_or_init(|| {
+        std::env::var("PARACORD_HTTP_STAGE_TRACE")
+            .ok()
+            .map(|raw| {
+                matches!(
+                    raw.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn channel_route_slow_ms() -> u64 {
+    *CHANNEL_ROUTE_SLOW_MS.get_or_init(|| {
+        std::env::var("PARACORD_HTTP_SLOW_MS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(500)
+    })
+}
 
 fn contains_dangerous_markup(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
@@ -21,6 +54,69 @@ fn contains_dangerous_markup(value: &str) -> bool {
         || lower.contains("onerror=")
         || lower.contains("onload=")
         || lower.contains("<iframe")
+}
+
+fn parse_discovery_tags(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+}
+
+fn normalize_discovery_tags(tags: &[String]) -> Result<String, ApiError> {
+    if tags.len() > MAX_DISCOVERY_TAGS {
+        return Err(ApiError::BadRequest(format!(
+            "discovery_tags cannot contain more than {MAX_DISCOVERY_TAGS} tags"
+        )));
+    }
+
+    let mut normalized = Vec::with_capacity(tags.len());
+    for tag in tags {
+        let value = tag.trim().to_ascii_lowercase();
+        if value.is_empty() {
+            continue;
+        }
+        if value.len() > MAX_DISCOVERY_TAG_LEN {
+            return Err(ApiError::BadRequest(format!(
+                "discovery_tags entries must be {MAX_DISCOVERY_TAG_LEN} characters or fewer"
+            )));
+        }
+        if contains_dangerous_markup(&value) {
+            return Err(ApiError::BadRequest(
+                "discovery_tags contain unsafe markup".into(),
+            ));
+        }
+        if !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        {
+            return Err(ApiError::BadRequest(
+                "discovery_tags may only contain letters, numbers, hyphen, and underscore".into(),
+            ));
+        }
+        if !normalized.contains(&value) {
+            normalized.push(value);
+        }
+    }
+
+    serde_json::to_string(&normalized)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))
+}
+
+fn guild_json(guild: &paracord_db::guilds::GuildRow, member_count: Option<i64>) -> Value {
+    let mut value = json!({
+        "id": guild.id.to_string(),
+        "name": guild.name,
+        "description": guild.description,
+        "icon_hash": guild.icon_hash,
+        "owner_id": guild.owner_id.to_string(),
+        "created_at": guild.created_at.to_rfc3339(),
+        "visibility": guild.visibility,
+        "discovery_tags": parse_discovery_tags(&guild.allowed_roles),
+        "hub_settings": guild.hub_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
+        "bot_settings": guild.bot_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
+    });
+    if let Some(count) = member_count {
+        value["member_count"] = json!(count);
+    }
+    value
 }
 
 #[derive(Deserialize)]
@@ -36,6 +132,8 @@ pub struct UpdateGuildRequest {
     pub icon: Option<String>,
     pub hub_settings: Option<Value>,
     pub bot_settings: Option<Value>,
+    pub visibility: Option<String>,
+    pub discovery_tags: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -65,17 +163,7 @@ pub async fn create_guild(
     )
     .await?;
 
-    let guild_json = json!({
-        "id": guild.id.to_string(),
-        "name": guild.name,
-        "description": guild.description,
-        "icon_hash": guild.icon_hash,
-        "owner_id": guild.owner_id.to_string(),
-        "member_count": 1,
-        "created_at": guild.created_at.to_rfc3339(),
-        "hub_settings": guild.hub_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-        "bot_settings": guild.bot_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-    });
+    let guild_json = guild_json(&guild, Some(1));
 
     state.member_index.add_member(guild_id, auth.user_id);
     state
@@ -89,25 +177,11 @@ pub async fn list_guilds(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
-    let guilds = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id)
+    let guilds = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into())
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let result: Vec<Value> = guilds
-        .iter()
-        .map(|g| {
-            json!({
-                "id": g.id.to_string(),
-                "name": g.name,
-                "description": g.description,
-                "icon_hash": g.icon_hash,
-                "owner_id": g.owner_id.to_string(),
-                "created_at": g.created_at.to_rfc3339(),
-                "hub_settings": g.hub_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-                "bot_settings": g.bot_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-            })
-        })
-        .collect();
+    let result: Vec<Value> = guilds.iter().map(|g| guild_json(g, None)).collect();
 
     Ok(Json(json!(result)))
 }
@@ -128,17 +202,7 @@ pub async fn get_guild(
         .await
         .unwrap_or(0);
 
-    Ok(Json(json!({
-        "id": guild.id.to_string(),
-        "name": guild.name,
-        "description": guild.description,
-        "icon_hash": guild.icon_hash,
-        "owner_id": guild.owner_id.to_string(),
-        "member_count": member_count,
-        "created_at": guild.created_at.to_rfc3339(),
-        "hub_settings": guild.hub_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-        "bot_settings": guild.bot_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-    })))
+    Ok(Json(guild_json(&guild, Some(member_count))))
 }
 
 pub async fn update_guild(
@@ -157,6 +221,23 @@ pub async fn update_guild(
             ));
         }
     }
+    let visibility = body
+        .visibility
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+    if let Some(value) = visibility.as_deref() {
+        if !matches!(value, "private" | "public" | "roles") {
+            return Err(ApiError::BadRequest(
+                "visibility must be private, public, or roles".into(),
+            ));
+        }
+    }
+    let discovery_tags = body
+        .discovery_tags
+        .as_ref()
+        .map(|tags| normalize_discovery_tags(tags))
+        .transpose()?;
 
     let hub_settings_str = body
         .hub_settings
@@ -177,19 +258,12 @@ pub async fn update_guild(
         body.icon.as_deref(),
         hub_settings_str.as_deref(),
         bot_settings_str.as_deref(),
+        visibility.as_deref(),
+        discovery_tags.as_deref(),
     )
     .await?;
 
-    let guild_json = json!({
-        "id": updated.id.to_string(),
-        "name": updated.name,
-        "description": updated.description,
-        "icon_hash": updated.icon_hash,
-        "owner_id": updated.owner_id.to_string(),
-        "created_at": updated.created_at.to_rfc3339(),
-        "hub_settings": updated.hub_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-        "bot_settings": updated.bot_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-    });
+    let guild_json = guild_json(&updated, None);
 
     state
         .event_bus
@@ -264,9 +338,10 @@ pub async fn transfer_ownership(
             "New owner must be a guild member".into(),
         ));
     }
-    let updated = paracord_db::guilds::transfer_ownership(&state.db, guild_id, new_owner_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let updated =
+        paracord_db::guilds::transfer_ownership(&state.db, guild_id.into(), new_owner_id.into())
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let payload = json!({
         "id": updated.id.to_string(),
         "owner_id": updated.owner_id.to_string(),
@@ -363,28 +438,51 @@ pub async fn update_channel_positions(
 pub async fn get_channels(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(guild_id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
+    let route_started = Instant::now();
+    let trace_id = headers
+        .get(TRACE_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("-");
+
+    let ensure_member_started = Instant::now();
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+    let ensure_member_ms = ensure_member_started.elapsed().as_millis() as u64;
+
+    let guild_fetch_started = Instant::now();
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+    let guild_fetch_ms = guild_fetch_started.elapsed().as_millis() as u64;
 
+    let channels_fetch_started = Instant::now();
     let channels = paracord_db::channels::get_guild_channels(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let channels_fetch_ms = channels_fetch_started.elapsed().as_millis() as u64;
 
+    let permissions_started = Instant::now();
+    let channel_permissions = paracord_core::permissions::compute_all_channel_permissions(
+        &state.db,
+        guild_id,
+        &channels,
+        guild.owner_id,
+        auth.user_id,
+    )
+    .await?;
+    let permissions_ms = permissions_started.elapsed().as_millis() as u64;
+
+    let serialize_started = Instant::now();
     let mut result: Vec<Value> = Vec::with_capacity(channels.len());
+    let total_channels = channels.len();
     for c in channels {
-        let perms = paracord_core::permissions::compute_channel_permissions(
-            &state.db,
-            guild_id,
-            c.id,
-            guild.owner_id,
-            auth.user_id,
-        )
-        .await?;
+        let perms = channel_permissions
+            .get(&c.id)
+            .copied()
+            .unwrap_or(Permissions::empty());
         if !perms.contains(Permissions::VIEW_CHANNEL) {
             continue;
         }
@@ -407,6 +505,47 @@ pub async fn get_channels(
             "last_message_id": c.last_message_id.map(|id| id.to_string()),
             "required_role_ids": required_role_ids,
         }));
+    }
+    let visible_channels = result.len();
+    let serialize_ms = serialize_started.elapsed().as_millis() as u64;
+    let total_ms = route_started.elapsed().as_millis() as u64;
+    let slow_threshold_ms = channel_route_slow_ms();
+    if channel_route_stage_trace_enabled() || total_ms >= slow_threshold_ms {
+        if total_ms >= slow_threshold_ms {
+            tracing::warn!(
+                target: "perf",
+                trace_id,
+                route = "GET /api/v1/guilds/{guild_id}/channels",
+                guild_id,
+                user_id = auth.user_id,
+                total_ms,
+                ensure_member_ms,
+                guild_fetch_ms,
+                channels_fetch_ms,
+                permissions_ms,
+                serialize_ms,
+                total_channels,
+                visible_channels,
+                "channel_list_timing"
+            );
+        } else {
+            tracing::info!(
+                target: "perf",
+                trace_id,
+                route = "GET /api/v1/guilds/{guild_id}/channels",
+                guild_id,
+                user_id = auth.user_id,
+                total_ms,
+                ensure_member_ms,
+                guild_fetch_ms,
+                channels_fetch_ms,
+                permissions_ms,
+                serialize_ms,
+                total_channels,
+                visible_channels,
+                "channel_list_timing"
+            );
+        }
     }
 
     Ok(Json(json!(result)))
@@ -659,4 +798,93 @@ pub async fn delete_files(
     }
 
     Ok(Json(json!({ "deleted": deleted })))
+}
+
+// ── Vanity URL ────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct UpdateVanityUrlRequest {
+    /// The new vanity code, or null/empty to clear it.
+    pub code: Option<String>,
+}
+
+/// GET /api/v1/guilds/{guild_id}/vanity-url
+/// Returns the current vanity URL code (owner-only).
+pub async fn get_vanity_url(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(guild_id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if guild.owner_id != auth.user_id {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(json!({ "code": guild.vanity_url_code })))
+}
+
+/// PATCH /api/v1/guilds/{guild_id}/vanity-url
+/// Set or clear the vanity URL code (owner-only).
+pub async fn update_vanity_url(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(guild_id): Path<i64>,
+    Json(body): Json<UpdateVanityUrlRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if guild.owner_id != auth.user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let code = body
+        .code
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    if let Some(code) = code {
+        if code.len() > MAX_VANITY_CODE_LEN {
+            return Err(ApiError::BadRequest(format!(
+                "vanity code must be at most {} characters",
+                MAX_VANITY_CODE_LEN
+            )));
+        }
+        // Allow only alphanumeric and hyphens
+        if !code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(ApiError::BadRequest(
+                "vanity code may only contain letters, digits, and hyphens".into(),
+            ));
+        }
+        // Check uniqueness
+        let existing = paracord_db::guilds::get_guild_by_vanity_code(&state.db, code)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if let Some(other) = existing {
+            if other.id != guild_id {
+                return Err(ApiError::BadRequest("vanity code is already in use".into()));
+            }
+        }
+    }
+
+    let updated = paracord_db::guilds::update_vanity_url(&state.db, guild_id.into(), code)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    audit::log_action(
+        &state,
+        guild_id,
+        auth.user_id,
+        audit::ACTION_GUILD_UPDATE,
+        Some(guild_id),
+        None,
+        Some(json!({ "vanity_url_code": updated.vanity_url_code })),
+    )
+    .await;
+
+    Ok(Json(json!({ "code": updated.vanity_url_code })))
 }

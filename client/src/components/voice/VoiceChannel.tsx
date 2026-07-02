@@ -17,7 +17,7 @@ interface VoiceChannelProps {
 export function VoiceChannel({ channelName, users, onJoin }: VoiceChannelProps) {
   return (
     <div>
-      <button onClick={onJoin} className="channel-item">
+      <button onClick={onJoin} className="channel-item" aria-label={`Join voice channel ${channelName}`}>
         <Volume2 size={18} style={{ color: 'var(--channel-icon)', flexShrink: 0 }} />
         <span className="truncate">{channelName}</span>
       </button>

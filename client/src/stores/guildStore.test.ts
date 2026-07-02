@@ -221,7 +221,11 @@ describe('guildStore', () => {
     });
 
     it('normalizes missing fields with defaults', () => {
-      const partial = { id: 'g-new', name: 'Partial', owner_id: 'u1' } as any;
+      const partial = {
+        id: 'g-new',
+        name: 'Partial',
+        owner_id: 'u1',
+      } as unknown as import('../types').Guild;
       useGuildStore.getState().addGuild(partial);
       const guild = useGuildStore.getState().guilds[0];
       expect(guild.member_count).toBe(0);

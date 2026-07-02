@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 pub mod client;
 pub mod protocol;
 pub mod signing;
@@ -9,6 +11,20 @@ use paracord_db::DbPool;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
+
+pub const FEDERATION_PROTOCOL_VERSION_V1: &str = "federation-v1";
+pub const FEDERATION_PROTOCOL_VERSION_V2: &str = "federation-v2";
+pub const FEDERATION_PROTOCOL_SUPPORTED: [&str; 2] = [
+    FEDERATION_PROTOCOL_VERSION_V2,
+    FEDERATION_PROTOCOL_VERSION_V1,
+];
+pub const FEDERATION_PROTOCOL_DEFAULT: &str = FEDERATION_PROTOCOL_VERSION_V2;
+
+pub fn is_supported_protocol_version(version: &str) -> bool {
+    FEDERATION_PROTOCOL_SUPPORTED
+        .iter()
+        .any(|supported| supported.eq_ignore_ascii_case(version))
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum FederationError {
@@ -400,25 +416,6 @@ impl FederationService {
             return;
         }
 
-        // Relay cycle guard: if we already persisted this event, skip relaying.
-        match self.fetch_event(pool, &envelope.event_id).await {
-            Ok(Some(_)) => {
-                tracing::debug!(
-                    "federation: skipping relay of already-persisted event {}",
-                    envelope.event_id
-                );
-                return;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "federation: relay dedup check failed for {}: {}",
-                    envelope.event_id,
-                    e
-                );
-            }
-            Ok(None) => {}
-        }
-
         let now_ms = chrono::Utc::now().timestamp_millis();
         let peers = match paracord_db::federation::list_trusted_federated_servers(pool).await {
             Ok(servers) => servers,
@@ -451,7 +448,11 @@ impl FederationService {
                 std::collections::HashSet::new()
             }
         };
-        let has_scoped_targets = !scoped_targets.is_empty();
+        let membership_event = matches!(
+            envelope.event_type.as_str(),
+            "m.member.join" | "m.member.leave"
+        );
+        let has_scoped_targets = !membership_event && !scoped_targets.is_empty();
 
         let client = match self.build_signed_client() {
             Ok(c) => c,
@@ -818,7 +819,7 @@ pub fn hex_encode(bytes: &[u8]) -> String {
 }
 
 pub fn hex_decode(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(value.len() / 2);

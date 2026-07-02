@@ -6,21 +6,23 @@ import { ServerConnectPage } from './pages/ServerConnectPage';
 import { AccountSetupPage } from './pages/AccountSetupPage';
 import { AccountUnlockPage } from './pages/AccountUnlockPage';
 import { AccountRecoverPage } from './pages/AccountRecoverPage';
-import { AppLayout } from './pages/AppLayout';
-import { GuildPage } from './pages/GuildPage';
-import { DMPage } from './pages/DMPage';
-import { FriendsPage } from './pages/FriendsPage';
-import { HomePage } from './pages/HomePage';
-import { InvitePage } from './pages/InvitePage';
 import { TermsPage } from './pages/TermsPage';
 import { PrivacyPage } from './pages/PrivacyPage';
-import { BotAuthorizePage } from './pages/BotAuthorizePage';
-import { GuildHub } from './pages/GuildHub';
 
-// Lazy-loaded pages (heavy, visited infrequently)
+// Lazy-loaded route surfaces keep the initial auth/server bootstrap bundle small.
+const AppLayout = lazy(() => import('./pages/AppLayout').then(m => ({ default: m.AppLayout })));
+const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.HomePage })));
+const GuildHub = lazy(() => import('./pages/GuildHub').then(m => ({ default: m.GuildHub })));
+const GuildPage = lazy(() => import('./pages/GuildPage').then(m => ({ default: m.GuildPage })));
+const GuildSettingsPage = lazy(() => import('./pages/GuildSettingsPage').then(m => ({ default: m.GuildSettingsPage })));
+const DMPage = lazy(() => import('./pages/DMPage').then(m => ({ default: m.DMPage })));
+const FriendsPage = lazy(() => import('./pages/FriendsPage').then(m => ({ default: m.FriendsPage })));
+const InvitePage = lazy(() => import('./pages/InvitePage').then(m => ({ default: m.InvitePage })));
+const BotAuthorizePage = lazy(() => import('./pages/BotAuthorizePage').then(m => ({ default: m.BotAuthorizePage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
 const DiscoveryPage = lazy(() => import('./pages/DiscoveryPage').then(m => ({ default: m.DiscoveryPage })));
 const DeveloperPage = lazy(() => import('./pages/DeveloperPage').then(m => ({ default: m.DeveloperPage })));
+const TemplateGalleryPage = lazy(() => import('./pages/TemplateGalleryPage').then(m => ({ default: m.TemplateGalleryPage })));
 const MediaTest = lazy(() => import('./pages/MediaTest'));
 import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
@@ -49,7 +51,7 @@ function useServerStatus() {
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
-        if (data?.service === 'paracord') {
+        if (data?.service === 'paracord' || data?.status === 'ok') {
           setStatus('ready');
         } else {
           setStatus('needed');
@@ -172,6 +174,10 @@ function LazyFallback() {
   );
 }
 
+function lazyRoute(children: React.ReactNode) {
+  return <Suspense fallback={<LazyFallback />}>{children}</Suspense>;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -188,26 +194,28 @@ export default function App() {
       <Route path="/register" element={<AuthRoute><RegisterPage /></AuthRoute>} />
 
       {/* Invites, legal */}
-      <Route path="/invite/:code" element={<InvitePage />} />
+      <Route path="/invite/:code" element={lazyRoute(<InvitePage />)} />
       <Route path="/terms" element={<TermsPage />} />
       <Route path="/privacy" element={<PrivacyPage />} />
 
       {/* Main app */}
-      <Route path="/app" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-        <Route index element={<HomePage />} />
-        <Route path="guilds/:guildId" element={<GuildHub />} />
-        <Route path="guilds/:guildId/channels/:channelId" element={<GuildPage />} />
-        <Route path="dms" element={<DMPage />} />
-        <Route path="dms/:channelId" element={<DMPage />} />
-        <Route path="friends" element={<FriendsPage />} />
-        <Route path="admin" element={<Suspense fallback={<LazyFallback />}><AdminPage /></Suspense>} />
-        <Route path="discovery" element={<Suspense fallback={<LazyFallback />}><DiscoveryPage /></Suspense>} />
-        <Route path="oauth2/authorize" element={<BotAuthorizePage />} />
-        <Route path="developers" element={<Suspense fallback={<LazyFallback />}><DeveloperPage /></Suspense>} />
+      <Route path="/app" element={<ProtectedRoute>{lazyRoute(<AppLayout />)}</ProtectedRoute>}>
+        <Route index element={lazyRoute(<HomePage />)} />
+        <Route path="guilds/:guildId" element={lazyRoute(<GuildHub />)} />
+        <Route path="guilds/:guildId/settings" element={lazyRoute(<GuildSettingsPage />)} />
+        <Route path="guilds/:guildId/channels/:channelId" element={lazyRoute(<GuildPage />)} />
+        <Route path="dms" element={lazyRoute(<DMPage />)} />
+        <Route path="dms/:channelId" element={lazyRoute(<DMPage />)} />
+        <Route path="friends" element={lazyRoute(<FriendsPage />)} />
+        <Route path="admin" element={lazyRoute(<AdminPage />)} />
+        <Route path="discovery" element={lazyRoute(<DiscoveryPage />)} />
+        <Route path="templates" element={lazyRoute(<TemplateGalleryPage />)} />
+        <Route path="oauth2/authorize" element={lazyRoute(<BotAuthorizePage />)} />
+        <Route path="developers" element={lazyRoute(<DeveloperPage />)} />
       </Route>
 
       {/* Media engine test page (no auth required) */}
-      <Route path="/media-test" element={<Suspense fallback={<LazyFallback />}><MediaTest /></Suspense>} />
+      <Route path="/media-test" element={lazyRoute(<MediaTest />)} />
 
       {/* Default: send to app (which handles auth redirects) */}
       <Route path="*" element={<Navigate to="/app" />} />

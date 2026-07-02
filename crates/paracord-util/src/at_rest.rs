@@ -63,6 +63,18 @@ impl FileCryptor {
         }
     }
 
+    /// Create a cryptor with a custom HKDF context label (e.g. `b"totp"` for TOTP secrets).
+    pub fn from_master_key_with_context(
+        master_key: &[u8; 32],
+        context: &[u8],
+        allow_plaintext_reads: bool,
+    ) -> Self {
+        Self {
+            key: derive_subkey(master_key, context),
+            allow_plaintext_reads,
+        }
+    }
+
     pub fn allow_plaintext_reads(&self) -> bool {
         self.allow_plaintext_reads
     }

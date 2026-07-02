@@ -12,10 +12,23 @@
 //! [`SimulcastEncoder`] wraps any `VideoEncoder` implementation and manages
 //! multiple encoder instances for simultaneous multi-quality output.
 
+#[cfg(feature = "vpx")]
+use super::VideoContentHint;
 use super::{
     downscale_i420, rgba_to_i420, EncodedFrame, EncoderConfig, PixelFormat, SimulcastLayer,
-    VideoError,
+    VideoCodec, VideoError,
 };
+
+#[cfg(target_os = "windows")]
+mod windows_h264;
+#[cfg(target_os = "windows")]
+pub use windows_h264::MfAv1Encoder;
+#[cfg(target_os = "windows")]
+pub use windows_h264::MfH264Encoder;
+#[cfg(target_os = "windows")]
+pub use windows_h264::WindowsAv1BackendProbe;
+#[cfg(target_os = "windows")]
+pub use windows_h264::WindowsH264BackendProbe;
 
 // ── VideoEncoder trait ───────────────────────────────────────────────
 
@@ -46,6 +59,43 @@ pub trait VideoEncoder: Send {
 
     /// Return the encoder configuration.
     fn config(&self) -> &EncoderConfig;
+
+    /// Codec produced by this encoder.
+    fn codec(&self) -> VideoCodec;
+
+    /// Human-readable backend identifier used for diagnostics.
+    fn backend_name(&self) -> &'static str;
+
+    /// Whether this encoder backend is hardware accelerated.
+    fn is_hardware_accelerated(&self) -> bool {
+        false
+    }
+}
+
+pub fn create_encoder(
+    codec: VideoCodec,
+    config: EncoderConfig,
+) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    match codec {
+        #[cfg(feature = "vpx")]
+        VideoCodec::Vp9 => Ok(Box::new(Vp9Encoder::new(config)?)),
+        #[cfg(not(feature = "vpx"))]
+        VideoCodec::Vp9 => Err(VideoError::CodecUnavailable(
+            "vp9 encoder unavailable without 'vpx' feature".into(),
+        )),
+        #[cfg(target_os = "windows")]
+        VideoCodec::Av1 => Ok(Box::new(MfAv1Encoder::new(config)?)),
+        #[cfg(not(target_os = "windows"))]
+        VideoCodec::Av1 => Err(VideoError::CodecUnavailable(
+            "av1 encoder backend not implemented on this platform yet".into(),
+        )),
+        #[cfg(target_os = "windows")]
+        VideoCodec::H264 => Ok(Box::new(MfH264Encoder::new(config)?)),
+        #[cfg(not(target_os = "windows"))]
+        VideoCodec::H264 => Err(VideoError::CodecUnavailable(
+            "h264 encoder backend not implemented on this platform yet".into(),
+        )),
+    }
 }
 
 // ── SimulcastEncoder ─────────────────────────────────────────────────
@@ -66,33 +116,39 @@ pub struct SimulcastEncoder {
     input_height: u32,
     /// Reusable I420 conversion buffer for RGBA input.
     i420_buf: Vec<u8>,
+    /// Backend identifier shared by the per-layer encoders.
+    backend_name: &'static str,
+    /// Whether the underlying encoder backend is hardware accelerated.
+    hardware_accelerated: bool,
 }
 
 impl SimulcastEncoder {
-    /// Create a new simulcast encoder.
-    ///
-    /// `factory` is called once per layer with the appropriate `EncoderConfig`.
-    /// The caller decides which concrete encoder backend to use.
-    pub fn new<F>(
+    /// Create a new simulcast encoder with explicit per-layer configurations.
+    pub fn new_with_configs<F>(
         input_width: u32,
         input_height: u32,
         input_format: PixelFormat,
-        layers: &[SimulcastLayer],
+        layers: &[(SimulcastLayer, EncoderConfig)],
         mut factory: F,
     ) -> Result<Self, VideoError>
     where
         F: FnMut(EncoderConfig) -> Result<Box<dyn VideoEncoder>, VideoError>,
     {
         let mut layer_encoders = Vec::with_capacity(layers.len());
-        for &layer in layers {
+        let mut backend_name = "unknown";
+        let mut hardware_accelerated = false;
+        for (layer, config) in layers {
             let config = EncoderConfig {
-                // The encoder always receives I420 — we convert from RGBA if needed.
                 pixel_format: PixelFormat::I420,
-                ..EncoderConfig::for_layer(layer, PixelFormat::I420)
+                ..config.clone()
             };
             config.validate()?;
             let enc = factory(config)?;
-            layer_encoders.push((layer, enc));
+            if layer_encoders.is_empty() {
+                backend_name = enc.backend_name();
+                hardware_accelerated = enc.is_hardware_accelerated();
+            }
+            layer_encoders.push((*layer, enc));
         }
 
         let i420_size = PixelFormat::I420.frame_size(input_width, input_height);
@@ -103,7 +159,39 @@ impl SimulcastEncoder {
             input_width,
             input_height,
             i420_buf: vec![0u8; i420_size],
+            backend_name,
+            hardware_accelerated,
         })
+    }
+
+    /// Create a new simulcast encoder.
+    ///
+    /// `factory` is called once per layer with the appropriate `EncoderConfig`.
+    /// The caller decides which concrete encoder backend to use.
+    pub fn new<F>(
+        input_width: u32,
+        input_height: u32,
+        input_format: PixelFormat,
+        layers: &[SimulcastLayer],
+        factory: F,
+    ) -> Result<Self, VideoError>
+    where
+        F: FnMut(EncoderConfig) -> Result<Box<dyn VideoEncoder>, VideoError>,
+    {
+        let configs = layers
+            .iter()
+            .copied()
+            .map(|layer| {
+                (
+                    layer,
+                    EncoderConfig {
+                        pixel_format: PixelFormat::I420,
+                        ..EncoderConfig::for_layer(layer, PixelFormat::I420)
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        Self::new_with_configs(input_width, input_height, input_format, &configs, factory)
     }
 
     /// Encode one input frame across all simulcast layers.
@@ -180,6 +268,14 @@ impl SimulcastEncoder {
         }
         Ok(results)
     }
+
+    pub fn backend_name(&self) -> &'static str {
+        self.backend_name
+    }
+
+    pub fn is_hardware_accelerated(&self) -> bool {
+        self.hardware_accelerated
+    }
 }
 
 // ── VP9 Encoder (feature-gated) ──────────────────────────────────────
@@ -199,7 +295,6 @@ mod vpx_impl {
         ctx: vpx_codec_ctx_t,
         config: EncoderConfig,
         frame_count: i64,
-        keyframe_interval: u32,
     }
 
     // Safety: The vpx_codec_ctx_t is accessed only through &mut self, so
@@ -207,6 +302,74 @@ mod vpx_impl {
     unsafe impl Send for Vp9Encoder {}
 
     impl Vp9Encoder {
+        fn thread_count_for_config(config: &EncoderConfig) -> u32 {
+            let available = std::thread::available_parallelism()
+                .map(|n| n.get() as u32)
+                .unwrap_or(4);
+            let recommended = match config.width.saturating_mul(config.height) {
+                pixels if pixels >= 3840 * 2160 => 16,
+                pixels if pixels >= 2560 * 1440 => 12,
+                pixels if pixels >= 1920 * 1080 => 8,
+                pixels if pixels >= 1280 * 720 => 6,
+                _ => 4,
+            };
+            available.min(recommended).max(2)
+        }
+
+        fn tile_columns_for_width(width: u32) -> i32 {
+            if width >= 3840 {
+                3
+            } else if width >= 1920 {
+                2
+            } else if width >= 1280 {
+                1
+            } else {
+                0
+            }
+        }
+
+        fn cpu_used_for_config(config: &EncoderConfig) -> i32 {
+            match config.content_hint {
+                VideoContentHint::Motion | VideoContentHint::Film => {
+                    match config.width.saturating_mul(config.height) {
+                        pixels if pixels >= 3840 * 2160 => 8,
+                        pixels if pixels >= 2560 * 1440 => 7,
+                        pixels if pixels >= 1920 * 1080 => 6,
+                        _ => 5,
+                    }
+                }
+                VideoContentHint::Detail => match config.width.saturating_mul(config.height) {
+                    pixels if pixels >= 2560 * 1440 => 7,
+                    pixels if pixels >= 1920 * 1080 => 6,
+                    _ => 5,
+                },
+                VideoContentHint::Default => match config.width.saturating_mul(config.height) {
+                    pixels if pixels >= 3840 * 2160 => 8,
+                    pixels if pixels >= 1920 * 1080 => 7,
+                    _ => 6,
+                },
+            }
+        }
+
+        fn quantizer_bounds(config: &EncoderConfig) -> (u32, u32) {
+            match config.content_hint {
+                VideoContentHint::Detail => (4, 28),
+                VideoContentHint::Motion => (4, 32),
+                VideoContentHint::Film => (4, 36),
+                VideoContentHint::Default => (4, 34),
+            }
+        }
+
+        fn tune_content(config: &EncoderConfig) -> i32 {
+            match config.content_hint {
+                VideoContentHint::Detail => vp9e_tune_content::VP9E_CONTENT_SCREEN as i32,
+                VideoContentHint::Film => vp9e_tune_content::VP9E_CONTENT_FILM as i32,
+                VideoContentHint::Motion | VideoContentHint::Default => {
+                    vp9e_tune_content::VP9E_CONTENT_DEFAULT as i32
+                }
+            }
+        }
+
         /// Create a new VP9 encoder with the given configuration.
         pub fn new(config: EncoderConfig) -> Result<Self, VideoError> {
             config.validate()?;
@@ -236,10 +399,19 @@ mod vpx_impl {
                 cfg.g_timebase.num = 1;
                 cfg.g_timebase.den = config.fps as c_int;
                 cfg.rc_target_bitrate = config.bitrate_kbps;
-                cfg.g_threads = 4;
+                cfg.g_threads = Self::thread_count_for_config(&config);
                 cfg.g_error_resilient = VPX_ERROR_RESILIENT_DEFAULT;
                 cfg.g_lag_in_frames = 0; // zero-latency for real-time
                 cfg.rc_end_usage = vpx_rc_mode::VPX_CBR; // constant bitrate for real-time
+                cfg.rc_buf_sz = 2_000;
+                cfg.rc_buf_initial_sz = 1_000;
+                cfg.rc_buf_optimal_sz = 1_200;
+                cfg.rc_undershoot_pct = 50;
+                cfg.rc_overshoot_pct = 50;
+                cfg.rc_dropframe_thresh = 0;
+                let (min_q, max_q) = Self::quantizer_bounds(&config);
+                cfg.rc_min_quantizer = min_q;
+                cfg.rc_max_quantizer = max_q;
 
                 if config.keyframe_interval > 0 {
                     cfg.kf_max_dist = config.keyframe_interval;
@@ -264,7 +436,7 @@ mod vpx_impl {
                 let _ = vpx_codec_control_(
                     &mut ctx,
                     vp8e_enc_control_id::VP8E_SET_CPUUSED as _,
-                    8 as c_int,
+                    Self::cpu_used_for_config(&config) as c_int,
                 );
 
                 // Enable row-level multi-threading for VP9
@@ -274,17 +446,52 @@ mod vpx_impl {
                     1 as c_int,
                 );
 
-                let keyframe_interval = if config.keyframe_interval > 0 {
-                    config.keyframe_interval
-                } else {
-                    300 // default: ~10 seconds at 30fps
-                };
+                // Screen-content tuning materially improves text/desktop clarity.
+                let _ = vpx_codec_control_(
+                    &mut ctx,
+                    vp8e_enc_control_id::VP9E_SET_TUNE_CONTENT as _,
+                    Self::tune_content(&config) as c_int,
+                );
+
+                // Allow the encoder to split the frame across tiles for better parallelism.
+                let _ = vpx_codec_control_(
+                    &mut ctx,
+                    vp8e_enc_control_id::VP9E_SET_TILE_COLUMNS as _,
+                    Self::tile_columns_for_width(config.width),
+                );
+
+                // Adaptive quantization helps preserve detail in screen content.
+                let _ = vpx_codec_control_(
+                    &mut ctx,
+                    vp8e_enc_control_id::VP9E_SET_AQ_MODE as _,
+                    3 as c_int,
+                );
+
+                // Constrained quality helps retain more detail within the bitrate budget.
+                let _ = vpx_codec_control_(
+                    &mut ctx,
+                    vp8e_enc_control_id::VP8E_SET_CQ_LEVEL as _,
+                    Self::quantizer_bounds(&config).1 as c_int,
+                );
+
+                // Keep the encoder from suppressing low-motion screen detail too aggressively.
+                let _ = vpx_codec_control_(
+                    &mut ctx,
+                    vp8e_enc_control_id::VP8E_SET_STATIC_THRESHOLD as _,
+                    0 as c_int,
+                );
+
+                // Permit larger intra bursts so keyframes stay crisp for text and UI.
+                let _ = vpx_codec_control_(
+                    &mut ctx,
+                    vp8e_enc_control_id::VP8E_SET_MAX_INTRA_BITRATE_PCT as _,
+                    300 as c_int,
+                );
 
                 Ok(Self {
                     ctx,
                     config,
                     frame_count: 0,
-                    keyframe_interval,
                 })
             }
         }
@@ -305,6 +512,7 @@ mod vpx_impl {
                         let is_keyframe = (f.flags & VPX_FRAME_IS_KEY) != 0;
                         frames.push(EncodedFrame {
                             data,
+                            codec: VideoCodec::Vp9,
                             pts: f.pts,
                             is_keyframe,
                             layer: None,
@@ -394,6 +602,14 @@ mod vpx_impl {
         fn config(&self) -> &EncoderConfig {
             &self.config
         }
+
+        fn codec(&self) -> VideoCodec {
+            VideoCodec::Vp9
+        }
+
+        fn backend_name(&self) -> &'static str {
+            "libvpx"
+        }
     }
 
     impl Drop for Vp9Encoder {
@@ -460,12 +676,13 @@ impl VideoEncoder for NullEncoder {
             300
         };
         let is_keyframe =
-            force_keyframe || self.frame_count == 0 || (self.frame_count % kf_interval == 0);
+            force_keyframe || self.frame_count == 0 || self.frame_count.is_multiple_of(kf_interval);
 
         self.frame_count += 1;
 
         Ok(vec![EncodedFrame {
             data: data.to_vec(),
+            codec: VideoCodec::Vp9,
             pts,
             is_keyframe,
             layer: None,
@@ -482,6 +699,14 @@ impl VideoEncoder for NullEncoder {
     fn config(&self) -> &EncoderConfig {
         &self.config
     }
+
+    fn codec(&self) -> VideoCodec {
+        VideoCodec::Vp9
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "null"
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -489,6 +714,7 @@ impl VideoEncoder for NullEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video::VideoContentHint;
 
     fn make_test_config(layer: SimulcastLayer) -> EncoderConfig {
         EncoderConfig::for_layer(layer, PixelFormat::I420)
@@ -585,6 +811,7 @@ mod tests {
             bitrate_kbps: 500,
             pixel_format: PixelFormat::I420,
             keyframe_interval: 0,
+            content_hint: VideoContentHint::Default,
         };
         assert!(NullEncoder::new(config).is_err());
     }

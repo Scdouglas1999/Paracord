@@ -77,10 +77,7 @@ pub async fn create_command(
     Ok(row)
 }
 
-pub async fn get_command(
-    pool: &DbPool,
-    id: i64,
-) -> Result<Option<ApplicationCommandRow>, DbError> {
+pub async fn get_command(pool: &DbPool, id: i64) -> Result<Option<ApplicationCommandRow>, DbError> {
     let sql = format!("SELECT {SELECT_COLS} FROM application_commands WHERE id = $1");
     let row = sqlx::query_as::<_, ApplicationCommandRow>(&sql)
         .bind(id)
@@ -171,12 +168,10 @@ pub async fn bulk_overwrite_global_commands(
     // Wrap in a transaction for atomicity
     let mut tx = pool.begin().await?;
 
-    sqlx::query(
-        "DELETE FROM application_commands WHERE application_id = $1 AND guild_id IS NULL",
-    )
-    .bind(application_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("DELETE FROM application_commands WHERE application_id = $1 AND guild_id IS NULL")
+        .bind(application_id)
+        .execute(&mut *tx)
+        .await?;
 
     let insert_sql = format!(
         "INSERT INTO application_commands (id, application_id, guild_id, name, description, options, type, default_member_permissions, dm_permission, nsfw)
@@ -185,7 +180,17 @@ pub async fn bulk_overwrite_global_commands(
     );
 
     let mut results = Vec::with_capacity(commands.len());
-    for &(id, name, description, options, cmd_type, default_member_permissions, dm_permission, nsfw) in commands {
+    for &(
+        id,
+        name,
+        description,
+        options,
+        cmd_type,
+        default_member_permissions,
+        dm_permission,
+        nsfw,
+    ) in commands
+    {
         let row = sqlx::query_as::<_, ApplicationCommandRow>(&insert_sql)
             .bind(id)
             .bind(application_id)
@@ -215,13 +220,11 @@ pub async fn bulk_overwrite_guild_commands(
     // Wrap in a transaction for atomicity
     let mut tx = pool.begin().await?;
 
-    sqlx::query(
-        "DELETE FROM application_commands WHERE application_id = $1 AND guild_id = $2",
-    )
-    .bind(application_id)
-    .bind(guild_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("DELETE FROM application_commands WHERE application_id = $1 AND guild_id = $2")
+        .bind(application_id)
+        .bind(guild_id)
+        .execute(&mut *tx)
+        .await?;
 
     let insert_sql = format!(
         "INSERT INTO application_commands (id, application_id, guild_id, name, description, options, type, default_member_permissions, dm_permission, nsfw)
@@ -230,7 +233,17 @@ pub async fn bulk_overwrite_guild_commands(
     );
 
     let mut results = Vec::with_capacity(commands.len());
-    for &(id, name, description, options, cmd_type, default_member_permissions, dm_permission, nsfw) in commands {
+    for &(
+        id,
+        name,
+        description,
+        options,
+        cmd_type,
+        default_member_permissions,
+        dm_permission,
+        nsfw,
+    ) in commands
+    {
         let row = sqlx::query_as::<_, ApplicationCommandRow>(&insert_sql)
             .bind(id)
             .bind(application_id)
@@ -280,26 +293,12 @@ mod tests {
     use crate::{create_pool, run_migrations};
 
     async fn setup_app(pool: &DbPool, owner_id: i64, app_id: i64, bot_user_id: i64) {
-        crate::users::create_user(
-            pool,
-            owner_id,
-            "owner",
-            1,
-            "owner@example.com",
-            "hash",
-        )
-        .await
-        .unwrap();
-        crate::users::create_user(
-            pool,
-            bot_user_id,
-            "botuser",
-            2,
-            "bot@example.com",
-            "hash",
-        )
-        .await
-        .unwrap();
+        crate::users::create_user(pool, owner_id, "owner", 1, "owner@example.com", "hash")
+            .await
+            .unwrap();
+        crate::users::create_user(pool, bot_user_id, "botuser", 2, "bot@example.com", "hash")
+            .await
+            .unwrap();
         crate::bot_applications::create_bot_application(
             pool,
             app_id,

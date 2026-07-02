@@ -11,9 +11,15 @@ interface UpdateWebhookRequest {
 }
 
 interface ExecuteWebhookRequest {
-  content: string;
+  content?: string;
   username?: string;
   avatar_url?: string;
+  embeds?: unknown[];
+}
+
+interface EditWebhookMessageRequest {
+  content?: string;
+  embeds?: unknown[];
 }
 
 export const webhookApi = {
@@ -27,4 +33,14 @@ export const webhookApi = {
   delete: (webhookId: string) => apiClient.delete(`/webhooks/${webhookId}`),
   execute: (webhookId: string, token: string, data: ExecuteWebhookRequest) =>
     apiClient.post(`/webhooks/${webhookId}/${token}`, data),
+  executeNoWait: (webhookId: string, token: string, data: ExecuteWebhookRequest) =>
+    apiClient.post(`/webhooks/${webhookId}/${token}?wait=false`, data),
+  editMessage: (
+    webhookId: string,
+    token: string,
+    messageId: string,
+    data: EditWebhookMessageRequest,
+  ) => apiClient.patch(`/webhooks/${webhookId}/${token}/messages/${messageId}`, data),
+  deleteMessage: (webhookId: string, token: string, messageId: string) =>
+    apiClient.delete(`/webhooks/${webhookId}/${token}/messages/${messageId}`),
 };

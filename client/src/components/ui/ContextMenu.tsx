@@ -72,7 +72,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
           }
           return next < 0 ? prev : next;
         });
-      } else if (e.key === 'Enter' && focusedIndex >= 0) {
+      } else if ((e.key === 'Enter' || e.key === ' ') && focusedIndex >= 0) {
         e.preventDefault();
         const item = items[focusedIndex];
         if (item && !item.disabled && !item.divider) {
@@ -104,6 +104,8 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
       style={{ left: adjustedPosition.x, top: adjustedPosition.y }}
       tabIndex={-1}
       role="menu"
+      aria-label="Context menu"
+      aria-activedescendant={focusedIndex >= 0 ? `context-menu-item-${focusedIndex}` : undefined}
     >
       {items.map((item, i) => {
         if (item.divider) {
@@ -112,6 +114,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
         return (
           <button
             key={i}
+            id={`context-menu-item-${i}`}
             role="menuitem"
             className={`context-menu-item${item.danger ? ' danger' : ''}`}
             style={{

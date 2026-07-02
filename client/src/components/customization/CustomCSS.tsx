@@ -81,6 +81,7 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
           </button>
           <button
             onClick={handleSave}
+            aria-label={saved ? 'Custom CSS saved' : 'Save custom CSS'}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium text-white transition-colors"
             style={{ backgroundColor: saved ? 'var(--accent-success)' : 'var(--accent-primary)' }}
           >

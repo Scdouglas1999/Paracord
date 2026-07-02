@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::routes::audit;
+use crate::routes::mod_log;
 
 const MAX_BAN_REASON_LEN: usize = 512;
 
@@ -140,6 +141,24 @@ pub async fn ban_member(
     )
     .await;
 
+    mod_log::emit_mod_log(
+        &state,
+        guild_id,
+        "Member Banned",
+        "A member was banned from the server.",
+        &[
+            ("Actor", auth.user_id.to_string()),
+            ("Target", user_id.to_string()),
+            (
+                "Reason",
+                reason
+                    .clone()
+                    .unwrap_or_else(|| "No reason provided".to_string()),
+            ),
+        ],
+    )
+    .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -166,6 +185,18 @@ pub async fn unban_member(
         Some(user_id),
         None,
         None,
+    )
+    .await;
+
+    mod_log::emit_mod_log(
+        &state,
+        guild_id,
+        "Member Unbanned",
+        "A member was unbanned.",
+        &[
+            ("Actor", auth.user_id.to_string()),
+            ("Target", user_id.to_string()),
+        ],
     )
     .await;
 

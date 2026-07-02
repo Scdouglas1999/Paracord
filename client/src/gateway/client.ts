@@ -25,8 +25,9 @@ export class GatewayClient {
     channelId: string | null,
     selfMute: boolean,
     selfDeaf: boolean,
+    selfVideo: boolean = false,
   ): void {
-    gateway.updateVoiceState(this.serverId, guildId, channelId, selfMute, selfDeaf);
+    gateway.updateVoiceState(this.serverId, guildId, channelId, selfMute, selfDeaf, selfVideo);
   }
 }
 

@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   paracord:
     build: .
@@ -8,7 +6,6 @@ services:
       - "8090:8090"
     volumes:
       - paracord-data:/data
-      - paracord-config:/data/config
     environment:
       # Server
       - PARACORD_BIND_ADDRESS=0.0.0.0:8090
@@ -19,7 +16,7 @@ services:
       - PARACORD_DATABASE_URL=sqlite:///data/paracord.db?mode=rwc
       - PARACORD_DATABASE_MAX_CONNECTIONS=20
 
-      # Auth — set a strong random secret in production
+      # Auth - set a strong random secret in production
       # - PARACORD_JWT_SECRET=your-64-char-random-secret-here
       - PARACORD_REGISTRATION_ENABLED=true
 
@@ -30,15 +27,15 @@ services:
       # Backup
       - PARACORD_BACKUP_DIR=/data/backups
 
-      # LiveKit — set if using the optional LiveKit service below
+      # LiveKit - set if using the optional LiveKit service below
       - PARACORD_LIVEKIT_URL=ws://livekit:7880
       - PARACORD_LIVEKIT_HTTP_URL=http://livekit:7880
+      - PARACORD_LIVEKIT_API_KEY=paracordlocal
+      - PARACORD_LIVEKIT_API_SECRET=localcompose_livekit_secret_0123456789abcdef
       # - PARACORD_LIVEKIT_PUBLIC_URL=wss://chat.example.com/livekit
-      # - PARACORD_LIVEKIT_API_KEY=your-livekit-api-key
-      # - PARACORD_LIVEKIT_API_SECRET=your-livekit-api-secret
 
-      # TLS — disable inside Docker if terminating TLS at a reverse proxy
-      # - PARACORD_TLS_ENABLED=false
+      # TLS - disabled inside Docker by default; terminate TLS at a reverse proxy.
+      - PARACORD_TLS_ENABLED=false
 
       # Port forwarding should be configured at your router/firewall layer
     restart: unless-stopped
@@ -46,17 +43,16 @@ services:
       - livekit
 
   livekit:
-    image: livekit/livekit-server:latest
+    image: livekit/livekit-server:v1.9.11
     container_name: paracord-livekit
     ports:
       - "7880:7880"
       - "7881:7881"
       - "7882:7882/udp"
     environment:
-      - LIVEKIT_KEYS=devkey: devsecret
+      - "LIVEKIT_KEYS=paracordlocal: localcompose_livekit_secret_0123456789abcdef"
     command: --dev --bind 0.0.0.0
     restart: unless-stopped
 
 volumes:
   paracord-data:
-  paracord-config:

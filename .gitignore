@@ -1,12 +1,12 @@
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
 
 # Node / Client
 client/node_modules/
 client/dist/
 client/.vite/
+client/coverage/
 client/test-results/
 client/playwright-report/
 client/bun.lock
@@ -14,6 +14,7 @@ client/bun.lock
 # Tauri
 client/src-tauri/target/
 client/src-tauri/gen/
+client/src-tauri/Cargo.lock
 
 # IDE
 .vscode/
@@ -31,6 +32,7 @@ desktop.ini
 .env
 .env.*
 !.env.example
+.cargo/config.toml
 
 # Config (local overrides, not the example)
 /config/paracord.toml
@@ -55,6 +57,8 @@ Dockerfile.*
 # Build artifacts
 *.tsbuildinfo
 /dist/
+packages/*/dist/
+packages/*/node_modules/
 livekit*.zip
 livekit*.tar.gz
 livekit-extracted*/
@@ -64,7 +68,9 @@ livekit-extracted-linux/
 linux-deb-out/
 linux-build-output/
 target-rebuild/
+target-server-rebuild/
 target-release-*/
+tmp-vcpkg/
 
 # Python artifacts
 __pycache__/
@@ -87,6 +93,7 @@ installer/*.exe
 client/ui_dump.html
 client/ui_mock_dump.html
 client/ui_mock_screenshot.png
+/goal.txt
 
 # Local logs & release staging
 /logs/

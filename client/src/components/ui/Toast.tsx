@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from 'lucide-react';
-import { useToastStore, type ToastType } from '../../stores/toastStore';
+import { useToastStore, type ToastType, type ToastAction } from '../../stores/toastStore';
 
 const iconMap: Record<ToastType, typeof CheckCircle> = {
   success: CheckCircle,
@@ -17,7 +17,19 @@ const colorMap: Record<ToastType, string> = {
   warning: 'var(--accent-warning)',
 };
 
-function ToastItem({ id, type, message, duration }: { id: string; type: ToastType; message: string; duration: number }) {
+function ToastItem({
+  id,
+  type,
+  message,
+  duration,
+  action,
+}: {
+  id: string;
+  type: ToastType;
+  message: string;
+  duration: number;
+  action?: ToastAction;
+}) {
   const removeToast = useToastStore((s) => s.removeToast);
   const progressRef = useRef<HTMLDivElement>(null);
   const Icon = iconMap[type];
@@ -33,8 +45,19 @@ function ToastItem({ id, type, message, duration }: { id: string; type: ToastTyp
     });
   }, [duration]);
 
+  const handleAction = async () => {
+    if (!action) return;
+    try {
+      await action.onClick();
+    } finally {
+      removeToast(id);
+    }
+  };
+
   return (
     <div
+      role={type === 'error' || type === 'warning' ? 'alert' : 'status'}
+      aria-live={type === 'error' || type === 'warning' ? 'assertive' : 'polite'}
       style={{
         background: 'var(--glass-modal-fill-top)',
         border: '1px solid var(--border-strong)',
@@ -46,9 +69,20 @@ function ToastItem({ id, type, message, duration }: { id: string; type: ToastTyp
       className="pointer-events-auto relative flex w-80 max-w-[calc(100vw-2rem)] items-start gap-2.5 overflow-hidden rounded-xl p-3"
     >
       <Icon size={18} style={{ color, flexShrink: 0, marginTop: '1px' }} />
-      <p className="flex-1 text-sm leading-snug" style={{ color: 'var(--text-secondary)' }}>
-        {message}
-      </p>
+      <div className="flex-1">
+        <p className="text-sm leading-snug" style={{ color: 'var(--text-secondary)' }}>
+          {message}
+        </p>
+        {action && (
+          <button
+            type="button"
+            onClick={() => void handleAction()}
+            className="mt-1 text-xs font-semibold uppercase tracking-wide text-accent-primary hover:text-accent-primary-hover"
+          >
+            {action.label}
+          </button>
+        )}
+      </div>
       <button
         onClick={() => removeToast(id)}
         className="flex-shrink-0 rounded-md p-0.5 transition-colors hover:bg-bg-mod-subtle"
@@ -74,6 +108,8 @@ export function ToastContainer() {
     <div
       className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col-reverse gap-2"
       style={{ maxHeight: 'calc(100vh - 2rem)' }}
+      aria-live="polite"
+      aria-atomic="false"
     >
       {toasts.map((t) => (
         <ToastItem key={t.id} {...t} />

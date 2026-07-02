@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -16,25 +16,35 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Hash, Volume2, MessageSquare, Trash2, Plus } from 'lucide-react';
+import { GripVertical, Hash, Volume2, MessageSquare, Trash2, Plus, Shield, ChevronDown, ChevronRight } from 'lucide-react';
 import type { Channel, Role } from '../../types';
 import { guildApi } from '../../api/guilds';
-import { channelApi } from '../../api/channels';
+import { channelApi, type ChannelFeatureSettings } from '../../api/channels';
+import { extractApiError } from '../../api/client';
 import { useChannelStore } from '../../stores/channelStore';
 import { buildChannelGroups, isVirtualGroup, type ChannelGroup } from '../../lib/channelGroups';
 import { cn } from '../../lib/utils';
+import { ChannelPermissionsEditor } from './ChannelPermissionsEditor';
+import { confirm } from '../../stores/confirmStore';
+import { Button } from '../ui/Button';
+import { toast } from '../../stores/toastStore';
 
 interface ChannelManagerProps {
   guildId: string;
   channels: Channel[];
   roles: Role[];
   canManageRoles: boolean;
+  highlightedChannelId?: string | null;
   onRefresh: () => Promise<void>;
 }
 
 // Prefixes to distinguish category vs channel drag IDs
 const CAT_PREFIX = 'cat::';
 const CH_PREFIX = 'ch::';
+
+function channelManagerError(action: string, err: unknown): string {
+  return `${action}: ${extractApiError(err)}`;
+}
 
 function channelTypeIcon(type: number) {
   if (type === 2) return <Volume2 size={14} className="text-text-muted" />;
@@ -49,7 +59,7 @@ function channelTypeBadge(type: number) {
   return 'Text';
 }
 
-export function ChannelManager({ guildId, channels, roles, canManageRoles, onRefresh }: ChannelManagerProps) {
+export function ChannelManager({ guildId, channels, roles, canManageRoles, highlightedChannelId, onRefresh }: ChannelManagerProps) {
   const reorderChannels = useChannelStore((s) => s.reorderChannels);
 
   const [newChannelName, setNewChannelName] = useState('');
@@ -64,6 +74,7 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
   const [inlineType, setInlineType] = useState<'text' | 'voice'>('text');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [permissionsChannel, setPermissionsChannel] = useState<Channel | null>(null);
 
   const groups = useMemo(() => buildChannelGroups(channels), [channels]);
   const categories = useMemo(() => channels.filter((c) => c.type === 4), [channels]);
@@ -201,11 +212,18 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
       setNewCategoryName('');
       await onRefresh();
     } catch (err) {
-      setError('Failed to create category');
+      setError(channelManagerError('Failed to create category', err));
     }
   }, [guildId, newCategoryName, onRefresh]);
 
   const handleDeleteCategory = useCallback(async (categoryId: string) => {
+    const ok = await confirm({
+      title: 'Delete category?',
+      description: 'All child channels will be moved to uncategorized before deleting this category.',
+      confirmLabel: 'Delete category',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setError(null);
     try {
       // Move children to uncategorized first
@@ -220,8 +238,8 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
       }
       await channelApi.delete(categoryId);
       await onRefresh();
-    } catch {
-      setError('Failed to delete category');
+    } catch (err) {
+      setError(channelManagerError('Failed to delete category', err));
     }
   }, [channels, guildId, onRefresh]);
 
@@ -233,8 +251,8 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
       setEditingCategoryId(null);
       setEditingCategoryName('');
       await onRefresh();
-    } catch {
-      setError('Failed to rename category');
+    } catch (err) {
+      setError(channelManagerError('Failed to rename category', err));
     }
   }, [editingCategoryName, onRefresh]);
 
@@ -252,8 +270,8 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
       setNewChannelName('');
       setNewChannelRequiredRoleIds([]);
       await onRefresh();
-    } catch {
-      setError('Failed to create channel');
+    } catch (err) {
+      setError(channelManagerError('Failed to create channel', err));
     }
   }, [guildId, newChannelName, newChannelType, newChannelCategoryId, newChannelRequiredRoleIds, canManageRoles, onRefresh]);
 
@@ -269,18 +287,74 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
       setInlineName('');
       setAddingInCategoryId(null);
       await onRefresh();
-    } catch {
-      setError('Failed to create channel');
+    } catch (err) {
+      setError(channelManagerError('Failed to create channel', err));
     }
   }, [guildId, inlineName, inlineType, onRefresh]);
 
   const handleDeleteChannel = useCallback(async (channelId: string) => {
+    const ok = await confirm({
+      title: 'Delete channel?',
+      description: 'This permanently deletes the channel and its history.',
+      confirmLabel: 'Delete channel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setError(null);
+    const deleted = channels.find((c) => c.id === channelId);
     try {
       await channelApi.delete(channelId);
       await onRefresh();
-    } catch {
-      setError('Failed to delete channel');
+      if (deleted) {
+        toast.info('Channel deleted.', 6000, {
+          label: 'Undo',
+          onClick: async () => {
+            await guildApi.createChannel(guildId, {
+              name: deleted.name || 'restored-channel',
+              channel_type: deleted.channel_type ?? deleted.type ?? 0,
+              parent_id: deleted.parent_id ?? null,
+              topic: deleted.topic ?? undefined,
+              bitrate: deleted.bitrate ?? undefined,
+              user_limit: deleted.user_limit ?? undefined,
+              required_role_ids: deleted.required_role_ids ?? undefined,
+            });
+            await onRefresh();
+            toast.success('Channel restored.');
+          },
+        });
+      }
+    } catch (err) {
+      setError(channelManagerError('Failed to delete channel', err));
+    }
+  }, [channels, guildId, onRefresh]);
+
+  const handleToggleNsfw = useCallback(async (channelId: string, nsfw: boolean) => {
+    setError(null);
+    try {
+      await channelApi.update(channelId, { nsfw });
+      await onRefresh();
+    } catch (err) {
+      setError(channelManagerError('Failed to update channel', err));
+    }
+  }, [onRefresh]);
+
+  const handleUpdateSlowmode = useCallback(async (channelId: string, rateLimitPerUser: number) => {
+    setError(null);
+    try {
+      await channelApi.update(channelId, { rate_limit_per_user: rateLimitPerUser });
+      await onRefresh();
+    } catch (err) {
+      setError(channelManagerError('Failed to update slowmode', err));
+    }
+  }, [onRefresh]);
+
+  const handleUpdateVoiceSettings = useCallback(async (channelId: string, bitrate: number, userLimit: number) => {
+    setError(null);
+    try {
+      await channelApi.update(channelId, { bitrate, user_limit: userLimit });
+      await onRefresh();
+    } catch (err) {
+      setError(channelManagerError('Failed to update voice settings', err));
     }
   }, [onRefresh]);
 
@@ -311,7 +385,7 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
       <h2 className="settings-section-title !mb-0">Channels</h2>
 
       {error && (
-        <div className="rounded-lg border border-accent-danger/30 bg-accent-danger/10 px-3.5 py-2.5 text-sm text-accent-danger">
+        <div role="alert" className="rounded-lg border border-accent-danger/30 bg-accent-danger/10 px-3.5 py-2.5 text-sm text-accent-danger">
           {error}
         </div>
       )}
@@ -329,9 +403,9 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
             onChange={(e) => setNewCategoryName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void handleCreateCategory(); }}
           />
-          <button className="btn-primary" onClick={() => void handleCreateCategory()}>
+          <Button onClick={() => void handleCreateCategory()}>
             Create
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -355,7 +429,9 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
               <CategoryGroupSection
                 key={group.id}
                 group={group}
+                guildId={guildId}
                 channels={channels}
+                roles={roles}
                 editingCategoryId={editingCategoryId}
                 editingCategoryName={editingCategoryName}
                 addingInCategoryId={addingInCategoryId}
@@ -370,6 +446,11 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
                 onCancelEdit={() => { setEditingCategoryId(null); setEditingCategoryName(''); }}
                 onDeleteCategory={handleDeleteCategory}
                 onDeleteChannel={handleDeleteChannel}
+                onToggleNsfw={handleToggleNsfw}
+                onUpdateSlowmode={handleUpdateSlowmode}
+                onUpdateVoiceSettings={handleUpdateVoiceSettings}
+                onEditPermissions={setPermissionsChannel}
+                highlightedChannelId={highlightedChannelId}
                 onStartInlineAdd={(catId) => {
                   setAddingInCategoryId(catId);
                   setInlineName('');
@@ -436,9 +517,9 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
               <option key={cat.id} value={cat.id}>{cat.name}</option>
             ))}
           </select>
-          <button className="btn-primary" onClick={() => void handleCreateChannel()}>
+          <Button onClick={() => void handleCreateChannel()}>
             Create
-          </button>
+          </Button>
         </div>
         {canManageRoles && assignableRoles.length > 0 && (
           <div className="space-y-2">
@@ -468,6 +549,16 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
           </div>
         )}
       </div>
+
+      {permissionsChannel && (
+        <ChannelPermissionsEditor
+          channelId={permissionsChannel.id}
+          channelName={permissionsChannel.name ?? permissionsChannel.id}
+          roles={roles}
+          guildId={guildId}
+          onClose={() => setPermissionsChannel(null)}
+        />
+      )}
     </div>
   );
 }
@@ -476,7 +567,9 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, onRef
 
 interface CategoryGroupSectionProps {
   group: ChannelGroup;
+  guildId: string;
   channels: Channel[];
+  roles: Role[];
   editingCategoryId: string | null;
   editingCategoryName: string;
   addingInCategoryId: string | null;
@@ -488,6 +581,11 @@ interface CategoryGroupSectionProps {
   onCancelEdit: () => void;
   onDeleteCategory: (id: string) => Promise<void>;
   onDeleteChannel: (id: string) => Promise<void>;
+  onToggleNsfw: (id: string, nsfw: boolean) => Promise<void>;
+  onUpdateSlowmode: (id: string, rateLimitPerUser: number) => Promise<void>;
+  onUpdateVoiceSettings: (id: string, bitrate: number, userLimit: number) => Promise<void>;
+  onEditPermissions: (channel: Channel) => void;
+  highlightedChannelId?: string | null;
   onStartInlineAdd: (catId: string) => void;
   onInlineNameChange: (name: string) => void;
   onInlineTypeChange: (type: 'text' | 'voice') => void;
@@ -497,6 +595,9 @@ interface CategoryGroupSectionProps {
 
 function CategoryGroupSection({
   group,
+  guildId,
+  channels,
+  roles,
   editingCategoryId,
   editingCategoryName,
   addingInCategoryId,
@@ -508,6 +609,11 @@ function CategoryGroupSection({
   onCancelEdit,
   onDeleteCategory,
   onDeleteChannel,
+  onToggleNsfw,
+  onUpdateSlowmode,
+  onUpdateVoiceSettings,
+  onEditPermissions,
+  highlightedChannelId,
   onStartInlineAdd,
   onInlineNameChange,
   onInlineTypeChange,
@@ -551,6 +657,8 @@ function CategoryGroupSection({
         {isSortableCategory && (
           <button
             className="cursor-grab text-text-muted hover:text-text-secondary active:cursor-grabbing"
+            aria-label={`Reorder ${group.name} category`}
+            title={`Reorder ${group.name} category`}
             {...attributes}
             {...listeners}
           >
@@ -585,9 +693,9 @@ function CategoryGroupSection({
           <>
             {isEditing ? (
               <div className="flex items-center gap-1">
-                <button className="btn-primary !py-1 !px-2.5 text-xs" onClick={() => void onSaveRename(group.id)}>
+                <Button size="sm" className="!py-1 !px-2.5 text-xs" onClick={() => void onSaveRename(group.id)}>
                   Save
-                </button>
+                </Button>
                 <button className="rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary" onClick={onCancelEdit}>
                   Cancel
                 </button>
@@ -597,6 +705,7 @@ function CategoryGroupSection({
                 <button
                   className="rounded p-1 text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
                   title="Add channel"
+                  aria-label={`Add channel to ${group.name}`}
                   onClick={() => onStartInlineAdd(group.id)}
                 >
                   <Plus size={14} />
@@ -604,6 +713,7 @@ function CategoryGroupSection({
                 <button
                   className="rounded p-1 text-text-muted transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
                   title="Delete category"
+                  aria-label={`Delete ${group.name} category`}
                   onClick={() => void onDeleteCategory(group.id)}
                 >
                   <Trash2 size={14} />
@@ -662,8 +772,16 @@ function CategoryGroupSection({
           {group.channels.map((ch) => (
             <SortableChannelItem
               key={ch.id}
+              guildId={guildId}
+              channels={channels}
+              roles={roles}
               channel={ch}
               onDelete={onDeleteChannel}
+              onToggleNsfw={onToggleNsfw}
+              onUpdateSlowmode={onUpdateSlowmode}
+              onUpdateVoiceSettings={onUpdateVoiceSettings}
+              onEditPermissions={onEditPermissions}
+              isHighlighted={highlightedChannelId === ch.id}
             />
           ))}
           {group.channels.length === 0 && (
@@ -677,12 +795,57 @@ function CategoryGroupSection({
 
 // ── Sortable Channel Item ───────────────────────────────────────────────────
 
+const SLOWMODE_OPTIONS = [
+  { label: 'Off', value: 0 },
+  { label: '5s', value: 5 },
+  { label: '10s', value: 10 },
+  { label: '15s', value: 15 },
+  { label: '30s', value: 30 },
+  { label: '1m', value: 60 },
+  { label: '2m', value: 120 },
+  { label: '5m', value: 300 },
+  { label: '10m', value: 600 },
+  { label: '15m', value: 900 },
+  { label: '30m', value: 1800 },
+  { label: '1h', value: 3600 },
+  { label: '2h', value: 7200 },
+  { label: '6h', value: 21600 },
+];
+
+const DISAPPEARING_OPTIONS = [
+  { label: 'Off', value: 0 },
+  { label: '1 hour', value: 3600 },
+  { label: '24 hours', value: 86400 },
+  { label: '7 days', value: 604800 },
+  { label: '30 days', value: 2592000 },
+];
+
 interface SortableChannelItemProps {
+  guildId: string;
+  channels: Channel[];
+  roles: Role[];
   channel: Channel;
   onDelete: (id: string) => Promise<void>;
+  onToggleNsfw: (id: string, nsfw: boolean) => Promise<void>;
+  onUpdateSlowmode: (id: string, rateLimitPerUser: number) => Promise<void>;
+  onUpdateVoiceSettings: (id: string, bitrate: number, userLimit: number) => Promise<void>;
+  onEditPermissions: (channel: Channel) => void;
+  isHighlighted?: boolean;
 }
 
-function SortableChannelItem({ channel, onDelete }: SortableChannelItemProps) {
+function SortableChannelItem({
+  guildId,
+  channels,
+  roles,
+  channel,
+  onDelete,
+  onToggleNsfw,
+  onUpdateSlowmode,
+  onUpdateVoiceSettings,
+  onEditPermissions,
+  isHighlighted = false,
+}: SortableChannelItemProps) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
   const {
     attributes,
     listeners,
@@ -699,37 +862,409 @@ function SortableChannelItem({ channel, onDelete }: SortableChannelItemProps) {
   };
 
   const roleCount = channel.required_role_ids?.length || 0;
+  const isVoice = channel.type === 2;
+  const isAnnouncement = channel.type === 5 || channel.channel_type === 5;
+
+  // Feature settings state
+  const [featuresExpanded, setFeaturesExpanded] = useState(false);
+  const [featureSettings, setFeatureSettings] = useState<ChannelFeatureSettings | null>(null);
+  const [featuresBusy, setFeaturesBusy] = useState(false);
+
+  const loadFeatureSettings = useCallback(async () => {
+    if (featureSettings !== null) return;
+    setFeaturesBusy(true);
+    try {
+      const { data } = await channelApi.getFeatureSettings(channel.id);
+      setFeatureSettings(data);
+    } catch {
+      // ignore — feature settings may not exist yet
+    } finally {
+      setFeaturesBusy(false);
+    }
+  }, [channel.id, featureSettings]);
+
+  const handleToggleFeatures = useCallback(async () => {
+    const next = !featuresExpanded;
+    setFeaturesExpanded(next);
+    if (next) await loadFeatureSettings();
+  }, [featuresExpanded, loadFeatureSettings]);
+
+  const patchFeatureSettings = useCallback(async (patch: Partial<ChannelFeatureSettings>) => {
+    if (!featureSettings) return;
+    const updated = { ...featureSettings, ...patch };
+    setFeatureSettings(updated);
+    try {
+      const { data } = await channelApi.updateFeatureSettings(channel.id, patch);
+      setFeatureSettings(data);
+    } catch (err) {
+      setFeatureSettings(featureSettings);
+      toast.error(channelManagerError('Failed to update channel features', err));
+    }
+  }, [channel.id, featureSettings]);
+
+  const toggleExemptRole = useCallback((roleId: string) => {
+    if (!featureSettings) return;
+    const current = featureSettings.slowmode_exempt_role_ids;
+    const next = current.includes(roleId)
+      ? current.filter((id) => id !== roleId)
+      : [...current, roleId];
+    void patchFeatureSettings({ slowmode_exempt_role_ids: next });
+  }, [featureSettings, patchFeatureSettings]);
+
+  const assignableRoles = useMemo(
+    () => roles.filter((r) => r.id !== guildId),
+    [roles, guildId]
+  );
+  const [followers, setFollowers] = useState<
+    Array<{ id: string; target_channel_id: string; target_guild_id: string }>
+  >([]);
+  const [followersLoading, setFollowersLoading] = useState(false);
+  const [followTargetId, setFollowTargetId] = useState('');
+  const [followBusy, setFollowBusy] = useState(false);
+  const followTargets = useMemo(
+    () =>
+      channels.filter(
+        (candidate) =>
+          candidate.id !== channel.id
+          && (candidate.type === 0 || candidate.channel_type === 0)
+          && candidate.guild_id === guildId,
+      ),
+    [channels, channel.id, guildId],
+  );
+
+  // Local state for voice settings to allow editing before saving
+  const [draftBitrate, setDraftBitrate] = useState<number>(channel.bitrate ?? 64000);
+  const [draftUserLimit, setDraftUserLimit] = useState<number>(channel.user_limit ?? 0);
+
+  const refreshFollowers = useCallback(async () => {
+    if (!isAnnouncement) return;
+    setFollowersLoading(true);
+    try {
+      const { data } = await channelApi.getFollowers(channel.id);
+      setFollowers(
+        data.map((entry) => ({
+          id: entry.id,
+          target_channel_id: entry.target_channel_id,
+          target_guild_id: entry.target_guild_id,
+        })),
+      );
+    } catch {
+      setFollowers([]);
+    } finally {
+      setFollowersLoading(false);
+    }
+  }, [channel.id, isAnnouncement]);
+
+  useEffect(() => {
+    if (!isAnnouncement) return;
+    void refreshFollowers();
+  }, [isAnnouncement, refreshFollowers]);
+
+  useEffect(() => {
+    if (!isAnnouncement || followTargets.length === 0) {
+      setFollowTargetId('');
+      return;
+    }
+    setFollowTargetId((prev) =>
+      prev && followTargets.some((target) => target.id === prev) ? prev : followTargets[0].id,
+    );
+  }, [followTargets, isAnnouncement]);
+
+  const addFollow = useCallback(async () => {
+    if (!followTargetId) return;
+    setFollowBusy(true);
+    try {
+      await channelApi.addFollower(channel.id, followTargetId, guildId);
+      await refreshFollowers();
+    } catch (err) {
+      toast.error(channelManagerError('Failed to follow announcement channel', err));
+    } finally {
+      setFollowBusy(false);
+    }
+  }, [channel.id, followTargetId, guildId, refreshFollowers]);
+
+  const removeFollow = useCallback(async () => {
+    if (!followTargetId) return;
+    setFollowBusy(true);
+    try {
+      await channelApi.removeFollower(channel.id, followTargetId);
+      await refreshFollowers();
+    } catch (err) {
+      toast.error(channelManagerError('Failed to unfollow announcement channel', err));
+    } finally {
+      setFollowBusy(false);
+    }
+  }, [channel.id, followTargetId, refreshFollowers]);
+
+  const activeFollow = followers.some((entry) => entry.target_channel_id === followTargetId);
+
+  useEffect(() => {
+    if (!isHighlighted) return;
+    rowRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [isHighlighted]);
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle/70 px-3 py-2.5 ml-3"
-    >
-      <button
-        className="cursor-grab text-text-muted hover:text-text-secondary active:cursor-grabbing"
-        {...attributes}
-        {...listeners}
+    <div ref={setNodeRef} style={style} className="ml-3 space-y-0">
+      {/* Main channel row */}
+      <div
+        ref={rowRef}
+        data-channel-id={channel.id}
+        data-highlighted-channel={isHighlighted ? channel.id : undefined}
+        className={cn(
+          'flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle/70 px-3 py-2.5',
+          isHighlighted && 'border-accent-primary/60 bg-accent-primary/10 ring-2 ring-accent-primary/25',
+        )}
       >
-        <GripVertical size={14} />
-      </button>
-      {channelTypeIcon(channel.type)}
-      <span className="flex-1 truncate text-sm text-text-primary">{channel.name || 'unnamed'}</span>
-      <span className="rounded border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
-        {channelTypeBadge(channel.type)}
-      </span>
-      {roleCount > 0 && (
+        <button
+          className="cursor-grab text-text-muted hover:text-text-secondary active:cursor-grabbing"
+          aria-label={`Reorder ${channel.name || 'channel'}`}
+          title={`Reorder ${channel.name || 'channel'}`}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={14} />
+        </button>
+        {channelTypeIcon(channel.type)}
+        <span className="flex-1 truncate text-sm text-text-primary">{channel.name || 'unnamed'}</span>
         <span className="rounded border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
-          {roleCount} role{roleCount !== 1 ? 's' : ''}
+          {channelTypeBadge(channel.type)}
         </span>
+        {roleCount > 0 && (
+          <span className="rounded border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
+            {roleCount} role{roleCount !== 1 ? 's' : ''}
+          </span>
+        )}
+        {isAnnouncement && (
+          <div className="flex items-center gap-1.5 ml-1">
+            <span className="rounded border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
+              Follows: {followers.length}
+            </span>
+            <select
+              className="rounded border border-border-subtle bg-bg-primary px-1 py-0.5 text-[10px] text-text-secondary"
+              value={followTargetId}
+              onChange={(e) => setFollowTargetId(e.target.value)}
+              disabled={followTargets.length === 0 || followersLoading || followBusy}
+              title="Target channel"
+            >
+              {followTargets.length === 0 ? (
+                <option value="">No target channels</option>
+              ) : (
+                followTargets.map((target) => (
+                  <option key={target.id} value={target.id}>
+                    #{target.name || target.id}
+                  </option>
+                ))
+              )}
+            </select>
+            {activeFollow ? (
+              <button
+                type="button"
+                className="rounded border border-accent-danger/35 bg-accent-danger/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15 disabled:opacity-60"
+                onClick={() => void removeFollow()}
+                disabled={!followTargetId || followBusy || followersLoading}
+              >
+                {followBusy ? '...' : 'Unfollow'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="rounded border border-accent-primary/35 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent-primary transition-colors hover:bg-accent-primary/20 disabled:opacity-60"
+                onClick={() => void addFollow()}
+                disabled={!followTargetId || followBusy || followersLoading}
+              >
+                {followBusy ? '...' : 'Follow'}
+              </button>
+            )}
+          </div>
+        )}
+        {isVoice && (
+          <div className="flex items-center gap-2 ml-1">
+            <label className="flex items-center gap-1" title="Audio bitrate">
+              <span className="text-[10px] font-medium text-text-muted">Bitrate</span>
+              <input
+                type="range"
+                min={8000}
+                max={384000}
+                step={8000}
+                value={draftBitrate}
+                onChange={(e) => setDraftBitrate(Number(e.target.value))}
+                onMouseUp={() => void onUpdateVoiceSettings(channel.id, draftBitrate, draftUserLimit)}
+                onTouchEnd={() => void onUpdateVoiceSettings(channel.id, draftBitrate, draftUserLimit)}
+                className="w-16 accent-accent-primary"
+              />
+              <span className="text-[10px] text-text-muted w-8 tabular-nums">
+                {Math.round(draftBitrate / 1000)}k
+              </span>
+            </label>
+            <label className="flex items-center gap-1" title="User limit (0 = unlimited)">
+              <span className="text-[10px] font-medium text-text-muted">Limit</span>
+              <input
+                type="number"
+                min={0}
+                max={99}
+                value={draftUserLimit}
+                onChange={(e) => setDraftUserLimit(Number(e.target.value))}
+                onBlur={() => void onUpdateVoiceSettings(channel.id, draftBitrate, draftUserLimit)}
+                className="w-10 rounded border border-border-subtle bg-bg-primary px-1 py-0.5 text-[10px] text-text-secondary text-center"
+              />
+            </label>
+          </div>
+        )}
+        {!isVoice && channel.type !== 4 && (
+          <>
+            <label className="flex items-center gap-1 cursor-pointer" title="NSFW channel">
+              <input
+                type="checkbox"
+                checked={channel.nsfw ?? false}
+                onChange={(e) => void onToggleNsfw(channel.id, e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-border-subtle accent-accent-danger"
+              />
+              <span className="text-[10px] font-medium text-text-muted">NSFW</span>
+            </label>
+            <label className="flex items-center gap-1" title="Slowmode">
+              <span className="text-[10px] font-medium text-text-muted">Slow</span>
+              <select
+                className="rounded border border-border-subtle bg-bg-primary px-1 py-0.5 text-[10px] text-text-secondary"
+                value={channel.rate_limit_per_user ?? 0}
+                onChange={(e) => void onUpdateSlowmode(channel.id, Number(e.target.value))}
+              >
+                {SLOWMODE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
+        {/* Advanced feature settings toggle (text/forum channels only) */}
+        {channel.type !== 4 && !isVoice && (
+          <button
+            className={cn(
+              'rounded p-1 text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary',
+              featuresExpanded && 'text-accent-primary bg-accent-primary/10',
+            )}
+            onClick={() => void handleToggleFeatures()}
+            title="Advanced channel features"
+            aria-label={`${featuresExpanded ? 'Hide' : 'Show'} advanced features for ${channel.name || 'channel'}`}
+          >
+            {featuresExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+        )}
+        <button
+          className="rounded p-1 text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-accent-primary"
+          onClick={() => onEditPermissions(channel)}
+          title="Edit permissions"
+          aria-label={`Edit permissions for ${channel.name || 'channel'}`}
+        >
+          <Shield size={14} />
+        </button>
+        <button
+          className="rounded p-1 text-text-muted transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
+          onClick={() => void onDelete(channel.id)}
+          title="Delete channel"
+          aria-label={`Delete ${channel.name || 'channel'}`}
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+
+      {/* Advanced feature settings panel */}
+      {featuresExpanded && channel.type !== 4 && !isVoice && (
+        <div className="rounded-b-lg border border-t-0 border-border-subtle bg-bg-primary/40 px-4 py-3 space-y-3">
+          {featuresBusy && (
+            <p className="text-[11px] text-text-muted">Loading...</p>
+          )}
+          {!featuresBusy && featureSettings && (
+            <>
+              {/* Disappearing messages */}
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] font-medium text-text-secondary w-36 shrink-0">
+                  Disappearing messages
+                </span>
+                <select
+                  className="rounded border border-border-subtle bg-bg-secondary px-2 py-1 text-[11px] text-text-primary"
+                  value={featureSettings.disappearing_seconds}
+                  onChange={(e) => void patchFeatureSettings({ disappearing_seconds: Number(e.target.value) })}
+                >
+                  {DISAPPEARING_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Anonymous posting */}
+              <label className="flex items-center gap-3 cursor-pointer">
+                <span className="text-[11px] font-medium text-text-secondary w-36 shrink-0">
+                  Anonymous posting
+                </span>
+                <input
+                  type="checkbox"
+                  checked={featureSettings.anonymous_posting_enabled}
+                  onChange={(e) => void patchFeatureSettings({ anonymous_posting_enabled: e.target.checked })}
+                  className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
+                />
+                <span className="text-[11px] text-text-muted">
+                  {featureSettings.anonymous_posting_enabled ? 'Enabled' : 'Disabled'}
+                </span>
+              </label>
+
+              {/* Adaptive slowmode */}
+              <label className="flex items-center gap-3 cursor-pointer">
+                <span className="text-[11px] font-medium text-text-secondary w-36 shrink-0">
+                  Adaptive slowmode
+                </span>
+                <input
+                  type="checkbox"
+                  checked={featureSettings.adaptive_slowmode_enabled}
+                  onChange={(e) => void patchFeatureSettings({ adaptive_slowmode_enabled: e.target.checked })}
+                  className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
+                />
+                <span className="text-[11px] text-text-muted">
+                  {featureSettings.adaptive_slowmode_enabled ? 'Enabled' : 'Disabled'}
+                </span>
+              </label>
+
+              {/* Slowmode exempt roles */}
+              {assignableRoles.length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="text-[11px] font-medium text-text-secondary">
+                    Slowmode exempt roles
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {assignableRoles.map((role) => {
+                      const isExempt = featureSettings.slowmode_exempt_role_ids.includes(role.id);
+                      const colorHex = role.color
+                        ? `#${role.color.toString(16).padStart(6, '0')}`
+                        : '#99aab5';
+                      return (
+                        <button
+                          key={role.id}
+                          type="button"
+                          onClick={() => toggleExemptRole(role.id)}
+                          className={cn(
+                            'flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] font-medium transition-colors',
+                            isExempt
+                              ? 'border-accent-primary/40 bg-accent-primary/15 text-accent-primary'
+                              : 'border-border-subtle bg-bg-secondary text-text-muted hover:border-border-strong hover:text-text-secondary',
+                          )}
+                        >
+                          <span
+                            className="inline-block h-2 w-2 rounded-full shrink-0"
+                            style={{ backgroundColor: colorHex }}
+                          />
+                          {role.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {!featuresBusy && !featureSettings && (
+            <p className="text-[11px] text-text-muted">Could not load feature settings.</p>
+          )}
+        </div>
       )}
-      <button
-        className="rounded p-1 text-text-muted transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
-        onClick={() => void onDelete(channel.id)}
-        title="Delete channel"
-      >
-        <Trash2 size={14} />
-      </button>
     </div>
   );
 }

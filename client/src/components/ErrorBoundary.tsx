@@ -1,10 +1,10 @@
-import { Component, type ReactNode, type ErrorInfo } from 'react';
+import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { safeExternalUrl } from '../lib/security';
 
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
 }
-
 interface State {
   hasError: boolean;
   error: Error | null;
@@ -12,7 +12,11 @@ interface State {
   retryCount: number;
 }
 
-const MAX_AUTO_RETRIES = 2;
+const MAX_RETRIES = 2;
+const DEFAULT_BUG_REPORT_URL = 'https://github.com/paracord/paracord/issues/new';
+const BUG_REPORT_URL =
+  safeExternalUrl(import.meta.env.VITE_BUG_REPORT_URL || DEFAULT_BUG_REPORT_URL) ??
+  DEFAULT_BUG_REPORT_URL;
 
 export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
@@ -31,7 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
     }
   }
 
-  handleRetry = () => {
+  private resetBoundary = () => {
     this.setState((prev) => ({
       hasError: false,
       error: null,
@@ -41,85 +45,64 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   render() {
-    if (this.state.hasError) {
-      if (this.props.fallback) {
-        return this.props.fallback;
-      }
+    if (!this.state.hasError) {
+      return this.props.children;
+    }
 
-      const isDev = import.meta.env.DEV;
-      const canRetry = this.state.retryCount < MAX_AUTO_RETRIES;
+    if (this.props.fallback) {
+      return this.props.fallback;
+    }
 
-      return (
-        <div style={{
-          padding: '2rem',
-          color: 'var(--text-primary)',
-          backgroundColor: 'var(--bg-primary)',
-          minHeight: '100vh',
-          fontFamily: 'monospace',
-        }}>
-          <h1 style={{ color: 'var(--accent-danger)', marginBottom: '1rem' }}>Something went wrong</h1>
+    const remainingRetries = Math.max(0, MAX_RETRIES - this.state.retryCount);
 
-          {isDev && this.state.error && (
-            <details open style={{ marginBottom: '1rem' }}>
-              <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                Error Details
-              </summary>
-              <pre style={{
-                backgroundColor: 'var(--bg-secondary)',
-                padding: '1rem',
-                borderRadius: '8px',
-                overflow: 'auto',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                border: '1px solid var(--border-subtle)',
-              }}>
-                {this.state.error.toString()}
-                {'\n\n'}
-                {this.state.errorInfo?.componentStack}
-              </pre>
-            </details>
-          )}
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary px-4 py-8">
+        <div className="w-full max-w-2xl rounded-2xl border border-border-subtle bg-bg-secondary p-6 shadow-lg">
+          <h1 className="text-xl font-bold text-accent-danger">Application Error</h1>
+          <p className="mt-2 text-sm text-text-secondary">
+            A rendering error interrupted this screen. You can retry, return home, or reload the app.
+          </p>
 
-          {!isDev && (
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-              An unexpected error occurred. Try retrying below, or reload the app.
-              If this keeps happening, check logs on the server and client.
-            </p>
-          )}
+          <details className="mt-4 rounded-xl border border-border-subtle bg-bg-mod-subtle/40 p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-text-primary">
+              Error details
+            </summary>
+            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border-subtle bg-bg-primary p-3 text-xs text-text-muted">
+              {this.state.error?.toString()}
+              {'\n\n'}
+              {this.state.errorInfo?.componentStack}
+            </pre>
+          </details>
 
-          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
-            {canRetry && (
-              <button
-                onClick={this.handleRetry}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: 'var(--accent-primary)',
-                  color: '#fff',
-                  border: '1px solid color-mix(in srgb, var(--accent-primary) 78%, var(--text-primary) 22%)',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                }}
-              >
-                Retry ({MAX_AUTO_RETRIES - this.state.retryCount} left)
-              </button>
-            )}
+          <div className="mt-5 flex flex-wrap items-center gap-2">
             <button
-              onClick={() => window.location.reload()}
-              style={{
-                padding: '0.5rem 1rem',
-                backgroundColor: canRetry ? 'var(--bg-secondary)' : 'var(--accent-primary)',
-                color: canRetry ? 'var(--text-primary)' : '#fff',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
+              type="button"
+              className="btn-primary"
+              onClick={this.resetBoundary}
+              disabled={remainingRetries === 0}
             >
-              Reload
+              {remainingRetries > 0 ? `Retry (${remainingRetries} left)` : 'Retry limit reached'}
             </button>
+            <a
+              href="/app"
+              className="btn-ghost inline-flex items-center justify-center"
+            >
+              Return Home
+            </a>
+            <button type="button" className="btn-ghost" onClick={() => window.location.reload()}>
+              Reload App
+            </button>
+            <a
+              href={BUG_REPORT_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-auto text-xs font-semibold text-text-link hover:underline"
+            >
+              Report bug
+            </a>
           </div>
         </div>
-      );
-    }
-    return this.props.children;
+      </div>
+    );
   }
 }

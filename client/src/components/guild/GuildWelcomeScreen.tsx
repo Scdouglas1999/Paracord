@@ -1,5 +1,6 @@
 import { Hash, Volume2, MessageSquare, Users, X } from 'lucide-react';
 import type { Guild, Channel } from '../../types';
+import { safeStoredImageDataUrl } from '../../lib/security';
 
 interface GuildWelcomeScreenProps {
   guild: Guild;
@@ -36,6 +37,7 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
   }
 
   const textChannels = channels.filter(ch => ch.type === 0 || ch.channel_type === 0);
+  const iconSrc = safeStoredImageDataUrl(guild.icon_hash);
 
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-bg-tertiary/75 p-4 backdrop-blur-sm">
@@ -52,9 +54,9 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
         {/* Guild icon + name */}
         <div className="flex flex-col items-center text-center">
           <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle text-2xl font-bold text-text-primary">
-            {guild.icon_hash ? (
+            {iconSrc ? (
               <img
-                src={`/api/guilds/${guild.id}/icon`}
+                src={iconSrc}
                 alt={guild.name}
                 className="h-full w-full rounded-2xl object-cover"
               />

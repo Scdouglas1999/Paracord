@@ -3,14 +3,44 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use paracord_core::{AppState, MESSAGE_FLAG_DM_E2EE};
 use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::routes::audit;
+use crate::routes::mod_log;
+
+/// Parse user mentions from message content. Matches `<@id>` and `<@!id>` patterns.
+fn parse_mentions(content: &str) -> Vec<i64> {
+    let mut ids = Vec::new();
+    let mut i = 0;
+    let bytes = content.as_bytes();
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'<' && bytes[i + 1] == b'@' {
+            let start = if i + 2 < bytes.len() && bytes[i + 2] == b'!' {
+                i + 3
+            } else {
+                i + 2
+            };
+            if let Some(end) = content[start..].find('>') {
+                if let Ok(id) = content[start..start + end].parse::<i64>() {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+                i = start + end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    ids
+}
 
 const MAX_CHANNEL_TOPIC_LEN: usize = 1_024;
 const MAX_BULK_DELETE_REQUEST_IDS: usize = 500;
@@ -19,6 +49,7 @@ const MAX_POLL_OPTION_LEN: usize = 100;
 const MAX_POLL_OPTIONS: usize = 10;
 const MAX_POLL_DURATION_MINUTES: i64 = 60 * 24 * 14; // 14 days
 const MAX_MESSAGE_NONCE_LEN: usize = 64;
+const MAX_FORUM_SEARCH_POSTS: usize = 250;
 
 fn contains_dangerous_markup(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
@@ -27,6 +58,33 @@ fn contains_dangerous_markup(value: &str) -> bool {
         || lower.contains("onerror=")
         || lower.contains("onload=")
         || lower.contains("<iframe")
+}
+
+fn parse_optional_datetime_param(
+    raw: Option<&str>,
+    end_of_day_for_date_only: bool,
+) -> Result<Option<DateTime<Utc>>, ApiError> {
+    let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
+        return Ok(Some(dt.with_timezone(&Utc)));
+    }
+
+    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        let naive = if end_of_day_for_date_only {
+            date.and_hms_opt(23, 59, 59)
+        } else {
+            date.and_hms_opt(0, 0, 0)
+        }
+        .ok_or_else(|| ApiError::BadRequest("Invalid date filter value".into()))?;
+        return Ok(Some(Utc.from_utc_datetime(&naive)));
+    }
+
+    Err(ApiError::BadRequest(
+        "Invalid date filter. Use RFC3339 or YYYY-MM-DD.".into(),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -43,6 +101,12 @@ pub struct UpdateChannelRequest {
     pub name: Option<String>,
     pub topic: Option<String>,
     pub required_role_ids: Option<Vec<String>>,
+    pub rate_limit_per_user: Option<i32>,
+    /// Voice channel audio bitrate in bits/sec (8000–384000).
+    pub bitrate: Option<i32>,
+    /// Max simultaneous users (0 = unlimited, 1–99).
+    pub user_limit: Option<i32>,
+    pub nsfw: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +118,14 @@ pub struct MessageQuery {
 #[derive(Deserialize)]
 pub struct MessageSearchQuery {
     pub q: String,
+    pub limit: Option<i64>,
+    pub author_id: Option<String>,
+    pub after: Option<String>,
+    pub before: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SummarizeQuery {
     pub limit: Option<i64>,
 }
 
@@ -71,6 +143,8 @@ pub struct SendMessageRequest {
     pub referenced_message_id: Option<String>,
     #[serde(default)]
     pub attachment_ids: Vec<String>,
+    #[serde(default)]
+    pub sticker_ids: Vec<String>,
     pub e2ee: Option<DmE2eePayloadRequest>,
     pub nonce: Option<String>,
 }
@@ -110,6 +184,12 @@ pub struct UpsertChannelOverwriteRequest {
     pub target_type: i16,
     pub allow_perms: i64,
     pub deny_perms: i64,
+}
+
+#[derive(Deserialize)]
+pub struct AddChannelFollowRequest {
+    pub target_channel_id: String,
+    pub target_guild_id: String,
 }
 
 pub fn channel_to_json(c: &paracord_db::channels::ChannelRow) -> Value {
@@ -308,7 +388,7 @@ fn poll_to_json(poll: &paracord_db::polls::PollWithOptions) -> Value {
     })
 }
 
-async fn message_to_json(
+pub async fn message_to_json(
     state: &AppState,
     msg: &paracord_db::messages::MessageRow,
     viewer_id: i64,
@@ -339,7 +419,61 @@ async fn message_to_json(
         json!(msg.content)
     };
 
-    let author = author_to_json(state, msg.author_id).await;
+    let channel = paracord_db::channels::get_channel(&state.db, msg.channel_id)
+        .await
+        .ok()
+        .flatten();
+    let channel_features = paracord_db::channel_features::get_or_default(&state.db, msg.channel_id)
+        .await
+        .ok();
+    let mut author = author_to_json(state, msg.author_id).await;
+
+    let anonymous_record =
+        paracord_db::anonymous_messages::get_anonymous_message(&state.db, msg.id)
+            .await
+            .ok()
+            .flatten();
+    let mut anonymous_json: Option<Value> = None;
+    if let Some(anonymous) = anonymous_record {
+        let mut can_deanonymize = false;
+        if let Some(channel_row) = channel.as_ref() {
+            if let Some(guild_id) = channel_row.guild_id() {
+                if let Ok(guild) = paracord_db::guilds::get_guild(&state.db, guild_id).await {
+                    if let Some(guild) = guild {
+                        if let Ok(perms) = paracord_core::permissions::compute_channel_permissions(
+                            &state.db,
+                            guild_id,
+                            msg.channel_id,
+                            guild.owner_id,
+                            viewer_id,
+                        )
+                        .await
+                        {
+                            can_deanonymize = perms.contains(Permissions::MANAGE_MESSAGES)
+                                || perms.contains(Permissions::MANAGE_GUILD);
+                        }
+                    }
+                }
+            }
+        }
+        if !can_deanonymize {
+            author = json!({
+                "id": format!("anon:{}:{}", anonymous.channel_id, anonymous.alias),
+                "username": anonymous.alias,
+                "discriminator": 0,
+                "avatar_hash": null,
+                "public_key": null,
+                "flags": 0,
+                "bot": false,
+            });
+        }
+        anonymous_json = Some(json!({
+            "alias": anonymous.alias,
+            "is_anonymous": true,
+            "can_deanonymize": can_deanonymize,
+        }));
+    }
+
     let attachments = paracord_db::attachments::get_message_attachments(&state.db, msg.id)
         .await
         .unwrap_or_default();
@@ -354,6 +488,25 @@ async fn message_to_json(
                 "url": a.url,
                 "width": a.width,
                 "height": a.height,
+            })
+        })
+        .collect();
+    let stickers = paracord_db::stickers::list_message_stickers(&state.db, msg.id)
+        .await
+        .unwrap_or_default();
+    let sticker_json: Vec<Value> = stickers
+        .iter()
+        .map(|sticker| {
+            json!({
+                "id": sticker.id.to_string(),
+                "guild_id": sticker.guild_id.to_string(),
+                "name": sticker.name,
+                "description": sticker.description,
+                "format_type": sticker.format_type,
+                "image_url": sticker.asset_key.as_ref().map(|_| format!("/api/v1/guilds/{}/stickers/{}/image", sticker.guild_id, sticker.id)),
+                "asset_content_type": sticker.asset_content_type,
+                "creator_id": sticker.creator_id.map(|id| id.to_string()),
+                "created_at": sticker.created_at.to_rfc3339(),
             })
         })
         .collect();
@@ -385,6 +538,24 @@ async fn message_to_json(
         .flatten()
         .map(|poll| poll_to_json(&poll));
 
+    let embeds_value: serde_json::Value = msg
+        .embeds
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::json!([]));
+    let components_value: serde_json::Value = msg
+        .components
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::json!([]));
+    let expires_at = channel_features
+        .as_ref()
+        .filter(|features| features.disappearing_seconds > 0)
+        .map(|features| {
+            (msg.created_at + chrono::Duration::seconds(i64::from(features.disappearing_seconds)))
+                .to_rfc3339()
+        });
+
     json!({
         "id": msg.id.to_string(),
         "channel_id": msg.channel_id.to_string(),
@@ -400,9 +571,107 @@ async fn message_to_json(
         "edited_at": msg.edited_at.map(|t| t.to_rfc3339()),
         "reference_id": msg.reference_id.map(|id| id.to_string()),
         "attachments": attachment_json,
+        "stickers": sticker_json,
         "reactions": reaction_json,
         "poll": poll_json,
+        "embeds": embeds_value,
+        "components": components_value,
+        "anonymous": anonymous_json,
+        "expires_at": expires_at,
     })
+}
+
+/// Returns the IDs of channels the requesting user can see in a guild.
+pub async fn get_visible_channels(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(guild_id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    let channels = paracord_db::channels::get_guild_channels(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let channel_permissions = paracord_core::permissions::compute_all_channel_permissions(
+        &state.db,
+        guild_id,
+        &channels,
+        guild.owner_id,
+        auth.user_id,
+    )
+    .await?;
+
+    let onboarding_settings =
+        paracord_db::onboarding::get_guild_onboarding_settings(&state.db, guild_id)
+            .await
+            .ok()
+            .flatten();
+    let onboarding_state =
+        paracord_db::onboarding::get_member_onboarding_state(&state.db, guild_id, auth.user_id)
+            .await
+            .ok()
+            .flatten();
+
+    let requires_rules = onboarding_settings
+        .as_ref()
+        .and_then(|row| row.rules_text.as_ref())
+        .is_some_and(|text| !text.trim().is_empty());
+    let accepted_rules = onboarding_state
+        .as_ref()
+        .map(|row| row.accepted_rules)
+        .unwrap_or(false);
+    let onboarding_completed = onboarding_state
+        .as_ref()
+        .and_then(|row| row.completed_at)
+        .is_some();
+
+    let progressive_threshold = onboarding_settings
+        .as_ref()
+        .map(|row| row.progressive_channel_min_messages.max(0))
+        .unwrap_or(0);
+    let message_count = if progressive_threshold > 0 {
+        paracord_db::messages::count_guild_messages_by_author(&state.db, guild_id, auth.user_id)
+            .await
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let gate_for_rules = requires_rules && !accepted_rules;
+    let gate_for_progressive = progressive_threshold > 0
+        && !onboarding_completed
+        && message_count < i64::from(progressive_threshold);
+
+    let mut visible = channels
+        .iter()
+        .filter(|channel| {
+            channel_permissions
+                .get(&channel.id)
+                .copied()
+                .unwrap_or(Permissions::empty())
+                .contains(Permissions::VIEW_CHANNEL)
+        })
+        .collect::<Vec<_>>();
+    visible.sort_by_key(|channel| channel.position);
+
+    if gate_for_rules {
+        // Rules gate: expose only a small starter set until onboarding acceptance.
+        visible.retain(|channel| channel.channel_type == 0 || channel.channel_type == 4);
+        visible.truncate(3);
+    } else if gate_for_progressive {
+        // Progressive disclosure: keep initial channel surface small for new members.
+        visible.truncate(8);
+    }
+
+    let channel_ids: Vec<String> = visible.into_iter().map(|c| c.id.to_string()).collect();
+
+    Ok(Json(json!({ "channel_ids": channel_ids })))
 }
 
 pub async fn create_channel(
@@ -480,6 +749,27 @@ pub async fn update_channel(
             return Err(ApiError::BadRequest("topic contains unsafe markup".into()));
         }
     }
+    if let Some(rate_limit) = body.rate_limit_per_user {
+        if rate_limit < 0 || rate_limit > 21600 {
+            return Err(ApiError::BadRequest(
+                "rate_limit_per_user must be between 0 and 21600".into(),
+            ));
+        }
+    }
+    if let Some(bitrate) = body.bitrate {
+        if bitrate < 8_000 || bitrate > 384_000 {
+            return Err(ApiError::BadRequest(
+                "bitrate must be between 8000 and 384000".into(),
+            ));
+        }
+    }
+    if let Some(user_limit) = body.user_limit {
+        if user_limit < 0 || user_limit > 99 {
+            return Err(ApiError::BadRequest(
+                "user_limit must be between 0 (unlimited) and 99".into(),
+            ));
+        }
+    }
 
     let guild_id = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
@@ -500,6 +790,10 @@ pub async fn update_channel(
         body.name.as_deref(),
         body.topic.as_deref(),
         required_role_ids.as_deref(),
+        body.rate_limit_per_user,
+        body.bitrate,
+        body.user_limit,
+        body.nsfw,
     )
     .await?;
 
@@ -599,6 +893,26 @@ pub async fn search_messages(
     if params.q.trim().is_empty() {
         return Err(ApiError::BadRequest("Query must not be empty".into()));
     }
+    let author_id = params
+        .author_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map_err(|_| ApiError::BadRequest("Invalid author_id filter".into()))
+        })
+        .transpose()?;
+    let after = parse_optional_datetime_param(params.after.as_deref(), false)?;
+    let before = parse_optional_datetime_param(params.before.as_deref(), true)?;
+    if let (Some(after_dt), Some(before_dt)) = (after.as_ref(), before.as_ref()) {
+        if after_dt > before_dt {
+            return Err(ApiError::BadRequest(
+                "after filter must be earlier than before filter".into(),
+            ));
+        }
+    }
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -612,14 +926,136 @@ pub async fn search_messages(
     .await?;
 
     let limit = params.limit.unwrap_or(20).min(100);
-    let messages = paracord_db::messages::search_messages(&state.db, channel_id, &params.q, limit)
+    let messages = if channel.channel_type == 7 {
+        // Forum channels store post content in thread children, not the forum parent.
+        // Search across forum posts so queries behave like a forum-wide search.
+        let forum_posts = paracord_db::channels::get_forum_posts(&state.db, channel_id, 0, true)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+        let mut aggregated = Vec::new();
+        let target_pool = (limit as usize).saturating_mul(8).max(limit as usize);
+        for post in forum_posts.into_iter().take(MAX_FORUM_SEARCH_POSTS) {
+            let mut hits = paracord_db::messages::search_messages(
+                &state.db, post.id, &params.q, limit, author_id, after, before,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            aggregated.append(&mut hits);
+            if aggregated.len() >= target_pool {
+                break;
+            }
+        }
+
+        aggregated.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        aggregated.dedup_by(|a, b| a.id == b.id);
+        aggregated.truncate(limit as usize);
+        aggregated
+    } else {
+        paracord_db::messages::search_messages(
+            &state.db, channel_id, &params.q, limit, author_id, after, before,
+        )
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    };
+
     let mut result = Vec::with_capacity(messages.len());
     for msg in &messages {
         result.push(message_to_json(&state, msg, auth.user_id).await);
     }
     Ok(Json(json!(result)))
+}
+
+pub async fn summarize_channel(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+    Query(params): Query<SummarizeQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
+    )
+    .await?;
+
+    let limit = params.limit.unwrap_or(150).clamp(20, 500);
+    let messages =
+        paracord_db::messages::get_channel_messages(&state.db, channel_id, None, None, limit)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if messages.is_empty() {
+        return Err(ApiError::BadRequest(
+            "No messages are available to summarize".to_string(),
+        ));
+    }
+
+    let mut author_name_cache: HashMap<i64, String> = HashMap::new();
+    let mut transcript_lines = Vec::new();
+    let mut contains_e2ee = false;
+
+    for msg in messages.iter().rev() {
+        if (msg.flags & MESSAGE_FLAG_DM_E2EE) != 0 {
+            contains_e2ee = true;
+            continue;
+        }
+        let content = msg.content.as_deref().map(str::trim).unwrap_or_default();
+        if content.is_empty() {
+            continue;
+        }
+        let author_name = if let Some(name) = author_name_cache.get(&msg.author_id) {
+            name.clone()
+        } else {
+            let resolved = paracord_db::users::get_user_by_id(&state.db, msg.author_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|u| u.username)
+                .unwrap_or_else(|| format!("User {}", msg.author_id));
+            author_name_cache.insert(msg.author_id, resolved.clone());
+            resolved
+        };
+        transcript_lines.push(format!("{author_name}: {content}"));
+    }
+
+    if contains_e2ee {
+        return Err(ApiError::BadRequest(
+            "This channel contains end-to-end encrypted messages; use client-side summarization."
+                .to_string(),
+        ));
+    }
+    if transcript_lines.is_empty() {
+        return Err(ApiError::BadRequest(
+            "No text messages are available to summarize".to_string(),
+        ));
+    }
+
+    let system_prompt = "You summarize chat channels. Produce a concise summary with: \
+key topics, decisions, open questions, and action items. Keep it factual and neutral.";
+    let user_prompt = format!(
+        "Channel: {}\nRecent messages (oldest to newest):\n{}",
+        channel.name.as_deref().unwrap_or("channel"),
+        transcript_lines.join("\n")
+    );
+    let (summary, provider, model) =
+        crate::ai::summarize_text(&state, system_prompt, &user_prompt).await?;
+
+    Ok(Json(json!({
+        "channel_id": channel_id.to_string(),
+        "provider": provider,
+        "model": model,
+        "message_count": transcript_lines.len(),
+        "summary": summary,
+    })))
 }
 
 pub async fn bulk_delete_messages(
@@ -677,6 +1113,31 @@ pub async fn bulk_delete_messages(
             .event_bus
             .dispatch("MESSAGE_DELETE_BULK", bulk_payload, guild_id);
     }
+    if let Some(gid) = guild_id {
+        audit::log_action(
+            &state,
+            gid,
+            auth.user_id,
+            audit::ACTION_MESSAGE_BULK_DELETE,
+            None,
+            None,
+            Some(json!({"channel_id": channel_id.to_string(), "count": deleted})),
+        )
+        .await;
+
+        mod_log::emit_mod_log(
+            &state,
+            gid,
+            "Messages Bulk Deleted",
+            "Multiple messages were removed from a channel.",
+            &[
+                ("Actor", auth.user_id.to_string()),
+                ("Channel", channel_id.to_string()),
+                ("Count", deleted.to_string()),
+            ],
+        )
+        .await;
+    }
     Ok(Json(json!({ "deleted": deleted })))
 }
 
@@ -692,6 +1153,7 @@ pub async fn send_message(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    let has_nonce = nonce.is_some();
     if let Some(candidate) = nonce.as_ref() {
         if candidate.len() > MAX_MESSAGE_NONCE_LEN {
             return Err(ApiError::BadRequest(
@@ -700,7 +1162,11 @@ pub async fn send_message(
         }
     }
 
-    if body.content.trim().is_empty() && body.attachment_ids.is_empty() && body.e2ee.is_none() {
+    if body.content.trim().is_empty()
+        && body.attachment_ids.is_empty()
+        && body.sticker_ids.is_empty()
+        && body.e2ee.is_none()
+    {
         return Err(ApiError::BadRequest(
             "Message must include content or attachments".into(),
         ));
@@ -730,6 +1196,84 @@ pub async fn send_message(
         &[Permissions::VIEW_CHANNEL, Permissions::SEND_MESSAGES],
     )
     .await?;
+    let now = chrono::Utc::now();
+
+    if let Some(guild_id) = channel.guild_id() {
+        let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?;
+        let channel_perms = paracord_core::permissions::compute_channel_permissions(
+            &state.db,
+            guild_id,
+            channel_id,
+            guild.owner_id,
+            auth.user_id,
+        )
+        .await?;
+        let can_bypass = channel_perms.contains(Permissions::MANAGE_MESSAGES)
+            || channel_perms.contains(Permissions::MANAGE_GUILD);
+        if !can_bypass {
+            let feature_settings =
+                paracord_db::channel_features::get_or_default(&state.db, channel_id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            let exempt_role_ids = paracord_db::channels::parse_required_role_ids(
+                &feature_settings.slowmode_exempt_role_ids,
+            );
+            let member_roles =
+                paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            let has_exempt_role = !exempt_role_ids.is_empty()
+                && member_roles
+                    .iter()
+                    .any(|role| exempt_role_ids.contains(&role.id));
+            if !has_exempt_role {
+                let base_slowmode_seconds = i64::from(channel.rate_limit_per_user.max(0));
+                let adaptive_extra_seconds = if feature_settings.adaptive_slowmode_enabled {
+                    let window_seconds =
+                        i64::from(feature_settings.adaptive_slowmode_window_seconds.max(5));
+                    let threshold = i64::from(feature_settings.adaptive_slowmode_threshold.max(1));
+                    let step_seconds =
+                        i64::from(feature_settings.adaptive_slowmode_step_seconds.max(1));
+                    let since = now - chrono::Duration::seconds(window_seconds);
+                    let recent_count = paracord_db::messages::count_channel_messages_since(
+                        &state.db, channel_id, since,
+                    )
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+                    if recent_count >= threshold {
+                        (recent_count - threshold + 1) * step_seconds
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+                let effective_slowmode_seconds =
+                    (base_slowmode_seconds + adaptive_extra_seconds).max(0);
+                if effective_slowmode_seconds > 0 {
+                    if let Some(last_message_at) =
+                        paracord_db::messages::get_last_user_message_time(
+                            &state.db,
+                            channel_id,
+                            auth.user_id,
+                        )
+                        .await
+                        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                    {
+                        let elapsed = now.signed_duration_since(last_message_at).num_seconds();
+                        if elapsed < effective_slowmode_seconds {
+                            return Err(ApiError::RateLimited(
+                                effective_slowmode_seconds - elapsed,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let referenced_message_id = match body.referenced_message_id.as_deref() {
         Some(id) => Some(
@@ -740,7 +1284,6 @@ pub async fn send_message(
     };
 
     let mut attachments = Vec::with_capacity(body.attachment_ids.len());
-    let now = chrono::Utc::now();
     for attachment_id in &body.attachment_ids {
         let id = attachment_id
             .parse::<i64>()
@@ -766,6 +1309,28 @@ pub async fn send_message(
             ));
         }
         attachments.push(attachment);
+    }
+
+    let mut sticker_ids = Vec::with_capacity(body.sticker_ids.len());
+    if !body.sticker_ids.is_empty() {
+        let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
+            "Stickers are only supported in guild channels".into(),
+        ))?;
+        for raw_sticker_id in &body.sticker_ids {
+            let sticker_id = raw_sticker_id
+                .parse::<i64>()
+                .map_err(|_| ApiError::BadRequest("Invalid sticker ID".into()))?;
+            let sticker = paracord_db::stickers::get_sticker(&state.db, sticker_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                .ok_or(ApiError::BadRequest("Sticker does not exist".into()))?;
+            if sticker.guild_id != guild_id {
+                return Err(ApiError::BadRequest(
+                    "Sticker does not belong to this guild".into(),
+                ));
+            }
+            sticker_ids.push(sticker_id);
+        }
     }
 
     let msg_id = paracord_util::snowflake::generate(1);
@@ -794,7 +1359,7 @@ pub async fn send_message(
         },
     )
     .await?;
-    let created_new = msg.id == msg_id;
+    let created_new = !has_nonce || msg.id == msg_id;
     for attachment in &attachments {
         if attachment.message_id == Some(msg.id) {
             continue;
@@ -828,6 +1393,11 @@ pub async fn send_message(
             ));
         }
     }
+    if created_new && !sticker_ids.is_empty() {
+        paracord_db::stickers::attach_stickers_to_message(&state.db, msg.id, &sticker_ids)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    }
 
     // Increment thread message count if the channel is a thread
     if created_new && channel.channel_type == 6 {
@@ -835,6 +1405,45 @@ pub async fn send_message(
     }
 
     let guild_id = channel.guild_id();
+    if created_new && guild_id.is_some() {
+        let features = paracord_db::channel_features::get_or_default(&state.db, channel_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if features.anonymous_posting_enabled {
+            let alias = paracord_db::anonymous_messages::get_or_create_alias(
+                &state.db,
+                channel_id,
+                auth.user_id,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            paracord_db::anonymous_messages::attach_anonymous_message(
+                &state.db,
+                msg.id,
+                channel_id,
+                auth.user_id,
+                &alias.alias,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        }
+    }
+    if created_new {
+        if let Some(gid) = guild_id {
+            if let Err(err) =
+                crate::routes::economy::award_message_xp(&state, gid, auth.user_id, &body.content)
+                    .await
+            {
+                tracing::warn!(
+                    channel_id,
+                    guild_id = gid,
+                    user_id = auth.user_id,
+                    error = %err,
+                    "failed to apply message XP progression"
+                );
+            }
+        }
+    }
     let msg_json = message_to_json(&state, &msg, auth.user_id).await;
 
     if created_new {
@@ -850,6 +1459,44 @@ pub async fn send_message(
             state
                 .event_bus
                 .dispatch("MESSAGE_CREATE", msg_json.clone(), guild_id);
+        }
+
+        // Mention count increment for @user, @everyone, @here
+        if !body.content.is_empty() {
+            let mentioned_user_ids = parse_mentions(&body.content);
+            let mut all_mentioned: Vec<i64> = mentioned_user_ids
+                .into_iter()
+                .filter(|&uid| uid != auth.user_id)
+                .collect();
+            if body.content.contains("@everyone") || body.content.contains("@here") {
+                if let Some(gid) = guild_id {
+                    if let Ok(member_ids) =
+                        paracord_db::members::get_guild_member_user_ids(&state.db, gid).await
+                    {
+                        for mid in member_ids {
+                            if mid != auth.user_id && !all_mentioned.contains(&mid) {
+                                all_mentioned.push(mid);
+                            }
+                        }
+                    }
+                }
+            }
+            for uid in all_mentioned {
+                let _ =
+                    paracord_db::read_states::increment_mention_count(&state.db, uid, channel_id)
+                        .await;
+            }
+        }
+
+        // OpenGraph link preview fetching (non-blocking background task)
+        if !body.content.is_empty() {
+            crate::opengraph::spawn_opengraph_task(
+                state.clone(),
+                msg.id,
+                channel_id,
+                guild_id,
+                body.content.clone(),
+            );
         }
 
         // Federation: forward message to peer servers (non-blocking)
@@ -873,6 +1520,46 @@ pub async fn send_message(
                     .await;
                 });
             }
+        }
+
+        // Announcement channel crosspost: copy message to all follower target channels
+        if channel.channel_type == 5 {
+            let crosspost_state = state.clone();
+            let crosspost_content = body.content.clone();
+            let crosspost_author = auth.user_id;
+            let crosspost_ref_id = msg.id;
+            tokio::spawn(async move {
+                if let Ok(follows) = paracord_db::channel_follows::get_follows_for_channel(
+                    &crosspost_state.db,
+                    channel_id,
+                )
+                .await
+                {
+                    for follow in follows {
+                        let cross_id = paracord_util::snowflake::generate(1);
+                        let cross_msg = paracord_db::messages::create_message(
+                            &crosspost_state.db,
+                            cross_id,
+                            follow.target_channel_id,
+                            crosspost_author,
+                            &crosspost_content,
+                            0,
+                            Some(crosspost_ref_id),
+                        )
+                        .await;
+                        if let Ok(cross_msg) = cross_msg {
+                            let cross_json =
+                                message_to_json(&crosspost_state, &cross_msg, crosspost_author)
+                                    .await;
+                            crosspost_state.event_bus.dispatch(
+                                "MESSAGE_CREATE",
+                                cross_json,
+                                Some(follow.target_guild_id),
+                            );
+                        }
+                    }
+                }
+            });
         }
     }
 
@@ -1207,6 +1894,33 @@ pub async fn edit_message(
     }
 
     if let Some(gid) = guild_id {
+        audit::log_action(
+            &state,
+            gid,
+            auth.user_id,
+            audit::ACTION_MESSAGE_EDIT,
+            Some(message_id),
+            None,
+            Some(json!({
+                "channel_id": channel_id.to_string(),
+                "edited_at": updated.edited_at.map(|t| t.to_rfc3339()),
+            })),
+        )
+        .await;
+
+        mod_log::emit_mod_log(
+            &state,
+            gid,
+            "Message Deleted",
+            "A message was deleted by a moderator.",
+            &[
+                ("Actor", auth.user_id.to_string()),
+                ("Channel", channel_id.to_string()),
+                ("Message", message_id.to_string()),
+            ],
+        )
+        .await;
+
         if paracord_federation::is_enabled() {
             let fed_state = state.clone();
             let fed_author = auth.user_id;
@@ -1234,6 +1948,45 @@ pub async fn edit_message(
     }
 
     Ok(Json(msg_json))
+}
+
+pub async fn get_edit_history(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, message_id)): Path<(i64, i64)>,
+) -> Result<Json<Value>, ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    ensure_channel_permissions(&state, &channel, auth.user_id, &[Permissions::VIEW_CHANNEL])
+        .await?;
+
+    let msg = paracord_db::messages::get_message(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if msg.channel_id != channel_id {
+        return Err(ApiError::NotFound);
+    }
+
+    let history = paracord_db::messages::get_edit_history(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let result: Vec<Value> = history
+        .iter()
+        .map(|h| {
+            json!({
+                "id": h.id.to_string(),
+                "message_id": h.message_id.to_string(),
+                "content": h.content,
+                "edited_at": h.edited_at.to_rfc3339(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!(result)))
 }
 
 pub async fn delete_message(
@@ -1265,6 +2018,17 @@ pub async fn delete_message(
     }
 
     if let Some(gid) = guild_id {
+        audit::log_action(
+            &state,
+            gid,
+            auth.user_id,
+            audit::ACTION_MESSAGE_DELETE,
+            Some(message_id),
+            None,
+            Some(json!({"channel_id": channel_id.to_string()})),
+        )
+        .await;
+
         if paracord_federation::is_enabled() {
             let fed_state = state.clone();
             let fed_author = auth.user_id;
@@ -1820,6 +2584,76 @@ pub async fn create_thread(
     let guild_id = parent_channel
         .guild_id()
         .ok_or(ApiError::BadRequest("Cannot create threads in DMs".into()))?;
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        auth.user_id,
+    )
+    .await?;
+    let can_manage =
+        perms.contains(Permissions::MANAGE_MESSAGES) || perms.contains(Permissions::MANAGE_GUILD);
+    if !can_manage {
+        let now = chrono::Utc::now();
+        let feature_settings = paracord_db::channel_features::get_or_default(&state.db, channel_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let exempt_role_ids = paracord_db::channels::parse_required_role_ids(
+            &feature_settings.slowmode_exempt_role_ids,
+        );
+        let member_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let has_exempt_role = !exempt_role_ids.is_empty()
+            && member_roles
+                .iter()
+                .any(|role| exempt_role_ids.contains(&role.id));
+        if !has_exempt_role {
+            let base_thread_slowmode =
+                i64::from(feature_settings.thread_rate_limit_per_user.max(0));
+            let adaptive_extra = if feature_settings.adaptive_slowmode_enabled {
+                let window_seconds =
+                    i64::from(feature_settings.adaptive_slowmode_window_seconds.max(5));
+                let threshold = i64::from(feature_settings.adaptive_slowmode_threshold.max(1));
+                let step_seconds =
+                    i64::from(feature_settings.adaptive_slowmode_step_seconds.max(1));
+                let since = now - chrono::Duration::seconds(window_seconds);
+                let recent_count = paracord_db::messages::count_channel_messages_since(
+                    &state.db, channel_id, since,
+                )
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+                if recent_count >= threshold {
+                    (recent_count - threshold + 1) * step_seconds
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            let effective_thread_slowmode = (base_thread_slowmode + adaptive_extra).max(0);
+            if effective_thread_slowmode > 0 {
+                if let Some(last_created) = paracord_db::channels::get_last_thread_creation_time(
+                    &state.db,
+                    channel_id,
+                    auth.user_id,
+                )
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                {
+                    let elapsed = now.signed_duration_since(last_created).num_seconds();
+                    if elapsed < effective_thread_slowmode {
+                        return Err(ApiError::RateLimited(effective_thread_slowmode - elapsed));
+                    }
+                }
+            }
+        }
+    }
 
     let auto_archive_duration = body.auto_archive_duration.unwrap_or(1440);
     let starter_message_id = match body.message_id.as_deref() {
@@ -2552,4 +3386,125 @@ async fn federation_forward_generic(
     service
         .forward_envelope_to_peers(&state.db, &envelope)
         .await;
+}
+
+// ============ Announcement channel follow/subscribe ============
+
+pub async fn add_channel_follow(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+    Json(body): Json<AddChannelFollowRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    if channel.channel_type != 5 {
+        return Err(ApiError::BadRequest(
+            "Only announcement channels (type 5) can be followed".into(),
+        ));
+    }
+
+    ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::MANAGE_CHANNELS],
+    )
+    .await?;
+
+    let target_channel_id: i64 = body
+        .target_channel_id
+        .parse()
+        .map_err(|_| ApiError::BadRequest("Invalid target_channel_id".into()))?;
+    let target_guild_id: i64 = body
+        .target_guild_id
+        .parse()
+        .map_err(|_| ApiError::BadRequest("Invalid target_guild_id".into()))?;
+
+    // Verify target channel exists
+    let _target = paracord_db::channels::get_channel(&state.db, target_channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::BadRequest("Target channel does not exist".into()))?;
+
+    let follow = paracord_db::channel_follows::create_follow(
+        &state.db,
+        channel_id,
+        target_channel_id,
+        target_guild_id,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": follow.id.to_string(),
+            "source_channel_id": follow.source_channel_id.to_string(),
+            "target_channel_id": follow.target_channel_id.to_string(),
+            "target_guild_id": follow.target_guild_id.to_string(),
+            "created_at": follow.created_at.to_rfc3339(),
+        })),
+    ))
+}
+
+pub async fn remove_channel_follow(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, target_channel_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::MANAGE_CHANNELS],
+    )
+    .await?;
+
+    paracord_db::channel_follows::delete_follow(&state.db, channel_id, target_channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn list_channel_follows(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    ensure_channel_permissions(&state, &channel, auth.user_id, &[Permissions::VIEW_CHANNEL])
+        .await?;
+
+    let follows = paracord_db::channel_follows::get_follows_for_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let json_follows: Vec<Value> = follows
+        .iter()
+        .map(|f| {
+            json!({
+                "id": f.id.to_string(),
+                "source_channel_id": f.source_channel_id.to_string(),
+                "target_channel_id": f.target_channel_id.to_string(),
+                "target_guild_id": f.target_guild_id.to_string(),
+                "created_at": f.created_at.to_rfc3339(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!(json_follows)))
 }

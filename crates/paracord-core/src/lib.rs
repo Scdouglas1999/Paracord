@@ -1,11 +1,15 @@
+#![allow(clippy::derivable_impls, clippy::too_many_arguments)]
+
 pub mod admin;
 pub mod auth;
+#[cfg(feature = "backup")]
 pub mod backup;
 pub mod channel;
 pub mod error;
 pub mod events;
 pub mod guild;
 pub mod identity;
+pub mod interactions;
 pub mod member_index;
 pub mod message;
 pub mod observability;
@@ -13,15 +17,19 @@ pub mod permissions;
 pub mod presence_manager;
 pub mod user;
 
+use dashmap::{DashMap, DashSet};
 use paracord_db::DbPool;
 use paracord_federation::FederationService;
 use paracord_media::{Storage, StorageManager, VoiceManager};
 use paracord_models::permissions::Permissions;
+#[cfg(feature = "native-media")]
 use paracord_relay::relay::RelayForwarder;
+#[cfg(feature = "native-media")]
 use paracord_relay::room::MediaRoomManager;
+#[cfg(feature = "native-media")]
 use paracord_relay::speaker::SpeakerDetector;
+#[cfg(feature = "native-media")]
 use paracord_transport::endpoint::MediaEndpoint;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{Notify, RwLock};
 
@@ -64,11 +72,19 @@ impl Default for RuntimeSettings {
 
 /// Cache key for computed channel permissions: (user_id, channel_id).
 pub type PermissionCacheKey = (i64, i64);
+pub const DEFAULT_PERMISSION_CACHE_MAX_ENTRIES: u64 = 10_000;
 
-/// Build the permission cache with a 5-minute TTL and 10k max entries.
-pub fn build_permission_cache() -> moka::future::Cache<PermissionCacheKey, Permissions> {
+/// Build the permission cache with a 5-minute TTL and configurable max entries.
+pub fn build_permission_cache(
+    max_entries: u64,
+) -> moka::future::Cache<PermissionCacheKey, Permissions> {
+    let capacity = if max_entries == 0 {
+        DEFAULT_PERMISSION_CACHE_MAX_ENTRIES
+    } else {
+        max_entries
+    };
     moka::future::Cache::builder()
-        .max_capacity(10_000)
+        .max_capacity(capacity)
         .time_to_live(std::time::Duration::from_secs(300))
         .build()
 }
@@ -85,9 +101,9 @@ pub struct AppState {
     pub storage_backend: Arc<Storage>,
     pub shutdown: Arc<Notify>,
     /// Set of user IDs currently connected to the gateway (online).
-    pub online_users: Arc<RwLock<HashSet<i64>>>,
+    pub online_users: Arc<DashSet<i64>>,
     /// Live presence payloads keyed by user ID.
-    pub user_presences: Arc<RwLock<HashMap<i64, serde_json::Value>>>,
+    pub user_presences: Arc<DashMap<i64, serde_json::Value>>,
     /// Cached computed channel permissions: (user_id, channel_id) -> Permissions.
     pub permission_cache: moka::future::Cache<PermissionCacheKey, Permissions>,
     /// Pre-built federation service (avoids re-parsing env vars on every request).
@@ -98,9 +114,12 @@ pub struct AppState {
     pub presence_manager: Arc<presence_manager::PresenceManager>,
     /// Native QUIC media relay state (None when using LiveKit).
     pub native_media: Option<NativeMediaState>,
+    /// Temporary MFA login tickets: ticket UUID -> user_id. 5-min TTL.
+    pub mfa_tickets: moka::future::Cache<String, i64>,
 }
 
 /// State for the native QUIC-based media server.
+#[cfg(feature = "native-media")]
 #[derive(Clone)]
 pub struct NativeMediaState {
     pub rooms: Arc<MediaRoomManager>,
@@ -112,6 +131,11 @@ pub struct NativeMediaState {
     /// to self-signed certs via WebTransport.
     pub cert_hash: String,
 }
+
+/// Placeholder type when native-media support is disabled at compile time.
+#[cfg(not(feature = "native-media"))]
+#[derive(Clone)]
+pub struct NativeMediaState;
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -137,6 +161,8 @@ pub struct AppConfig {
     pub media_max_file_size: u64,
     pub media_p2p_threshold: u64,
     pub file_cryptor: Option<paracord_util::at_rest::FileCryptor>,
+    /// Cryptor for encrypting TOTP secrets at rest (derived from the same master key with "totp" context).
+    pub totp_cryptor: Option<paracord_util::at_rest::FileCryptor>,
     pub backup_dir: String,
     pub database_url: String,
     /// Per-peer rate limit for inbound federation events (per minute). None = no limit.
@@ -159,4 +185,18 @@ pub struct AppConfig {
     pub federation_file_cache_max_size: u64,
     /// TTL for cached federation files in hours.
     pub federation_file_cache_ttl_hours: u64,
+    /// Optional Tenor API key for GIF search proxy.
+    pub tenor_api_key: Option<String>,
+    /// Whether email verification is required after registration.
+    pub require_email_verification: bool,
+    /// Optional AI provider id (openai/anthropic/ollama/openai_compatible).
+    pub ai_provider: Option<String>,
+    /// Optional AI API base URL.
+    pub ai_base_url: Option<String>,
+    /// Optional AI API key.
+    pub ai_api_key: Option<String>,
+    /// Optional AI model id.
+    pub ai_model: Option<String>,
+    /// Timeout for AI requests in seconds.
+    pub ai_timeout_seconds: u64,
 }

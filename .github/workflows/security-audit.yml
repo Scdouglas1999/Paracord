@@ -29,7 +29,7 @@ jobs:
           cache-dependency-path: client/package-lock.json
       - name: npm audit (client)
         working-directory: client
-        run: npm ci && npm audit --audit-level=high
+        run: npm ci && npm audit --audit-level=moderate
 
   release-security-gate:
     runs-on: ubuntu-latest

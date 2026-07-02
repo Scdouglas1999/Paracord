@@ -1,8 +1,8 @@
 # Security Release Checklist
 
 ## Pre-Release Gate
-- [ ] All `P0` tasks are `DONE` in `SECURITY_REMEDIATION_TRACKER.md`.
-- [ ] `cargo audit` passes (or exceptions are documented and unexpired).
+- [ ] All `P0` tasks are `DONE` in `docs/security-release-gate.md`; `SECURITY_REMEDIATION_TRACKER.md` is only a private developer fallback and must not be the public release authority.
+- [ ] `cargo audit` passes with no unignored vulnerabilities; warning waivers are documented in `docs/release-risk-waivers.md` and explicitly accepted by the release owner.
 - [ ] `npm audit` reports no unresolved high/critical findings.
 - [ ] Security regression tests pass.
 - [ ] HTTP->HTTPS redirect and HSTS verified in staging.

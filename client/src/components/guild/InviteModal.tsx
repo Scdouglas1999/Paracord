@@ -5,6 +5,8 @@ import { inviteApi } from '../../api/invites';
 import { getStoredServerUrl } from '../../lib/apiBaseUrl';
 import { toPortableUri } from '../../lib/portableLinks';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { extractApiError } from '../../api/client';
+import { writeClipboardText } from '../../lib/clipboard';
 
 interface InviteModalProps {
   guildName: string;
@@ -19,12 +21,12 @@ const EXPIRATION_MAP: Record<string, number | undefined> = {
   '12hr': 43200,
   '1day': 86400,
   '7days': 604800,
-  'never': undefined,
+  'never': 0,
 };
 
 const MAX_USES_MAP: Record<string, number | undefined> = {
   '1': 1, '5': 5, '10': 10, '25': 25, '50': 50, '100': 100,
-  'unlimited': undefined,
+  'unlimited': 0,
 };
 
 /** Resolve the server's base URL for encoding into portable links. */
@@ -43,9 +45,13 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
   const [inviteCode, setInviteCode] = useState('');
   const [portableLink, setPortableLink] = useState('');
   const [loading, setLoading] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
 
   const generateInvite = async () => {
     setLoading(true);
+    setInviteError(null);
+    setCopyError(null);
     try {
       const { data } = await inviteApi.create(channelId, {
         max_age: EXPIRATION_MAP[expiration],
@@ -55,9 +61,10 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       const serverUrl = resolveServerBaseUrl();
       setInviteCode(code);
       setPortableLink(toPortableUri(serverUrl, code));
-    } catch {
+    } catch (err) {
       setInviteCode('');
-      setPortableLink('Failed to generate invite');
+      setPortableLink('');
+      setInviteError(`Failed to generate invite: ${extractApiError(err)}`);
     } finally {
       setLoading(false);
     }
@@ -70,15 +77,25 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
   useFocusTrap(dialogRef, true, onClose);
 
   const handleCopyPortable = async () => {
-    await navigator.clipboard?.writeText(portableLink);
-    setCopiedPortable(true);
-    setTimeout(() => setCopiedPortable(false), 2000);
+    try {
+      setCopyError(null);
+      await writeClipboardText(portableLink);
+      setCopiedPortable(true);
+      setTimeout(() => setCopiedPortable(false), 2000);
+    } catch (err) {
+      setCopyError(`Failed to copy portable invite link: ${extractApiError(err)}`);
+    }
   };
 
   const handleCopyCode = async () => {
-    await navigator.clipboard?.writeText(inviteCode);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
+    try {
+      setCopyError(null);
+      await writeClipboardText(inviteCode);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    } catch (err) {
+      setCopyError(`Failed to copy invite code: ${extractApiError(err)}`);
+    }
   };
 
   const modal = (
@@ -108,6 +125,24 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
 
         {/* Body */}
         <div className="space-y-7 px-8 pb-8 sm:px-8 sm:pb-8">
+          {inviteError && (
+            <div
+              role="alert"
+              className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger"
+            >
+              {inviteError}
+            </div>
+          )}
+
+          {copyError && (
+            <div
+              role="alert"
+              className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger"
+            >
+              {copyError}
+            </div>
+          )}
+
           {/* Portable invite link (primary) */}
           <div>
             <label className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
@@ -131,6 +166,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
               <button
                 onClick={handleCopyPortable}
                 disabled={loading || !portableLink}
+                aria-label={copiedPortable ? 'Portable invite link copied' : 'Copy portable invite link'}
                 className="inline-flex items-center justify-center px-4 py-3 text-sm font-semibold text-white transition-colors"
                 style={{ backgroundColor: copiedPortable ? 'var(--accent-success)' : 'var(--accent-primary)' }}
               >
@@ -162,6 +198,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
               <button
                 onClick={handleCopyCode}
                 disabled={loading || !inviteCode}
+                aria-label={copiedCode ? 'Invite code copied' : 'Copy invite code'}
                 className="inline-flex items-center justify-center px-3 py-2.5 text-xs font-semibold transition-colors"
                 style={{ color: copiedCode ? 'var(--accent-success)' : 'var(--text-secondary)' }}
               >

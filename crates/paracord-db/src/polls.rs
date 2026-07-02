@@ -181,14 +181,15 @@ async fn build_options_with_votes(
                 .fetch_one(pool)
                 .await?;
 
-        let voted: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM poll_votes WHERE poll_id = $1 AND option_id = $2 AND user_id = $3)",
+        let voted_row = sqlx::query(
+            "SELECT EXISTS(SELECT 1 FROM poll_votes WHERE poll_id = $1 AND option_id = $2 AND user_id = $3) AS voted",
         )
         .bind(poll_id)
         .bind(opt.id)
         .bind(viewer_id)
         .fetch_one(pool)
         .await?;
+        let voted = bool_from_any_row(&voted_row, "voted")?;
 
         result.push(PollOptionWithVotes {
             id: opt.id,
@@ -240,6 +241,76 @@ pub async fn add_vote(
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_pool() -> DbPool {
+        let pool = crate::create_pool("sqlite::memory:", 1).await.unwrap();
+        crate::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    async fn setup_message(pool: &DbPool) -> (i64, i64, i64) {
+        let user_id = 101;
+        let guild_id = 201;
+        let channel_id = 301;
+        let message_id = 401;
+        crate::users::create_user(pool, user_id, "polluser", 1, "poll@example.test", "hash")
+            .await
+            .unwrap();
+        crate::guilds::create_guild(pool, guild_id, "Poll Guild", user_id, None)
+            .await
+            .unwrap();
+        crate::channels::create_channel(pool, channel_id, guild_id, "polls", 0, 0, None, None)
+            .await
+            .unwrap();
+        crate::messages::create_message(
+            pool, message_id, channel_id, user_id, "question", 20, None,
+        )
+        .await
+        .unwrap();
+        (user_id, channel_id, message_id)
+    }
+
+    #[tokio::test]
+    async fn get_poll_decodes_sqlite_exists_voted_flag() {
+        let pool = test_pool().await;
+        let (user_id, channel_id, message_id) = setup_message(&pool).await;
+        create_poll(
+            &pool,
+            501,
+            message_id,
+            channel_id,
+            "Best protocol?",
+            &[
+                CreatePollOption {
+                    text: "Matrix".to_string(),
+                    emoji: None,
+                },
+                CreatePollOption {
+                    text: "Paracord".to_string(),
+                    emoji: None,
+                },
+            ],
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let poll = get_poll(&pool, 501, user_id).await.unwrap().unwrap();
+        assert_eq!(poll.options.len(), 2);
+        assert!(!poll.options[0].voted);
+
+        add_vote(&pool, 501, poll.options[0].id, user_id)
+            .await
+            .unwrap();
+        let updated = get_poll(&pool, 501, user_id).await.unwrap().unwrap();
+        assert!(updated.options[0].voted);
+    }
 }
 
 pub async fn remove_vote(

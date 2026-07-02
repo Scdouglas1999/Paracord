@@ -1,16 +1,110 @@
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
+use dashmap::DashMap;
+use hmac::{Hmac, Mac};
 use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::Sha256;
+use std::sync::LazyLock;
+use std::time::Instant;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
+use crate::routes::audit;
+
+// ---------------------------------------------------------------------------
+// M13: Per-webhook rate limiter (sliding window: 30 requests per 60 seconds)
+// ---------------------------------------------------------------------------
+
+const WEBHOOK_RATE_LIMIT: usize = 30;
+const WEBHOOK_RATE_WINDOW_SECS: u64 = 60;
+
+struct WebhookRateEntry {
+    timestamps: Vec<Instant>,
+}
+
+static WEBHOOK_RATE_MAP: LazyLock<DashMap<i64, WebhookRateEntry>> = LazyLock::new(DashMap::new);
+
+fn check_webhook_rate_limit(webhook_id: i64) -> Result<(), ApiError> {
+    let now = Instant::now();
+    let cutoff = now - std::time::Duration::from_secs(WEBHOOK_RATE_WINDOW_SECS);
+
+    let mut entry = WEBHOOK_RATE_MAP
+        .entry(webhook_id)
+        .or_insert_with(|| WebhookRateEntry {
+            timestamps: Vec::new(),
+        });
+
+    // Remove expired timestamps
+    entry.timestamps.retain(|ts| *ts > cutoff);
+
+    if entry.timestamps.len() >= WEBHOOK_RATE_LIMIT {
+        return Err(ApiError::RateLimited(WEBHOOK_RATE_WINDOW_SECS as i64));
+    }
+
+    entry.timestamps.push(now);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// H6: GitHub webhook HMAC-SHA256 signature verification
+// ---------------------------------------------------------------------------
+
+type HmacSha256 = Hmac<Sha256>;
+
+fn verify_github_signature(secret: &str, body: &[u8], signature_header: &str) -> bool {
+    // GitHub sends: sha256=<hex>
+    let hex_sig = match signature_header.strip_prefix("sha256=") {
+        Some(hex) => hex,
+        None => return false,
+    };
+
+    let expected_bytes = match hex::decode(hex_sig) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+
+    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    mac.update(body);
+
+    // Constant-time comparison via the `verify_slice` method
+    mac.verify_slice(&expected_bytes).is_ok()
+}
+
+/// Simple hex decoder (avoids adding a `hex` crate dependency)
+mod hex {
+    pub fn decode(input: &str) -> Result<Vec<u8>, ()> {
+        if input.len() % 2 != 0 {
+            return Err(());
+        }
+        let mut out = Vec::with_capacity(input.len() / 2);
+        let bytes = input.as_bytes();
+        for chunk in bytes.chunks(2) {
+            let hi = hex_val(chunk[0]).ok_or(())?;
+            let lo = hex_val(chunk[1]).ok_or(())?;
+            out.push((hi << 4) | lo);
+        }
+        Ok(out)
+    }
+
+    fn hex_val(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+}
 
 fn webhook_to_json(w: &paracord_db::webhooks::WebhookRow, token: Option<&str>) -> Value {
     let mut v = json!({
@@ -112,6 +206,19 @@ pub async fn create_webhook(
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    audit::log_action(
+        &state,
+        guild_id,
+        auth.user_id,
+        audit::ACTION_WEBHOOK_CREATE,
+        Some(webhook.id),
+        None,
+        Some(json!({
+            "channel_id": webhook.channel_id.to_string(),
+            "name": webhook.name,
+        })),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -174,6 +281,7 @@ pub async fn get_webhook(
 #[derive(Deserialize)]
 pub struct UpdateWebhookRequest {
     pub name: Option<String>,
+    pub github_secret: Option<String>,
 }
 
 pub async fn update_webhook(
@@ -198,10 +306,40 @@ pub async fn update_webhook(
         }
     }
 
-    let updated =
+    let mut updated =
         paracord_db::webhooks::update_webhook(&state.db, webhook_id, body.name.as_deref())
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    // Update github_secret if provided (empty string clears it)
+    if let Some(ref github_secret) = body.github_secret {
+        let secret_value = if github_secret.is_empty() {
+            None
+        } else {
+            Some(github_secret.as_str())
+        };
+        updated = paracord_db::webhooks::update_webhook_github_secret(
+            &state.db,
+            webhook_id,
+            secret_value,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    }
+
+    audit::log_action(
+        &state,
+        webhook.space_id,
+        auth.user_id,
+        audit::ACTION_WEBHOOK_UPDATE,
+        Some(updated.id),
+        None,
+        Some(json!({
+            "name": updated.name,
+            "channel_id": updated.channel_id.to_string(),
+        })),
+    )
+    .await;
 
     Ok(Json(webhook_to_json(&updated, None)))
 }
@@ -221,15 +359,79 @@ pub async fn delete_webhook(
     paracord_db::webhooks::delete_webhook(&state.db, webhook_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    audit::log_action(
+        &state,
+        webhook.space_id,
+        auth.user_id,
+        audit::ACTION_WEBHOOK_DELETE,
+        Some(webhook.id),
+        None,
+        Some(json!({
+            "name": webhook.name,
+            "channel_id": webhook.channel_id.to_string(),
+        })),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
 pub struct ExecuteWebhookRequest {
-    pub content: String,
+    pub content: Option<String>,
     pub username: Option<String>,
     pub avatar_url: Option<String>,
+    pub embeds: Option<Vec<Value>>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct ExecuteWebhookQuery {
+    pub wait: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct EditWebhookMessageRequest {
+    pub content: Option<String>,
+    pub embeds: Option<Vec<Value>>,
+}
+
+fn webhook_message_to_json(
+    msg: &paracord_db::messages::MessageRow,
+    webhook_id: i64,
+    display_name: &str,
+    avatar_url: Option<&str>,
+) -> Value {
+    let embeds_value: Value = msg
+        .embeds
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| json!([]));
+    json!({
+        "id": msg.id.to_string(),
+        "channel_id": msg.channel_id.to_string(),
+        "author": {
+            "id": webhook_id.to_string(),
+            "username": display_name,
+            "discriminator": 0,
+            "avatar_hash": null,
+            "avatar_url": avatar_url,
+            "bot": true,
+        },
+        "content": msg.content,
+        "pinned": msg.pinned,
+        "type": msg.message_type,
+        "message_type": msg.message_type,
+        "flags": msg.flags,
+        "timestamp": msg.created_at.to_rfc3339(),
+        "created_at": msg.created_at.to_rfc3339(),
+        "edited_timestamp": msg.edited_at.map(|dt| dt.to_rfc3339()),
+        "edited_at": msg.edited_at.map(|dt| dt.to_rfc3339()),
+        "reference_id": msg.reference_id.map(|id| id.to_string()),
+        "attachments": [],
+        "reactions": [],
+        "embeds": embeds_value,
+        "webhook_id": webhook_id.to_string(),
+    })
 }
 
 fn format_github_event(event_type: &str, payload: &Value) -> String {
@@ -376,28 +578,57 @@ fn format_github_event(event_type: &str, payload: &Value) -> String {
 /// Execute a webhook - no auth required, uses token in path.
 pub async fn execute_webhook(
     State(state): State<AppState>,
+    Query(query): Query<ExecuteWebhookQuery>,
     Path((webhook_id, token)): Path<(i64, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    // M13: Per-webhook rate limiting
+    check_webhook_rate_limit(webhook_id)?;
+
     let webhook = paracord_db::webhooks::get_webhook_by_id_and_token(&state.db, webhook_id, &token)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
     // Check for GitHub webhook
-    let (content, display_name) = if let Some(github_event) = headers.get("X-GitHub-Event") {
+    let (content, display_name, avatar_url, embeds) = if let Some(github_event) =
+        headers.get("X-GitHub-Event")
+    {
+        // H6: Verify GitHub webhook signature if github_secret is configured
+        if let Some(ref secret) = webhook.github_secret {
+            let sig_header = headers
+                .get("X-Hub-Signature-256")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if !verify_github_signature(secret, &body, sig_header) {
+                return Err(ApiError::Unauthorized);
+            }
+        } else {
+            // No github_secret configured: log a warning but still process
+            tracing::warn!(
+                    webhook_id = webhook_id,
+                    "GitHub webhook event received without github_secret configured -- signature not verified"
+                );
+        }
+
         let event_type = github_event.to_str().unwrap_or("unknown");
         let payload: Value = serde_json::from_slice(&body)
             .map_err(|_| ApiError::BadRequest("Invalid JSON payload".into()))?;
         let content = format_github_event(event_type, &payload);
-        (content, "GitHub".to_string())
+        (content, "GitHub".to_string(), None, Vec::new())
     } else {
         // Normal webhook execution
         let req: ExecuteWebhookRequest = serde_json::from_slice(&body)
             .map_err(|_| ApiError::BadRequest("Invalid JSON payload".into()))?;
-        let content = req.content.trim().to_string();
-        if content.is_empty() {
+        let content = req
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let embeds = req.embeds.unwrap_or_default();
+        if content.is_empty() && embeds.is_empty() {
             return Err(ApiError::BadRequest("Content must not be empty".into()));
         }
         if content.len() > 2000 {
@@ -406,7 +637,12 @@ pub async fn execute_webhook(
             ));
         }
         let name = req.username.unwrap_or_else(|| webhook.name.clone());
-        (content, name)
+        if name.trim().is_empty() || name.len() > 80 {
+            return Err(ApiError::BadRequest(
+                "username must be between 1 and 80 characters".into(),
+            ));
+        }
+        (content, name, req.avatar_url, embeds)
     };
 
     // Create the message using the webhook creator as the author
@@ -425,41 +661,166 @@ pub async fn execute_webhook(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    if !embeds.is_empty() {
+        let embeds_json = serde_json::to_string(&embeds)
+            .map_err(|_| ApiError::BadRequest("Invalid embeds payload".into()))?;
+        paracord_db::messages::update_message_embeds(&state.db, msg.id, &embeds_json)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    }
+    paracord_db::webhooks::link_webhook_message(&state.db, webhook.id, msg.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let msg = paracord_db::messages::get_message_with_embeds(&state.db, msg.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
     let channel = paracord_db::channels::get_channel(&state.db, webhook.channel_id)
         .await
         .ok()
         .flatten();
     let guild_id = channel.and_then(|c| c.guild_id());
 
-    let msg_json = json!({
-        "id": msg.id.to_string(),
-        "channel_id": msg.channel_id.to_string(),
-        "author": {
-            "id": webhook.id.to_string(),
-            "username": display_name,
-            "discriminator": 0,
-            "avatar_hash": null,
-            "bot": true,
-        },
-        "content": msg.content,
-        "pinned": msg.pinned,
-        "type": msg.message_type,
-        "message_type": msg.message_type,
-        "timestamp": msg.created_at.to_rfc3339(),
-        "created_at": msg.created_at.to_rfc3339(),
-        "edited_timestamp": null,
-        "edited_at": null,
-        "reference_id": null,
-        "attachments": [],
-        "reactions": [],
-        "webhook_id": webhook.id.to_string(),
-    });
+    let msg_json = webhook_message_to_json(&msg, webhook.id, &display_name, avatar_url.as_deref());
 
     state
         .event_bus
         .dispatch("MESSAGE_CREATE", msg_json.clone(), guild_id);
 
-    Ok((StatusCode::CREATED, Json(msg_json)))
+    if query.wait.unwrap_or(true) {
+        Ok((StatusCode::CREATED, Json(msg_json)))
+    } else {
+        Ok((StatusCode::NO_CONTENT, Json(Value::Null)))
+    }
+}
+
+pub async fn edit_webhook_message(
+    State(state): State<AppState>,
+    Path((webhook_id, token, message_id)): Path<(i64, String, i64)>,
+    Json(body): Json<EditWebhookMessageRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let webhook = paracord_db::webhooks::get_webhook_by_id_and_token(&state.db, webhook_id, &token)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    let owns_message =
+        paracord_db::webhooks::webhook_owns_message(&state.db, webhook.id, message_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if !owns_message {
+        return Err(ApiError::NotFound);
+    }
+
+    let existing = paracord_db::messages::get_message_with_embeds(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if existing.channel_id != webhook.channel_id {
+        return Err(ApiError::NotFound);
+    }
+
+    let has_content_update = body.content.is_some();
+    let has_embed_update = body.embeds.is_some();
+    if !has_content_update && !has_embed_update {
+        return Err(ApiError::BadRequest(
+            "content or embeds is required".to_string(),
+        ));
+    }
+
+    if let Some(content) = body.content.as_deref() {
+        if content.trim().len() > 2000 {
+            return Err(ApiError::BadRequest(
+                "Content must be 2000 characters or fewer".into(),
+            ));
+        }
+    }
+
+    if has_content_update {
+        let updated_content = body
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        paracord_db::messages::update_message(&state.db, message_id, &updated_content)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    }
+
+    if let Some(embeds) = body.embeds.as_ref() {
+        let embeds_json = serde_json::to_string(embeds)
+            .map_err(|_| ApiError::BadRequest("Invalid embeds payload".into()))?;
+        paracord_db::messages::update_message_embeds(&state.db, message_id, &embeds_json)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    }
+
+    let msg = paracord_db::messages::get_message_with_embeds(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    let guild_id = paracord_db::channels::get_channel(&state.db, webhook.channel_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| row.guild_id());
+    let msg_json = webhook_message_to_json(&msg, webhook.id, &webhook.name, None);
+
+    state
+        .event_bus
+        .dispatch("MESSAGE_UPDATE", msg_json.clone(), guild_id);
+
+    Ok(Json(msg_json))
+}
+
+pub async fn delete_webhook_message(
+    State(state): State<AppState>,
+    Path((webhook_id, token, message_id)): Path<(i64, String, i64)>,
+) -> Result<StatusCode, ApiError> {
+    let webhook = paracord_db::webhooks::get_webhook_by_id_and_token(&state.db, webhook_id, &token)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    let owns_message =
+        paracord_db::webhooks::webhook_owns_message(&state.db, webhook.id, message_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if !owns_message {
+        return Err(ApiError::NotFound);
+    }
+
+    let msg = paracord_db::messages::get_message(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if msg.channel_id != webhook.channel_id {
+        return Err(ApiError::NotFound);
+    }
+
+    paracord_db::messages::delete_message(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let guild_id = paracord_db::channels::get_channel(&state.db, webhook.channel_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| row.guild_id());
+    let delete_payload = json!({
+        "id": message_id.to_string(),
+        "channel_id": msg.channel_id.to_string(),
+        "guild_id": guild_id.map(|id| id.to_string()),
+    });
+    state
+        .event_bus
+        .dispatch("MESSAGE_DELETE", delete_payload, guild_id);
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn generate_webhook_token() -> String {

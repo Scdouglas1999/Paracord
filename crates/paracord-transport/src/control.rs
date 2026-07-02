@@ -6,6 +6,10 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::TrackType;
+use crate::stream::{
+    PublishedTrack, StreamId, TrackId, TrackSubscription, VideoCodec, VideoCodecCapability,
+    ViewportHint,
+};
 
 /// Serializable track type for control messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +37,16 @@ impl From<TrackKind> for TrackType {
     }
 }
 
+/// Session-level participant identity announced over the stream control plane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionParticipant {
+    pub user_id: i64,
+    pub session_id: String,
+    #[serde(default)]
+    pub video_capabilities: Vec<VideoCodecCapability>,
+}
+
 /// Control messages exchanged over QUIC bidirectional streams.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -45,6 +59,53 @@ pub enum ControlMessage {
 
     /// Unsubscribe from a user's media track.
     Unsubscribe { user_id: i64, track_type: TrackKind },
+
+    /// Client joins a specific stream-capable media session.
+    SessionJoin {
+        room_id: String,
+        session_id: String,
+        #[serde(default)]
+        video_capabilities: Vec<VideoCodecCapability>,
+    },
+
+    /// Client leaves a specific stream-capable media session.
+    SessionLeave { room_id: String, session_id: String },
+
+    /// Snapshot of currently connected media participants in the room.
+    SessionState {
+        participants: Vec<SessionParticipant>,
+    },
+
+    /// One participant joined the active media session.
+    SessionParticipantJoin { participant: SessionParticipant },
+
+    /// One participant left the active media session.
+    SessionParticipantLeave { user_id: i64 },
+
+    /// Publisher announces a track and its currently available layers.
+    TrackPublish { track: PublishedTrack },
+
+    /// Publisher removes a previously announced track.
+    TrackUnpublish {
+        stream_id: StreamId,
+        track_id: TrackId,
+    },
+
+    /// Viewer subscribes to a specific published track.
+    SubscribeStream { subscription: TrackSubscription },
+
+    /// Viewer unsubscribes from a specific published track.
+    UnsubscribeStream {
+        stream_id: StreamId,
+        track_id: TrackId,
+    },
+
+    /// Publisher refreshes layer state without fully unpublishing the track.
+    TrackLayers {
+        stream_id: StreamId,
+        track_id: TrackId,
+        layers: Vec<crate::stream::PublishedLayer>,
+    },
 
     /// Announce a new encryption key epoch.
     /// `encrypted_keys` maps (recipient_user_id, ciphertext).
@@ -60,8 +121,54 @@ pub enum ControlMessage {
         ciphertext: Vec<u8>,
     },
 
+    /// Announce sender-key state for one published track.
+    StreamKeyAnnounce {
+        stream_id: StreamId,
+        track_id: TrackId,
+        codec: Option<VideoCodec>,
+        epoch: u8,
+        encrypted_keys: Vec<(i64, Vec<u8>)>,
+    },
+
+    /// Deliver an announced sender key to one participant.
+    StreamKeyDeliver {
+        stream_id: StreamId,
+        track_id: TrackId,
+        sender_user_id: i64,
+        epoch: u8,
+        ciphertext: Vec<u8>,
+    },
+
+    /// Request that the publisher send a sender key for one published track
+    /// to a specific recipient.
+    RequestStreamKey {
+        stream_id: StreamId,
+        track_id: TrackId,
+        recipient_user_id: i64,
+    },
+
     /// Bandwidth feedback from the server or peer.
     BandwidthFeedback { available_kbps: u32 },
+
+    /// Viewer's current receive conditions for one subscribed track.
+    ReceiverReport {
+        stream_id: StreamId,
+        track_id: TrackId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        active_layer: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        viewport: Option<ViewportHint>,
+        estimated_bitrate_kbps: u32,
+        packet_loss_ppm: u32,
+    },
+
+    /// Request an immediate keyframe for one published track.
+    RequestKeyframe {
+        stream_id: StreamId,
+        track_id: TrackId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        layer_id: Option<u8>,
+    },
 
     /// Keepalive ping.
     Ping,
@@ -135,7 +242,7 @@ pub enum ControlMessage {
 }
 
 /// Maximum control message size (256 KiB).
-const MAX_MESSAGE_SIZE: u32 = 256 * 1024;
+pub const MAX_MESSAGE_SIZE: u32 = 256 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ControlError {
@@ -381,6 +488,7 @@ impl Default for StreamFrameCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stream::VideoCodecCapability;
 
     #[test]
     fn auth_round_trip() {
@@ -409,6 +517,164 @@ mod tests {
         let msg = ControlMessage::Unsubscribe {
             user_id: 987654321,
             track_type: TrackKind::Video,
+        };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn session_join_round_trip() {
+        let msg = ControlMessage::SessionJoin {
+            room_id: "1:2".to_string(),
+            session_id: "browser-42".to_string(),
+            video_capabilities: vec![],
+        };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn session_state_round_trip() {
+        let msg = ControlMessage::SessionState {
+            participants: vec![
+                SessionParticipant {
+                    user_id: 42,
+                    session_id: "native-42".to_string(),
+                    video_capabilities: vec![],
+                },
+                SessionParticipant {
+                    user_id: 99,
+                    session_id: "browser-99".to_string(),
+                    video_capabilities: vec![],
+                },
+            ],
+        };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn session_participant_join_round_trip() {
+        let msg = ControlMessage::SessionParticipantJoin {
+            participant: SessionParticipant {
+                user_id: 77,
+                session_id: "native-77".to_string(),
+                video_capabilities: vec![],
+            },
+        };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn session_join_round_trip_with_video_capabilities() {
+        let msg = ControlMessage::SessionJoin {
+            room_id: "1:2".to_string(),
+            session_id: "native-42".to_string(),
+            video_capabilities: vec![VideoCodecCapability {
+                codec: VideoCodec::H264,
+                encode: true,
+                decode: true,
+                hardware_accelerated: true,
+            }],
+        };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn session_state_round_trip_with_video_capabilities() {
+        let msg = ControlMessage::SessionState {
+            participants: vec![SessionParticipant {
+                user_id: 42,
+                session_id: "native-42".to_string(),
+                video_capabilities: vec![VideoCodecCapability {
+                    codec: VideoCodec::Av1,
+                    encode: false,
+                    decode: true,
+                    hardware_accelerated: true,
+                }],
+            }],
+        };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn session_participant_leave_round_trip() {
+        let msg = ControlMessage::SessionParticipantLeave { user_id: 77 };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn track_publish_round_trip() {
+        let msg = ControlMessage::TrackPublish {
+            track: PublishedTrack {
+                stream_id: StreamId::new("stream-1"),
+                track_id: TrackId::new("screen"),
+                publisher_user_id: 42,
+                kind: TrackKind::Video,
+                codec: Some(VideoCodec::H264),
+                layers: vec![crate::stream::PublishedLayer {
+                    layer_id: 0,
+                    ssrc: 101,
+                    width: Some(1280),
+                    height: Some(720),
+                    max_bitrate_kbps: Some(2500),
+                    active: true,
+                }],
+            },
+        };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn subscribe_stream_round_trip() {
+        let msg = ControlMessage::SubscribeStream {
+            subscription: TrackSubscription {
+                stream_id: StreamId::new("stream-1"),
+                track_id: TrackId::new("screen"),
+                requested_layer: Some(1),
+                active_layer: None,
+                viewport: Some(ViewportHint {
+                    width: 1280,
+                    height: 720,
+                }),
+            },
+        };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn request_keyframe_round_trip() {
+        let msg = ControlMessage::RequestKeyframe {
+            stream_id: StreamId::new("stream-1"),
+            track_id: TrackId::new("screen"),
+            layer_id: Some(2),
+        };
+        let encoded = msg.encode().unwrap();
+        let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn request_stream_key_round_trip() {
+        let msg = ControlMessage::RequestStreamKey {
+            stream_id: StreamId::new("stream-1"),
+            track_id: TrackId::new("screen"),
+            recipient_user_id: 42,
         };
         let encoded = msg.encode().unwrap();
         let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();

@@ -1,4 +1,5 @@
-import { resolveApiBaseUrl } from './apiBaseUrl';
+import { resolveResourceUrl } from './apiBaseUrl';
+import { getAccessToken } from './authToken';
 
 const CUSTOM_EMOJI_TOKEN_PATTERN = /^<(a?):([A-Za-z0-9_]{1,32}):([0-9]+)>$/;
 
@@ -7,10 +8,6 @@ export interface ParsedCustomEmojiToken {
   name: string;
   id: string;
   animated: boolean;
-}
-
-function normalizedApiBase(): string {
-  return resolveApiBaseUrl().replace(/\/+$/, '');
 }
 
 export function parseCustomEmojiToken(value: string): ParsedCustomEmojiToken | null {
@@ -34,5 +31,8 @@ export function formatCustomEmojiToken(name: string, emojiId: string, animated =
 }
 
 export function buildGuildEmojiImageUrl(guildId: string, emojiId: string): string {
-  return `${normalizedApiBase()}/guilds/${encodeURIComponent(guildId)}/emojis/${encodeURIComponent(emojiId)}/image`;
+  return resolveResourceUrl(
+    `guilds/${encodeURIComponent(guildId)}/emojis/${encodeURIComponent(emojiId)}/image`,
+    getAccessToken(),
+  );
 }

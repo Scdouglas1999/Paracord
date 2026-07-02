@@ -16,9 +16,76 @@ env:
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 jobs:
+  validate-release-version:
+    name: Validate Release Version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: |
+            client/package-lock.json
+            packages/paracord-bot-sdk/package-lock.json
+
+      - name: Check tag matches package versions
+        shell: bash
+        run: python3 scripts/check_release_version.py "${GITHUB_REF_NAME}"
+
+      - name: Install cargo-audit
+        shell: bash
+        run: cargo install cargo-audit --locked
+
+      - name: Audit Rust dependencies
+        shell: bash
+        run: cargo audit
+
+      - name: Audit client dependencies
+        working-directory: client
+        shell: bash
+        run: npm ci && npm audit --audit-level=moderate
+
+      - name: Audit bot SDK dependencies
+        working-directory: packages/paracord-bot-sdk
+        shell: bash
+        run: npm ci && npm audit --audit-level=moderate
+
+      - name: Check release checklist coverage
+        shell: bash
+        run: python3 scripts/validate_release_checklist_status.py
+
+      - name: Check release line endings
+        shell: bash
+        run: python3 scripts/check_migration_line_endings.py
+
+      - name: Check Python release helper syntax
+        shell: bash
+        run: python3 scripts/check_python_syntax.py
+
+      - name: Check shell script syntax
+        shell: bash
+        run: bash -n scripts/setup.sh scripts/backup-db.sh scripts/restore-db.sh
+
+      - name: Lint release workflows
+        shell: bash
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}:/repo" -w /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            .github/workflows/ci.yml \
+            .github/workflows/release.yml \
+            .github/workflows/security-audit.yml \
+            .github/workflows/security-dast-fuzz.yml
+
   build-server-windows:
     name: Build Server (Windows x64)
     runs-on: windows-latest
+    needs: validate-release-version
     steps:
       - uses: actions/checkout@v4
 
@@ -82,10 +149,12 @@ jobs:
         with:
           name: server-windows
           path: dist/paracord-server-windows-x64-*.zip
+          if-no-files-found: error
 
   build-server-linux:
     name: Build Server (Linux x64)
     runs-on: ubuntu-latest
+    needs: validate-release-version
     steps:
       - uses: actions/checkout@v4
 
@@ -163,10 +232,12 @@ jobs:
         with:
           name: server-linux
           path: dist/paracord-server-linux-x64-*.tar.gz
+          if-no-files-found: error
 
   build-client-windows:
     name: Build Client (Windows x64)
     runs-on: windows-latest
+    needs: validate-release-version
     steps:
       - uses: actions/checkout@v4
 
@@ -182,9 +253,35 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install libvpx for native media
+        shell: pwsh
+        run: |
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkgRoot) { $vcpkgRoot = $env:VCPKG_ROOT }
+          if (-not $vcpkgRoot) { $vcpkgRoot = "C:\vcpkg" }
+
+          $vcpkg = Join-Path $vcpkgRoot "vcpkg.exe"
+          if (-not (Test-Path $vcpkg)) {
+            throw "vcpkg.exe not found at $vcpkg"
+          }
+
+          & $vcpkg install libvpx:x64-windows-static
+
+          $installed = Join-Path $vcpkgRoot "installed\x64-windows-static"
+          "VPX_LIB_DIR=$installed\lib" >> $env:GITHUB_ENV
+          "VPX_INCLUDE_DIR=$installed\include" >> $env:GITHUB_ENV
+          "VPX_VERSION=1.16.0" >> $env:GITHUB_ENV
+          "VPX_STATIC=1" >> $env:GITHUB_ENV
+
       - name: Install client dependencies
         working-directory: client
         run: npm ci
+
+      - name: Enable signed updater artifacts
+        if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        shell: pwsh
+        run: |
+          node -e "const fs=require('fs'); const p='client/src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.bundle.createUpdaterArtifacts=true; fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');"
 
       - name: Build Tauri bundles (Windows)
         working-directory: client
@@ -195,29 +292,46 @@ jobs:
         run: |
           Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile installer/MicrosoftEdgeWebview2Setup.exe
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $roots = @(
+            [Environment]::GetFolderPath("ProgramFilesX86"),
+            [Environment]::GetFolderPath("ProgramFiles")
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          $iscc = $roots |
+            ForEach-Object { Get-ChildItem -Path $_ -Recurse -Filter "ISCC.exe" -ErrorAction SilentlyContinue } |
+            Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found after installing Inno Setup" }
+          "ISCC_EXE=$($iscc.FullName)" >> $env:GITHUB_ENV
+
       - name: Build Inno installer
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart("v")
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$version installer/paracord-client.iss
+          & "$env:ISCC_EXE" /DAppVersion=$version installer/paracord-client.iss
 
       - name: Upload client installer (Inno)
         uses: actions/upload-artifact@v4
         with:
           name: client-windows-installer
           path: installer/output/Paracord-Setup-*.exe
+          if-no-files-found: error
 
       - name: Upload client MSI
         uses: actions/upload-artifact@v4
         with:
           name: client-windows-msi
           path: |
-            client/src-tauri/target/release/bundle/msi/*.msi
-            client/src-tauri/target/release/bundle/msi/*.msi.sig
+            target/release/bundle/msi/*.msi
+            target/release/bundle/msi/*.msi.sig
+          if-no-files-found: error
 
   build-client-linux:
     name: Build Client (Linux x64)
     runs-on: ubuntu-latest
+    needs: validate-release-version
     steps:
       - uses: actions/checkout@v4
 
@@ -232,7 +346,8 @@ jobs:
             libglib2.0-dev \
             libjavascriptcoregtk-4.1-dev \
             libsoup-3.0-dev \
-            libasound2-dev
+            libasound2-dev \
+            libvpx-dev
           if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
             sudo apt-get install -y libayatana-appindicator3-dev
           else
@@ -255,6 +370,11 @@ jobs:
         working-directory: client
         run: npm ci
 
+      - name: Enable signed updater artifacts
+        if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          node -e "const fs=require('fs'); const p='client/src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.bundle.createUpdaterArtifacts=true; fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');"
+
       - name: Build Tauri bundles (AppImage + deb)
         working-directory: client
         run: npx tauri build --bundles appimage,deb
@@ -264,16 +384,18 @@ jobs:
         with:
           name: client-linux-appimage
           path: |
-            client/src-tauri/target/release/bundle/appimage/*.AppImage
-            client/src-tauri/target/release/bundle/appimage/*.AppImage.sig
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*.AppImage.sig
+          if-no-files-found: error
 
       - name: Upload client deb
         uses: actions/upload-artifact@v4
         with:
           name: client-linux-deb
           path: |
-            client/src-tauri/target/release/bundle/deb/*.deb
-            client/src-tauri/target/release/bundle/deb/*.deb.sig
+            target/release/bundle/deb/*.deb
+            target/release/bundle/deb/*.deb.sig
+          if-no-files-found: error
 
   release:
     name: Create Release
@@ -307,7 +429,7 @@ jobs:
 
           # Only generate latest.json if all signature files exist (signing key was configured)
           if [ -z "$msi_sig_path" ] || [ -z "$appimage_sig_path" ] || [ -z "$deb_sig_path" ]; then
-            echo "Signing artifacts not found — skipping latest.json generation"
+            echo "Signing artifacts not found - skipping latest.json generation"
             exit 0
           fi
 
@@ -355,6 +477,7 @@ jobs:
         with:
           sparse-checkout: RELEASE_NOTES.md
           sparse-checkout-cone-mode: false
+          clean: false
 
       - name: Build release body from RELEASE_NOTES.md
         shell: bash
@@ -380,8 +503,29 @@ jobs:
           | Client MSI (Windows) | `Paracord_*_x64_en-US.msi` |
           | Client AppImage (Linux) | `Paracord_*.AppImage` |
           | Client deb (Linux) | `paracord_*_amd64.deb` |
-          | Signed updater manifest | `latest.json` |
+          | Signed updater manifest, when signing artifacts are configured | `latest.json` |
           DOWNLOADS
+
+      - name: Verify required release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          required_patterns=(
+            "artifacts/server-windows/*.zip"
+            "artifacts/server-linux/*.tar.gz"
+            "artifacts/client-windows-installer/*.exe"
+            "artifacts/client-windows-msi/*.msi"
+            "artifacts/client-linux-appimage/*.AppImage"
+            "artifacts/client-linux-deb/*.deb"
+            "artifacts/body.md"
+          )
+          for pattern in "${required_patterns[@]}"; do
+            if ! compgen -G "$pattern" > /dev/null; then
+              echo "Missing required release artifact: $pattern" >&2
+              exit 1
+            fi
+          done
 
       - name: Delete existing release assets
         shell: bash

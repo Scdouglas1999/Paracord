@@ -1,6 +1,7 @@
 import { isTauri } from './tauriEnv';
+import { getVersionedStorageItem, setVersionedStorageItem } from './versionedStorage';
 
-const NOTIFICATIONS_ENABLED_KEY = 'paracord:notifications-enabled';
+const NOTIFICATIONS_ENABLED_KEY = 'notifications-enabled';
 
 /**
  * Check if notification permission has been granted.
@@ -87,7 +88,7 @@ export async function sendNotification(
  */
 export function isEnabled(): boolean {
   try {
-    return localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== 'false';
+    return getVersionedStorageItem(NOTIFICATIONS_ENABLED_KEY, ['notifications-enabled']) !== 'false';
   } catch {
     return true;
   }
@@ -98,7 +99,7 @@ export function isEnabled(): boolean {
  */
 export function setEnabled(enabled: boolean): void {
   try {
-    localStorage.setItem(NOTIFICATIONS_ENABLED_KEY, String(enabled));
+    setVersionedStorageItem(NOTIFICATIONS_ENABLED_KEY, String(enabled));
   } catch {
     // localStorage unavailable
   }

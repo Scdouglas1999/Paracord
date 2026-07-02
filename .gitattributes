@@ -1,0 +1,8 @@
+crates/paracord-db/migrations/*.sql text eol=lf
+crates/paracord-db/migrations_pg/*.sql text eol=lf
+scripts/*.sh text eol=lf
+scripts/*.py text eol=lf
+.github/workflows/*.yml text eol=lf
+.github/workflows/*.yaml text eol=lf
+README.md text eol=lf
+RELEASE_NOTES.md text eol=lf

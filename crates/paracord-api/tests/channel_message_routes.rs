@@ -1,111 +1,41 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+mod common;
 
 use anyhow::Context;
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use chrono::{Duration, Utc};
-use paracord_core::{build_permission_cache, AppConfig, AppState, RuntimeSettings};
-use paracord_media::{
-    LiveKitConfig, LocalStorage, Storage, StorageConfig, StorageManager, VoiceManager,
+use common::{
+    build_json_request, build_test_app, create_authenticated_user_token, dispatch_json, TestApp,
+    TestAppOptions,
 };
 use serde_json::{json, Value};
-use tempfile::TempDir;
-use tokio::sync::{Notify, RwLock};
-use tower::ServiceExt;
-use uuid::Uuid;
 
 struct TestContext {
     app: Router,
     token: String,
-    _storage_dir: TempDir,
-    _media_dir: TempDir,
-    _backup_dir: TempDir,
+    _test_app: TestApp,
 }
 
 impl TestContext {
     async fn new() -> anyhow::Result<Self> {
-        let db = paracord_db::create_pool("sqlite::memory:", 1).await?;
-        paracord_db::run_migrations(&db).await?;
-
-        let storage_dir = tempfile::tempdir()?;
-        let media_dir = tempfile::tempdir()?;
-        let backup_dir = tempfile::tempdir()?;
-        let jwt_secret = "integration-test-secret".to_string();
-
-        let livekit = Arc::new(LiveKitConfig {
-            api_key: "lk-test-key".to_string(),
-            api_secret: "lk-test-secret".to_string(),
-            url: "ws://localhost:7880".to_string(),
-            http_url: "http://localhost:7880".to_string(),
-        });
-
-        let state = AppState {
-            db: db.clone(),
-            event_bus: paracord_core::events::EventBus::default(),
-            config: AppConfig {
-                jwt_secret: jwt_secret.clone(),
-                jwt_expiry_seconds: 3600,
-                registration_enabled: true,
-                allow_username_login: false,
-                require_email: true,
-                storage_path: storage_dir.path().to_string_lossy().into_owned(),
-                max_upload_size: 10 * 1024 * 1024,
-                livekit_api_key: livekit.api_key.clone(),
-                livekit_api_secret: livekit.api_secret.clone(),
-                livekit_url: livekit.url.clone(),
-                livekit_http_url: livekit.http_url.clone(),
-                livekit_public_url: livekit.url.clone(),
-                livekit_available: false,
-                public_url: None,
-                media_storage_path: media_dir.path().to_string_lossy().into_owned(),
-                media_max_file_size: 10 * 1024 * 1024,
-                media_p2p_threshold: 1024 * 1024,
-                file_cryptor: None,
-                backup_dir: backup_dir.path().to_string_lossy().into_owned(),
-                database_url: "sqlite::memory:".to_string(),
-                federation_max_events_per_peer_per_minute: None,
-                federation_max_user_creates_per_peer_per_hour: None,
-                native_media_enabled: false,
-                native_media_port: 8443,
-                native_media_max_participants: 50,
-                native_media_e2ee_required: false,
-                max_guild_storage_quota: 0,
-                federation_file_cache_enabled: false,
-                federation_file_cache_max_size: 0,
-                federation_file_cache_ttl_hours: 0,
-            },
-            runtime: Arc::new(RwLock::new(RuntimeSettings::default())),
-            voice: Arc::new(VoiceManager::new(livekit)),
-            storage: Arc::new(StorageManager::new(StorageConfig {
-                base_path: media_dir.path().to_path_buf(),
-                max_file_size: 10 * 1024 * 1024,
-                p2p_threshold: 1024 * 1024,
-                allowed_extensions: None,
-            })),
-            storage_backend: Arc::new(Storage::Local(LocalStorage::new(storage_dir.path()))),
-            shutdown: Arc::new(Notify::new()),
-            online_users: Arc::new(RwLock::new(HashSet::new())),
-            user_presences: Arc::new(RwLock::new(HashMap::new())),
-            permission_cache: build_permission_cache(),
-            federation_service: None,
-            member_index: Arc::new(paracord_core::member_index::MemberIndex::empty()),
-            native_media: None,
-        };
-
-        paracord_api::install_http_rate_limiter();
-        let app = paracord_api::build_router().with_state(state);
-        let token = create_authenticated_user_token(&db, &jwt_secret).await?;
+        let test_app = build_test_app(TestAppOptions {
+            install_http_rate_limiter: true,
+            ..Default::default()
+        })
+        .await?;
+        let token = create_authenticated_user_token(
+            &test_app.db,
+            &test_app.jwt_secret,
+            "integration",
+            "IntegrationPass123!",
+        )
+        .await?;
 
         Ok(Self {
-            app,
+            app: test_app.app.clone(),
             token,
-            _storage_dir: storage_dir,
-            _media_dir: media_dir,
-            _backup_dir: backup_dir,
+            _test_app: test_app,
         })
     }
 
@@ -115,72 +45,9 @@ impl TestContext {
         path: &str,
         body: Option<Value>,
     ) -> anyhow::Result<(StatusCode, Value)> {
-        let mut builder = Request::builder()
-            .method(method)
-            .uri(path)
-            .header(header::AUTHORIZATION, format!("Bearer {}", self.token));
-
-        let request = if let Some(payload) = body {
-            builder = builder.header(header::CONTENT_TYPE, "application/json");
-            builder.body(Body::from(payload.to_string()))?
-        } else {
-            builder.body(Body::empty())?
-        };
-
-        let response = self.app.clone().oneshot(request).await?;
-        let status = response.status();
-        let body_bytes = to_bytes(response.into_body(), usize::MAX).await?;
-        let payload = if body_bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&body_bytes)
-                .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&body_bytes) }))
-        };
-
-        Ok((status, payload))
+        let request = build_json_request(method, path, body, Some(&self.token))?;
+        dispatch_json(&self.app, request).await
     }
-}
-
-async fn create_authenticated_user_token(
-    db: &paracord_db::DbPool,
-    jwt_secret: &str,
-) -> anyhow::Result<String> {
-    let user_id = paracord_util::snowflake::generate(1);
-    let nonce = Uuid::new_v4().simple().to_string();
-    let username = format!("integration_{nonce}");
-    let email = format!("{nonce}@example.com");
-    let password_hash = paracord_core::auth::hash_password("IntegrationPass123!")?;
-
-    let user =
-        paracord_db::users::create_user(db, user_id, &username, 1, &email, &password_hash).await?;
-
-    let session_id = format!("sess-{}", Uuid::new_v4().simple());
-    let jti = format!("jti-{}", Uuid::new_v4().simple());
-    let refresh_hash = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    paracord_db::sessions::create_session(
-        db,
-        &session_id,
-        user.id,
-        &refresh_hash,
-        &jti,
-        user.public_key.as_deref(),
-        None,
-        None,
-        None,
-        Utc::now() + Duration::days(1),
-    )
-    .await?;
-
-    let token = paracord_core::auth::create_session_token(
-        user.id,
-        user.public_key.as_deref(),
-        jwt_secret,
-        3600,
-        &session_id,
-        &jti,
-    )?;
-
-    Ok(token)
 }
 
 async fn create_guild(ctx: &TestContext, name: &str) -> anyhow::Result<String> {

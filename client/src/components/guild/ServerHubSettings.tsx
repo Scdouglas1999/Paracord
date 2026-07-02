@@ -1,9 +1,10 @@
 import { useState, ChangeEvent } from 'react';
-import { Upload, X, Save, LayoutTemplate, MessageSquare } from 'lucide-react';
+import { Upload, X, Save, LayoutTemplate, MessageSquare, Globe2 } from 'lucide-react';
 import { Guild, Channel, HubSettings } from '../../types';
-import { isAllowedImageMimeType } from '../../lib/security';
+import { isAllowedImageMimeType, isSafeImageDataUrl, safeStoredImageDataUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
 import { guildApi } from '../../api/guilds';
+import { extractApiError } from '../../api/client';
 
 interface ServerHubSettingsProps {
     guild: Guild;
@@ -17,6 +18,8 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
     const [hubSettings, setHubSettings] = useState<HubSettings>(
         guild.hub_settings || {}
     );
+    const [isDiscoverable, setIsDiscoverable] = useState(guild.visibility === 'public');
+    const [discoveryTags, setDiscoveryTags] = useState((guild.discovery_tags || []).join(', '));
 
     const textChannels = channels.filter(c => c.type === 0 || c.channel_type === 0);
 
@@ -45,6 +48,10 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
         const reader = new FileReader();
         reader.onload = () => {
             if (typeof reader.result === 'string') {
+                if (!isSafeImageDataUrl(reader.result)) {
+                    setError('Please upload PNG, JPG, GIF, or WEBP.');
+                    return;
+                }
                 setHubSettings(prev => ({ ...prev, banner_hash: reader.result as string }));
             }
         };
@@ -63,15 +70,22 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
         setError(null);
         try {
             await guildApi.update(guild.id, {
-                hub_settings: hubSettings
+                hub_settings: hubSettings,
+                visibility: isDiscoverable ? 'public' : 'private',
+                discovery_tags: discoveryTags
+                    .split(',')
+                    .map(tag => tag.trim())
+                    .filter(Boolean),
             });
             onUpdate();
-        } catch (err: any) {
-            setError(err?.response?.data?.message || 'Failed to update Hub Settings');
+        } catch (err: unknown) {
+            setError(extractApiError(err) || 'Failed to update Hub Settings');
         } finally {
             setLoading(false);
         }
     };
+
+    const bannerSrc = safeStoredImageDataUrl(hubSettings.banner_hash);
 
     return (
         <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6 card-stack-relaxed">
@@ -88,6 +102,7 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
                 <button
                     onClick={handleSave}
                     disabled={loading}
+                    aria-label={loading ? 'Saving server hub settings' : 'Save server hub settings'}
                     className="btn-primary flex items-center gap-2"
                 >
                     <Save size={16} />
@@ -102,10 +117,10 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
                         Hub Banner Image
                     </label>
                     <div className="flex flex-col gap-4">
-                        {hubSettings.banner_hash ? (
+                        {bannerSrc ? (
                             <div className="relative w-full h-40 rounded-lg overflow-hidden border border-border-subtle group">
                                 <img
-                                    src={hubSettings.banner_hash.startsWith('data:') ? hubSettings.banner_hash : `/api/v1/guilds/${guild.id}/banner`}
+                                    src={bannerSrc}
                                     alt="Hub Banner"
                                     className="w-full h-full object-cover"
                                 />
@@ -155,6 +170,39 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
                             className="input-field w-full min-h-[100px] resize-y"
                             placeholder="Write a detailed description about what this server is for..."
                             maxLength={2000}
+                        />
+                    </div>
+                </div>
+
+                {/* Discovery */}
+                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/50 p-5 space-y-5">
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-text-secondary mb-2 flex items-center gap-2">
+                        <Globe2 size={14} />
+                        Server Discovery
+                    </label>
+                    <label className="flex items-start gap-3 rounded-lg border border-border-subtle p-3">
+                        <input
+                            type="checkbox"
+                            checked={isDiscoverable}
+                            onChange={e => setIsDiscoverable(e.target.checked)}
+                            className="mt-1 rounded border-border-strong text-accent-primary focus:ring-accent-primary bg-bg-primary"
+                        />
+                        <span>
+                            <span className="block text-sm font-medium text-text-primary">List this server publicly</span>
+                            <span className="block text-xs text-text-muted">
+                                Public servers can appear in discovery results. Leave this off for invite-only communities.
+                            </span>
+                        </span>
+                    </label>
+                    <div>
+                        <span className="text-xs text-text-muted mb-1 block">Discovery Tags</span>
+                        <input
+                            type="text"
+                            value={discoveryTags}
+                            onChange={e => setDiscoveryTags(e.target.value)}
+                            className="input-field w-full"
+                            placeholder="gaming, open-source, friends"
+                            maxLength={240}
                         />
                     </div>
                 </div>

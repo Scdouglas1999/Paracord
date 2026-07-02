@@ -8,6 +8,7 @@ export interface BotApplication {
   bot_user_id: string;
   redirect_uri: string | null;
   permissions: string;
+  intents: number;
   created_at: string;
   updated_at: string;
   token?: string;
@@ -55,6 +56,8 @@ interface UpdateBotRequest {
   name?: string;
   description?: string;
   redirect_uri?: string;
+  permissions?: string;
+  intents?: number;
 }
 
 export const botApi = {

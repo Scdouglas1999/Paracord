@@ -196,6 +196,43 @@ pub async fn get_space_entries(
     Ok(rows)
 }
 
+pub async fn get_entry_by_id(pool: &DbPool, id: i64) -> Result<Option<AuditLogEntryRow>, DbError> {
+    let row = sqlx::query_as::<_, AuditLogEntryRow>(
+        "SELECT id, space_id, user_id, action_type, target_id, reason, changes, created_at
+         FROM audit_log_entries
+         WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn update_entry_changes(
+    pool: &DbPool,
+    id: i64,
+    reason: Option<&str>,
+    changes: Option<&serde_json::Value>,
+) -> Result<AuditLogEntryRow, DbError> {
+    let serialized_changes = changes
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| DbError::Sqlx(sqlx::Error::Protocol(format!("invalid audit json: {e}"))))?;
+    let row = sqlx::query_as::<_, AuditLogEntryRow>(
+        "UPDATE audit_log_entries
+         SET reason = COALESCE($2, reason),
+             changes = COALESCE($3, changes)
+         WHERE id = $1
+         RETURNING id, space_id, user_id, action_type, target_id, reason, changes, created_at",
+    )
+    .bind(id)
+    .bind(reason)
+    .bind(serialized_changes)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 pub async fn purge_entries_older_than(
     pool: &DbPool,
     older_than: DateTime<Utc>,

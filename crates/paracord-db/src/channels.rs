@@ -1,20 +1,11 @@
-use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
+use crate::{
+    active_database_engine, bool_from_any_row, datetime_from_db_text, DatabaseEngine, DbError,
+    DbPool,
+};
 use chrono::{DateTime, Utc};
+use paracord_models::id::{ChannelId, GuildId, MessageId, UserId};
 use sqlx::Row;
 use std::collections::BTreeSet;
-
-fn thread_is_archived(thread_metadata: Option<&str>) -> bool {
-    let Some(raw) = thread_metadata else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return false;
-    };
-    value
-        .get("archived")
-        .and_then(|archived| archived.as_bool())
-        .unwrap_or(false)
-}
 
 #[derive(Debug, Clone)]
 pub struct ChannelRow {
@@ -99,14 +90,15 @@ impl ChannelRow {
     }
 }
 
-pub async fn create_channel(
+/// Core implementation using newtype IDs.
+pub async fn create_channel_typed(
     pool: &DbPool,
-    id: i64,
-    space_id: i64,
+    id: ChannelId,
+    space_id: GuildId,
     name: &str,
     channel_type: i16,
     position: i32,
-    parent_id: Option<i64>,
+    parent_id: Option<ChannelId>,
     required_role_ids: Option<&str>,
 ) -> Result<ChannelRow, DbError> {
     let row = sqlx::query_as::<_, ChannelRow>(
@@ -126,7 +118,35 @@ pub async fn create_channel(
     Ok(row)
 }
 
-pub async fn get_channel(pool: &DbPool, id: i64) -> Result<Option<ChannelRow>, DbError> {
+/// Raw i64 shim kept for API compat.
+pub async fn create_channel(
+    pool: &DbPool,
+    id: i64,
+    space_id: i64,
+    name: &str,
+    channel_type: i16,
+    position: i32,
+    parent_id: Option<i64>,
+    required_role_ids: Option<&str>,
+) -> Result<ChannelRow, DbError> {
+    create_channel_typed(
+        pool,
+        ChannelId::new(id),
+        GuildId::new(space_id),
+        name,
+        channel_type,
+        position,
+        parent_id.map(ChannelId::new),
+        required_role_ids,
+    )
+    .await
+}
+
+/// Core implementation using newtype ID.
+pub async fn get_channel_typed(
+    pool: &DbPool,
+    id: ChannelId,
+) -> Result<Option<ChannelRow>, DbError> {
     let row = sqlx::query_as::<_, ChannelRow>(
         "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels WHERE id = $1"
@@ -137,12 +157,26 @@ pub async fn get_channel(pool: &DbPool, id: i64) -> Result<Option<ChannelRow>, D
     Ok(row)
 }
 
+/// Raw i64 shim kept for API compat.
+pub async fn get_channel(pool: &DbPool, id: i64) -> Result<Option<ChannelRow>, DbError> {
+    get_channel_typed(pool, ChannelId::new(id)).await
+}
+
 /// Get channels for a space (alias kept as get_guild_channels for API compat).
 pub async fn get_guild_channels(pool: &DbPool, space_id: i64) -> Result<Vec<ChannelRow>, DbError> {
     get_space_channels(pool, space_id).await
 }
 
+/// Raw i64 shim kept for API compat. Core implementation via get_space_channels_typed.
 pub async fn get_space_channels(pool: &DbPool, space_id: i64) -> Result<Vec<ChannelRow>, DbError> {
+    get_space_channels_typed(pool, GuildId::new(space_id)).await
+}
+
+/// Core implementation using newtype ID.
+pub async fn get_space_channels_typed(
+    pool: &DbPool,
+    space_id: GuildId,
+) -> Result<Vec<ChannelRow>, DbError> {
     let rows = sqlx::query_as::<_, ChannelRow>(
         "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels WHERE space_id = $1 ORDER BY position"
@@ -153,37 +187,91 @@ pub async fn get_space_channels(pool: &DbPool, space_id: i64) -> Result<Vec<Chan
     Ok(rows)
 }
 
+/// Core implementation using newtype ID.
+pub async fn update_channel_typed(
+    pool: &DbPool,
+    id: ChannelId,
+    name: Option<&str>,
+    topic: Option<&str>,
+    required_role_ids: Option<&str>,
+    rate_limit_per_user: Option<i32>,
+    bitrate: Option<i32>,
+    user_limit: Option<i32>,
+    nsfw: Option<bool>,
+) -> Result<ChannelRow, DbError> {
+    // nsfw needs special handling: COALESCE won't work cleanly with booleans
+    // across all SQLx backends, so we build a conditional expression.
+    let nsfw_expr = match (active_database_engine(), nsfw) {
+        (DatabaseEngine::Postgres, Some(true)) => "TRUE",
+        (DatabaseEngine::Postgres, Some(false)) => "FALSE",
+        (_, Some(true)) => "1",
+        (_, Some(false)) => "0",
+        (_, None) => "nsfw",
+    };
+    let query = format!(
+        "UPDATE channels
+         SET name = COALESCE($2, name),
+             topic = COALESCE($3, topic),
+             required_role_ids = COALESCE($4, required_role_ids),
+             rate_limit_per_user = COALESCE($5, rate_limit_per_user),
+             bitrate = COALESCE($6, bitrate),
+             user_limit = COALESCE($7, user_limit),
+             nsfw = {nsfw_expr},
+             updated_at = datetime('now')
+         WHERE id = $1
+         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+    );
+    let row = sqlx::query_as::<_, ChannelRow>(&query)
+        .bind(id)
+        .bind(name)
+        .bind(topic)
+        .bind(required_role_ids)
+        .bind(rate_limit_per_user)
+        .bind(bitrate)
+        .bind(user_limit)
+        .fetch_one(pool)
+        .await?;
+    Ok(row)
+}
+
+/// Raw i64 shim kept for API compat.
 pub async fn update_channel(
     pool: &DbPool,
     id: i64,
     name: Option<&str>,
     topic: Option<&str>,
     required_role_ids: Option<&str>,
+    rate_limit_per_user: Option<i32>,
+    bitrate: Option<i32>,
+    user_limit: Option<i32>,
+    nsfw: Option<bool>,
 ) -> Result<ChannelRow, DbError> {
-    let row = sqlx::query_as::<_, ChannelRow>(
-        "UPDATE channels
-         SET name = COALESCE($2, name),
-             topic = COALESCE($3, topic),
-             required_role_ids = COALESCE($4, required_role_ids),
-             updated_at = datetime('now')
-         WHERE id = $1
-         RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
+    update_channel_typed(
+        pool,
+        ChannelId::new(id),
+        name,
+        topic,
+        required_role_ids,
+        rate_limit_per_user,
+        bitrate,
+        user_limit,
+        nsfw,
     )
-    .bind(id)
-    .bind(name)
-    .bind(topic)
-    .bind(required_role_ids)
-    .fetch_one(pool)
-    .await?;
-    Ok(row)
+    .await
 }
 
-pub async fn delete_channel(pool: &DbPool, id: i64) -> Result<(), DbError> {
+/// Core implementation using newtype ID.
+pub async fn delete_channel_typed(pool: &DbPool, id: ChannelId) -> Result<(), DbError> {
     sqlx::query("DELETE FROM channels WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn delete_channel(pool: &DbPool, id: i64) -> Result<(), DbError> {
+    delete_channel_typed(pool, ChannelId::new(id)).await
 }
 
 pub async fn count_channels(pool: &DbPool) -> Result<i64, DbError> {
@@ -194,25 +282,45 @@ pub async fn count_channels(pool: &DbPool) -> Result<i64, DbError> {
 }
 
 pub async fn reorder_channels(pool: &DbPool, updates: &[(i64, i32)]) -> Result<(), DbError> {
-    for (channel_id, position) in updates {
-        sqlx::query(
-            "UPDATE channels SET position = $2, updated_at = datetime('now') WHERE id = $1",
-        )
-        .bind(channel_id)
-        .bind(position)
-        .execute(pool)
-        .await?;
+    if updates.is_empty() {
+        return Ok(());
     }
+
+    let mut sql = String::from("UPDATE channels SET position = CASE id ");
+    for (idx, _) in updates.iter().enumerate() {
+        let id_param = idx * 2 + 1;
+        let pos_param = idx * 2 + 2;
+        sql.push_str(&format!("WHEN ${id_param} THEN ${pos_param} "));
+    }
+    sql.push_str("ELSE position END, updated_at = datetime('now') WHERE id IN (");
+    for idx in 0..updates.len() {
+        if idx > 0 {
+            sql.push_str(", ");
+        }
+        let id_param = updates.len() * 2 + idx + 1;
+        sql.push_str(&format!("${id_param}"));
+    }
+    sql.push(')');
+
+    let mut query = sqlx::query(&sql);
+    for (channel_id, position) in updates {
+        query = query.bind(*channel_id).bind(*position);
+    }
+    for (channel_id, _) in updates {
+        query = query.bind(*channel_id);
+    }
+    query.execute(pool).await?;
+
     Ok(())
 }
 
 /// Bulk update channel positions and optionally parent_id within a guild.
 /// Each entry is (channel_id, position, optional parent_id).
 /// Returns the list of channels that were actually changed.
-pub async fn update_channel_positions(
+pub async fn update_channel_positions_typed(
     pool: &DbPool,
-    guild_id: i64,
-    positions: &[(i64, i32, Option<Option<i64>>)],
+    guild_id: GuildId,
+    positions: &[(ChannelId, i32, Option<Option<ChannelId>>)],
 ) -> Result<Vec<ChannelRow>, DbError> {
     let mut changed = Vec::new();
     for &(channel_id, position, ref parent_id) in positions {
@@ -227,8 +335,8 @@ pub async fn update_channel_positions(
 
         let Some(existing) = existing else { continue };
 
-        let new_parent = match parent_id {
-            Some(pid) => *pid,
+        let new_parent: Option<i64> = match parent_id {
+            Some(pid) => pid.map(|c| c.get()),
             None => existing.parent_id,
         };
 
@@ -251,6 +359,25 @@ pub async fn update_channel_positions(
     Ok(changed)
 }
 
+/// Raw i64 shim kept for API compat.
+pub async fn update_channel_positions(
+    pool: &DbPool,
+    guild_id: i64,
+    positions: &[(i64, i32, Option<Option<i64>>)],
+) -> Result<Vec<ChannelRow>, DbError> {
+    let typed_positions: Vec<(ChannelId, i32, Option<Option<ChannelId>>)> = positions
+        .iter()
+        .map(|&(cid, pos, ref pid)| {
+            (
+                ChannelId::new(cid),
+                pos,
+                pid.map(|inner| inner.map(ChannelId::new)),
+            )
+        })
+        .collect();
+    update_channel_positions_typed(pool, GuildId::new(guild_id), &typed_positions).await
+}
+
 pub fn parse_required_role_ids(raw: &str) -> Vec<i64> {
     serde_json::from_str::<Vec<i64>>(raw).unwrap_or_default()
 }
@@ -261,16 +388,16 @@ pub fn serialize_required_role_ids(role_ids: &[i64]) -> String {
     serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Create a thread channel under a parent text channel.
-pub async fn create_thread(
+/// Create a thread channel under a parent text channel. Core implementation.
+pub async fn create_thread_typed(
     pool: &DbPool,
-    id: i64,
-    space_id: i64,
-    parent_channel_id: i64,
+    id: ChannelId,
+    space_id: GuildId,
+    parent_channel_id: ChannelId,
     name: &str,
-    owner_id: i64,
+    owner_id: UserId,
     auto_archive_duration: i64,
-    starter_message_id: Option<i64>,
+    starter_message_id: Option<MessageId>,
 ) -> Result<ChannelRow, DbError> {
     let thread_metadata = serde_json::json!({
         "archived": false,
@@ -297,50 +424,124 @@ pub async fn create_thread(
     Ok(row)
 }
 
-/// Get active (non-archived) threads under a parent channel.
+/// Raw i64 shim kept for API compat.
+pub async fn create_thread(
+    pool: &DbPool,
+    id: i64,
+    space_id: i64,
+    parent_channel_id: i64,
+    name: &str,
+    owner_id: i64,
+    auto_archive_duration: i64,
+    starter_message_id: Option<i64>,
+) -> Result<ChannelRow, DbError> {
+    create_thread_typed(
+        pool,
+        ChannelId::new(id),
+        GuildId::new(space_id),
+        ChannelId::new(parent_channel_id),
+        name,
+        UserId::new(owner_id),
+        auto_archive_duration,
+        starter_message_id.map(MessageId::new),
+    )
+    .await
+}
+
+/// Get active (non-archived) threads under a parent channel. Core implementation.
+pub async fn get_channel_threads_typed(
+    pool: &DbPool,
+    parent_channel_id: ChannelId,
+) -> Result<Vec<ChannelRow>, DbError> {
+    let rows = match crate::active_database_engine() {
+        crate::DatabaseEngine::Postgres => {
+            sqlx::query_as::<_, ChannelRow>(
+                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+                 FROM channels
+                 WHERE parent_id = $1
+                   AND channel_type = 6
+                   AND COALESCE((thread_metadata::jsonb ->> 'archived')::boolean, FALSE) = FALSE
+                 ORDER BY created_at DESC",
+            )
+            .bind(parent_channel_id)
+            .fetch_all(pool)
+            .await?
+        }
+        crate::DatabaseEngine::Sqlite => {
+            sqlx::query_as::<_, ChannelRow>(
+                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+                 FROM channels
+                 WHERE parent_id = $1
+                   AND channel_type = 6
+                   AND COALESCE(json_extract(thread_metadata, '$.archived'), 0) = 0
+                 ORDER BY created_at DESC",
+            )
+            .bind(parent_channel_id)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    Ok(rows)
+}
+
+/// Raw i64 shim kept for API compat.
 pub async fn get_channel_threads(
     pool: &DbPool,
     parent_channel_id: i64,
 ) -> Result<Vec<ChannelRow>, DbError> {
-    let rows = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
-         FROM channels
-         WHERE parent_id = $1 AND channel_type = 6
-         ORDER BY created_at DESC"
-    )
-    .bind(parent_channel_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .filter(|row| !thread_is_archived(row.thread_metadata.as_deref()))
-        .collect())
+    get_channel_threads_typed(pool, ChannelId::new(parent_channel_id)).await
 }
 
 /// Get archived threads under a parent channel.
+pub async fn get_archived_threads_typed(
+    pool: &DbPool,
+    parent_channel_id: ChannelId,
+) -> Result<Vec<ChannelRow>, DbError> {
+    let rows = match crate::active_database_engine() {
+        crate::DatabaseEngine::Postgres => {
+            sqlx::query_as::<_, ChannelRow>(
+                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+                 FROM channels
+                 WHERE parent_id = $1
+                   AND channel_type = 6
+                   AND COALESCE((thread_metadata::jsonb ->> 'archived')::boolean, FALSE) = TRUE
+                 ORDER BY created_at DESC",
+            )
+            .bind(parent_channel_id)
+            .fetch_all(pool)
+            .await?
+        }
+        crate::DatabaseEngine::Sqlite => {
+            sqlx::query_as::<_, ChannelRow>(
+                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
+                 FROM channels
+                 WHERE parent_id = $1
+                   AND channel_type = 6
+                   AND COALESCE(json_extract(thread_metadata, '$.archived'), 0) = 1
+                 ORDER BY created_at DESC",
+            )
+            .bind(parent_channel_id)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    Ok(rows)
+}
+
+/// Raw i64 shim kept for API compat.
 pub async fn get_archived_threads(
     pool: &DbPool,
     parent_channel_id: i64,
 ) -> Result<Vec<ChannelRow>, DbError> {
-    let rows = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
-         FROM channels
-         WHERE parent_id = $1 AND channel_type = 6
-         ORDER BY created_at DESC"
-    )
-    .bind(parent_channel_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .filter(|row| thread_is_archived(row.thread_metadata.as_deref()))
-        .collect())
+    get_archived_threads_typed(pool, ChannelId::new(parent_channel_id)).await
 }
 
-/// Update thread archived/locked state and optionally rename.
-pub async fn update_thread(
+/// Update thread archived/locked state and optionally rename. Core implementation.
+pub async fn update_thread_typed(
     pool: &DbPool,
-    thread_id: i64,
+    thread_id: ChannelId,
     name: Option<&str>,
     archived: Option<bool>,
     locked: Option<bool>,
@@ -393,8 +594,22 @@ pub async fn update_thread(
     Ok(row)
 }
 
+/// Raw i64 shim kept for API compat.
+pub async fn update_thread(
+    pool: &DbPool,
+    thread_id: i64,
+    name: Option<&str>,
+    archived: Option<bool>,
+    locked: Option<bool>,
+) -> Result<ChannelRow, DbError> {
+    update_thread_typed(pool, ChannelId::new(thread_id), name, archived, locked).await
+}
+
 /// Increment the message count for a thread channel.
-pub async fn increment_thread_message_count(pool: &DbPool, thread_id: i64) -> Result<(), DbError> {
+pub async fn increment_thread_message_count_typed(
+    pool: &DbPool,
+    thread_id: ChannelId,
+) -> Result<(), DbError> {
     sqlx::query(
         "UPDATE channels SET message_count = COALESCE(message_count, 0) + 1 WHERE id = $1 AND channel_type = 6"
     )
@@ -404,16 +619,60 @@ pub async fn increment_thread_message_count(pool: &DbPool, thread_id: i64) -> Re
     Ok(())
 }
 
+/// Raw i64 shim kept for API compat.
+pub async fn increment_thread_message_count(pool: &DbPool, thread_id: i64) -> Result<(), DbError> {
+    increment_thread_message_count_typed(pool, ChannelId::new(thread_id)).await
+}
+
+/// Returns the most recent thread creation timestamp for `owner_id` under `parent_channel_id`.
+pub async fn get_last_thread_creation_time_typed(
+    pool: &DbPool,
+    parent_channel_id: ChannelId,
+    owner_id: UserId,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, DbError> {
+    let row: Option<String> = sqlx::query_scalar(
+        "SELECT created_at
+         FROM channels
+         WHERE parent_id = $1
+           AND channel_type = 6
+           AND owner_id = $2
+         ORDER BY id DESC
+         LIMIT 1",
+    )
+    .bind(parent_channel_id)
+    .bind(owner_id)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        Some(raw) => Ok(Some(crate::datetime_from_db_text(&raw)?)),
+        None => Ok(None),
+    }
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn get_last_thread_creation_time(
+    pool: &DbPool,
+    parent_channel_id: i64,
+    owner_id: i64,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, DbError> {
+    get_last_thread_creation_time_typed(
+        pool,
+        ChannelId::new(parent_channel_id),
+        UserId::new(owner_id),
+    )
+    .await
+}
+
 // ============ Forum channel helpers ============
 
-/// Create a forum post (a thread under a forum channel).
-pub async fn create_forum_post(
+/// Create a forum post (a thread under a forum channel). Core implementation.
+pub async fn create_forum_post_typed(
     pool: &DbPool,
-    id: i64,
-    space_id: i64,
-    forum_channel_id: i64,
+    id: ChannelId,
+    space_id: GuildId,
+    forum_channel_id: ChannelId,
     name: &str,
-    owner_id: i64,
+    owner_id: UserId,
     applied_tags: Option<&str>,
 ) -> Result<ChannelRow, DbError> {
     let thread_metadata = serde_json::json!({
@@ -444,11 +703,33 @@ pub async fn create_forum_post(
     Ok(row)
 }
 
+/// Raw i64 shim kept for API compat.
+pub async fn create_forum_post(
+    pool: &DbPool,
+    id: i64,
+    space_id: i64,
+    forum_channel_id: i64,
+    name: &str,
+    owner_id: i64,
+    applied_tags: Option<&str>,
+) -> Result<ChannelRow, DbError> {
+    create_forum_post_typed(
+        pool,
+        ChannelId::new(id),
+        GuildId::new(space_id),
+        ChannelId::new(forum_channel_id),
+        name,
+        UserId::new(owner_id),
+        applied_tags,
+    )
+    .await
+}
+
 /// Get forum posts (threads) under a forum channel, sorted by latest activity or creation.
 /// sort_order: 0 = latest activity (last_message_id desc), 1 = creation date desc
-pub async fn get_forum_posts(
+pub async fn get_forum_posts_typed(
     pool: &DbPool,
-    forum_channel_id: i64,
+    forum_channel_id: ChannelId,
     sort_order: i32,
     include_archived: bool,
 ) -> Result<Vec<ChannelRow>, DbError> {
@@ -458,30 +739,56 @@ pub async fn get_forum_posts(
         "COALESCE(last_message_id, id) DESC"
     };
 
+    let archive_filter = if include_archived {
+        String::new()
+    } else {
+        match crate::active_database_engine() {
+            crate::DatabaseEngine::Postgres => {
+                " AND COALESCE((thread_metadata::jsonb ->> 'archived')::boolean, FALSE) = FALSE"
+                    .to_string()
+            }
+            crate::DatabaseEngine::Sqlite => {
+                " AND COALESCE(json_extract(thread_metadata, '$.archived'), 0) = 0".to_string()
+            }
+        }
+    };
+
     let sql = format!(
         "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels
-         WHERE parent_id = $1 AND channel_type = 6
+         WHERE parent_id = $1 AND channel_type = 6{}
          ORDER BY {}",
-        order
+        archive_filter, order
     );
 
     let rows = sqlx::query_as::<_, ChannelRow>(&sql)
         .bind(forum_channel_id)
         .fetch_all(pool)
         .await?;
-    if include_archived {
-        Ok(rows)
-    } else {
-        Ok(rows
-            .into_iter()
-            .filter(|row| !thread_is_archived(row.thread_metadata.as_deref()))
-            .collect())
-    }
+    Ok(rows)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn get_forum_posts(
+    pool: &DbPool,
+    forum_channel_id: i64,
+    sort_order: i32,
+    include_archived: bool,
+) -> Result<Vec<ChannelRow>, DbError> {
+    get_forum_posts_typed(
+        pool,
+        ChannelId::new(forum_channel_id),
+        sort_order,
+        include_archived,
+    )
+    .await
 }
 
 /// Get forum tags for a forum channel.
-pub async fn get_forum_tags(pool: &DbPool, channel_id: i64) -> Result<Vec<ForumTagRow>, DbError> {
+pub async fn get_forum_tags_typed(
+    pool: &DbPool,
+    channel_id: ChannelId,
+) -> Result<Vec<ForumTagRow>, DbError> {
     let rows = sqlx::query_as::<_, ForumTagRow>(
         "SELECT id, channel_id, name, emoji, CASE WHEN moderated THEN 1 ELSE 0 END AS moderated, position, created_at
          FROM forum_tags WHERE channel_id = $1 ORDER BY position",
@@ -492,11 +799,16 @@ pub async fn get_forum_tags(pool: &DbPool, channel_id: i64) -> Result<Vec<ForumT
     Ok(rows)
 }
 
+/// Raw i64 shim kept for API compat.
+pub async fn get_forum_tags(pool: &DbPool, channel_id: i64) -> Result<Vec<ForumTagRow>, DbError> {
+    get_forum_tags_typed(pool, ChannelId::new(channel_id)).await
+}
+
 /// Create a forum tag.
-pub async fn create_forum_tag(
+pub async fn create_forum_tag_typed(
     pool: &DbPool,
     id: i64,
-    channel_id: i64,
+    channel_id: ChannelId,
     name: &str,
     emoji: Option<&str>,
     moderated: bool,
@@ -522,11 +834,23 @@ pub async fn create_forum_tag(
     Ok(row)
 }
 
+/// Raw i64 shim kept for API compat.
+pub async fn create_forum_tag(
+    pool: &DbPool,
+    id: i64,
+    channel_id: i64,
+    name: &str,
+    emoji: Option<&str>,
+    moderated: bool,
+) -> Result<ForumTagRow, DbError> {
+    create_forum_tag_typed(pool, id, ChannelId::new(channel_id), name, emoji, moderated).await
+}
+
 /// Delete a forum tag.
-pub async fn delete_forum_tag(
+pub async fn delete_forum_tag_typed(
     pool: &DbPool,
     tag_id: i64,
-    channel_id: i64,
+    channel_id: ChannelId,
 ) -> Result<bool, DbError> {
     let result = sqlx::query("DELETE FROM forum_tags WHERE id = $1 AND channel_id = $2")
         .bind(tag_id)
@@ -536,10 +860,19 @@ pub async fn delete_forum_tag(
     Ok(result.rows_affected() > 0)
 }
 
-/// Update applied_tags on a thread/post channel.
-pub async fn update_post_tags(
+/// Raw i64 shim kept for API compat.
+pub async fn delete_forum_tag(
     pool: &DbPool,
-    thread_id: i64,
+    tag_id: i64,
+    channel_id: i64,
+) -> Result<bool, DbError> {
+    delete_forum_tag_typed(pool, tag_id, ChannelId::new(channel_id)).await
+}
+
+/// Update applied_tags on a thread/post channel.
+pub async fn update_post_tags_typed(
+    pool: &DbPool,
+    thread_id: ChannelId,
     applied_tags: &str,
 ) -> Result<(), DbError> {
     sqlx::query("UPDATE channels SET applied_tags = $2, updated_at = datetime('now') WHERE id = $1 AND channel_type = 6")
@@ -550,10 +883,19 @@ pub async fn update_post_tags(
     Ok(())
 }
 
-/// Update default_sort_order on a forum channel.
-pub async fn update_forum_sort_order(
+/// Raw i64 shim kept for API compat.
+pub async fn update_post_tags(
     pool: &DbPool,
-    channel_id: i64,
+    thread_id: i64,
+    applied_tags: &str,
+) -> Result<(), DbError> {
+    update_post_tags_typed(pool, ChannelId::new(thread_id), applied_tags).await
+}
+
+/// Update default_sort_order on a forum channel.
+pub async fn update_forum_sort_order_typed(
+    pool: &DbPool,
+    channel_id: ChannelId,
     sort_order: i32,
 ) -> Result<(), DbError> {
     sqlx::query("UPDATE channels SET default_sort_order = $2, updated_at = datetime('now') WHERE id = $1 AND channel_type = 7")
@@ -562,6 +904,15 @@ pub async fn update_forum_sort_order(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn update_forum_sort_order(
+    pool: &DbPool,
+    channel_id: i64,
+    sort_order: i32,
+) -> Result<(), DbError> {
+    update_forum_sort_order_typed(pool, ChannelId::new(channel_id), sort_order).await
 }
 
 #[cfg(test)]
@@ -588,9 +939,18 @@ mod tests {
     async fn test_create_channel() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        let channel = create_channel(&pool, 10, guild_id, "general", 0, 0, None, None)
-            .await
-            .unwrap();
+        let channel = create_channel_typed(
+            &pool,
+            ChannelId::new(10),
+            GuildId::new(guild_id),
+            "general",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(channel.id, 10);
         assert_eq!(channel.name.as_deref(), Some("general"));
         assert_eq!(channel.channel_type, 0);
@@ -602,10 +962,22 @@ mod tests {
     async fn test_get_channel() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        create_channel(&pool, 20, guild_id, "voice", 2, 1, None, None)
+        create_channel_typed(
+            &pool,
+            ChannelId::new(20),
+            GuildId::new(guild_id),
+            "voice",
+            2,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let channel = get_channel_typed(&pool, ChannelId::new(20))
             .await
+            .unwrap()
             .unwrap();
-        let channel = get_channel(&pool, 20).await.unwrap().unwrap();
         assert_eq!(channel.name.as_deref(), Some("voice"));
         assert_eq!(channel.channel_type, 2);
     }
@@ -613,7 +985,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_channel_not_found() {
         let pool = test_pool().await;
-        let channel = get_channel(&pool, 9999).await.unwrap();
+        let channel = get_channel_typed(&pool, ChannelId::new(9999))
+            .await
+            .unwrap();
         assert!(channel.is_none());
     }
 
@@ -621,13 +995,33 @@ mod tests {
     async fn test_list_guild_channels_ordered_by_position() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        create_channel(&pool, 30, guild_id, "general", 0, 0, None, None)
+        create_channel_typed(
+            &pool,
+            ChannelId::new(30),
+            GuildId::new(guild_id),
+            "general",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        create_channel_typed(
+            &pool,
+            ChannelId::new(31),
+            GuildId::new(guild_id),
+            "random",
+            0,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let channels = get_space_channels_typed(&pool, GuildId::new(guild_id))
             .await
             .unwrap();
-        create_channel(&pool, 31, guild_id, "random", 0, 1, None, None)
-            .await
-            .unwrap();
-        let channels = get_guild_channels(&pool, guild_id).await.unwrap();
         assert_eq!(channels.len(), 2);
         assert_eq!(channels[0].position, 0);
         assert_eq!(channels[1].position, 1);
@@ -637,12 +1031,31 @@ mod tests {
     async fn test_update_channel() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        create_channel(&pool, 40, guild_id, "old-name", 0, 0, None, None)
-            .await
-            .unwrap();
-        let updated = update_channel(&pool, 40, Some("new-name"), Some("A topic"), None)
-            .await
-            .unwrap();
+        create_channel_typed(
+            &pool,
+            ChannelId::new(40),
+            GuildId::new(guild_id),
+            "old-name",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let updated = update_channel_typed(
+            &pool,
+            ChannelId::new(40),
+            Some("new-name"),
+            Some("A topic"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(updated.name.as_deref(), Some("new-name"));
         assert_eq!(updated.topic.as_deref(), Some("A topic"));
     }
@@ -651,12 +1064,31 @@ mod tests {
     async fn test_update_channel_partial() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        create_channel(&pool, 41, guild_id, "keep-name", 0, 0, None, None)
-            .await
-            .unwrap();
-        let updated = update_channel(&pool, 41, None, Some("topic only"), None)
-            .await
-            .unwrap();
+        create_channel_typed(
+            &pool,
+            ChannelId::new(41),
+            GuildId::new(guild_id),
+            "keep-name",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let updated = update_channel_typed(
+            &pool,
+            ChannelId::new(41),
+            None,
+            Some("topic only"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(updated.name.as_deref(), Some("keep-name"));
         assert_eq!(updated.topic.as_deref(), Some("topic only"));
     }
@@ -665,11 +1097,22 @@ mod tests {
     async fn test_delete_channel() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        create_channel(&pool, 50, guild_id, "to-delete", 0, 0, None, None)
+        create_channel_typed(
+            &pool,
+            ChannelId::new(50),
+            GuildId::new(guild_id),
+            "to-delete",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        delete_channel_typed(&pool, ChannelId::new(50))
             .await
             .unwrap();
-        delete_channel(&pool, 50).await.unwrap();
-        let channel = get_channel(&pool, 50).await.unwrap();
+        let channel = get_channel_typed(&pool, ChannelId::new(50)).await.unwrap();
         assert!(channel.is_none());
     }
 
@@ -678,12 +1121,30 @@ mod tests {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
         assert_eq!(count_channels(&pool).await.unwrap(), 0);
-        create_channel(&pool, 60, guild_id, "ch1", 0, 0, None, None)
-            .await
-            .unwrap();
-        create_channel(&pool, 61, guild_id, "ch2", 0, 1, None, None)
-            .await
-            .unwrap();
+        create_channel_typed(
+            &pool,
+            ChannelId::new(60),
+            GuildId::new(guild_id),
+            "ch1",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        create_channel_typed(
+            &pool,
+            ChannelId::new(61),
+            GuildId::new(guild_id),
+            "ch2",
+            0,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(count_channels(&pool).await.unwrap(), 2);
     }
 
@@ -691,14 +1152,34 @@ mod tests {
     async fn test_reorder_channels() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        create_channel(&pool, 70, guild_id, "first", 0, 0, None, None)
-            .await
-            .unwrap();
-        create_channel(&pool, 71, guild_id, "second", 0, 1, None, None)
-            .await
-            .unwrap();
+        create_channel_typed(
+            &pool,
+            ChannelId::new(70),
+            GuildId::new(guild_id),
+            "first",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        create_channel_typed(
+            &pool,
+            ChannelId::new(71),
+            GuildId::new(guild_id),
+            "second",
+            0,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         reorder_channels(&pool, &[(70, 1), (71, 0)]).await.unwrap();
-        let channels = get_guild_channels(&pool, guild_id).await.unwrap();
+        let channels = get_space_channels_typed(&pool, GuildId::new(guild_id))
+            .await
+            .unwrap();
         assert_eq!(channels[0].id, 71);
         assert_eq!(channels[0].position, 0);
         assert_eq!(channels[1].id, 70);
@@ -709,12 +1190,30 @@ mod tests {
     async fn test_channel_with_parent() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        create_channel(&pool, 80, guild_id, "category", 4, 0, None, None)
-            .await
-            .unwrap();
-        let child = create_channel(&pool, 81, guild_id, "child", 0, 0, Some(80), None)
-            .await
-            .unwrap();
+        create_channel_typed(
+            &pool,
+            ChannelId::new(80),
+            GuildId::new(guild_id),
+            "category",
+            4,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let child = create_channel_typed(
+            &pool,
+            ChannelId::new(81),
+            GuildId::new(guild_id),
+            "child",
+            0,
+            0,
+            Some(ChannelId::new(80)),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(child.parent_id, Some(80));
     }
 
@@ -735,12 +1234,30 @@ mod tests {
     async fn test_create_thread() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        create_channel(&pool, 90, guild_id, "parent", 0, 0, None, None)
-            .await
-            .unwrap();
-        let thread = create_thread(&pool, 91, guild_id, 90, "my-thread", 1, 1440, None)
-            .await
-            .unwrap();
+        create_channel_typed(
+            &pool,
+            ChannelId::new(90),
+            GuildId::new(guild_id),
+            "parent",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let thread = create_thread_typed(
+            &pool,
+            ChannelId::new(91),
+            GuildId::new(guild_id),
+            ChannelId::new(90),
+            "my-thread",
+            UserId::new(1),
+            1440,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(thread.channel_type, 6);
         assert_eq!(thread.parent_id, Some(90));
         assert_eq!(thread.owner_id, Some(1));
@@ -751,16 +1268,45 @@ mod tests {
     async fn test_get_channel_threads() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        create_channel(&pool, 92, guild_id, "parent", 0, 0, None, None)
+        create_channel_typed(
+            &pool,
+            ChannelId::new(92),
+            GuildId::new(guild_id),
+            "parent",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        create_thread_typed(
+            &pool,
+            ChannelId::new(93),
+            GuildId::new(guild_id),
+            ChannelId::new(92),
+            "thread-a",
+            UserId::new(1),
+            1440,
+            None,
+        )
+        .await
+        .unwrap();
+        create_thread_typed(
+            &pool,
+            ChannelId::new(94),
+            GuildId::new(guild_id),
+            ChannelId::new(92),
+            "thread-b",
+            UserId::new(1),
+            1440,
+            None,
+        )
+        .await
+        .unwrap();
+        let threads = get_channel_threads_typed(&pool, ChannelId::new(92))
             .await
             .unwrap();
-        create_thread(&pool, 93, guild_id, 92, "thread-a", 1, 1440, None)
-            .await
-            .unwrap();
-        create_thread(&pool, 94, guild_id, 92, "thread-b", 1, 1440, None)
-            .await
-            .unwrap();
-        let threads = get_channel_threads(&pool, 92).await.unwrap();
         assert_eq!(threads.len(), 2);
     }
 
@@ -768,9 +1314,18 @@ mod tests {
     async fn test_guild_id_backward_compat() {
         let pool = test_pool().await;
         let guild_id = setup_guild(&pool).await;
-        let channel = create_channel(&pool, 95, guild_id, "compat", 0, 0, None, None)
-            .await
-            .unwrap();
+        let channel = create_channel_typed(
+            &pool,
+            ChannelId::new(95),
+            GuildId::new(guild_id),
+            "compat",
+            0,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(channel.guild_id(), Some(guild_id));
     }
 }

@@ -16,17 +16,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = ROOT / "crates" / "paracord-db" / "migrations"
+MIGRATIONS_PG_DIR = ROOT / "crates" / "paracord-db" / "migrations_pg"
 MIGRATION_RE = re.compile(r"^(\d{14})_([a-z0-9_]+)\.sql$")
+POSTGRES_EXTRA_MIGRATIONS = {
+    "20260208000000_sqlite_compat.sql",
+}
 
 
-def load_migrations() -> list[tuple[int, Path]]:
-    if not MIGRATIONS_DIR.exists():
-        raise RuntimeError(f"Missing migrations directory: {MIGRATIONS_DIR}")
+def load_migrations(directory: Path) -> list[tuple[int, Path]]:
+    if not directory.exists():
+        raise RuntimeError(f"Missing migrations directory: {directory}")
 
     migrations: list[tuple[int, Path]] = []
     seen_versions: dict[int, Path] = {}
 
-    for file_path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+    for file_path in sorted(directory.glob("*.sql")):
         match = MIGRATION_RE.match(file_path.name)
         if not match:
             raise RuntimeError(
@@ -48,6 +52,64 @@ def load_migrations() -> list[tuple[int, Path]]:
         raise RuntimeError("No migrations found.")
 
     return migrations
+
+
+def verify_sqlite_postgres_parity(
+    sqlite_migrations: list[tuple[int, Path]],
+    postgres_migrations: list[tuple[int, Path]],
+) -> None:
+    sqlite_names = {path.name for _, path in sqlite_migrations}
+    postgres_names = {path.name for _, path in postgres_migrations}
+    expected_postgres = sqlite_names | POSTGRES_EXTRA_MIGRATIONS
+
+    missing = sorted(sqlite_names - postgres_names)
+    unexpected = sorted(postgres_names - expected_postgres)
+
+    if missing:
+        raise RuntimeError(
+            "PostgreSQL migrations missing SQLite counterparts:\n"
+            + "\n".join(f"- {name}" for name in missing)
+        )
+    if unexpected:
+        raise RuntimeError(
+            "Unexpected PostgreSQL-only migrations:\n"
+            + "\n".join(f"- {name}" for name in unexpected)
+        )
+
+
+def verify_obvious_dialect_drift(
+    sqlite_migrations: list[tuple[int, Path]],
+    postgres_migrations: list[tuple[int, Path]],
+) -> None:
+    sqlite_forbidden = [
+        "BIGSERIAL",
+        "JSONB",
+        "ILIKE",
+        "CREATE EXTENSION",
+        "USING GIN",
+        "GENERATED ALWAYS AS IDENTITY",
+    ]
+    postgres_forbidden = [
+        "AUTOINCREMENT",
+        "WITHOUT ROWID",
+        "PRAGMA ",
+    ]
+
+    for _, path in sqlite_migrations:
+        sql = path.read_text(encoding="utf-8").upper()
+        for token in sqlite_forbidden:
+            if token in sql:
+                raise RuntimeError(
+                    f"SQLite migration {path.name} contains PostgreSQL-only token: {token}"
+                )
+
+    for _, path in postgres_migrations:
+        sql = path.read_text(encoding="utf-8").upper()
+        for token in postgres_forbidden:
+            if token in sql:
+                raise RuntimeError(
+                    f"PostgreSQL migration {path.name} contains SQLite-only token: {token}"
+                )
 
 
 def verify_strict_ordering(migrations: list[tuple[int, Path]]) -> None:
@@ -84,14 +146,22 @@ def apply_all_sqlite_migrations(migrations: list[tuple[int, Path]]) -> None:
 
 def main() -> int:
     try:
-        migrations = load_migrations()
+        migrations = load_migrations(MIGRATIONS_DIR)
+        postgres_migrations = load_migrations(MIGRATIONS_PG_DIR)
         verify_strict_ordering(migrations)
+        verify_strict_ordering(postgres_migrations)
+        verify_sqlite_postgres_parity(migrations, postgres_migrations)
+        verify_obvious_dialect_drift(migrations, postgres_migrations)
         apply_all_sqlite_migrations(migrations)
     except RuntimeError as exc:
         print(f"[migration-sanity] FAILED: {exc}")
         return 1
 
-    print(f"[migration-sanity] OK: {len(migrations)} migrations validated.")
+    print(
+        "[migration-sanity] OK: "
+        f"{len(migrations)} SQLite migrations applied; "
+        f"{len(postgres_migrations)} PostgreSQL migrations checked for parity."
+    )
     return 0
 
 

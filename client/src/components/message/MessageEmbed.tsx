@@ -1,18 +1,24 @@
 import { ExternalLink } from 'lucide-react';
 import type { MessageEmbed as EmbedType } from '../../types';
+import { useUIStore } from '../../stores/uiStore';
+import { safeClientResourceUrl, safeExternalUrl } from '../../lib/security';
 
 interface MessageEmbedCardProps {
   embed: EmbedType;
 }
 
 export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
+  const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const accentColor = embed.color || 'var(--accent-primary)';
-  const hasImage = Boolean(embed.image || embed.thumbnail);
-  const imageUrl = embed.image || embed.thumbnail;
+  const imageUrl = safeClientResourceUrl(embed.image || embed.thumbnail || '');
+  const hasImage = !lowBandwidthMode && Boolean(imageUrl);
+  const url = safeExternalUrl(embed.url);
+
+  if (!url) return null;
 
   return (
     <a
-      href={embed.url}
+      href={url}
       target="_blank"
       rel="noopener noreferrer"
       className="group mt-1.5 flex max-w-[480px] overflow-hidden rounded-xl border border-border-subtle bg-bg-mod-subtle/60 transition-colors hover:bg-bg-mod-subtle"
@@ -40,18 +46,23 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
           {!embed.title && !embed.description && (
             <div className="flex items-center gap-1.5 text-xs text-text-muted">
               <ExternalLink size={12} />
-              <span className="truncate">{embed.url}</span>
+              <span className="truncate">{url}</span>
             </div>
           )}
         </div>
 
         {hasImage && (
           <img
-            src={imageUrl!}
+            src={imageUrl ?? undefined}
             alt=""
             className="h-16 w-16 shrink-0 rounded-lg object-cover"
             loading="lazy"
           />
+        )}
+        {!hasImage && lowBandwidthMode && imageUrl && (
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-border-subtle bg-bg-mod-subtle text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+            Image
+          </div>
         )}
       </div>
     </a>

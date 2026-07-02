@@ -1,115 +1,49 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+mod common;
 
 use anyhow::Context;
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    http::{Method, StatusCode},
     Router,
 };
-use chrono::{Duration, Utc};
-use paracord_core::{build_permission_cache, AppConfig, AppState, RuntimeSettings};
-use paracord_media::{
-    LiveKitConfig, LocalStorage, Storage, StorageConfig, StorageManager, VoiceManager,
+use common::{
+    build_json_request, build_test_app, create_authenticated_user_token, dispatch_json, TestApp,
+    TestAppOptions,
 };
 use serde_json::{json, Value};
-use tempfile::TempDir;
-use tokio::sync::{Notify, RwLock};
-use tower::ServiceExt;
-use uuid::Uuid;
 
 struct VoiceTestContext {
     app: Router,
     #[allow(dead_code)]
     db: paracord_db::DbPool,
     token: String,
-    _storage_dir: TempDir,
-    _media_dir: TempDir,
-    _backup_dir: TempDir,
+    event_bus: paracord_core::events::EventBus,
+    _test_app: TestApp,
 }
 
 impl VoiceTestContext {
     async fn new(native_media_enabled: bool, livekit_available: bool) -> anyhow::Result<Self> {
-        let db = paracord_db::create_pool("sqlite::memory:", 1).await?;
-        paracord_db::run_migrations(&db).await?;
-
-        let storage_dir = tempfile::tempdir()?;
-        let media_dir = tempfile::tempdir()?;
-        let backup_dir = tempfile::tempdir()?;
-        let jwt_secret = "voice-test-secret".to_string();
-
-        let livekit = Arc::new(LiveKitConfig {
-            api_key: "lk-test-key".to_string(),
-            api_secret: "lk-test-secret".to_string(),
-            url: "ws://localhost:7880".to_string(),
-            http_url: "http://localhost:7880".to_string(),
-        });
-
-        let state = AppState {
-            db: db.clone(),
-            event_bus: paracord_core::events::EventBus::default(),
-            config: AppConfig {
-                jwt_secret: jwt_secret.clone(),
-                jwt_expiry_seconds: 3600,
-                registration_enabled: true,
-                allow_username_login: false,
-                require_email: true,
-                storage_path: storage_dir.path().to_string_lossy().into_owned(),
-                max_upload_size: 10 * 1024 * 1024,
-                livekit_api_key: livekit.api_key.clone(),
-                livekit_api_secret: livekit.api_secret.clone(),
-                livekit_url: livekit.url.clone(),
-                livekit_http_url: livekit.http_url.clone(),
-                livekit_public_url: livekit.url.clone(),
-                livekit_available,
-                public_url: None,
-                media_storage_path: media_dir.path().to_string_lossy().into_owned(),
-                media_max_file_size: 10 * 1024 * 1024,
-                media_p2p_threshold: 1024 * 1024,
-                file_cryptor: None,
-                backup_dir: backup_dir.path().to_string_lossy().into_owned(),
-                database_url: "sqlite::memory:".to_string(),
-                federation_max_events_per_peer_per_minute: None,
-                federation_max_user_creates_per_peer_per_hour: None,
-                native_media_enabled,
-                native_media_port: 8443,
-                native_media_max_participants: 50,
-                native_media_e2ee_required: false,
-                max_guild_storage_quota: 0,
-                federation_file_cache_enabled: false,
-                federation_file_cache_max_size: 0,
-                federation_file_cache_ttl_hours: 0,
-            },
-            runtime: Arc::new(RwLock::new(RuntimeSettings::default())),
-            voice: Arc::new(VoiceManager::new(livekit)),
-            storage: Arc::new(StorageManager::new(StorageConfig {
-                base_path: media_dir.path().to_path_buf(),
-                max_file_size: 10 * 1024 * 1024,
-                p2p_threshold: 1024 * 1024,
-                allowed_extensions: None,
-            })),
-            storage_backend: Arc::new(Storage::Local(LocalStorage::new(storage_dir.path()))),
-            shutdown: Arc::new(Notify::new()),
-            online_users: Arc::new(RwLock::new(HashSet::new())),
-            user_presences: Arc::new(RwLock::new(HashMap::new())),
-            permission_cache: build_permission_cache(),
-            federation_service: None,
-            member_index: Arc::new(paracord_core::member_index::MemberIndex::empty()),
-            presence_manager: Arc::new(paracord_core::presence_manager::PresenceManager::new()),
-            native_media: None,
-        };
-
-        paracord_api::install_http_rate_limiter();
-        let app = paracord_api::build_router().with_state(state);
-        let token = create_voice_test_user_token(&db, &jwt_secret).await?;
+        let test_app = build_test_app(TestAppOptions {
+            install_http_rate_limiter: true,
+            jwt_secret: "voice-test-secret".to_string(),
+            native_media_enabled,
+            livekit_available,
+            ..Default::default()
+        })
+        .await?;
+        let token = create_authenticated_user_token(
+            &test_app.db,
+            &test_app.jwt_secret,
+            "voicetest",
+            "VoiceTestPass123!",
+        )
+        .await?;
 
         Ok(Self {
-            app,
-            db,
+            app: test_app.app.clone(),
+            db: test_app.db.clone(),
             token,
-            _storage_dir: storage_dir,
-            _media_dir: media_dir,
-            _backup_dir: backup_dir,
+            event_bus: test_app.event_bus.clone(),
+            _test_app: test_app,
         })
     }
 
@@ -119,72 +53,9 @@ impl VoiceTestContext {
         path: &str,
         body: Option<Value>,
     ) -> anyhow::Result<(StatusCode, Value)> {
-        let mut builder = Request::builder()
-            .method(method)
-            .uri(path)
-            .header(header::AUTHORIZATION, format!("Bearer {}", self.token));
-
-        let request = if let Some(payload) = body {
-            builder = builder.header(header::CONTENT_TYPE, "application/json");
-            builder.body(Body::from(payload.to_string()))?
-        } else {
-            builder.body(Body::empty())?
-        };
-
-        let response = self.app.clone().oneshot(request).await?;
-        let status = response.status();
-        let body_bytes = to_bytes(response.into_body(), usize::MAX).await?;
-        let payload = if body_bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&body_bytes)
-                .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&body_bytes) }))
-        };
-
-        Ok((status, payload))
+        let request = build_json_request(method, path, body, Some(&self.token))?;
+        dispatch_json(&self.app, request).await
     }
-}
-
-async fn create_voice_test_user_token(
-    db: &paracord_db::DbPool,
-    jwt_secret: &str,
-) -> anyhow::Result<String> {
-    let user_id = paracord_util::snowflake::generate(1);
-    let nonce = Uuid::new_v4().simple().to_string();
-    let username = format!("voicetest_{nonce}");
-    let email = format!("{nonce}@example.com");
-    let password_hash = paracord_core::auth::hash_password("VoiceTestPass123!")?;
-
-    let user =
-        paracord_db::users::create_user(db, user_id, &username, 1, &email, &password_hash).await?;
-
-    let session_id = format!("sess-{}", Uuid::new_v4().simple());
-    let jti = format!("jti-{}", Uuid::new_v4().simple());
-    let refresh_hash = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    paracord_db::sessions::create_session(
-        db,
-        &session_id,
-        user.id,
-        &refresh_hash,
-        &jti,
-        user.public_key.as_deref(),
-        None,
-        None,
-        None,
-        Utc::now() + Duration::days(1),
-    )
-    .await?;
-
-    let token = paracord_core::auth::create_session_token(
-        user.id,
-        user.public_key.as_deref(),
-        jwt_secret,
-        3600,
-        &session_id,
-        &jti,
-    )?;
-
-    Ok(token)
 }
 
 async fn create_guild_and_voice_channel(
@@ -360,6 +231,289 @@ async fn native_only_no_livekit_returns_native_without_fallback() -> anyhow::Res
         payload["livekit_available"],
         json!(false),
         "livekit_available should be false"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_dm_voice_token_uses_revocable_zero_guild_room() -> anyhow::Result<()> {
+    let ctx = VoiceTestContext::new(true, false).await?;
+    let recipient_id = paracord_util::snowflake::generate(1);
+    paracord_db::users::create_user(
+        &ctx.db,
+        recipient_id,
+        "dmvoicepeer",
+        1,
+        "dmvoicepeer@example.com",
+        "hash",
+    )
+    .await?;
+
+    let (status, dm_payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/users/@me/channels",
+            Some(json!({
+                "recipient_ids": [recipient_id.to_string()],
+                "name": "Native DM Voice",
+            })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "group DM create: {dm_payload}");
+    let channel_id = dm_payload["id"]
+        .as_str()
+        .context("group DM id should be a string")?
+        .to_string();
+    let expected_room = format!("0:{channel_id}");
+    let mut events = ctx.event_bus.subscribe_system();
+
+    let (status, join_payload) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/dms/{channel_id}/voice/join"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "DM voice join: {join_payload}");
+    assert_eq!(join_payload["native_media"], json!(true));
+    assert_eq!(join_payload["room_name"], json!(expected_room));
+    let session_id = join_payload["session_id"]
+        .as_str()
+        .context("native DM voice join should return a session_id")?;
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .context("timed out waiting for native DM voice join event")??;
+    assert_eq!(event.event_type, "VOICE_STATE_UPDATE");
+    assert_eq!(event.guild_id, None);
+    let mut targets = event
+        .target_user_ids
+        .clone()
+        .context("DM voice events should target DM recipients")?;
+    targets.sort_unstable();
+    let (status, me_payload) = ctx
+        .request_json(Method::GET, "/api/v1/users/@me", None)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "get current user: {me_payload}");
+    let user_id = me_payload["id"]
+        .as_str()
+        .context("expected /users/@me id")?
+        .parse::<i64>()?;
+    let mut expected_targets = vec![recipient_id, user_id];
+    expected_targets.sort_unstable();
+    assert_eq!(targets, expected_targets);
+    assert_eq!(event.payload["user_id"], json!(user_id.to_string()));
+    assert_eq!(event.payload["channel_id"], json!(channel_id));
+    assert_eq!(event.payload["session_id"], json!(session_id));
+
+    let token = join_payload["media_token"]
+        .as_str()
+        .context("native DM voice join should return a media_token")?;
+    let token_data = jsonwebtoken::decode::<serde_json::Value>(
+        token,
+        &jsonwebtoken::DecodingKey::from_secret(b"voice-test-secret"),
+        &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256),
+    )?;
+    assert_eq!(token_data.claims["sid"], json!(session_id));
+    assert_eq!(token_data.claims["room"], json!(expected_room));
+
+    let state_after_join =
+        paracord_db::voice_states::get_user_voice_session(&ctx.db, user_id, None)
+            .await?
+            .context("native DM voice join should create a revocable voice state")?;
+    assert_eq!(state_after_join.session_id, session_id);
+    assert_eq!(state_after_join.channel_id.to_string(), channel_id);
+
+    let (status, leave_payload) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/dms/{channel_id}/voice/leave"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "DM voice leave should succeed: {leave_payload}"
+    );
+    let state_after_leave =
+        paracord_db::voice_states::get_user_voice_session(&ctx.db, user_id, None).await?;
+    assert!(
+        state_after_leave.is_none(),
+        "DM voice leave should revoke the media-token backing voice state"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn dm_voice_leave_requires_membership_and_preserves_other_active_dm() -> anyhow::Result<()> {
+    let ctx = VoiceTestContext::new(true, false).await?;
+    let recipient_one_id = paracord_util::snowflake::generate(1);
+    paracord_db::users::create_user(
+        &ctx.db,
+        recipient_one_id,
+        "dmvoicepeerone",
+        1,
+        "dmvoicepeerone@example.com",
+        "hash",
+    )
+    .await?;
+    let recipient_two_id = paracord_util::snowflake::generate(1);
+    paracord_db::users::create_user(
+        &ctx.db,
+        recipient_two_id,
+        "dmvoicepeertwo",
+        1,
+        "dmvoicepeertwo@example.com",
+        "hash",
+    )
+    .await?;
+    let outsider_token = create_authenticated_user_token(
+        &ctx.db,
+        "voice-test-secret",
+        "dmvoiceoutsider",
+        "VoiceTestPass123!",
+    )
+    .await?;
+
+    let (status, dm_one) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/users/@me/channels",
+            Some(json!({
+                "recipient_ids": [recipient_one_id.to_string()],
+                "name": "Native DM Voice One",
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "first group DM create: {dm_one}"
+    );
+    let channel_one_id = dm_one["id"]
+        .as_str()
+        .context("first group DM id should be a string")?
+        .to_string();
+
+    let (status, dm_two) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/users/@me/channels",
+            Some(json!({
+                "recipient_ids": [recipient_two_id.to_string()],
+                "name": "Native DM Voice Two",
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "second group DM create: {dm_two}"
+    );
+    let channel_two_id = dm_two["id"]
+        .as_str()
+        .context("second group DM id should be a string")?
+        .to_string();
+
+    let (status, join_payload) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/dms/{channel_one_id}/voice/join"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "first DM voice join: {join_payload}"
+    );
+
+    let (status, me_payload) = ctx
+        .request_json(Method::GET, "/api/v1/users/@me", None)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "get current user: {me_payload}");
+    let user_id = me_payload["id"]
+        .as_str()
+        .context("expected /users/@me id")?
+        .parse::<i64>()?;
+
+    let outsider_leave = build_json_request(
+        Method::POST,
+        &format!("/api/v1/dms/{channel_one_id}/voice/leave"),
+        None,
+        Some(&outsider_token),
+    )?;
+    let (status, outsider_payload) = dispatch_json(&ctx.app, outsider_leave).await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "non-member DM voice leave should be forbidden: {outsider_payload}"
+    );
+
+    let mut no_op_events = ctx.event_bus.subscribe_system();
+    let (status, wrong_leave_payload) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/dms/{channel_two_id}/voice/leave"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "leaving a different DM should be a no-op: {wrong_leave_payload}"
+    );
+    let active_after_wrong_leave =
+        paracord_db::voice_states::get_user_voice_session(&ctx.db, user_id, None)
+            .await?
+            .context("wrong-channel DM leave must not revoke the active DM voice state")?;
+    assert_eq!(
+        active_after_wrong_leave.channel_id.to_string(),
+        channel_one_id
+    );
+    let no_op_event =
+        tokio::time::timeout(std::time::Duration::from_millis(100), no_op_events.recv()).await;
+    assert!(
+        no_op_event.is_err(),
+        "leaving a different DM should not emit a voice-state event"
+    );
+    let mut events = ctx.event_bus.subscribe_system();
+
+    let (status, leave_payload) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/dms/{channel_one_id}/voice/leave"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "leaving the active DM should succeed: {leave_payload}"
+    );
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .context("timed out waiting for native DM voice leave event")??;
+    assert_eq!(event.event_type, "VOICE_STATE_UPDATE");
+    assert_eq!(event.guild_id, None);
+    let mut targets = event
+        .target_user_ids
+        .clone()
+        .context("DM voice leave events should target DM recipients")?;
+    targets.sort_unstable();
+    let mut expected_targets = vec![recipient_one_id, user_id];
+    expected_targets.sort_unstable();
+    assert_eq!(targets, expected_targets);
+    assert_eq!(event.payload["user_id"], json!(user_id.to_string()));
+    assert_eq!(event.payload["channel_id"], Value::Null);
+
+    let state_after_leave =
+        paracord_db::voice_states::get_user_voice_session(&ctx.db, user_id, None).await?;
+    assert!(
+        state_after_leave.is_none(),
+        "active-channel DM leave should revoke the active DM voice state"
     );
 
     Ok(())

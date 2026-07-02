@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle } from 'lucide-react';
+import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff } from 'lucide-react';
 import { useMessageStore } from '../../stores/messageStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useFileUpload } from '../../hooks/useFileUpload';
@@ -7,9 +7,22 @@ import { useTyping } from '../../hooks/useTyping';
 import { MAX_MESSAGE_LENGTH } from '../../lib/constants';
 import { EmojiPicker } from '../ui/EmojiPicker';
 import { channelApi } from '../../api/channels';
+import type { ChannelFeatureSettings } from '../../api/channels';
 import { usePollStore } from '../../stores/pollStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { MarkdownToolbar, applyMarkdownToolbarAction, resolveMarkdownShortcut } from './MarkdownToolbar';
+import { GifPicker } from './GifPicker';
+import { StickerPicker } from './StickerPicker';
+import { SlashCommandPopup } from './SlashCommandPopup';
+import type { ApplicationCommand } from '../../types/commands';
+import {
+  getVersionedStorageItem,
+  removeVersionedStorageItem,
+  setVersionedStorageItem,
+} from '../../lib/versionedStorage';
+import { isAllowedImageMimeType } from '../../lib/security';
+import { toast } from '../../stores/toastStore';
+import { extractApiError } from '../../api/client';
 
 interface MessageInputProps {
   channelId: string;
@@ -29,11 +42,13 @@ const POLL_DURATION_OPTIONS = [
   { label: '14 days', minutes: 20160 },
 ];
 
-const DRAFT_KEY_PREFIX = 'paracord:draft:';
+function canPreviewImageFile(file: File): boolean {
+  return isAllowedImageMimeType(file.type);
+}
 
 function loadDraft(channelId: string): string {
   try {
-    return localStorage.getItem(`${DRAFT_KEY_PREFIX}${channelId}`) || '';
+    return getVersionedStorageItem(`draft:${channelId}`, [`draft:${channelId}`]) || '';
   } catch {
     return '';
   }
@@ -42,13 +57,21 @@ function loadDraft(channelId: string): string {
 function saveDraft(channelId: string, content: string) {
   try {
     if (content.trim()) {
-      localStorage.setItem(`${DRAFT_KEY_PREFIX}${channelId}`, content);
+      setVersionedStorageItem(`draft:${channelId}`, content);
     } else {
-      localStorage.removeItem(`${DRAFT_KEY_PREFIX}${channelId}`);
+      removeVersionedStorageItem(`draft:${channelId}`, [`draft:${channelId}`]);
     }
   } catch {
     // localStorage unavailable
   }
+}
+
+function messageInputError(err: unknown, fallback: string): string {
+  const responseData = (err as { response?: { data?: { message?: string; error?: string } } }).response?.data;
+  if (responseData?.message) return responseData.message;
+  if (responseData?.error) return responseData.error;
+  const extracted = extractApiError(err);
+  return extracted === 'An unexpected error occurred' ? fallback : extracted;
 }
 
 export function MessageInput({ channelId, guildId, channelName, replyingTo, onCancelReply }: MessageInputProps) {
@@ -57,6 +80,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const [isDragOver, setIsDragOver] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const [showStickerPicker, setShowStickerPicker] = useState(false);
   const [showFormattingTools, setShowFormattingTools] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
@@ -64,6 +89,9 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const [pollAllowMultiselect, setPollAllowMultiselect] = useState(false);
   const [pollDurationMinutes, setPollDurationMinutes] = useState(1440);
   const [creatingPoll, setCreatingPoll] = useState(false);
+  const [showScheduleComposer, setShowScheduleComposer] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [schedulingMessage, setSchedulingMessage] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { upload, uploading } = useFileUpload(channelId);
@@ -75,6 +103,22 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   );
   const activeChannelType = activeChannel?.channel_type ?? activeChannel?.type;
   const canCreatePoll = activeChannelType == null || (activeChannelType !== 2 && activeChannelType !== 4);
+
+  // Anonymous posting detection
+  const [channelFeatures, setChannelFeatures] = useState<ChannelFeatureSettings | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    channelApi.getFeatureSettings(channelId).then(({ data }) => {
+      if (!cancelled) setChannelFeatures(data);
+    }).catch(() => {
+      // Feature settings are optional
+    });
+    return () => { cancelled = true; };
+  }, [channelId]);
+  const isAnonymousChannel = channelFeatures?.anonymous_posting_enabled === true;
+
+  // Slash command state
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
 
   // @mention autocomplete
   const allMembers = useMemberStore((s) => s.members);
@@ -113,20 +157,26 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     // Restore draft for this channel
     setContent(loadDraft(channelId));
     setMentionQuery(null);
+    setSlashQuery(null);
     setShowPollComposer(false);
     setShowFormattingTools(false);
+    setShowGifPicker(false);
+    setShowStickerPicker(false);
     setPollQuestion('');
     setPollOptions(['', '']);
     setPollAllowMultiselect(false);
     setPollDurationMinutes(1440);
     setCreatingPoll(false);
+    setShowScheduleComposer(false);
+    setScheduledAt('');
+    setSchedulingMessage(false);
     setSubmitError(null);
   }, [channelId]);
 
   const stagedImagePreviews = useMemo(
     () =>
       stagedFiles.map((file) => (
-        file.type.startsWith('image/') ? URL.createObjectURL(file) : null
+        canPreviewImageFile(file) ? URL.createObjectURL(file) : null
       )),
     [stagedFiles],
   );
@@ -182,10 +232,54 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         onCancelReply?.();
         resetPollComposer();
       } catch (err) {
-        const responseData = (err as { response?: { data?: { message?: string; error?: string } } }).response?.data;
-        setSubmitError(responseData?.message || responseData?.error || 'Failed to create poll.');
+        setSubmitError(messageInputError(err, 'Failed to create poll.'));
       } finally {
         setCreatingPoll(false);
+      }
+      return;
+    }
+    if (showScheduleComposer) {
+      if (!content.trim()) {
+        setSubmitError('Enter a message to schedule.');
+        return;
+      }
+      if (!scheduledAt) {
+        setSubmitError('Select when this message should be sent.');
+        return;
+      }
+      if (stagedFiles.length > 0) {
+        setSubmitError('Scheduled messages currently do not support file attachments.');
+        return;
+      }
+      const parsedSendAt = new Date(scheduledAt);
+      if (Number.isNaN(parsedSendAt.getTime())) {
+        setSubmitError('Select a valid scheduled time.');
+        return;
+      }
+      if (parsedSendAt.getTime() <= Date.now()) {
+        setSubmitError('Choose a future time for scheduled messages.');
+        return;
+      }
+      try {
+        setSubmitError(null);
+        setSchedulingMessage(true);
+        const sendAtIso = parsedSendAt.toISOString();
+        await useMessageStore.getState().scheduleMessage(
+          channelId,
+          content.trim(),
+          sendAtIso,
+          replyingTo?.id,
+        );
+        toast.success('Message scheduled.');
+        setContent('');
+        setScheduledAt('');
+        setShowScheduleComposer(false);
+        saveDraft(channelId, '');
+        onCancelReply?.();
+      } catch (err) {
+        setSubmitError(messageInputError(err, 'Failed to schedule message.'));
+      } finally {
+        setSchedulingMessage(false);
       }
       return;
     }
@@ -215,12 +309,12 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       setStagedFiles([]);
       onCancelReply?.();
       if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    } catch {
-      setSubmitError('Failed to send message.');
+    } catch (err) {
+      setSubmitError(messageInputError(err, 'Failed to send message.'));
     }
   };
 
-  /** Detect @mention query from cursor position */
+  /** Detect @mention query and /slash command query from cursor position */
   const detectMentionQuery = useCallback((text: string, cursorPos: number) => {
     const before = text.slice(0, cursorPos);
     const match = before.match(/@(\w*)$/);
@@ -230,21 +324,30 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     } else {
       setMentionQuery(null);
     }
+
+    // Detect slash command: only at position 0, e.g. "/cmd"
+    const slashMatch = text.match(/^\/(\w*)$/);
+    if (slashMatch) {
+      setSlashQuery(slashMatch[1]);
+    } else {
+      setSlashQuery(null);
+    }
   }, []);
 
-  const insertMention = useCallback((username: string) => {
+  const insertMention = useCallback((userId: string) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const before = content.slice(0, textarea.selectionStart);
     const after = content.slice(textarea.selectionStart);
     const mentionStart = before.lastIndexOf('@');
     if (mentionStart === -1) return;
-    const newContent = before.slice(0, mentionStart) + `@${username} ` + after;
+    const mentionText = `<@${userId}>`;
+    const newContent = before.slice(0, mentionStart) + mentionText + ' ' + after;
     setContent(newContent);
     setMentionQuery(null);
     // Restore focus
     requestAnimationFrame(() => {
-      const newPos = mentionStart + username.length + 2;
+      const newPos = mentionStart + mentionText.length + 1;
       textarea.focus();
       textarea.setSelectionRange(newPos, newPos);
     });
@@ -266,12 +369,21 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       if (e.key === 'Tab' || e.key === 'Enter') {
         e.preventDefault();
         const selected = mentionResults[mentionIndex];
-        if (selected) insertMention(selected.user.username);
+        if (selected) insertMention(selected.user.id);
         return;
       }
       if (e.key === 'Escape') {
         e.preventDefault();
         setMentionQuery(null);
+        return;
+      }
+    }
+
+    // Dismiss slash popup on Escape
+    if (slashQuery !== null) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSlashQuery(null);
         return;
       }
     }
@@ -309,7 +421,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = Array.from(e.clipboardData?.items || []);
     const imageFiles = items
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .filter((item) => item.kind === 'file' && isAllowedImageMimeType(item.type))
       .map((item) => item.getAsFile())
       .filter((f): f is File => f !== null);
 
@@ -387,17 +499,29 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
   return (
     <div
-      className="relative mx-auto w-full max-w-[54rem] px-4 pb-[calc(var(--safe-bottom)+1.25rem)] pt-2 sm:px-6 sm:pb-8"
+      className="relative w-full px-4 pb-[calc(var(--safe-bottom)+1.25rem)] pt-2 sm:px-6 sm:pb-8"
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
     >
+      {isAnonymousChannel && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent-primary/30 bg-accent-primary/10 px-3 py-2 text-xs text-accent-primary">
+          <EyeOff size={13} className="shrink-0" />
+          <span>Messages in this channel are posted anonymously</span>
+        </div>
+      )}
+
       {replyingTo && (
         <div className="flex flex-wrap items-center gap-2 rounded-t-2xl border border-b-0 border-border-subtle bg-bg-mod-subtle px-3 py-2 text-xs text-text-muted sm:px-4 sm:py-2.5 sm:text-sm">
           <span>Replying to</span>
           <span style={{ color: 'var(--text-primary)' }} className="font-medium">{replyingTo.author}</span>
           <span className="truncate flex-1" style={{ color: 'var(--text-muted)' }}>{replyingTo.content}</span>
-          <button onClick={onCancelReply} className="command-icon-btn h-8 w-8">
+          <button
+            onClick={onCancelReply}
+            className="command-icon-btn h-8 w-8"
+            aria-label="Cancel reply"
+            title="Cancel reply"
+          >
             <X size={16} />
           </button>
         </div>
@@ -419,7 +543,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
                 maxWidth: 'min(180px, 48vw)',
               }}
             >
-              {file.type.startsWith('image/') ? (
+              {canPreviewImageFile(file) ? (
                 <img
                   src={stagedImagePreviews[i] || ''}
                   alt={file.name}
@@ -436,6 +560,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
                 onClick={() => removeFile(i)}
                 className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border border-border-subtle opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
                 style={{ backgroundColor: 'var(--accent-danger)', color: '#fff' }}
+                aria-label={`Remove ${file.name}`}
+                title={`Remove ${file.name}`}
               >
                 <X size={13} />
               </button>
@@ -539,8 +665,32 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         </div>
       )}
 
+      {showScheduleComposer && (
+        <div
+          className="mt-2 border border-border-subtle bg-bg-mod-subtle px-3 py-2.5"
+          style={{ borderRadius: '12px' }}
+        >
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              Send At
+            </span>
+            <input
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              className="input-field mt-1.5"
+              min={new Date(Date.now() + 5000).toISOString().slice(0, 16)}
+            />
+          </label>
+        </div>
+      )}
+
       {submitError && (
-        <div className="mt-2 rounded-lg border border-accent-danger/40 bg-accent-danger/10 px-3 py-2 text-xs font-semibold" style={{ color: 'var(--accent-danger)' }}>
+        <div
+          className="mt-2 rounded-lg border border-accent-danger/40 bg-accent-danger/10 px-3 py-2 text-xs font-semibold"
+          style={{ color: 'var(--accent-danger)' }}
+          role="alert"
+        >
           {submitError}
         </div>
       )}
@@ -561,6 +711,21 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           </div>
         )}
 
+        {/* Slash command popup */}
+        {guildId && (
+          <SlashCommandPopup
+            query={slashQuery ?? ''}
+            guildId={guildId}
+            visible={slashQuery !== null}
+            onSelectCommand={(cmd: ApplicationCommand) => {
+              setContent(`/${cmd.name} `);
+              setSlashQuery(null);
+              requestAnimationFrame(() => textareaRef.current?.focus());
+            }}
+            onDismiss={() => setSlashQuery(null)}
+          />
+        )}
+
         {/* @mention autocomplete */}
         {mentionQuery !== null && mentionResults.length > 0 && (
           <div className="absolute bottom-full left-3 right-3 z-20 mb-2 max-h-64 overflow-y-auto rounded-xl border border-border-subtle bg-bg-floating shadow-lg backdrop-blur-lg">
@@ -574,7 +739,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
                   }`}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  insertMention(member.user.username);
+                  insertMention(member.user.id);
                 }}
                 onMouseEnter={() => setMentionIndex(i)}
               >
@@ -636,6 +801,20 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           </button>
         )}
 
+        <button
+          type="button"
+          onClick={() => setShowScheduleComposer((prev) => !prev)}
+          className={`command-icon-btn h-8 w-8 flex-shrink-0 border transition-colors ${showScheduleComposer
+              ? 'border-accent-primary/45 bg-accent-primary/15 text-accent-primary'
+              : 'border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary'
+            }`}
+          aria-label={showScheduleComposer ? 'Scheduling enabled' : 'Schedule message'}
+          title={showScheduleComposer ? 'Scheduling enabled' : 'Schedule message'}
+          disabled={showPollComposer}
+        >
+          <Clock3 size={16} />
+        </button>
+
         <input
           ref={fileInputRef}
           type="file"
@@ -654,7 +833,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={showPollComposer ? 'Poll question above will be sent as a poll message' : `Message ${channelName ? '#' + channelName : 'this channel'}`}
+          placeholder={showPollComposer ? 'Poll question above will be sent as a poll message' : showScheduleComposer ? `Schedule message for ${channelName ? '#' + channelName : 'this channel'}` : `Message ${channelName ? '#' + channelName : 'this channel'}`}
           rows={1}
           maxLength={MAX_MESSAGE_LENGTH}
           disabled={showPollComposer}
@@ -666,10 +845,79 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           }}
         />
 
+        {guildId && (
+          <div className="relative">
+            <button
+              className="command-icon-btn h-8 w-8 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowEmojiPicker(false); }}
+              disabled={showPollComposer}
+              aria-label="Stickers"
+              title="Stickers"
+            >
+              {/* Sticker icon: a square with a folded corner */}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.5L15.5 2z" />
+                <polyline points="15 2 15 9 22 9" />
+                <circle cx="10" cy="14" r="2" />
+                <path d="m20 17-1.09-1.09a2 2 0 0 0-2.82 0L10 22" />
+              </svg>
+            </button>
+            {showStickerPicker && (
+              <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
+                <StickerPicker
+                  guildId={guildId}
+                  onSelect={(stickerId) => {
+                    setShowStickerPicker(false);
+                    void (async () => {
+                      try {
+                        await useMessageStore.getState().sendMessage(channelId, '', replyingTo?.id, undefined, [stickerId]);
+                        onCancelReply?.();
+                      } catch (err) {
+                        setSubmitError(`Failed to send sticker: ${messageInputError(err, 'Request failed')}`);
+                      }
+                    })();
+                  }}
+                  onClose={() => setShowStickerPicker(false)}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="relative">
           <button
             className="command-icon-btn h-8 w-8 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            onClick={() => { setShowGifPicker(!showGifPicker); setShowEmojiPicker(false); setShowStickerPicker(false); }}
+            disabled={showPollComposer}
+            aria-label="GIF"
+            title="GIF"
+          >
+            <Image size={18} />
+          </button>
+          {showGifPicker && (
+            <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
+              <GifPicker
+                onSelect={(gifUrl) => {
+                  setShowGifPicker(false);
+                  void (async () => {
+                    try {
+                      await useMessageStore.getState().sendMessage(channelId, gifUrl, replyingTo?.id);
+                      onCancelReply?.();
+                    } catch (err) {
+                      setSubmitError(`Failed to send GIF: ${messageInputError(err, 'Request failed')}`);
+                    }
+                  })();
+                }}
+                onClose={() => setShowGifPicker(false)}
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="relative">
+          <button
+            className="command-icon-btn h-8 w-8 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowGifPicker(false); setShowStickerPicker(false); }}
             disabled={showPollComposer}
             aria-label="Emoji"
             title="Emoji"
@@ -693,12 +941,12 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
         <button
           onClick={() => void handleSubmit()}
-          disabled={uploading || creatingPoll || (!showPollComposer && !content.trim() && stagedFiles.length === 0)}
+          disabled={uploading || creatingPoll || schedulingMessage || (showScheduleComposer ? (!content.trim() || !scheduledAt) : (!showPollComposer && !content.trim() && stagedFiles.length === 0))}
           className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label="Send message"
-          title="Send message"
+          aria-label={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
+          title={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
         >
-          <Send size={17} />
+          {showScheduleComposer ? <Clock3 size={17} /> : <Send size={17} />}
         </button>
       </div>
 

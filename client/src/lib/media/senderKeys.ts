@@ -180,6 +180,11 @@ export class SenderKeyManager {
     return this.participantIds;
   }
 
+  /** Replace the tracked participant set without triggering a rotation. */
+  syncParticipants(participantIds: Iterable<string>): void {
+    this.participantIds = new Set(participantIds);
+  }
+
   /**
    * Encrypt a media frame payload.
    * Nonce (12 bytes): SSRC (4) || epoch (1) || sequence (2) || 5 zero bytes

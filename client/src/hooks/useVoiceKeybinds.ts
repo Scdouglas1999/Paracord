@@ -83,7 +83,8 @@ function publishVoiceState() {
     state.guildId,
     state.channelId,
     state.selfMute,
-    state.selfDeaf
+    state.selfDeaf,
+    state.selfVideo
   );
 }
 
@@ -99,6 +100,7 @@ async function toggleDeafAndPublish() {
 
 export function useVoiceKeybinds() {
   const rawKeybinds = useAuthStore((s) => s.settings?.keybinds as Record<string, unknown> | undefined);
+  const rawNotifications = useAuthStore((s) => s.settings?.notifications as Record<string, unknown> | undefined);
   const pushToTalkEngaged = useRef(false);
 
   const bindings = useMemo(() => {
@@ -110,6 +112,22 @@ export function useVoiceKeybinds() {
     };
   }, [rawKeybinds]);
 
+  const isPttMode = useMemo(() => {
+    const mode = (rawNotifications || {})['voiceInputMode'];
+    return mode === 'push_to_talk';
+  }, [rawNotifications]);
+
+  // When PTT mode is enabled and the user is in a voice channel but not muted,
+  // auto-mute them. This handles the case where the setting is toggled while
+  // already in a call.
+  useEffect(() => {
+    if (!isPttMode) return;
+    const voiceState = useVoiceStore.getState();
+    if (voiceState.connected && voiceState.channelId && !voiceState.selfMute) {
+      void toggleMuteAndPublish();
+    }
+  }, [isPttMode]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return;
@@ -118,6 +136,8 @@ export function useVoiceKeybinds() {
 
       if (matchesBinding(event, bindings.toggleMute)) {
         if (event.repeat) return;
+        // In PTT mode, toggle-mute keybind is disabled (PTT key controls mute)
+        if (isPttMode) return;
         event.preventDefault();
         void toggleMuteAndPublish();
         return;
@@ -133,8 +153,17 @@ export function useVoiceKeybinds() {
       if (matchesBinding(event, bindings.pushToTalk)) {
         event.preventDefault();
         if (event.repeat || pushToTalkEngaged.current) return;
-        if (voiceState.selfMute) {
+        // In PTT mode, always unmute when key is pressed (regardless of current mute state)
+        if (isPttMode) {
           pushToTalkEngaged.current = true;
+          useVoiceStore.getState().setPttEngaged(true);
+          if (voiceState.selfMute) {
+            void toggleMuteAndPublish();
+          }
+        } else if (voiceState.selfMute) {
+          // In non-PTT mode, only engage PTT if the user was already muted
+          pushToTalkEngaged.current = true;
+          useVoiceStore.getState().setPttEngaged(true);
           void toggleMuteAndPublish();
         }
       }
@@ -145,23 +174,24 @@ export function useVoiceKeybinds() {
       event.preventDefault();
       if (!pushToTalkEngaged.current) return;
       const voiceState = useVoiceStore.getState();
+      useVoiceStore.getState().setPttEngaged(false);
+      pushToTalkEngaged.current = false;
       if (!voiceState.connected || !voiceState.channelId) {
-        pushToTalkEngaged.current = false;
         return;
       }
       if (!voiceState.selfMute) {
         void toggleMuteAndPublish();
       }
-      pushToTalkEngaged.current = false;
     };
 
     const handleWindowBlur = () => {
       if (!pushToTalkEngaged.current) return;
       const voiceState = useVoiceStore.getState();
+      useVoiceStore.getState().setPttEngaged(false);
+      pushToTalkEngaged.current = false;
       if (voiceState.connected && voiceState.channelId && !voiceState.selfMute) {
         void toggleMuteAndPublish();
       }
-      pushToTalkEngaged.current = false;
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -173,7 +203,7 @@ export function useVoiceKeybinds() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [bindings]);
+  }, [bindings, isPttMode]);
 }
 
 

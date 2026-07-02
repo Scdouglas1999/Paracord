@@ -1,17 +1,47 @@
-import { useState, useEffect } from 'react';
+import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Users, Server, Settings, BarChart3, Shield, ShieldOff, Trash2, Pencil, HardDrive, Download, Plus, Loader2, RotateCcw } from 'lucide-react';
-import { adminApi } from '../api/admin';
+import { ArrowLeft, Users, Server, Settings, BarChart3, Shield, ShieldOff, Trash2, Pencil, HardDrive, Download, Plus, Loader2, RotateCcw, Globe2 } from 'lucide-react';
+import { adminApi, type FederatedServer, type SecurityEvent } from '../api/admin';
 import { extractApiError } from '../api/client';
 import { toast } from '../stores/toastStore';
+import { Button } from '../components/ui/Button';
 import { useAuthStore } from '../stores/authStore';
 import { isAdmin, UserFlags } from '../types';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+import { confirm } from '../stores/confirmStore';
 
-type Tab = 'overview' | 'users' | 'guilds' | 'settings' | 'security' | 'backups';
+type Tab = 'overview' | 'users' | 'guilds' | 'settings' | 'federation' | 'security' | 'backups';
 
 export function AdminPage() {
   const navigate = useNavigate();
+  const currentUser = useAuthStore((s) => s.user);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
+
+  if (!currentUser) {
+    return (
+      <div className="flex h-full items-center justify-center px-4">
+        <div className="settings-surface-card w-full max-w-md text-center">
+          <p className="text-sm leading-6 text-text-muted">Checking admin access...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAdmin(currentUser.flags ?? 0)) {
+    return (
+      <div className="flex h-full items-center justify-center px-4">
+        <div className="settings-surface-card w-full max-w-md text-center">
+          <h1 className="mb-4 text-xl font-semibold text-text-primary">Access denied</h1>
+          <p className="mb-8 text-sm leading-6 text-text-muted">
+            You need administrator access to open the control plane.
+          </p>
+          <button className="btn-primary" onClick={() => navigate('/app')}>
+            Go Back
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 gap-3">
@@ -21,6 +51,8 @@ export function AdminPage() {
           <button
             onClick={() => navigate(-1)}
             className="command-icon-btn"
+            aria-label="Go back"
+            title="Go back"
           >
             <ArrowLeft size={18} />
           </button>
@@ -36,6 +68,7 @@ export function AdminPage() {
             { id: 'users' as Tab, label: 'Users', icon: Users },
             { id: 'guilds' as Tab, label: 'Guilds', icon: Server },
             { id: 'settings' as Tab, label: 'Settings', icon: Settings },
+            { id: 'federation' as Tab, label: 'Federation', icon: Globe2 },
             { id: 'security' as Tab, label: 'Security', icon: Shield },
             { id: 'backups' as Tab, label: 'Backups', icon: HardDrive },
           ]).map(({ id, label, icon: Icon }) => (
@@ -62,6 +95,7 @@ export function AdminPage() {
           {activeTab === 'users' && <UsersPanel />}
           {activeTab === 'guilds' && <GuildsPanel />}
           {activeTab === 'settings' && <SettingsPanel />}
+          {activeTab === 'federation' && <FederationPanel />}
           {activeTab === 'security' && <SecurityPanel />}
           {activeTab === 'backups' && <BackupsPanel />}
         </div>
@@ -135,16 +169,19 @@ function UsersPanel() {
     created_at: string;
   }>>([]);
   const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [cursorStack, setCursorStack] = useState<Array<number | null>>([]);
   const [search, setSearch] = useState('');
   const limit = 25;
 
   const fetchUsers = () => {
     adminApi
-      .getUsers({ offset, limit })
+      .getUsers({ cursor: cursor ?? undefined, limit })
       .then(({ data }) => {
         setUsers(data.users);
         setTotal(data.total);
+        setNextCursor(data.next_cursor);
       })
       .catch((err) => {
         toast.error(`Failed to load users: ${extractApiError(err)}`);
@@ -153,7 +190,7 @@ function UsersPanel() {
 
   useEffect(() => {
     fetchUsers();
-  }, [offset]);
+  }, [cursor]);
 
   const toggleAdmin = async (userId: string, currentFlags: number) => {
     const newFlags = isAdmin(currentFlags)
@@ -168,7 +205,12 @@ function UsersPanel() {
   };
 
   const deleteUser = async (userId: string, username: string) => {
-    if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: 'Delete user?',
+      description: `Delete "${username}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    }))) return;
     try {
       await adminApi.deleteUser(userId);
       fetchUsers();
@@ -185,6 +227,26 @@ function UsersPanel() {
           (u.display_name && u.display_name.toLowerCase().includes(search.toLowerCase()))
       )
     : users;
+
+  const pageIndex = cursorStack.length;
+  const pageStart = users.length > 0 ? pageIndex * limit + 1 : 0;
+  const pageEnd = pageIndex * limit + users.length;
+
+  const goPreviousPage = () => {
+    setCursorStack((prev) => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      const previousCursor = next.pop() ?? null;
+      setCursor(previousCursor);
+      return next;
+    });
+  };
+
+  const goNextPage = () => {
+    if (nextCursor === null) return;
+    setCursorStack((prev) => [...prev, cursor]);
+    setCursor(nextCursor);
+  };
 
   return (
     <div>
@@ -243,6 +305,7 @@ function UsersPanel() {
                           onClick={() => toggleAdmin(u.id, u.flags)}
                           className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
                           title={isAdmin(u.flags) ? 'Remove admin' : 'Make admin'}
+                          aria-label={`${isAdmin(u.flags) ? 'Remove admin from' : 'Make admin'} ${u.display_name || u.username}`}
                         >
                           {isAdmin(u.flags) ? <ShieldOff size={16} /> : <Shield size={16} />}
                         </button>
@@ -250,6 +313,7 @@ function UsersPanel() {
                           onClick={() => deleteUser(u.id, u.username)}
                           className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
                           title="Delete user"
+                          aria-label={`Delete user ${u.display_name || u.username}`}
                         >
                           <Trash2 size={16} />
                         </button>
@@ -274,21 +338,21 @@ function UsersPanel() {
         </div>
       </div>
 
-      {total > limit && (
+      {(cursorStack.length > 0 || nextCursor !== null) && (
         <div className="mt-4 flex items-center justify-between">
           <button
-            onClick={() => setOffset(Math.max(0, offset - limit))}
-            disabled={offset === 0}
+            onClick={goPreviousPage}
+            disabled={cursorStack.length === 0}
             className="control-pill-btn h-10 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           >
             Previous
           </button>
           <span className="text-sm text-text-muted">
-            {offset + 1} - {Math.min(offset + limit, total)} of {total}
+            {pageStart} - {Math.min(pageEnd, total)} of {total}
           </span>
           <button
-            onClick={() => setOffset(offset + limit)}
-            disabled={offset + limit >= total}
+            onClick={goNextPage}
+            disabled={nextCursor === null}
             className="control-pill-btn h-10 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           >
             Next
@@ -310,6 +374,7 @@ type GuildRow = {
 };
 
 function GuildsPanel() {
+  const editDialogRef = useRef<HTMLDivElement>(null);
   const [guilds, setGuilds] = useState<GuildRow[]>([]);
   const [editingGuild, setEditingGuild] = useState<GuildRow | null>(null);
   const [editName, setEditName] = useState('');
@@ -335,10 +400,12 @@ function GuildsPanel() {
     setEditDescription(g.description ?? '');
   };
 
-  const closeEdit = () => {
+  const closeEdit = useCallback(() => {
     setEditingGuild(null);
     setSaving(false);
-  };
+  }, []);
+
+  useFocusTrap(editDialogRef, Boolean(editingGuild), closeEdit);
 
   const saveGuild = async () => {
     if (!editingGuild) return;
@@ -364,7 +431,12 @@ function GuildsPanel() {
   };
 
   const deleteGuild = async (guildId: string, name: string) => {
-    if (!confirm(`Delete guild "${name}"? This will delete all channels and messages. This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: 'Delete guild?',
+      description: `Delete "${name}"? This will delete all channels and messages. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    }))) return;
     try {
       await adminApi.deleteGuild(guildId);
       if (editingGuild?.id === guildId) closeEdit();
@@ -407,6 +479,7 @@ function GuildsPanel() {
                       onClick={() => openEdit(g)}
                       className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
                       title="Edit guild"
+                      aria-label={`Edit guild ${g.name}`}
                     >
                       <Pencil size={16} />
                     </button>
@@ -414,6 +487,7 @@ function GuildsPanel() {
                       onClick={() => deleteGuild(g.id, g.name)}
                       className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
                       title="Delete guild"
+                      aria-label={`Delete guild ${g.name}`}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -435,15 +509,19 @@ function GuildsPanel() {
 
       {editingGuild && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ backgroundColor: 'var(--overlay-backdrop)' }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop"
           onClick={closeEdit}
         >
           <div
+            ref={editDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="admin-edit-guild-title"
+            tabIndex={-1}
             className="glass-modal w-full max-w-md rounded-2xl p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="mb-5 text-lg font-semibold text-text-primary">Edit Guild</h3>
+            <h3 id="admin-edit-guild-title" className="mb-5 text-lg font-semibold text-text-primary">Edit Guild</h3>
             <div className="space-y-6">
               <div>
                 <label className="mb-3 block text-sm font-medium text-text-secondary">Name</label>
@@ -471,13 +549,12 @@ function GuildsPanel() {
               >
                 Cancel
               </button>
-              <button
+              <Button
                 onClick={saveGuild}
                 disabled={saving}
-                className="btn-primary"
               >
                 {saving ? 'Saving...' : 'Save'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -489,36 +566,84 @@ function GuildsPanel() {
 // ── Settings ──────────────────────────────────────────────────────────
 
 function SecurityPanel() {
-  const [events, setEvents] = useState<Array<{
-    id: string;
-    actor_user_id?: string | null;
-    action: string;
-    target_user_id?: string | null;
-    session_id?: string | null;
-    ip_address?: string | null;
-    created_at: string;
-  }>>([]);
+  const [events, setEvents] = useState<SecurityEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionFilter, setActionFilter] = useState('');
-
-  const fetchEvents = async () => {
-    setLoading(true);
-    try {
-      const { data } = await adminApi.listSecurityEvents({
-        limit: 200,
-        action: actionFilter.trim() || undefined,
-      });
-      setEvents(data);
-    } catch (err) {
-      toast.error(`Failed to load security events: ${extractApiError(err)}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [appliedAction, setAppliedAction] = useState('');
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [cursorStack, setCursorStack] = useState<Array<string | null>>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const pageLimit = 25;
 
   useEffect(() => {
+    let cancelled = false;
+    const fetchEvents = async () => {
+      setLoading(true);
+      try {
+        const { data } = await adminApi.listSecurityEvents({
+          limit: pageLimit + 1,
+          before: cursor ?? undefined,
+          action: appliedAction || undefined,
+        });
+        if (cancelled) return;
+        const pageEvents = data.slice(0, pageLimit);
+        setEvents(pageEvents);
+        setNextCursor(data.length > pageLimit && pageEvents.length > 0
+          ? pageEvents[pageEvents.length - 1].id
+          : null);
+        setExpandedEventId(null);
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(`Failed to load security events: ${extractApiError(err)}`);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
     void fetchEvents();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedAction, cursor, reloadKey]);
+
+  const applyFilter = () => {
+    setCursorStack([]);
+    setCursor(null);
+    setAppliedAction(actionFilter.trim());
+    setReloadKey((key) => key + 1);
+  };
+
+  const goPreviousPage = () => {
+    setCursorStack((prev) => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      const previousCursor = next.pop() ?? null;
+      setCursor(previousCursor);
+      return next;
+    });
+  };
+
+  const goNextPage = () => {
+    if (nextCursor === null) return;
+    setCursorStack((prev) => [...prev, cursor]);
+    setCursor(nextCursor);
+  };
+
+  const formatDetails = (event: SecurityEvent) => {
+    const blocks: Array<[string, string]> = [];
+    if (event.device_id) blocks.push(['Device', event.device_id]);
+    if (event.user_agent) blocks.push(['User agent', event.user_agent]);
+    if (event.details && Object.keys(event.details).length > 0) {
+      blocks.push(['Details', JSON.stringify(event.details, null, 2)]);
+    }
+    return blocks;
+  };
+
+  const pageIndex = cursorStack.length + 1;
 
   return (
     <div>
@@ -528,7 +653,7 @@ function SecurityPanel() {
           <p className="text-sm text-text-muted">Recent authentication and admin activity.</p>
         </div>
         <button
-          onClick={() => void fetchEvents()}
+          onClick={() => setReloadKey((key) => key + 1)}
           className="control-pill-btn h-10 px-4 text-sm"
         >
           Refresh
@@ -536,15 +661,19 @@ function SecurityPanel() {
       </div>
 
       <div className="mb-6 flex gap-3">
+        <label htmlFor="admin-security-action-filter" className="sr-only">
+          Filter security events by exact action
+        </label>
         <input
+          id="admin-security-action-filter"
           type="text"
           value={actionFilter}
           onChange={(e) => setActionFilter(e.target.value)}
-          placeholder="Filter by action (e.g. auth.login)"
+          placeholder="Exact action (e.g. auth.login)"
           className="input-field max-w-md"
         />
         <button
-          onClick={() => void fetchEvents()}
+          onClick={applyFilter}
           className="control-pill-btn h-10 px-4 text-sm"
         >
           Apply
@@ -562,7 +691,7 @@ function SecurityPanel() {
       ) : (
         <div className="card-surface overflow-hidden rounded-xl border border-border-subtle bg-bg-mod-subtle/40">
           <div className="overflow-x-auto">
-          <table className="min-w-[880px] w-full text-left text-sm">
+          <table className="min-w-[960px] w-full text-left text-sm">
             <thead>
               <tr className="border-b border-border-subtle bg-bg-secondary/60">
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Time</th>
@@ -571,22 +700,80 @@ function SecurityPanel() {
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Target</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">IP</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Session</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Details</th>
               </tr>
             </thead>
             <tbody>
-              {events.map((event) => (
-                <tr key={event.id} className="border-b border-border-subtle/50 last:border-b-0 align-top hover:bg-bg-mod-subtle/20">
-                  <td className="px-4 py-3 text-text-secondary">{new Date(event.created_at).toLocaleString()}</td>
-                  <td className="px-4 py-3 font-medium text-text-primary">{event.action}</td>
-                  <td className="px-4 py-3 text-text-secondary">{event.actor_user_id || '-'}</td>
-                  <td className="px-4 py-3 text-text-secondary">{event.target_user_id || '-'}</td>
-                  <td className="px-4 py-3 text-text-secondary">{event.ip_address || '-'}</td>
-                  <td className="px-4 py-3 text-text-secondary">{event.session_id || '-'}</td>
-                </tr>
-              ))}
+              {events.map((event) => {
+                const details = formatDetails(event);
+                const expanded = expandedEventId === event.id;
+                return (
+                  <Fragment key={event.id}>
+                    <tr className="border-b border-border-subtle/50 align-top hover:bg-bg-mod-subtle/20">
+                      <td className="px-4 py-3 text-text-secondary">{new Date(event.created_at).toLocaleString()}</td>
+                      <td className="px-4 py-3 font-medium text-text-primary">{event.action}</td>
+                      <td className="px-4 py-3 text-text-secondary">{event.actor_user_id || '-'}</td>
+                      <td className="px-4 py-3 text-text-secondary">{event.target_user_id || '-'}</td>
+                      <td className="px-4 py-3 text-text-secondary">{event.ip_address || '-'}</td>
+                      <td className="px-4 py-3 text-text-secondary">{event.session_id || '-'}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedEventId(expanded ? null : event.id)}
+                          disabled={details.length === 0}
+                          className="control-pill-btn h-8 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-expanded={expanded}
+                          aria-controls={`security-event-details-${event.id}`}
+                        >
+                          {expanded ? 'Hide' : 'View'}
+                        </button>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr id={`security-event-details-${event.id}`} className="border-b border-border-subtle/50 bg-bg-secondary/50">
+                        <td colSpan={7} className="px-4 py-4">
+                          <dl className="space-y-3">
+                            {details.map(([label, value]) => (
+                              <div key={label}>
+                                <dt className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</dt>
+                                <dd>
+                                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border-subtle bg-bg-primary/60 p-3 font-mono text-xs text-text-secondary">
+                                    {value}
+                                  </pre>
+                                </dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
           </div>
+        </div>
+      )}
+      {(cursorStack.length > 0 || nextCursor !== null) && (
+        <div className="mt-4 flex items-center justify-between">
+          <button
+            onClick={goPreviousPage}
+            disabled={cursorStack.length === 0}
+            className="control-pill-btn h-10 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Previous
+          </button>
+          <span className="text-sm text-text-muted">
+            Page {pageIndex} · Showing {events.length} events
+          </span>
+          <button
+            onClick={goNextPage}
+            disabled={nextCursor === null}
+            className="control-pill-btn h-10 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Next
+          </button>
         </div>
       )}
     </div>
@@ -637,6 +824,7 @@ function SettingsPanel() {
             Server Name
           </label>
           <input
+            aria-label="Server Name"
             type="text"
             value={settings.server_name || ''}
             onChange={(e) => update('server_name', e.target.value)}
@@ -650,6 +838,7 @@ function SettingsPanel() {
             Server Description
           </label>
           <textarea
+            aria-label="Server Description"
             value={settings.server_description || ''}
             onChange={(e) => update('server_description', e.target.value)}
             rows={3}
@@ -667,6 +856,10 @@ function SettingsPanel() {
             onClick={() =>
               update('registration_enabled', settings.registration_enabled === 'true' ? 'false' : 'true')
             }
+            type="button"
+            role="switch"
+            aria-checked={settings.registration_enabled === 'true'}
+            aria-label="Toggle open registration"
             className={`relative h-7 w-12 rounded-full transition-colors ${
               settings.registration_enabled === 'true'
                 ? 'bg-accent-success'
@@ -687,6 +880,7 @@ function SettingsPanel() {
             Max Guilds Per User
           </label>
           <input
+            aria-label="Max Guilds Per User"
             type="number"
             value={settings.max_guilds_per_user || '100'}
             onChange={(e) => update('max_guilds_per_user', e.target.value)}
@@ -700,6 +894,7 @@ function SettingsPanel() {
             Max Members Per Guild
           </label>
           <input
+            aria-label="Max Members Per Guild"
             type="number"
             value={settings.max_members_per_guild || '1000'}
             onChange={(e) => update('max_members_per_guild', e.target.value)}
@@ -719,6 +914,7 @@ function SettingsPanel() {
             Max Guild Storage Quota (MB)
           </label>
           <input
+            aria-label="Max Guild Storage Quota in MB"
             type="number"
             value={settings.max_guild_storage_quota || ''}
             onChange={(e) => update('max_guild_storage_quota', e.target.value)}
@@ -746,6 +942,10 @@ function SettingsPanel() {
             onClick={() =>
               update('federation_file_cache_enabled', settings.federation_file_cache_enabled === 'true' ? 'false' : 'true')
             }
+            type="button"
+            role="switch"
+            aria-checked={settings.federation_file_cache_enabled === 'true'}
+            aria-label="Toggle federation file cache"
             className={`relative h-7 w-12 rounded-full transition-colors ${
               settings.federation_file_cache_enabled === 'true'
                 ? 'bg-accent-success'
@@ -765,6 +965,7 @@ function SettingsPanel() {
             Federation Cache Max Size (MB)
           </label>
           <input
+            aria-label="Federation Cache Max Size in MB"
             type="number"
             value={settings.federation_file_cache_max_size || ''}
             onChange={(e) => update('federation_file_cache_max_size', e.target.value)}
@@ -778,6 +979,7 @@ function SettingsPanel() {
             Federation Cache TTL (hours)
           </label>
           <input
+            aria-label="Federation Cache TTL in hours"
             type="number"
             value={settings.federation_file_cache_ttl_hours || ''}
             onChange={(e) => update('federation_file_cache_ttl_hours', e.target.value)}
@@ -791,10 +993,9 @@ function SettingsPanel() {
 
         {/* Save button */}
         <div className="settings-action-row">
-          <button
+          <Button
             onClick={handleSave}
             disabled={saving}
-            className="btn-primary"
             style={
               saved
                 ? {
@@ -807,7 +1008,7 @@ function SettingsPanel() {
             }
           >
             {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Changes'}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -815,6 +1016,326 @@ function SettingsPanel() {
 }
 
 // ── Backups ────────────────────────────────────────────────────────────
+
+function FederationPanel() {
+  const [servers, setServers] = useState<FederatedServer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [inspectingName, setInspectingName] = useState<string | null>(null);
+  const [selectedServer, setSelectedServer] = useState<FederatedServer | null>(null);
+
+  const [serverName, setServerName] = useState('');
+  const [domain, setDomain] = useState('');
+  const [endpoint, setEndpoint] = useState('');
+  const [publicKeyHex, setPublicKeyHex] = useState('');
+  const [keyId, setKeyId] = useState('');
+  const [trusted, setTrusted] = useState(true);
+  const [discover, setDiscover] = useState(true);
+
+  const fetchServers = async (showSpinner = false) => {
+    if (showSpinner) setRefreshing(true);
+    try {
+      const { data } = await adminApi.listFederatedServers();
+      const nextServers = Array.isArray(data.servers) ? data.servers : [];
+      setServers(nextServers);
+      if (selectedServer) {
+        const match = nextServers.find((s) => s.server_name === selectedServer.server_name) ?? null;
+        setSelectedServer(match);
+      }
+    } catch (err) {
+      toast.error(`Failed to load federated servers: ${extractApiError(err)}`);
+      setServers([]);
+      setSelectedServer(null);
+    } finally {
+      setLoading(false);
+      if (showSpinner) setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchServers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleCreate = async () => {
+    const trimmedName = serverName.trim();
+    const trimmedDomain = domain.trim();
+    const trimmedEndpoint = endpoint.trim();
+    if (!trimmedName || !trimmedDomain || !trimmedEndpoint) {
+      toast.error('Server name, domain, and endpoint are required.');
+      return;
+    }
+    setCreating(true);
+    try {
+      await adminApi.addFederatedServer({
+        server_name: trimmedName,
+        domain: trimmedDomain,
+        federation_endpoint: trimmedEndpoint,
+        public_key_hex: publicKeyHex.trim() || undefined,
+        key_id: keyId.trim() || undefined,
+        trusted,
+        discover,
+      });
+      toast.success(`Federated server added: ${trimmedName}`);
+      setServerName('');
+      setDomain('');
+      setEndpoint('');
+      setPublicKeyHex('');
+      setKeyId('');
+      setTrusted(true);
+      setDiscover(true);
+      await fetchServers();
+    } catch (err) {
+      toast.error(`Failed to add federated server: ${extractApiError(err)}`);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleInspect = async (name: string) => {
+    setInspectingName(name);
+    try {
+      const { data } = await adminApi.getFederatedServer(name);
+      setSelectedServer(data);
+    } catch (err) {
+      toast.error(`Failed to inspect server: ${extractApiError(err)}`);
+    } finally {
+      setInspectingName(null);
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    if (!(await confirm({
+      title: 'Delete federated server?',
+      description: `Delete "${name}" from trusted federation peers?`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    }))) return;
+    setDeletingName(name);
+    try {
+      await adminApi.deleteFederatedServer(name);
+      toast.success(`Deleted federated server: ${name}`);
+      setServers((prev) => prev.filter((s) => s.server_name !== name));
+      if (selectedServer?.server_name === name) setSelectedServer(null);
+    } catch (err) {
+      toast.error(`Failed to delete server: ${extractApiError(err)}`);
+    } finally {
+      setDeletingName(null);
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h2 className="mb-2 text-xl font-semibold text-text-primary">Federation</h2>
+        <p className="text-sm text-text-muted">
+          Manage trusted peers and inspect discovered federation metadata.
+        </p>
+      </div>
+
+      <section className="card-surface space-y-5 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 p-6">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-text-muted">Add Federated Server</h3>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-2 block text-sm font-medium text-text-secondary">Server Name</label>
+            <input
+              aria-label="Server Name"
+              type="text"
+              value={serverName}
+              onChange={(e) => setServerName(e.target.value)}
+              placeholder="example-server"
+              className="input-field"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-text-secondary">Domain</label>
+            <input
+              aria-label="Domain"
+              type="text"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              placeholder="example.com"
+              className="input-field"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="mb-2 block text-sm font-medium text-text-secondary">Federation Endpoint</label>
+            <input
+              aria-label="Federation Endpoint"
+              type="url"
+              value={endpoint}
+              onChange={(e) => setEndpoint(e.target.value)}
+              placeholder="https://example.com/_paracord/federation/v1"
+              className="input-field"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-text-secondary">Public Key (hex)</label>
+            <input
+              aria-label="Public Key hex"
+              type="text"
+              value={publicKeyHex}
+              onChange={(e) => setPublicKeyHex(e.target.value)}
+              placeholder="Optional"
+              className="input-field"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-text-secondary">Key ID</label>
+            <input
+              aria-label="Key ID"
+              type="text"
+              value={keyId}
+              onChange={(e) => setKeyId(e.target.value)}
+              placeholder="Optional"
+              className="input-field"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="card-surface inline-flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2 text-sm text-text-secondary">
+            <input
+              aria-label="Trusted peer"
+              type="checkbox"
+              checked={trusted}
+              onChange={(e) => setTrusted(e.target.checked)}
+              className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
+            />
+            Trusted peer
+          </label>
+          <label className="card-surface inline-flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2 text-sm text-text-secondary">
+            <input
+              aria-label="Discover keys automatically"
+              type="checkbox"
+              checked={discover}
+              onChange={(e) => setDiscover(e.target.checked)}
+              className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
+            />
+            Discover keys automatically
+          </label>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <Button
+            onClick={handleCreate}
+            disabled={creating}
+            className="inline-flex items-center gap-2"
+          >
+            {creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+            {creating ? 'Adding...' : 'Add Server'}
+          </Button>
+          <button
+            onClick={() => fetchServers(true)}
+            disabled={refreshing}
+            className="btn-secondary inline-flex items-center gap-2"
+          >
+            {refreshing ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
+            {refreshing ? 'Refreshing...' : 'Refresh List'}
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-text-muted">Known Servers</h3>
+        {loading ? (
+          <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-6 text-sm text-text-muted">
+            Loading federated servers...
+          </div>
+        ) : servers.length === 0 ? (
+          <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-6 text-sm text-text-muted">
+            No federated servers configured yet.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {servers.map((server) => (
+              <div
+                key={server.server_name}
+                className="card-surface flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-4 py-4"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium text-text-primary">{server.server_name}</p>
+                  <p className="truncate text-sm text-text-muted">{server.domain}</p>
+                  <p className="truncate text-xs text-text-muted">{server.federation_endpoint}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                      server.trusted
+                        ? 'bg-accent-success/20 text-accent-success'
+                        : 'bg-warning/20 text-warning'
+                    }`}
+                  >
+                    {server.trusted ? 'Trusted' : 'Untrusted'}
+                  </span>
+                  <button
+                    onClick={() => handleInspect(server.server_name)}
+                    disabled={inspectingName === server.server_name}
+                    className="btn-secondary inline-flex items-center gap-2"
+                  >
+                    {inspectingName === server.server_name ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Pencil size={14} />
+                    )}
+                    Inspect
+                  </button>
+                  <button
+                    onClick={() => handleDelete(server.server_name)}
+                    disabled={deletingName === server.server_name}
+                    className="btn-danger inline-flex items-center gap-2"
+                  >
+                    {deletingName === server.server_name ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={14} />
+                    )}
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {selectedServer && (
+        <section className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 p-6">
+          <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-text-muted">
+            Server Details: {selectedServer.server_name}
+          </h3>
+          <div className="grid gap-3 text-sm md:grid-cols-2">
+            <p className="text-text-secondary">
+              <span className="font-medium text-text-primary">Domain:</span> {selectedServer.domain}
+            </p>
+            <p className="text-text-secondary">
+              <span className="font-medium text-text-primary">Trusted:</span>{' '}
+              {selectedServer.trusted ? 'Yes' : 'No'}
+            </p>
+            <p className="text-text-secondary md:col-span-2">
+              <span className="font-medium text-text-primary">Endpoint:</span>{' '}
+              {selectedServer.federation_endpoint}
+            </p>
+            <p className="text-text-secondary">
+              <span className="font-medium text-text-primary">Key ID:</span>{' '}
+              {selectedServer.key_id || 'Not set'}
+            </p>
+            <p className="text-text-secondary">
+              <span className="font-medium text-text-primary">Last Seen:</span>{' '}
+              {selectedServer.last_seen_at || 'Never'}
+            </p>
+            <p className="break-all text-text-secondary md:col-span-2">
+              <span className="font-medium text-text-primary">Public Key:</span>{' '}
+              {selectedServer.public_key_hex || 'Not set'}
+            </p>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
 
 type BackupRow = {
   name: string;
@@ -888,7 +1409,12 @@ function BackupsPanel() {
   };
 
   const handleDelete = async (name: string) => {
-    if (!confirm(`Delete backup "${name}"? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: 'Delete backup?',
+      description: `Delete "${name}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    }))) return;
     setDeletingName(name);
     try {
       await adminApi.deleteBackup(name);
@@ -902,13 +1428,12 @@ function BackupsPanel() {
   };
 
   const handleRestore = async (name: string) => {
-    if (
-      !confirm(
-        `Restore backup "${name}" now?\n\nThis will overwrite current data on disk. A server restart is recommended after restore.`
-      )
-    ) {
-      return;
-    }
+    if (!(await confirm({
+      title: 'Restore backup?',
+      description: `Restore "${name}" now? This will overwrite current data on disk. A server restart is recommended after restore.`,
+      confirmLabel: 'Restore',
+      variant: 'danger',
+    }))) return;
     setRestoringName(name);
     try {
       const { data } = await adminApi.restoreBackup(name);
@@ -926,10 +1451,10 @@ function BackupsPanel() {
 
       {/* Create backup controls */}
       <div className="mb-8 flex flex-wrap items-center gap-5">
-        <button
+        <Button
           onClick={handleCreate}
           disabled={creating}
-          className="btn-primary inline-flex items-center gap-2"
+          className="inline-flex items-center gap-2"
         >
           {creating ? (
             <Loader2 size={16} className="animate-spin" />
@@ -937,7 +1462,7 @@ function BackupsPanel() {
             <Plus size={16} />
           )}
           {creating ? 'Creating Backup...' : 'Create Backup'}
-        </button>
+        </Button>
 
         <label className="card-surface inline-flex items-center gap-2 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-4 py-3 text-sm text-text-secondary">
           <input
@@ -995,6 +1520,7 @@ function BackupsPanel() {
                         disabled={restoringName === b.name}
                         className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary disabled:opacity-50"
                         title="Restore backup"
+                        aria-label={`Restore backup ${b.name}`}
                       >
                         {restoringName === b.name ? (
                           <Loader2 size={16} className="animate-spin" />
@@ -1007,6 +1533,7 @@ function BackupsPanel() {
                         disabled={downloadingName === b.name}
                         className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary disabled:opacity-50"
                         title="Download backup"
+                        aria-label={`Download backup ${b.name}`}
                       >
                         {downloadingName === b.name ? (
                           <Loader2 size={16} className="animate-spin" />
@@ -1019,6 +1546,7 @@ function BackupsPanel() {
                         disabled={deletingName === b.name}
                         className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-accent-danger/10 hover:text-accent-danger disabled:opacity-50"
                         title="Delete backup"
+                        aria-label={`Delete backup ${b.name}`}
                       >
                         {deletingName === b.name ? (
                           <Loader2 size={16} className="animate-spin" />

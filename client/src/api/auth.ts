@@ -47,4 +47,20 @@ export const authApi = {
       new_email: newEmail,
     }),
   exportMyData: () => apiClient.get<Record<string, unknown>>('/users/@me/data-export'),
+  forgotPassword: (identifier: string) =>
+    apiClient.post<{ message: string }>('/auth/forgot-password', { identifier }),
+  resetPassword: (token: string, newPassword: string) =>
+    apiClient.post<{ message: string }>('/auth/reset-password', { token, new_password: newPassword }),
+  verifyEmail: (token: string) =>
+    apiClient.post<{ message: string }>('/auth/verify-email', { token }),
+  mfaStatus: () =>
+    apiClient.get<{ mfa_enabled: boolean; backup_codes_remaining: number }>('/auth/mfa/status'),
+  mfaSetup: () =>
+    apiClient.post<{ secret: string; otpauth_url: string; qr_code: string }>('/auth/mfa/setup'),
+  mfaVerify: (code: string) =>
+    apiClient.post<{ mfa_enabled: boolean; backup_codes: string[]; message: string }>('/auth/mfa/verify', { code }),
+  mfaDisable: (code: string) =>
+    apiClient.post<{ mfa_enabled: boolean; message: string }>('/auth/mfa/disable', { code }),
+  mfaLogin: (ticket: string, code: string) =>
+    apiClient.post<LoginResponse>('/auth/mfa/login', { ticket, code }),
 };

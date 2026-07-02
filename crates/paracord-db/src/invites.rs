@@ -65,6 +65,7 @@ pub async fn get_invite(pool: &DbPool, code: &str) -> Result<Option<InviteRow>, 
     let row = sqlx::query_as::<_, InviteRow>(
         "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at
          FROM invites WHERE code = $1
+           AND (max_uses IS NULL OR max_uses = 0 OR uses < max_uses)
            AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))",
     )
     .bind(code)
@@ -105,6 +106,7 @@ pub async fn get_guild_invites(pool: &DbPool, guild_id: i64) -> Result<Vec<Invit
          FROM invites i
          INNER JOIN channels c ON c.id = i.channel_id
          WHERE c.space_id = $1
+           AND (i.max_uses IS NULL OR i.max_uses = 0 OR i.uses < i.max_uses)
            AND (i.max_age IS NULL OR i.max_age = 0 OR datetime(i.created_at, '+' || i.max_age || ' seconds') > datetime('now'))
          ORDER BY i.created_at DESC",
     )
@@ -118,7 +120,8 @@ pub async fn get_all_invites(pool: &DbPool) -> Result<Vec<InviteRow>, DbError> {
     let rows = sqlx::query_as::<_, InviteRow>(
         "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at
          FROM invites
-         WHERE (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))
+         WHERE (max_uses IS NULL OR max_uses = 0 OR uses < max_uses)
+           AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))
          ORDER BY created_at DESC",
     )
     .fetch_all(pool)
@@ -134,6 +137,7 @@ pub async fn get_channel_invites(
         "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at
          FROM invites
          WHERE channel_id = $1
+           AND (max_uses IS NULL OR max_uses = 0 OR uses < max_uses)
            AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))
          ORDER BY created_at DESC",
     )
@@ -249,6 +253,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_invite_hides_exhausted_invite() {
+        let pool = test_pool().await;
+        let (user_id, guild_id, channel_id) = setup_channel(&pool).await;
+        create_invite(
+            &pool,
+            "used_up",
+            guild_id,
+            channel_id,
+            user_id,
+            Some(1),
+            None,
+        )
+        .await
+        .unwrap();
+        let first = use_invite(&pool, "used_up").await.unwrap();
+        assert!(first.is_some());
+
+        let invite = get_invite(&pool, "used_up").await.unwrap();
+        assert!(invite.is_none());
+    }
+
+    #[tokio::test]
     async fn test_use_invite_increments_uses() {
         let pool = test_pool().await;
         let (user_id, guild_id, channel_id) = setup_channel(&pool).await;
@@ -356,5 +382,47 @@ mod tests {
         let invites = get_guild_invites(&pool, guild_id).await.unwrap();
         assert_eq!(invites.len(), 1);
         assert_eq!(invites[0].code, "active_list");
+    }
+
+    #[tokio::test]
+    async fn test_invite_lists_filter_exhausted_entries() {
+        let pool = test_pool().await;
+        let (user_id, guild_id, channel_id) = setup_channel(&pool).await;
+        create_invite(
+            &pool,
+            "exhausted_list",
+            guild_id,
+            channel_id,
+            user_id,
+            Some(1),
+            None,
+        )
+        .await
+        .unwrap();
+        create_invite(
+            &pool,
+            "active_unlimited",
+            guild_id,
+            channel_id,
+            user_id,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let used = use_invite(&pool, "exhausted_list").await.unwrap();
+        assert!(used.is_some());
+
+        let guild_invites = get_guild_invites(&pool, guild_id).await.unwrap();
+        assert_eq!(guild_invites.len(), 1);
+        assert_eq!(guild_invites[0].code, "active_unlimited");
+
+        let channel_invites = get_channel_invites(&pool, channel_id).await.unwrap();
+        assert_eq!(channel_invites.len(), 1);
+        assert_eq!(channel_invites[0].code, "active_unlimited");
+
+        let all_invites = get_all_invites(&pool).await.unwrap();
+        assert_eq!(all_invites.len(), 1);
+        assert_eq!(all_invites[0].code, "active_unlimited");
     }
 }

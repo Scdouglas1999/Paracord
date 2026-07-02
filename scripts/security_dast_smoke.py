@@ -98,8 +98,14 @@ def main() -> int:
         )
     )
 
-    traversal = request(base_url, "GET", "/api/v1/attachments/../../etc/passwd")
-    results.append(expect_not_5xx("path-traversal-probe", traversal))
+    traversal = request(base_url, "GET", "/api/v1/attachments/%2e%2e%2f%2e%2e%2fetc%2fpasswd")
+    results.append(
+        CheckResult(
+            "path-traversal-rejected",
+            traversal.status_code in (400, 401, 403, 404, 405),
+            f"status={traversal.status_code}",
+        )
+    )
 
     cors_probe = requests.options(
         f"{base_url}/api/v1/auth/login",

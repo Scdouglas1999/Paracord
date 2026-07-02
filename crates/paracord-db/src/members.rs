@@ -1,5 +1,6 @@
 use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
+use paracord_models::id::{GuildId, UserId};
 use sqlx::Row;
 
 #[derive(Debug, Clone)]
@@ -70,8 +71,12 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MemberWithUserRow {
     }
 }
 
-/// Add a user as a server-wide member. guild_id kept for API compat but ignored.
-pub async fn add_member(pool: &DbPool, user_id: i64, guild_id: i64) -> Result<(), DbError> {
+/// Core implementation using newtype IDs.
+pub async fn add_member_typed(
+    pool: &DbPool,
+    user_id: UserId,
+    guild_id: GuildId,
+) -> Result<(), DbError> {
     sqlx::query("INSERT INTO members (user_id, guild_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
         .bind(user_id)
         .bind(guild_id)
@@ -80,7 +85,12 @@ pub async fn add_member(pool: &DbPool, user_id: i64, guild_id: i64) -> Result<()
     Ok(())
 }
 
-pub async fn add_server_member(pool: &DbPool, user_id: i64) -> Result<(), DbError> {
+/// Raw i64 shim kept for API compat with callers that haven't migrated yet.
+pub async fn add_member(pool: &DbPool, user_id: i64, guild_id: i64) -> Result<(), DbError> {
+    add_member_typed(pool, UserId::new(user_id), GuildId::new(guild_id)).await
+}
+
+pub async fn add_server_member(pool: &DbPool, user_id: UserId) -> Result<(), DbError> {
     sqlx::query(
         "INSERT INTO members (user_id, guild_id)
          SELECT $1, s.id
@@ -93,10 +103,11 @@ pub async fn add_server_member(pool: &DbPool, user_id: i64) -> Result<(), DbErro
     Ok(())
 }
 
-pub async fn get_member(
+/// Core implementation using newtype IDs.
+pub async fn get_member_typed(
     pool: &DbPool,
-    user_id: i64,
-    guild_id: i64,
+    user_id: UserId,
+    guild_id: GuildId,
 ) -> Result<Option<MemberRow>, DbError> {
     let row = sqlx::query_as::<_, MemberRow>(
         "SELECT user_id, nick, avatar_hash, joined_at, CASE WHEN deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN mute THEN 1 ELSE 0 END AS mute, communication_disabled_until
@@ -109,7 +120,19 @@ pub async fn get_member(
     Ok(row)
 }
 
-pub async fn get_server_member(pool: &DbPool, user_id: i64) -> Result<Option<MemberRow>, DbError> {
+/// Raw i64 shim kept for API compat.
+pub async fn get_member(
+    pool: &DbPool,
+    user_id: i64,
+    guild_id: i64,
+) -> Result<Option<MemberRow>, DbError> {
+    get_member_typed(pool, UserId::new(user_id), GuildId::new(guild_id)).await
+}
+
+pub async fn get_server_member(
+    pool: &DbPool,
+    user_id: UserId,
+) -> Result<Option<MemberRow>, DbError> {
     let row = sqlx::query_as::<_, MemberRow>(
         "SELECT user_id, nick, avatar_hash, joined_at, CASE WHEN deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN mute THEN 1 ELSE 0 END AS mute, communication_disabled_until
          FROM members WHERE user_id = $1 ORDER BY joined_at ASC LIMIT 1",
@@ -120,11 +143,12 @@ pub async fn get_server_member(pool: &DbPool, user_id: i64) -> Result<Option<Mem
     Ok(row)
 }
 
-pub async fn get_guild_members(
+/// Core implementation using newtype IDs.
+pub async fn get_guild_members_typed(
     pool: &DbPool,
-    guild_id: i64,
+    guild_id: GuildId,
     limit: i64,
-    after: Option<i64>,
+    after: Option<UserId>,
 ) -> Result<Vec<MemberWithUserRow>, DbError> {
     let rows = if let Some(after_id) = after {
         sqlx::query_as::<_, MemberWithUserRow>(
@@ -158,6 +182,16 @@ pub async fn get_guild_members(
         .await?
     };
     Ok(rows)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn get_guild_members(
+    pool: &DbPool,
+    guild_id: i64,
+    limit: i64,
+    after: Option<i64>,
+) -> Result<Vec<MemberWithUserRow>, DbError> {
+    get_guild_members_typed(pool, GuildId::new(guild_id), limit, after.map(UserId::new)).await
 }
 
 pub async fn get_server_members(
@@ -197,10 +231,11 @@ pub async fn get_server_members(
     Ok(rows)
 }
 
-pub async fn update_member(
+/// Core implementation using newtype IDs.
+pub async fn update_member_typed(
     pool: &DbPool,
-    user_id: i64,
-    guild_id: i64,
+    user_id: UserId,
+    guild_id: GuildId,
     nick: Option<&str>,
     deaf: Option<bool>,
     mute: Option<bool>,
@@ -220,7 +255,32 @@ pub async fn update_member(
     Ok(row)
 }
 
-pub async fn remove_member(pool: &DbPool, user_id: i64, guild_id: i64) -> Result<(), DbError> {
+/// Raw i64 shim kept for API compat.
+pub async fn update_member(
+    pool: &DbPool,
+    user_id: i64,
+    guild_id: i64,
+    nick: Option<&str>,
+    deaf: Option<bool>,
+    mute: Option<bool>,
+) -> Result<MemberRow, DbError> {
+    update_member_typed(
+        pool,
+        UserId::new(user_id),
+        GuildId::new(guild_id),
+        nick,
+        deaf,
+        mute,
+    )
+    .await
+}
+
+/// Core implementation using newtype IDs.
+pub async fn remove_member_typed(
+    pool: &DbPool,
+    user_id: UserId,
+    guild_id: GuildId,
+) -> Result<(), DbError> {
     sqlx::query("DELETE FROM members WHERE user_id = $1 AND guild_id = $2")
         .bind(user_id)
         .bind(guild_id)
@@ -229,10 +289,16 @@ pub async fn remove_member(pool: &DbPool, user_id: i64, guild_id: i64) -> Result
     Ok(())
 }
 
-pub async fn set_member_timeout(
+/// Raw i64 shim kept for API compat.
+pub async fn remove_member(pool: &DbPool, user_id: i64, guild_id: i64) -> Result<(), DbError> {
+    remove_member_typed(pool, UserId::new(user_id), GuildId::new(guild_id)).await
+}
+
+/// Core implementation using newtype IDs.
+pub async fn set_member_timeout_typed(
     pool: &DbPool,
-    user_id: i64,
-    guild_id: i64,
+    user_id: UserId,
+    guild_id: GuildId,
     communication_disabled_until: Option<DateTime<Utc>>,
 ) -> Result<MemberRow, DbError> {
     let row = sqlx::query_as::<_, MemberRow>(
@@ -249,12 +315,34 @@ pub async fn set_member_timeout(
     Ok(row)
 }
 
-pub async fn get_member_count(pool: &DbPool, guild_id: i64) -> Result<i64, DbError> {
+/// Raw i64 shim kept for API compat.
+pub async fn set_member_timeout(
+    pool: &DbPool,
+    user_id: i64,
+    guild_id: i64,
+    communication_disabled_until: Option<DateTime<Utc>>,
+) -> Result<MemberRow, DbError> {
+    set_member_timeout_typed(
+        pool,
+        UserId::new(user_id),
+        GuildId::new(guild_id),
+        communication_disabled_until,
+    )
+    .await
+}
+
+/// Core implementation using newtype ID.
+pub async fn get_member_count_typed(pool: &DbPool, guild_id: GuildId) -> Result<i64, DbError> {
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM members WHERE guild_id = $1")
         .bind(guild_id)
         .fetch_one(pool)
         .await?;
     Ok(row.0)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn get_member_count(pool: &DbPool, guild_id: i64) -> Result<i64, DbError> {
+    get_member_count_typed(pool, GuildId::new(guild_id)).await
 }
 
 pub async fn get_all_memberships(pool: &DbPool) -> Result<Vec<(i64, i64)>, DbError> {
@@ -264,6 +352,80 @@ pub async fn get_all_memberships(pool: &DbPool) -> Result<Vec<(i64, i64)>, DbErr
     Ok(rows)
 }
 
+/// Core implementation using newtype ID.
+pub async fn search_guild_members_typed(
+    pool: &DbPool,
+    guild_id: GuildId,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<MemberWithUserRow>, DbError> {
+    let pattern = format!("{query}%");
+    let rows = match crate::active_database_engine() {
+        crate::DatabaseEngine::Postgres => {
+            sqlx::query_as::<_, MemberWithUserRow>(
+                "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
+                        u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
+                 FROM members m
+                 INNER JOIN users u ON u.id = m.user_id
+                 WHERE m.guild_id = $1
+                   AND (LOWER(u.username) LIKE LOWER($2) OR LOWER(COALESCE(m.nick, '')) LIKE LOWER($2))
+                 ORDER BY u.username
+                 LIMIT $3",
+            )
+            .bind(guild_id)
+            .bind(&pattern)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        crate::DatabaseEngine::Sqlite => {
+            sqlx::query_as::<_, MemberWithUserRow>(
+                "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
+                        u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
+                 FROM members m
+                 INNER JOIN users u ON u.id = m.user_id
+                 WHERE m.guild_id = $1
+                   AND (u.username LIKE $2 COLLATE NOCASE OR COALESCE(m.nick, '') LIKE $2 COLLATE NOCASE)
+                 ORDER BY u.username
+                 LIMIT $3",
+            )
+            .bind(guild_id)
+            .bind(&pattern)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(rows)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn search_guild_members(
+    pool: &DbPool,
+    guild_id: i64,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<MemberWithUserRow>, DbError> {
+    search_guild_members_typed(pool, GuildId::new(guild_id), query, limit).await
+}
+
+/// Core implementation using newtype ID. Returns typed UserId vec.
+pub async fn get_guild_member_user_ids_typed(
+    pool: &DbPool,
+    guild_id: GuildId,
+) -> Result<Vec<UserId>, DbError> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT user_id
+         FROM members
+         WHERE guild_id = $1",
+    )
+    .bind(guild_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| UserId::new(id)).collect())
+}
+
+/// Raw i64 shim kept for API compat.
 pub async fn get_guild_member_user_ids(pool: &DbPool, guild_id: i64) -> Result<Vec<i64>, DbError> {
     let rows: Vec<(i64,)> = sqlx::query_as(
         "SELECT user_id
@@ -276,7 +438,12 @@ pub async fn get_guild_member_user_ids(pool: &DbPool, guild_id: i64) -> Result<V
     Ok(rows.into_iter().map(|(user_id,)| user_id).collect())
 }
 
-pub async fn share_any_guild(pool: &DbPool, user_a: i64, user_b: i64) -> Result<bool, DbError> {
+/// Core implementation using newtype IDs.
+pub async fn share_any_guild_typed(
+    pool: &DbPool,
+    user_a: UserId,
+    user_b: UserId,
+) -> Result<bool, DbError> {
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT 1
          FROM members a
@@ -290,6 +457,11 @@ pub async fn share_any_guild(pool: &DbPool, user_a: i64, user_b: i64) -> Result<
     .fetch_optional(pool)
     .await?;
     Ok(row.is_some())
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn share_any_guild(pool: &DbPool, user_a: i64, user_b: i64) -> Result<bool, DbError> {
+    share_any_guild_typed(pool, UserId::new(user_a), UserId::new(user_b)).await
 }
 
 pub async fn get_server_member_count(pool: &DbPool) -> Result<i64, DbError> {
@@ -325,8 +497,12 @@ mod tests {
     async fn test_add_member() {
         let pool = test_pool().await;
         let (user_id, guild_id) = setup_guild(&pool).await;
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        let member = get_member(&pool, user_id, guild_id).await.unwrap();
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        let member = get_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
         assert!(member.is_some());
         let m = member.unwrap();
         assert_eq!(m.user_id, user_id);
@@ -339,17 +515,25 @@ mod tests {
     async fn test_add_member_duplicate_is_noop() {
         let pool = test_pool().await;
         let (user_id, guild_id) = setup_guild(&pool).await;
-        add_member(&pool, user_id, guild_id).await.unwrap();
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
         // Adding again should not error
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        let count = get_member_count(&pool, guild_id).await.unwrap();
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        let count = get_member_count_typed(&pool, GuildId::new(guild_id))
+            .await
+            .unwrap();
         assert_eq!(count, 1);
     }
 
     #[tokio::test]
     async fn test_get_member_not_found() {
         let pool = test_pool().await;
-        let member = get_member(&pool, 999, 888).await.unwrap();
+        let member = get_member_typed(&pool, UserId::new(999), GuildId::new(888))
+            .await
+            .unwrap();
         assert!(member.is_none());
     }
 
@@ -357,9 +541,15 @@ mod tests {
     async fn test_remove_member() {
         let pool = test_pool().await;
         let (user_id, guild_id) = setup_guild(&pool).await;
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        remove_member(&pool, user_id, guild_id).await.unwrap();
-        let member = get_member(&pool, user_id, guild_id).await.unwrap();
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        remove_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        let member = get_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
         assert!(member.is_none());
     }
 
@@ -370,9 +560,15 @@ mod tests {
         crate::users::create_user(&pool, 2, "user2", 1, "u2@example.com", "hash")
             .await
             .unwrap();
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        add_member(&pool, 2, guild_id).await.unwrap();
-        let members = get_guild_members(&pool, guild_id, 50, None).await.unwrap();
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        add_member_typed(&pool, UserId::new(2), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        let members = get_guild_members_typed(&pool, GuildId::new(guild_id), 50, None)
+            .await
+            .unwrap();
         assert_eq!(members.len(), 2);
     }
 
@@ -392,16 +588,23 @@ mod tests {
             .await
             .unwrap();
         }
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        for i in 2..=5 {
-            add_member(&pool, i, guild_id).await.unwrap();
-        }
-        let page1 = get_guild_members(&pool, guild_id, 2, None).await.unwrap();
-        assert_eq!(page1.len(), 2);
-        let last_id = page1.last().unwrap().user_id;
-        let page2 = get_guild_members(&pool, guild_id, 2, Some(last_id))
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
             .await
             .unwrap();
+        for i in 2..=5 {
+            add_member_typed(&pool, UserId::new(i), GuildId::new(guild_id))
+                .await
+                .unwrap();
+        }
+        let page1 = get_guild_members_typed(&pool, GuildId::new(guild_id), 2, None)
+            .await
+            .unwrap();
+        assert_eq!(page1.len(), 2);
+        let last_id = page1.last().unwrap().user_id;
+        let page2 =
+            get_guild_members_typed(&pool, GuildId::new(guild_id), 2, Some(UserId::new(last_id)))
+                .await
+                .unwrap();
         assert_eq!(page2.len(), 2);
         // Ensure no overlap
         let page1_ids: Vec<i64> = page1.iter().map(|m| m.user_id).collect();
@@ -415,10 +618,19 @@ mod tests {
     async fn test_update_member_nick() {
         let pool = test_pool().await;
         let (user_id, guild_id) = setup_guild(&pool).await;
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        let updated = update_member(&pool, user_id, guild_id, Some("MyNick"), None, None)
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
             .await
             .unwrap();
+        let updated = update_member_typed(
+            &pool,
+            UserId::new(user_id),
+            GuildId::new(guild_id),
+            Some("MyNick"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(updated.nick.as_deref(), Some("MyNick"));
     }
 
@@ -426,10 +638,19 @@ mod tests {
     async fn test_update_member_deaf_and_mute() {
         let pool = test_pool().await;
         let (user_id, guild_id) = setup_guild(&pool).await;
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        let updated = update_member(&pool, user_id, guild_id, None, Some(true), Some(true))
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
             .await
             .unwrap();
+        let updated = update_member_typed(
+            &pool,
+            UserId::new(user_id),
+            GuildId::new(guild_id),
+            None,
+            Some(true),
+            Some(true),
+        )
+        .await
+        .unwrap();
         assert!(updated.deaf);
         assert!(updated.mute);
     }
@@ -441,25 +662,38 @@ mod tests {
         crate::users::create_user(&pool, user_id, "tester", 1, "m@example.com", "hash")
             .await
             .unwrap();
-        let guild_a = crate::guilds::create_space(&pool, 200, "a", user_id, None)
+        let guild_a =
+            crate::guilds::create_space(&pool, GuildId::new(200), "a", UserId::new(user_id), None)
+                .await
+                .unwrap();
+        let guild_b =
+            crate::guilds::create_space(&pool, GuildId::new(201), "b", UserId::new(user_id), None)
+                .await
+                .unwrap();
+
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_a.id))
             .await
             .unwrap();
-        let guild_b = crate::guilds::create_space(&pool, 201, "b", user_id, None)
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_b.id))
             .await
             .unwrap();
 
-        add_member(&pool, user_id, guild_a.id).await.unwrap();
-        add_member(&pool, user_id, guild_b.id).await.unwrap();
+        update_member_typed(
+            &pool,
+            UserId::new(user_id),
+            GuildId::new(guild_a.id),
+            Some("nick-a"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
-        update_member(&pool, user_id, guild_a.id, Some("nick-a"), None, None)
-            .await
-            .unwrap();
-
-        let member_a = get_member(&pool, user_id, guild_a.id)
+        let member_a = get_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_a.id))
             .await
             .unwrap()
             .unwrap();
-        let member_b = get_member(&pool, user_id, guild_b.id)
+        let member_b = get_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_b.id))
             .await
             .unwrap()
             .unwrap();
@@ -472,9 +706,21 @@ mod tests {
     async fn test_get_member_count() {
         let pool = test_pool().await;
         let (user_id, guild_id) = setup_guild(&pool).await;
-        assert_eq!(get_member_count(&pool, guild_id).await.unwrap(), 0);
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        assert_eq!(get_member_count(&pool, guild_id).await.unwrap(), 1);
+        assert_eq!(
+            get_member_count_typed(&pool, GuildId::new(guild_id))
+                .await
+                .unwrap(),
+            0
+        );
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            get_member_count_typed(&pool, GuildId::new(guild_id))
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -484,12 +730,18 @@ mod tests {
         crate::users::create_user(&pool, 2, "user2", 1, "u2@example.com", "hash")
             .await
             .unwrap();
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        add_member(&pool, 2, guild_id).await.unwrap();
-        let ids = get_guild_member_user_ids(&pool, guild_id).await.unwrap();
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        add_member_typed(&pool, UserId::new(2), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        let ids = get_guild_member_user_ids_typed(&pool, GuildId::new(guild_id))
+            .await
+            .unwrap();
         assert_eq!(ids.len(), 2);
-        assert!(ids.contains(&user_id));
-        assert!(ids.contains(&2));
+        assert!(ids.contains(&UserId::new(user_id)));
+        assert!(ids.contains(&UserId::new(2)));
     }
 
     #[tokio::test]
@@ -499,9 +751,17 @@ mod tests {
         crate::users::create_user(&pool, 2, "user2", 1, "u2@example.com", "hash")
             .await
             .unwrap();
-        add_member(&pool, user_id, guild_id).await.unwrap();
-        add_member(&pool, 2, guild_id).await.unwrap();
-        assert!(share_any_guild(&pool, user_id, 2).await.unwrap());
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        add_member_typed(&pool, UserId::new(2), GuildId::new(guild_id))
+            .await
+            .unwrap();
+        assert!(
+            share_any_guild_typed(&pool, UserId::new(user_id), UserId::new(2))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -511,8 +771,14 @@ mod tests {
         crate::users::create_user(&pool, 2, "user2", 1, "u2@example.com", "hash")
             .await
             .unwrap();
-        add_member(&pool, user_id, guild_id).await.unwrap();
+        add_member_typed(&pool, UserId::new(user_id), GuildId::new(guild_id))
+            .await
+            .unwrap();
         // user 2 not added to any guild
-        assert!(!share_any_guild(&pool, user_id, 2).await.unwrap());
+        assert!(
+            !share_any_guild_typed(&pool, UserId::new(user_id), UserId::new(2))
+                .await
+                .unwrap()
+        );
     }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Sidebar } from '../components/layout/Sidebar';
@@ -13,8 +13,10 @@ import { useGuildStore } from '../stores/guildStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useKeyboardNavigation } from '../hooks/useKeyboardNavigation';
 import { useSwipeGesture } from '../hooks/useSwipeGesture';
+import { useMobile } from '../hooks/useMobile';
 import { SettingsPage } from './SettingsPage';
 import { GuildSettingsPage } from './GuildSettingsPage';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 export function AppLayout() {
   useKeyboardNavigation();
@@ -30,24 +32,21 @@ export function AppLayout() {
 
   const userSettingsOpen = useUIStore((s) => s.userSettingsOpen);
   const guildSettingsId = useUIStore((s) => s.guildSettingsId);
+  const setUserSettingsOpen = useUIStore((s) => s.setUserSettingsOpen);
+  const setGuildSettingsId = useUIStore((s) => s.setGuildSettingsId);
+  const userSettingsDialogRef = useRef<HTMLDivElement>(null);
+  const guildSettingsDialogRef = useRef<HTMLDivElement>(null);
+  const closeUserSettings = useCallback(() => setUserSettingsOpen(false), [setUserSettingsOpen]);
+  const closeGuildSettings = useCallback(() => setGuildSettingsId(null), [setGuildSettingsId]);
 
-  const [isMobile, setIsMobile] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia('(max-width: 768px)').matches;
-  });
+  useFocusTrap(userSettingsDialogRef, userSettingsOpen, closeUserSettings);
+  useFocusTrap(guildSettingsDialogRef, Boolean(guildSettingsId), closeGuildSettings);
+
+  const isMobile = useMobile();
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mediaQuery = window.matchMedia('(max-width: 768px)');
-    const onChange = () => {
-      const mobile = mediaQuery.matches;
-      setIsMobile(mobile);
-      setSidebarCollapsed(mobile);
-    };
-    onChange();
-    mediaQuery.addEventListener('change', onChange);
-    return () => mediaQuery.removeEventListener('change', onChange);
-  }, [setSidebarCollapsed]);
+    setSidebarCollapsed(isMobile);
+  }, [isMobile, setSidebarCollapsed]);
 
   // Mobile swipe gestures: right from left edge → open sidebar, left from right edge → open member list
   const setMemberPanelOpen = useUIStore((s) => s.setMemberPanelOpen);
@@ -140,8 +139,7 @@ export function AppLayout() {
       <AnimatePresence>
         {showMobileChannelPanel && (
           <motion.div
-            className="mobile-sidebar-overlay md:hidden"
-            style={{ backgroundColor: 'var(--overlay-backdrop)' }}
+            className="mobile-sidebar-overlay md:hidden modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -170,19 +168,23 @@ export function AppLayout() {
       <AnimatePresence>
         {userSettingsOpen && (
           <motion.div
-            className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md"
-            style={{ backgroundColor: 'var(--overlay-backdrop)' }}
+            className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
           >
             <motion.div
+              ref={userSettingsDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="User settings"
+              tabIndex={-1}
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="w-full h-full max-w-6xl max-h-[900px] shadow-2xl relative flex flex-col"
+              className="w-full h-full max-w-6xl max-h-[min(900px,85vh)] shadow-2xl relative flex flex-col"
             >
               <SettingsPage />
             </motion.div>
@@ -191,19 +193,23 @@ export function AppLayout() {
 
         {guildSettingsId && (
           <motion.div
-            className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md"
-            style={{ backgroundColor: 'var(--overlay-backdrop)' }}
+            className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
           >
             <motion.div
+              ref={guildSettingsDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Server settings"
+              tabIndex={-1}
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="w-full h-full max-w-6xl max-h-[900px] shadow-2xl relative flex flex-col"
+              className="w-full h-full max-w-6xl max-h-[min(900px,85vh)] shadow-2xl relative flex flex-col"
             >
               <GuildSettingsPage />
             </motion.div>

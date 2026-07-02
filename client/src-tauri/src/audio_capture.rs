@@ -214,18 +214,16 @@ fn capture_loop(
     let my_pid = std::process::id();
 
     let result = match win_process_loopback::activate_process_loopback_exclude(my_pid) {
-        Ok(client) => {
-            match capture_loop_with_client(channel, stop_flag, &client, true) {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    eprintln!(
-                        "[audio_capture] Process Loopback capture failed ({e}), \
+        Ok(client) => match capture_loop_with_client(channel, stop_flag, &client, true) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!(
+                    "[audio_capture] Process Loopback capture failed ({e}), \
                          falling back to legacy WASAPI loopback"
-                    );
-                    capture_loop_legacy(channel, stop_flag)
-                }
+                );
+                capture_loop_legacy(channel, stop_flag)
             }
-        }
+        },
         Err(e) => {
             eprintln!(
                 "[audio_capture] Process Loopback Exclusion API unavailable ({e}), \
@@ -263,13 +261,15 @@ fn capture_loop_with_client(
         let format_ptr = match client.GetMixFormat() {
             Ok(p) => p,
             Err(_) if is_process_loopback => {
-                let enumerator: IMMDeviceEnumerator = windows::Win32::System::Com::CoCreateInstance(
-                    &MMDeviceEnumerator,
-                    None,
-                    windows::Win32::System::Com::CLSCTX_ALL,
-                )?;
+                let enumerator: IMMDeviceEnumerator =
+                    windows::Win32::System::Com::CoCreateInstance(
+                        &MMDeviceEnumerator,
+                        None,
+                        windows::Win32::System::Com::CLSCTX_ALL,
+                    )?;
                 let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
-                let render_client: IAudioClient = device.Activate(windows::Win32::System::Com::CLSCTX_ALL, None)?;
+                let render_client: IAudioClient =
+                    device.Activate(windows::Win32::System::Com::CLSCTX_ALL, None)?;
                 render_client.GetMixFormat()?
             }
             Err(e) => return Err(e.into()),
@@ -317,7 +317,11 @@ fn capture_loop_with_client(
         };
         let buffer_size = client.GetBufferSize()?;
 
-        let mode = if is_process_loopback { "process loopback exclusion" } else { "loopback" };
+        let mode = if is_process_loopback {
+            "process loopback exclusion"
+        } else {
+            "loopback"
+        };
         eprintln!(
             "[audio_capture] Started ({mode}): {sample_rate}Hz, {num_channels} ch, {bits_per_sample}-bit, {buffer_size} frames",
         );

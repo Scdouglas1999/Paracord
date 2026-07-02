@@ -5,6 +5,7 @@ import { useRelationshipStore } from '../stores/relationshipStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { dmApi } from '../api/dms';
+import { extractApiError } from '../api/client';
 import { useChannelStore } from '../stores/channelStore';
 import { cn } from '../lib/utils';
 
@@ -16,6 +17,7 @@ export function FriendsPage() {
   const [addFriendInput, setAddFriendInput] = useState('');
   const [addFriendStatus, setAddFriendStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [relationshipError, setRelationshipError] = useState<string | null>(null);
+  const [pendingActions, setPendingActions] = useState<Set<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const relationships = useRelationshipStore((s) => s.relationships);
   const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
@@ -41,45 +43,77 @@ export function FriendsPage() {
     [friends, presences, getPresence, activeServerId]
   );
 
+  const isActionPending = (actionKey: string) => pendingActions.has(actionKey);
+  const startAction = (actionKey: string) => {
+    setPendingActions((current) => new Set(current).add(actionKey));
+  };
+  const finishAction = (actionKey: string) => {
+    setPendingActions((current) => {
+      const next = new Set(current);
+      next.delete(actionKey);
+      return next;
+    });
+  };
+
   const handleAddFriend = async () => {
-    if (!addFriendInput.trim()) return;
+    const identifier = addFriendInput.trim();
+    if (!identifier || isActionPending('add')) return;
     setAddFriendStatus(null);
     setRelationshipError(null);
+    startAction('add');
     try {
-      await useRelationshipStore.getState().addFriend(addFriendInput.trim());
-      setAddFriendStatus({ type: 'success', message: `Friend request sent to ${addFriendInput.trim()}!` });
+      await useRelationshipStore.getState().addFriend(identifier);
+      setAddFriendStatus({ type: 'success', message: `Friend request sent to ${identifier}!` });
       setAddFriendInput('');
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const normalized = err as {
+        response?: { data?: { message?: string; error?: string }; status?: number };
+      };
       const errorMessage =
-        err?.response?.data?.message ||
-        err?.response?.data?.error ||
-        (err?.response?.status === 422
+        normalized.response?.data?.message ||
+        normalized.response?.data?.error ||
+        (normalized.response?.status === 422
           ? 'Server rejected this format. Try using the user ID instead of username.'
-          : 'Failed to send friend request');
+          : extractApiError(err));
       setAddFriendStatus({ type: 'error', message: errorMessage });
+    } finally {
+      finishAction('add');
     }
   };
 
   const handleRemoveFriend = async (userId: string) => {
+    const actionKey = `remove:${userId}`;
+    if (isActionPending(actionKey)) return;
     setRelationshipError(null);
+    startAction(actionKey);
     try {
       await useRelationshipStore.getState().removeFriend(userId);
-    } catch (err: any) {
-      setRelationshipError(err?.response?.data?.message || 'Failed to update relationship');
+    } catch (err: unknown) {
+      setRelationshipError(extractApiError(err) || 'Failed to update relationship');
+    } finally {
+      finishAction(actionKey);
     }
   };
 
   const handleAcceptFriend = async (userId: string) => {
+    const actionKey = `accept:${userId}`;
+    if (isActionPending(actionKey)) return;
     setRelationshipError(null);
+    startAction(actionKey);
     try {
       await useRelationshipStore.getState().acceptFriend(userId);
-    } catch (err: any) {
-      setRelationshipError(err?.response?.data?.message || 'Failed to accept friend request');
+    } catch (err: unknown) {
+      setRelationshipError(extractApiError(err) || 'Failed to accept friend request');
+    } finally {
+      finishAction(actionKey);
     }
   };
 
   const handleMessageFriend = async (userId: string) => {
+    const actionKey = `message:${userId}`;
+    if (isActionPending(actionKey)) return;
     setRelationshipError(null);
+    startAction(actionKey);
     try {
       const { data } = await dmApi.create(userId);
       const dmChannels = useChannelStore.getState().channelsByGuild[''] || [];
@@ -88,8 +122,10 @@ export function FriendsPage() {
       useChannelStore.getState().setDmChannels(nextDms);
       useChannelStore.getState().selectChannel(data.id);
       navigate(`/app/dms/${data.id}`);
-    } catch (err: any) {
-      setRelationshipError(err?.response?.data?.message || 'Failed to open direct message');
+    } catch (err: unknown) {
+      setRelationshipError(extractApiError(err) || 'Failed to open direct message');
+    } finally {
+      finishAction(actionKey);
     }
   };
 
@@ -134,6 +170,7 @@ export function FriendsPage() {
           <div className="inline-flex min-w-full items-center gap-4 rounded-xl border border-border-subtle/65 bg-bg-mod-subtle/45 px-4 py-3 sm:gap-5 sm:px-5 sm:py-3.5">
             {tabs.map((tab) => (
               <button
+                type="button"
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
@@ -147,6 +184,7 @@ export function FriendsPage() {
               </button>
             ))}
             <button
+              type="button"
               onClick={() => setActiveTab('add')}
               className={cn(
                 'inline-flex h-11 shrink-0 items-center justify-center rounded-lg border px-6 text-[0.92rem] font-semibold leading-none transition-colors',
@@ -170,7 +208,11 @@ export function FriendsPage() {
 
               <div className="mt-6 flex flex-col items-stretch gap-5 rounded-xl border border-border-subtle bg-bg-mod-subtle px-5 py-4 sm:flex-row sm:items-center sm:gap-6 sm:px-6 sm:py-5">
                 <UserPlus size={18} className="text-text-muted" />
+                <label htmlFor="friend-identifier" className="sr-only">
+                  Username or user ID
+                </label>
                 <input
+                  id="friend-identifier"
                   type="text"
                   value={addFriendInput}
                   onChange={(e) => setAddFriendInput(e.target.value)}
@@ -179,16 +221,18 @@ export function FriendsPage() {
                   className="flex-1 bg-transparent text-sm text-text-primary outline-none placeholder:text-text-muted"
                 />
                 <button
+                  type="button"
                   onClick={() => void handleAddFriend()}
                   className="control-pill-btn w-full sm:w-auto sm:min-w-[188px] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!addFriendInput.trim()}
+                  disabled={!addFriendInput.trim() || isActionPending('add')}
                 >
-                  Send Friend Request
+                  {isActionPending('add') ? 'Sending...' : 'Send Friend Request'}
                 </button>
               </div>
 
               {addFriendStatus && (
                 <div
+                  role={addFriendStatus.type === 'error' ? 'alert' : 'status'}
                   className={cn(
                     'mt-3 rounded-lg border px-3 py-2 text-sm font-medium',
                     addFriendStatus.type === 'success'
@@ -205,7 +249,7 @@ export function FriendsPage() {
           <div className="mx-auto h-full w-full">
             <div className="glass-panel flex h-full min-h-0 flex-col rounded-2xl p-5 sm:p-6 md:p-8">
               {relationshipError && (
-                <div className="mb-4 rounded-lg border border-accent-danger/40 bg-accent-danger/10 px-3 py-2 text-sm font-medium text-accent-danger">
+                <div role="alert" className="mb-4 rounded-lg border border-accent-danger/40 bg-accent-danger/10 px-3 py-2 text-sm font-medium text-accent-danger">
                   {relationshipError}
                 </div>
               )}
@@ -213,7 +257,11 @@ export function FriendsPage() {
                 <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/50 p-3">
                   <div className="relative">
                     <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                    <label htmlFor="friends-search" className="sr-only">
+                      Search friends
+                    </label>
                     <input
+                      id="friends-search"
                       type="text"
                       placeholder="Search friends"
                       value={searchQuery}
@@ -259,6 +307,7 @@ export function FriendsPage() {
                       {activeTab === 'all' && "Click 'Add Friend' above to get started."}
                     </p>
                     <button
+                      type="button"
                       onClick={() => setActiveTab('add')}
                       className="btn-primary mt-2"
                     >
@@ -293,26 +342,35 @@ export function FriendsPage() {
                         <div className="ml-auto flex items-center gap-3">
                           {rel.type === 3 && (
                             <button
+                              type="button"
                               onClick={() => void handleAcceptFriend(rel.user.id)}
                               className="command-icon-btn border border-border-subtle bg-bg-mod-subtle text-accent-success hover:bg-bg-mod-strong"
                               title="Accept Friend Request"
+                              aria-label={`Accept friend request from ${rel.user.username}`}
+                              disabled={isActionPending(`accept:${rel.user.id}`)}
                             >
                               <Check size={16} />
                             </button>
                           )}
                           {rel.type === 1 && (
                             <button
+                              type="button"
                               className="command-icon-btn border border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
                               onClick={() => void handleMessageFriend(rel.user.id)}
                               title="Message"
+                              aria-label={`Message ${rel.user.username}`}
+                              disabled={isActionPending(`message:${rel.user.id}`)}
                             >
                               <MessageSquare size={16} />
                             </button>
                           )}
                           <button
+                            type="button"
                             onClick={() => void handleRemoveFriend(rel.user.id)}
                             className="command-icon-btn border border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-accent-danger"
                             title={rel.type === 2 ? 'Unblock' : 'Remove'}
+                            aria-label={`${rel.type === 2 ? 'Unblock' : 'Remove'} ${rel.user.username}`}
+                            disabled={isActionPending(`remove:${rel.user.id}`)}
                           >
                             <X size={16} />
                           </button>

@@ -47,8 +47,8 @@ fn build_nonce(ssrc: u32, epoch: u8, sequence: u16) -> [u8; NONCE_SIZE] {
 /// Encrypts media frame payloads using per-epoch keys. The 16-byte MediaHeader
 /// is used as Additional Authenticated Data (AAD) to prevent header tampering.
 pub struct FrameEncryptor {
-    /// Keys indexed by epoch.
-    keys: HashMap<u8, Aes128Gcm>,
+    /// Keys indexed by (ssrc, epoch). SSRC 0 is treated as a wildcard fallback.
+    keys: HashMap<(u32, u8), Aes128Gcm>,
 }
 
 impl FrameEncryptor {
@@ -61,13 +61,23 @@ impl FrameEncryptor {
 
     /// Set the encryption key for a given epoch.
     pub fn set_key(&mut self, epoch: u8, key: &[u8; KEY_SIZE]) {
+        self.set_peer_key(0, epoch, key);
+    }
+
+    /// Set the encryption key for a specific sender SSRC + epoch.
+    pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
         let cipher = Aes128Gcm::new_from_slice(key).expect("valid key size");
-        self.keys.insert(epoch, cipher);
+        self.keys.insert((ssrc, epoch), cipher);
     }
 
     /// Remove the key for a given epoch.
     pub fn remove_key(&mut self, epoch: u8) {
-        self.keys.remove(&epoch);
+        self.remove_peer_key(0, epoch);
+    }
+
+    /// Remove the key for a specific sender SSRC + epoch.
+    pub fn remove_peer_key(&mut self, ssrc: u32, epoch: u8) {
+        self.keys.remove(&(ssrc, epoch));
     }
 
     /// Encrypt a media frame payload.
@@ -87,7 +97,8 @@ impl FrameEncryptor {
     ) -> Result<Vec<u8>, CryptoError> {
         let cipher = self
             .keys
-            .get(&epoch)
+            .get(&(ssrc, epoch))
+            .or_else(|| self.keys.get(&(0, epoch)))
             .ok_or(CryptoError::NoKeyForEpoch(epoch))?;
 
         let nonce_bytes = build_nonce(ssrc, epoch, sequence);
@@ -105,13 +116,19 @@ impl FrameEncryptor {
     }
 }
 
+impl Default for FrameEncryptor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Frame decryptor using AES-128-GCM.
 ///
 /// Decrypts media frame payloads, supporting multiple active key epochs
 /// for handling in-flight packets during key rotation.
 pub struct FrameDecryptor {
-    /// Keys indexed by epoch.
-    keys: HashMap<u8, Aes128Gcm>,
+    /// Keys indexed by (ssrc, epoch). SSRC 0 is treated as a wildcard fallback.
+    keys: HashMap<(u32, u8), Aes128Gcm>,
 }
 
 impl FrameDecryptor {
@@ -124,13 +141,23 @@ impl FrameDecryptor {
 
     /// Set the decryption key for a given epoch.
     pub fn set_key(&mut self, epoch: u8, key: &[u8; KEY_SIZE]) {
+        self.set_peer_key(0, epoch, key);
+    }
+
+    /// Set the decryption key for a specific sender SSRC + epoch.
+    pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
         let cipher = Aes128Gcm::new_from_slice(key).expect("valid key size");
-        self.keys.insert(epoch, cipher);
+        self.keys.insert((ssrc, epoch), cipher);
     }
 
     /// Remove the key for a given epoch.
     pub fn remove_key(&mut self, epoch: u8) {
-        self.keys.remove(&epoch);
+        self.remove_peer_key(0, epoch);
+    }
+
+    /// Remove the key for a specific sender SSRC + epoch.
+    pub fn remove_peer_key(&mut self, ssrc: u32, epoch: u8) {
+        self.keys.remove(&(ssrc, epoch));
     }
 
     /// Decrypt a media frame payload.
@@ -154,7 +181,8 @@ impl FrameDecryptor {
 
         let cipher = self
             .keys
-            .get(&epoch)
+            .get(&(ssrc, epoch))
+            .or_else(|| self.keys.get(&(0, epoch)))
             .ok_or(CryptoError::NoKeyForEpoch(epoch))?;
 
         let nonce_bytes = build_nonce(ssrc, epoch, sequence);
@@ -169,6 +197,12 @@ impl FrameDecryptor {
                 },
             )
             .map_err(|_| CryptoError::DecryptionFailed)
+    }
+}
+
+impl Default for FrameDecryptor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -341,6 +375,40 @@ mod tests {
 
         assert_eq!(pt1, b"epoch1");
         assert_eq!(pt2, b"epoch2");
+    }
+
+    #[test]
+    fn encryptor_prefers_ssrc_specific_key_over_wildcard() {
+        let header = test_header();
+        let wildcard_key = test_key();
+        let peer_key = [
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
+            0x1E, 0x1F,
+        ];
+        let ssrc = 0xDEADBEEF;
+        let epoch = 1;
+        let sequence = 7;
+
+        let mut encryptor = FrameEncryptor::new();
+        encryptor.set_key(epoch, &wildcard_key);
+        encryptor.set_peer_key(ssrc, epoch, &peer_key);
+
+        let ciphertext = encryptor
+            .encrypt(&header, ssrc, epoch, sequence, b"ssrc scoped sender key")
+            .expect("encryption failed");
+
+        let mut wildcard_only = FrameDecryptor::new();
+        wildcard_only.set_key(epoch, &wildcard_key);
+        let result = wildcard_only.decrypt(&header, ssrc, epoch, sequence, &ciphertext);
+        assert!(matches!(result, Err(CryptoError::DecryptionFailed)));
+
+        let mut peer_decryptor = FrameDecryptor::new();
+        peer_decryptor.set_key(epoch, &wildcard_key);
+        peer_decryptor.set_peer_key(ssrc, epoch, &peer_key);
+        let decrypted = peer_decryptor
+            .decrypt(&header, ssrc, epoch, sequence, &ciphertext)
+            .expect("peer decrypt failed");
+        assert_eq!(decrypted, b"ssrc scoped sender key");
     }
 
     #[test]

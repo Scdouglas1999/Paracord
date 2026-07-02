@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight } from 'lucide-react';
+import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight, Bot } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useUIStore } from '../../stores/uiStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { isAdmin } from '../../types';
 import { cn } from '../../lib/utils';
 import type { Channel, Guild } from '../../types';
@@ -36,19 +37,32 @@ export function CommandPalette() {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+
+  const handleClose = useCallback(() => {
+    setOpen(false);
+    const returnTarget = returnFocusRef.current;
+    if (returnTarget && document.contains(returnTarget)) {
+      requestAnimationFrame(() => returnTarget.focus());
+    }
+  }, [setOpen]);
 
   // Reset state on open
   useEffect(() => {
-    if (open) {
-      setQuery('');
-      setSelectedIndex(0);
-      // Focus input after animation
-      requestAnimationFrame(() => {
-        inputRef.current?.focus();
-      });
+    if (open && !wasOpenRef.current) {
+      if (document.activeElement instanceof HTMLElement && !panelRef.current?.contains(document.activeElement)) {
+        returnFocusRef.current = document.activeElement;
+      }
+      if (query !== '') setQuery('');
+      if (selectedIndex !== 0) setSelectedIndex(0);
     }
-  }, [open]);
+    wasOpenRef.current = open;
+  }, [open, query, selectedIndex]);
+
+  useFocusTrap(panelRef, open, handleClose);
 
   // Build palette items from all available navigation targets
   const allItems = useMemo((): PaletteItem[] => {
@@ -77,6 +91,16 @@ export function CommandPalette() {
       action: () => useUIStore.getState().setUserSettingsOpen(true),
       category: 'Navigation',
       keywords: 'settings preferences account profile',
+    });
+
+    items.push({
+      id: 'nav-developers',
+      label: 'Developer Portal',
+      sublabel: 'Bot applications and API access',
+      icon: <Bot size={16} />,
+      action: () => navigate('/app/developers'),
+      category: 'Navigation',
+      keywords: 'developer portal bots applications api',
     });
 
     if (user && isAdmin(user.flags)) {
@@ -214,10 +238,6 @@ export function CommandPalette() {
     }
   }, [selectedIndex]);
 
-  const handleClose = useCallback(() => {
-    setOpen(false);
-  }, [setOpen]);
-
   const handleSelect = useCallback((item: PaletteItem) => {
     handleClose();
     // Use requestAnimationFrame to run navigation after the palette closes
@@ -254,6 +274,9 @@ export function CommandPalette() {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
+        if (!open && document.activeElement instanceof HTMLElement) {
+          returnFocusRef.current = document.activeElement;
+        }
         setOpen(!open);
       }
     };
@@ -267,11 +290,16 @@ export function CommandPalette() {
     <AnimatePresence>
       {open && (
         <div
-          className="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh]"
+          className="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh] modal-backdrop"
           style={{ backgroundColor: 'var(--overlay-backdrop)' }}
           onClick={handleClose}
         >
           <motion.div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="command-palette-title"
+            tabIndex={-1}
             initial={{ opacity: 0, scale: 0.96, y: -12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: -12 }}
@@ -280,12 +308,14 @@ export function CommandPalette() {
             onClick={(e) => e.stopPropagation()}
             onKeyDown={handleKeyDown}
           >
+            <h2 id="command-palette-title" className="sr-only">Command Palette</h2>
             {/* Search input */}
             <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3.5">
               <Search size={18} className="shrink-0 text-text-muted" />
               <input
                 ref={inputRef}
                 autoFocus
+                aria-label="Search command palette"
                 className="flex-1 bg-transparent px-1 py-0.5 text-[15px] text-text-primary outline-none placeholder:text-text-muted"
                 placeholder="Where would you like to go?"
                 value={query}

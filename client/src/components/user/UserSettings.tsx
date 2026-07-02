@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Monitor, Sun, Moon, ArrowLeft } from 'lucide-react';
+import { X, ArrowLeft } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { useUIStore } from '../../stores/uiStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useMediaDevices } from '../../hooks/useMediaDevices';
+import { useMobile } from '../../hooks/useMobile';
 import { APP_NAME } from '../../lib/constants';
 import { hasAccount as hasLocalCryptoAccount } from '../../lib/account';
 import { isAdmin } from '../../types';
@@ -14,6 +15,8 @@ import { apiClient, extractApiError } from '../../api/client';
 import { authApi, type AuthSession } from '../../api/auth';
 import { cn } from '../../lib/utils';
 import { confirm } from '../../stores/confirmStore';
+import { ErrorBanner } from '../ui/Feedback';
+import { Button } from '../ui/Button';
 import {
   isEnabled as isNotificationsEnabled,
   setEnabled as setNotificationsEnabled,
@@ -27,6 +30,10 @@ import {
   readableAppName,
   saveKnownActivityAppsToStorage,
 } from '../../lib/activityPresence';
+import { formatIdentityFingerprint } from '../../lib/keyVerification';
+import { safeExternalUrl } from '../../lib/security';
+import { CustomCSS } from '../customization/CustomCSS';
+import { ThemeSelector } from '../customization/ThemeSelector';
 
 interface UserSettingsProps {
   onClose: () => void;
@@ -58,6 +65,7 @@ const NAV_ITEMS: { id: SettingsSection; label: string; adminOnly?: boolean }[] =
 export function UserSettings({ onClose }: UserSettingsProps) {
   const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState<SettingsSection>('account');
+  const [mobileShowNav, setMobileShowNav] = useState(true);
   const user = useAuthStore(s => s.user);
   const settings = useAuthStore(s => s.settings);
   const logout = useAuthStore(s => s.logout);
@@ -68,12 +76,15 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const accountPublicKey = useAccountStore((s) => s.publicKey);
   const accountUnlocked = useAccountStore((s) => s.isUnlocked);
   const setThemeUI = useUIStore((s) => s.setTheme);
-  const accentPresetUI = useUIStore((s) => s.accentPreset);
-  const setAccentPresetUI = useUIStore((s) => s.setAccentPreset);
-  const [theme, setTheme] = useState<'dark' | 'light' | 'amoled'>('dark');
-  const [accentPreset, setAccentPreset] = useState(accentPresetUI);
+  const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
+  const setLowBandwidthModeUI = useUIStore((s) => s.setLowBandwidthMode);
+  const customCss = useUIStore((s) => s.customCss);
+  const setCustomCss = useUIStore((s) => s.setCustomCss);
+  const [theme, setTheme] = useState<'dark' | 'light' | 'amoled' | 'high-contrast'>('dark');
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
+  const [pronouns, setPronouns] = useState('');
+  const [linkedAccountsInput, setLinkedAccountsInput] = useState('');
   const [locale, setLocale] = useState('en-US');
   const [messageCompact, setMessageCompact] = useState(false);
   const [notifications, setNotifications] = useState<Record<string, unknown>>({});
@@ -82,6 +93,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [capturingKeybind, setCapturingKeybind] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
+  const [statusKind, setStatusKind] = useState<'success' | 'error' | null>(null);
   const cryptoAuthEnabled = settings?.crypto_auth_enabled === true;
   const {
     audioInputDevices,
@@ -98,10 +110,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [restartConfirm, setRestartConfirm] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const localCryptoAccountReady = Boolean(accountPublicKey) || hasLocalCryptoAccount();
-  const [isMobile, setIsMobile] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia('(max-width: 768px)').matches;
-  });
+  const isMobile = useMobile();
   const [notifEnabled, setNotifEnabled] = useState(() => isNotificationsEnabled());
   const [notifPermission, setNotifPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
   const [sessions, setSessions] = useState<AuthSession[]>([]);
@@ -115,6 +124,17 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [accountActionLoading, setAccountActionLoading] = useState(false);
   const [accountDataExporting, setAccountDataExporting] = useState(false);
 
+  // MFA state
+  const [mfaEnabled, setMfaEnabled] = useState(false);
+  const [mfaBackupCodesRemaining, setMfaBackupCodesRemaining] = useState(0);
+  const [mfaSetupData, setMfaSetupData] = useState<{ secret: string; otpauth_url: string; qr_code: string } | null>(null);
+  const [mfaVerifyCode, setMfaVerifyCode] = useState('');
+  const [mfaDisableCode, setMfaDisableCode] = useState('');
+  const [mfaBackupCodes, setMfaBackupCodes] = useState<string[]>([]);
+  const [mfaLoading, setMfaLoading] = useState(false);
+  const [mfaView, setMfaView] = useState<'idle' | 'setup' | 'disable'>('idle');
+  const [mfaStatus, setMfaStatus] = useState<string | null>(null);
+
   // Identity portability state
   const [exportIncludeMessages, setExportIncludeMessages] = useState(false);
   const [exportIncludeRelationships, setExportIncludeRelationships] = useState(true);
@@ -123,6 +143,21 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [importPreview, setImportPreview] = useState<Record<string, unknown> | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [identityStatus, setIdentityStatus] = useState<string | null>(null);
+
+  const clearStatus = useCallback(() => {
+    setStatusText(null);
+    setStatusKind(null);
+  }, []);
+
+  const setSuccessStatus = useCallback((message: string) => {
+    setStatusText(message);
+    setStatusKind('success');
+  }, []);
+
+  const setErrorStatus = useCallback((message: string) => {
+    setStatusText(message);
+    setStatusKind('error');
+  }, []);
 
   useEffect(() => {
     void checkNotificationPermission().then((granted) => {
@@ -138,9 +173,26 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     if (user) {
       setDisplayName(user.display_name || '');
       setBio(user.bio || '');
+      setPronouns(user.pronouns || '');
+      const linked = Array.isArray(user.linked_accounts)
+        ? user.linked_accounts
+            .filter(
+              (entry): entry is { label: string; url: string } =>
+                Boolean(
+                  entry &&
+                    typeof entry.label === 'string' &&
+                    entry.label.trim().length > 0 &&
+                    typeof entry.url === 'string' &&
+                    entry.url.trim().length > 0
+                )
+            )
+            .map((entry) => `${entry.label}|${entry.url}`)
+            .join('\n')
+        : '';
+      setLinkedAccountsInput(linked);
       setAccountNewEmail(user.email || '');
     }
-  }, [user?.id, user?.display_name, user?.bio, user?.email]);
+  }, [user?.id, user?.display_name, user?.bio, user?.pronouns, user?.linked_accounts, user?.email]);
 
   useEffect(() => {
     if (settings) {
@@ -157,7 +209,6 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       );
 
       setTheme(settings.theme);
-      setAccentPreset(accentPresetUI);
       setLocale(settings.locale || 'en-US');
       setMessageCompact(settings.message_display_compact || false);
       setKnownActivityApps(known);
@@ -169,6 +220,26 @@ export function UserSettings({ onClose }: UserSettingsProps) {
           a.localeCompare(b, undefined, { sensitivity: 'base' })
         ),
       });
+      if (typeof notif?.['profilePronouns'] === 'string') {
+        setPronouns((notif['profilePronouns'] as string).trim());
+      }
+      if (Array.isArray(notif?.['profileLinkedAccounts'])) {
+        const linked = (notif['profileLinkedAccounts'] as Array<unknown>)
+          .filter(
+            (entry): entry is { label: string; url: string } =>
+              Boolean(
+                entry &&
+                  typeof entry === 'object' &&
+                  entry !== null &&
+                  typeof (entry as Record<string, unknown>).label === 'string' &&
+                  typeof (entry as Record<string, unknown>).url === 'string'
+              )
+          )
+          .map((entry) => `${entry.label}|${entry.url}`)
+          .join('\n');
+        setLinkedAccountsInput(linked);
+      }
+      setLowBandwidthModeUI(notif?.['lowBandwidthMode'] === true);
       setKeybinds((settings.keybinds as Record<string, unknown>) || {});
       if (typeof notif?.['audioInputDeviceId'] === 'string') {
         selectAudioInput(notif['audioInputDeviceId'] as string);
@@ -177,7 +248,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         selectAudioOutput(notif['audioOutputDeviceId'] as string);
       }
     }
-  }, [settings, accentPresetUI]);
+  }, [settings, setLowBandwidthModeUI]);
 
   useEffect(() => {
     if (activeSection !== 'voice') return;
@@ -192,20 +263,40 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       });
   }, [activeSection, enumerate]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mediaQuery = window.matchMedia('(max-width: 768px)');
-    const updateIsMobile = () => setIsMobile(mediaQuery.matches);
-    updateIsMobile();
-    mediaQuery.addEventListener('change', updateIsMobile);
-    return () => mediaQuery.removeEventListener('change', updateIsMobile);
+  const selectMobileSection = useCallback((section: SettingsSection) => {
+    setActiveSection(section);
+    setMobileShowNav(false);
+    history.pushState({ settingsSection: section }, '');
   }, []);
 
+  useEffect(() => {
+    if (!isMobile) return;
+    const handlePopState = (e: PopStateEvent) => {
+      if (mobileShowNav) {
+        // Already showing nav list — let browser handle (close settings via parent)
+        onClose();
+      } else {
+        // Navigate back to nav list
+        e.preventDefault?.();
+        setMobileShowNav(true);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [isMobile, mobileShowNav, onClose]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') onClose();
+    if (e.key !== 'Escape') return;
+    if (capturingKeybind) {
+      e.preventDefault();
+      e.stopPropagation();
+      setCapturingKeybind(null);
+      return;
+    }
+    onClose();
   };
 
-  const handleThemeChange = (newTheme: 'dark' | 'light' | 'amoled') => {
+  const handleThemeChange = (newTheme: 'dark' | 'light' | 'amoled' | 'high-contrast') => {
     setTheme(newTheme);
     setThemeUI(newTheme);
   };
@@ -214,9 +305,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     () => ({
       desktop: true,
       messageSound: true,
+      lowBandwidthMode,
       ...notifications,
     }),
-    [notifications]
+    [notifications, lowBandwidthMode]
   );
 
   const mergedKeybinds = useMemo<Record<string, unknown>>(
@@ -230,6 +322,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   );
 
   const activityDetectionEnabled = mergedNotifications['activityDetectionEnabled'] !== false;
+  const ownIdentityFingerprint = useMemo(() => {
+    const key = (user?.public_key || accountPublicKey || '').trim();
+    if (!key) return null;
+    return formatIdentityFingerprint(key);
+  }, [accountPublicKey, user?.public_key]);
   const disabledActivityApps = useMemo(
     () =>
       new Set(
@@ -269,16 +366,50 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   }, [activeSection, visibleKnownActivityApps]);
 
   const saveProfile = async () => {
+    const linkedAccounts = linkedAccountsInput
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const splitAt = line.indexOf('|');
+        if (splitAt <= 0 || splitAt === line.length - 1) return null;
+        const label = line.slice(0, splitAt).trim();
+        const url = line.slice(splitAt + 1).trim();
+        if (!label || !url) return null;
+        const safeUrl = safeExternalUrl(url);
+        if (!safeUrl) return null;
+        return { label, url: safeUrl };
+      });
+    if (linkedAccounts.some((entry) => entry === null)) {
+      setErrorStatus('Linked accounts must use the format "Label|https://url".');
+      return;
+    }
+    const parsedLinkedAccounts = linkedAccounts.filter(
+      (entry): entry is { label: string; url: string } => entry !== null
+    );
+    if (parsedLinkedAccounts.length > 8) {
+      setErrorStatus('You can add up to 8 linked accounts.');
+      return;
+    }
+
     setSaving(true);
-    setStatusText(null);
+    clearStatus();
     try {
       await updateUser({
         display_name: displayName || undefined,
         bio: bio || undefined,
       });
-      setStatusText('Profile updated.');
-    } catch {
-      setStatusText('Failed to update profile.');
+      await updateSettings({
+        notifications: {
+          ...mergedNotifications,
+          profilePronouns: pronouns.trim() || null,
+          profileLinkedAccounts: parsedLinkedAccounts,
+        },
+      });
+      await fetchUser();
+      setSuccessStatus('Profile updated.');
+    } catch (err) {
+      setErrorStatus(`Failed to update profile: ${extractApiError(err)}`);
     } finally {
       setSaving(false);
     }
@@ -290,15 +421,21 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       const { data } = await authApi.listSessions();
       setSessions(data);
     } catch (err) {
-      setStatusText(`Failed to load sessions: ${extractApiError(err)}`);
+      setErrorStatus(`Failed to load sessions: ${extractApiError(err)}`);
     } finally {
       setSessionsLoading(false);
     }
-  }, []);
+  }, [setErrorStatus]);
 
   useEffect(() => {
     if (activeSection !== 'account') return;
     void loadSessions();
+    void authApi.mfaStatus().then(({ data }) => {
+      setMfaEnabled(data.mfa_enabled ?? false);
+      setMfaBackupCodesRemaining(data.backup_codes_remaining ?? 0);
+    }).catch((err) => {
+      setMfaStatus(`Failed to load MFA status: ${extractApiError(err)}`);
+    });
   }, [activeSection, loadSessions]);
 
   const revokeSession = async (sessionId: string) => {
@@ -309,10 +446,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       await authApi.revokeSession(sessionId);
       setSessions((prev) => prev.filter((session) => session.id !== sessionId));
       if (!sessions.find((session) => session.id === sessionId)?.current) {
-        setStatusText('Session revoked.');
+        setSuccessStatus('Session revoked.');
       }
     } catch (err) {
-      setStatusText(`Failed to revoke session: ${extractApiError(err)}`);
+      setErrorStatus(`Failed to revoke session: ${extractApiError(err)}`);
     } finally {
       setSessionBusyId(null);
     }
@@ -323,11 +460,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     const nextPassword = accountNewPassword.trim();
     const confirmPw = accountConfirmPassword.trim();
     if (!current || !nextPassword) {
-      setStatusText('Current password and new password are required.');
+      setErrorStatus('Current password and new password are required.');
       return;
     }
     if (nextPassword !== confirmPw) {
-      setStatusText('New password confirmation does not match.');
+      setErrorStatus('New password confirmation does not match.');
       return;
     }
     setAccountActionLoading(true);
@@ -336,10 +473,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       setPasswordCurrentPassword('');
       setAccountNewPassword('');
       setAccountConfirmPassword('');
-      setStatusText('Password updated. Other sessions were signed out.');
+      setSuccessStatus('Password updated. Other sessions were signed out.');
       await loadSessions();
     } catch (err) {
-      setStatusText(`Failed to change password: ${extractApiError(err)}`);
+      setErrorStatus(`Failed to change password: ${extractApiError(err)}`);
     } finally {
       setAccountActionLoading(false);
     }
@@ -349,20 +486,74 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     const current = emailCurrentPassword.trim();
     const nextEmail = accountNewEmail.trim();
     if (!current || !nextEmail) {
-      setStatusText('Current password and new email are required.');
+      setErrorStatus('Current password and new email are required.');
       return;
     }
     setAccountActionLoading(true);
     try {
       await authApi.changeEmail(current, nextEmail);
       setEmailCurrentPassword('');
-      setStatusText('Email updated. Other sessions were signed out.');
+      setSuccessStatus('Email updated. Other sessions were signed out.');
       await fetchUser();
       await loadSessions();
     } catch (err) {
-      setStatusText(`Failed to change email: ${extractApiError(err)}`);
+      setErrorStatus(`Failed to change email: ${extractApiError(err)}`);
     } finally {
       setAccountActionLoading(false);
+    }
+  };
+
+  const startMfaSetup = async () => {
+    setMfaLoading(true);
+    setMfaStatus(null);
+    try {
+      const { data } = await authApi.mfaSetup();
+      setMfaSetupData(data);
+      setMfaView('setup');
+      setMfaVerifyCode('');
+    } catch (err) {
+      setMfaStatus(`Failed to start MFA setup: ${extractApiError(err)}`);
+    } finally {
+      setMfaLoading(false);
+    }
+  };
+
+  const verifyMfaSetup = async () => {
+    if (!mfaVerifyCode.trim()) return;
+    setMfaLoading(true);
+    setMfaStatus(null);
+    try {
+      const { data } = await authApi.mfaVerify(mfaVerifyCode.trim());
+      setMfaEnabled(true);
+      setMfaBackupCodes(data.backup_codes ?? []);
+      setMfaBackupCodesRemaining(data.backup_codes?.length ?? 0);
+      setMfaView('idle');
+      setMfaSetupData(null);
+      setMfaVerifyCode('');
+      setMfaStatus('Two-factor authentication enabled.');
+    } catch (err) {
+      setMfaStatus(`Failed to verify MFA setup: ${extractApiError(err)}`);
+    } finally {
+      setMfaLoading(false);
+    }
+  };
+
+  const disableMfa = async () => {
+    if (!mfaDisableCode.trim()) return;
+    setMfaLoading(true);
+    setMfaStatus(null);
+    try {
+      await authApi.mfaDisable(mfaDisableCode.trim());
+      setMfaEnabled(false);
+      setMfaBackupCodesRemaining(0);
+      setMfaBackupCodes([]);
+      setMfaView('idle');
+      setMfaDisableCode('');
+      setMfaStatus('Two-factor authentication disabled.');
+    } catch (err) {
+      setMfaStatus(`Failed to disable MFA: ${extractApiError(err)}`);
+    } finally {
+      setMfaLoading(false);
     }
   };
 
@@ -380,9 +571,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      setStatusText('Account data export downloaded.');
+      setSuccessStatus('Account data export downloaded.');
     } catch (err) {
-      setStatusText(`Account export failed: ${extractApiError(err)}`);
+      setErrorStatus(`Account export failed: ${extractApiError(err)}`);
     } finally {
       setAccountDataExporting(false);
     }
@@ -390,7 +581,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
   const saveSettings = async () => {
     setSaving(true);
-    setStatusText(null);
+    clearStatus();
     try {
       await updateSettings({
         theme,
@@ -405,10 +596,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         keybinds: mergedKeybinds,
       });
       setThemeUI(theme);
-      setAccentPresetUI(accentPreset);
-      setStatusText('Settings saved.');
-    } catch {
-      setStatusText('Failed to save settings.');
+      setSuccessStatus('Settings saved.');
+    } catch (err) {
+      setErrorStatus(`Failed to save settings: ${extractApiError(err)}`);
     } finally {
       setSaving(false);
     }
@@ -464,9 +654,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         },
         keybinds: mergedKeybinds,
       });
-      setStatusText(enabled ? 'Device crypto security enabled.' : 'Device crypto security disabled.');
-    } catch {
-      setStatusText('Failed to update device crypto security.');
+      setSuccessStatus(
+        enabled ? 'Device crypto security enabled.' : 'Device crypto security disabled.',
+      );
+    } catch (err) {
+      setErrorStatus(`Failed to update device crypto security: ${extractApiError(err)}`);
     } finally {
       setSaving(false);
     }
@@ -537,8 +729,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       const warnings = (result.warnings as string[]) || [];
       const parts: string[] = [];
       if (result.profile_updated) parts.push('Profile updated');
+      if (result.settings_imported) parts.push('Settings imported');
       if (typeof result.messages_imported === 'number' && result.messages_imported > 0)
         parts.push(`${result.messages_imported} messages imported`);
+      if (typeof result.prekeys_imported === 'number' && result.prekeys_imported > 0)
+        parts.push(`${result.prekeys_imported} encryption keys imported`);
+      if (typeof result.attachments_noted === 'number' && result.attachments_noted > 0)
+        parts.push(`${result.attachments_noted} attachment records noted`);
       if (typeof result.relationships_found === 'number' && result.relationships_found > 0)
         parts.push(`${result.relationships_found} relationships noted`);
       if (typeof result.guilds_noted === 'number' && result.guilds_noted > 0)
@@ -571,7 +768,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
       {!isMobile && (
         <div className="absolute right-6 top-6 z-50 flex flex-col items-center gap-1">
-          <button onClick={onClose} className="command-icon-btn rounded-full border border-border-strong bg-bg-secondary/75 hover:bg-bg-mod-subtle">
+          <button
+            onClick={onClose}
+            className="command-icon-btn rounded-full border border-border-strong bg-bg-secondary/75 hover:bg-bg-mod-subtle"
+            aria-label="Close user settings"
+            title="Close user settings"
+          >
             <X size={18} />
           </button>
           <span className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Esc</span>
@@ -579,36 +781,69 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       )}
 
       {isMobile ? (
-        <div className="relative z-10 border-b border-border-subtle/70 bg-bg-secondary/70 px-3 pb-2.5 pt-[calc(var(--safe-top)+0.75rem)]">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">User Settings</div>
-            <button onClick={onClose} className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75">
+        mobileShowNav ? (
+          <div className="relative z-10 flex flex-1 flex-col overflow-y-auto bg-bg-secondary/70 pt-[calc(var(--safe-top)+0.75rem)]">
+            <div className="flex items-center justify-between px-4 pb-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">User Settings</div>
+              <button
+                onClick={onClose}
+                className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
+                aria-label="Close user settings"
+                title="Close user settings"
+              >
+                <X size={17} />
+              </button>
+            </div>
+            <div className="flex flex-col px-2 pb-[calc(var(--safe-bottom)+1rem)]">
+              {NAV_ITEMS.filter(item => !item.adminOnly || userIsAdmin).map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => selectMobileSection(item.id)}
+                  className="flex w-full items-center justify-between rounded-xl px-4 py-3.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
+                >
+                  {item.label}
+                  <ArrowLeft size={14} className="rotate-180 text-text-muted" />
+                </button>
+              ))}
+              <div className="mx-2 my-2 h-px bg-border-subtle" />
+              <button
+                onClick={() => { onClose(); navigate('/app/developers'); }}
+                className="flex w-full items-center justify-between rounded-xl px-4 py-3.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
+              >
+                Developer Portal
+                <ArrowLeft size={14} className="rotate-180 text-text-muted" />
+              </button>
+              <div className="mx-2 my-2 h-px bg-border-subtle" />
+              <button
+                onClick={() => { void logout(); onClose(); }}
+                className="flex w-full items-center rounded-xl px-4 py-3.5 text-sm font-medium text-accent-danger transition-colors hover:bg-accent-danger/10"
+              >
+                Log Out
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="relative z-10 flex items-center gap-2 border-b border-border-subtle/70 bg-bg-secondary/70 px-3 pb-2.5 pt-[calc(var(--safe-top)+0.75rem)]">
+            <button
+              onClick={() => setMobileShowNav(true)}
+              className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
+              aria-label="Back to settings menu"
+            >
+              <ArrowLeft size={17} />
+            </button>
+            <div className="flex-1 text-sm font-semibold text-text-primary">
+              {NAV_ITEMS.find(i => i.id === activeSection)?.label ?? activeSection}
+            </div>
+            <button
+              onClick={onClose}
+              className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
+              aria-label="Close user settings"
+              title="Close user settings"
+            >
               <X size={17} />
             </button>
           </div>
-          <div className="scrollbar-thin flex items-center gap-2 overflow-x-auto pb-1">
-            {NAV_ITEMS.filter(item => !item.adminOnly || userIsAdmin).map(item => (
-              <button
-                key={item.id}
-                onClick={() => setActiveSection(item.id)}
-                className={cn(
-                  'inline-flex h-9 shrink-0 items-center justify-center rounded-lg border px-3 text-sm font-semibold transition-colors',
-                  activeSection === item.id
-                    ? 'border-border-strong bg-bg-mod-strong text-text-primary'
-                    : 'border-border-subtle/70 bg-bg-mod-subtle text-text-secondary'
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
-            <button
-              onClick={() => { void logout(); onClose(); }}
-              className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg border border-accent-danger/45 bg-accent-danger/10 px-3 text-sm font-semibold text-accent-danger"
-            >
-              Log Out
-            </button>
-          </div>
-        </div>
+        )
       ) : (
         <div className="relative z-10 w-72 shrink-0 overflow-y-auto border-r border-border-subtle/70 bg-bg-secondary/65 px-4 py-10">
           <div className="ml-auto w-full max-w-[236px]">
@@ -633,6 +868,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             ))}
             <div className="mx-2 my-2 h-px bg-border-subtle" />
             <button
+              onClick={() => { onClose(); navigate('/app/developers'); }}
+              className="settings-nav-item"
+            >
+              Developer Portal
+            </button>
+            <div className="mx-2 my-2 h-px bg-border-subtle" />
+            <button
               onClick={() => { void logout(); onClose(); }}
               className="settings-nav-item"
               style={{ color: 'var(--accent-danger)', borderColor: 'transparent' }}
@@ -644,7 +886,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       )}
 
       {/* Content area */}
-      <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-3 pb-[calc(var(--safe-bottom)+1rem)] pt-3' : 'px-6 py-8')}>
+      {(!isMobile || !mobileShowNav) && <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-3 pb-[calc(var(--safe-bottom)+1rem)] pt-3' : 'px-6 py-8')}>
         <div className="w-full">
           {!isMobile && (
             <nav className="mb-4 flex items-center gap-1.5 text-xs text-text-muted" aria-label="Breadcrumb">
@@ -655,10 +897,16 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               </span>
             </nav>
           )}
-          {statusText && (
+          {statusText && statusKind === 'error' && (
+            <div className="mb-10">
+              <ErrorBanner message={statusText} />
+            </div>
+          )}
+          {statusText && statusKind === 'success' && (
             <div
-              className="card-surface mb-10 inline-flex max-w-full items-center rounded-xl border border-border-subtle bg-bg-mod-subtle px-4 py-3 text-sm font-medium"
-              style={{ color: statusText.includes('Failed') ? 'var(--accent-danger)' : 'var(--accent-success)' }}
+              className="card-surface mb-10 inline-flex max-w-full items-center rounded-xl border border-accent-success/35 bg-accent-success/10 px-4 py-3 text-sm font-medium text-accent-success"
+              role="status"
+              aria-live="polite"
             >
               {statusText}
             </div>
@@ -703,15 +951,37 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         <textarea className="input-field resize-none" rows={3} value={bio} onChange={(e) => setBio(e.target.value)} />
                       </div>
                       <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
+                        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Pronouns</div>
+                        <input
+                          className="input-field"
+                          value={pronouns}
+                          onChange={(e) => setPronouns(e.target.value)}
+                          placeholder="e.g. they/them"
+                        />
+                      </div>
+                      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Linked Accounts</div>
+                        <div className="mb-3 text-xs text-text-muted">
+                          One per line in the format <code>Label|https://url</code>.
+                        </div>
+                        <textarea
+                          className="input-field resize-none"
+                          rows={4}
+                          value={linkedAccountsInput}
+                          onChange={(e) => setLinkedAccountsInput(e.target.value)}
+                          placeholder={'GitHub|https://github.com/username\nWebsite|https://example.com'}
+                        />
+                      </div>
+                      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
                         <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Email</div>
                         <div className="text-sm font-medium text-text-primary">
                           {user?.email ? user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : '***@***'}
                         </div>
                       </div>
                       <div className="settings-action-row">
-                        <button className="btn-primary" onClick={() => void saveProfile()} disabled={saving}>
+                        <Button onClick={() => void saveProfile()} disabled={saving}>
                           {saving ? 'Saving...' : 'Save Profile'}
-                        </button>
+                        </Button>
                       </div>
                     </div>
 
@@ -745,13 +1015,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                             </label>
                           </div>
                           <div className="settings-action-row">
-                            <button
-                              className="btn-primary"
+                            <Button
                               onClick={() => void submitEmailChange()}
                               disabled={accountActionLoading || !emailCurrentPassword.trim() || !accountNewEmail.trim()}
                             >
                               {accountActionLoading ? 'Updating...' : 'Update Email'}
-                            </button>
+                            </Button>
                           </div>
                         </div>
 
@@ -792,8 +1061,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                             </label>
                           </div>
                           <div className="settings-action-row">
-                            <button
-                              className="btn-primary"
+                            <Button
                               onClick={() => void submitPasswordChange()}
                               disabled={
                                 accountActionLoading ||
@@ -803,7 +1071,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                               }
                             >
                               {accountActionLoading ? 'Updating...' : 'Update Password'}
-                            </button>
+                            </Button>
                           </div>
                         </div>
 
@@ -817,14 +1085,152 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                                 Download a JSON export of your account data.
                               </div>
                             </div>
-                            <button
-                              className="btn-primary"
+                            <Button
                               onClick={() => void downloadAccountData()}
                               disabled={accountDataExporting}
                             >
                               {accountDataExporting ? 'Exporting...' : 'Download Data'}
-                            </button>
+                            </Button>
                           </div>
+                        </div>
+
+                        {/* Two-Factor Authentication */}
+                        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
+                          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                                Two-Factor Authentication (2FA)
+                              </div>
+                              <div className="mt-1 text-sm text-text-muted">
+                                {mfaEnabled
+                                  ? `Enabled. ${mfaBackupCodesRemaining} backup code${mfaBackupCodesRemaining !== 1 ? 's' : ''} remaining.`
+                                  : 'Add an extra layer of security to your account.'}
+                              </div>
+                            </div>
+                            {mfaView === 'idle' && (
+                              mfaEnabled ? (
+                                <button
+                                  className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-1.5 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15 disabled:opacity-60"
+                                  onClick={() => { setMfaView('disable'); setMfaStatus(null); }}
+                                  disabled={mfaLoading}
+                                >
+                                  Disable 2FA
+                                </button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  onClick={() => void startMfaSetup()}
+                                  disabled={mfaLoading}
+                                >
+                                  {mfaLoading ? 'Loading...' : 'Enable 2FA'}
+                                </Button>
+                              )
+                            )}
+                          </div>
+
+                          {mfaStatus && (
+                            <div
+                              className={`mb-4 rounded-lg px-4 py-3 text-sm font-medium ${mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'border border-accent-success/35 bg-accent-success/10 text-accent-success' : 'border border-accent-danger/35 bg-accent-danger/10 text-accent-danger'}`}
+                              role={mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'status' : 'alert'}
+                              aria-live={mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'polite' : 'assertive'}
+                            >
+                              {mfaStatus}
+                            </div>
+                          )}
+
+                          {mfaBackupCodes.length > 0 && (
+                            <div className="mb-4">
+                              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-accent-warning">
+                                Save These Backup Codes
+                              </div>
+                              <div className="rounded-lg border border-border-subtle bg-bg-tertiary/70 p-3 font-mono text-xs text-text-primary">
+                                {mfaBackupCodes.map((code) => (
+                                  <div key={code}>{code}</div>
+                                ))}
+                              </div>
+                              <div className="mt-2 text-xs text-text-muted">
+                                Each code can only be used once. Store them somewhere safe.
+                              </div>
+                              <button
+                                className="mt-2 text-xs font-semibold text-text-link hover:underline"
+                                onClick={() => setMfaBackupCodes([])}
+                              >
+                                I have saved my codes
+                              </button>
+                            </div>
+                          )}
+
+                          {mfaView === 'setup' && mfaSetupData && (
+                            <div className="space-y-4">
+                              <div className="text-sm text-text-muted">
+                                1. Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.), or manually enter the secret.
+                              </div>
+                              <div className="flex justify-center">
+                                <img src={mfaSetupData.qr_code} alt="TOTP QR Code" className="h-40 w-40 rounded-lg" />
+                              </div>
+                              <div className="rounded-lg border border-border-subtle bg-bg-tertiary/70 p-3 font-mono text-xs text-text-primary break-all">
+                                {mfaSetupData.secret}
+                              </div>
+                              <div className="text-sm text-text-muted">
+                                2. Enter the 6-digit code from your authenticator app:
+                              </div>
+                              <input
+                                className="input-field"
+                                type="text"
+                                aria-label="Authenticator code"
+                                inputMode="numeric"
+                                maxLength={6}
+                                placeholder="000000"
+                                value={mfaVerifyCode}
+                                onChange={(e) => setMfaVerifyCode(e.target.value.replace(/\D/g, ''))}
+                              />
+                              <div className="flex gap-3">
+                                <Button
+                                  onClick={() => void verifyMfaSetup()}
+                                  disabled={mfaLoading || mfaVerifyCode.length < 6}
+                                >
+                                  {mfaLoading ? 'Verifying...' : 'Confirm & Enable'}
+                                </Button>
+                                <button
+                                  className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary hover:text-text-primary"
+                                  onClick={() => { setMfaView('idle'); setMfaSetupData(null); setMfaVerifyCode(''); setMfaStatus(null); }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {mfaView === 'disable' && (
+                            <div className="space-y-4">
+                              <div className="text-sm text-text-muted">
+                                Enter your current TOTP code or a backup code to disable 2FA:
+                              </div>
+                              <input
+                                className="input-field"
+                                type="text"
+                                aria-label="Current TOTP or backup code"
+                                placeholder="6-digit code or backup code"
+                                value={mfaDisableCode}
+                                onChange={(e) => setMfaDisableCode(e.target.value)}
+                              />
+                              <div className="flex gap-3">
+                                <button
+                                  className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-4 py-2 text-sm font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15 disabled:opacity-60"
+                                  onClick={() => void disableMfa()}
+                                  disabled={mfaLoading || !mfaDisableCode.trim()}
+                                >
+                                  {mfaLoading ? 'Disabling...' : 'Disable 2FA'}
+                                </button>
+                                <button
+                                  className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary hover:text-text-primary"
+                                  onClick={() => { setMfaView('idle'); setMfaDisableCode(''); setMfaStatus(null); }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
@@ -923,15 +1329,14 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                               You have not set up a local crypto identity for this account yet.
                             </div>
                             <div className="settings-action-row">
-                              <button
-                                className="btn-primary"
+                              <Button
                                 onClick={() => {
                                   onClose();
                                   navigate('/setup?migrate=1');
                                 }}
                               >
                                 Set Up Local Identity
-                              </button>
+                              </Button>
                             </div>
                           </div>
                         )}
@@ -961,64 +1366,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)]">
               <h2 className="settings-section-title mb-8">Appearance</h2>
               <div className="mb-8">
-                <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Theme</div>
-                <div className="grid gap-5 sm:grid-cols-3">
-                  {[
-                    { id: 'dark' as const, label: 'Dark', icon: <Moon size={20} /> },
-                    { id: 'light' as const, label: 'Light', icon: <Sun size={20} /> },
-                    { id: 'amoled' as const, label: 'AMOLED', icon: <Monitor size={20} /> },
-                  ].map(t => (
-                    <button
-                      key={t.id}
-                      onClick={() => handleThemeChange(t.id)}
-                      className="card-surface flex flex-col items-center gap-2.5 rounded-xl border px-6 py-5 transition-colors"
-                      style={{
-                        backgroundColor: theme === t.id ? 'var(--accent-primary)' : 'var(--bg-secondary)',
-                        color: theme === t.id ? '#fff' : 'var(--text-secondary)',
-                        borderColor: theme === t.id ? 'var(--accent-primary)' : 'var(--border-subtle)',
-                      }}
-                    >
-                      {t.icon}
-                      <span className="text-sm font-medium">{t.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="mb-8">
-                <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Accent Color</div>
-                <div className="grid grid-cols-5 gap-2.5 sm:grid-cols-10">
-                  {([
-                    ['red', '#eb4d4b'],
-                    ['blue', '#4f7cff'],
-                    ['emerald', '#22b07d'],
-                    ['amber', '#d1972f'],
-                    ['rose', '#d95d7a'],
-                    ['violet', '#7a6cff'],
-                    ['cyan', '#21a9b7'],
-                    ['lime', '#7ba72a'],
-                    ['orange', '#d86d36'],
-                    ['slate', '#7a879f'],
-                  ] as const).map(([id, color]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => {
-                        setAccentPreset(id);
-                        setAccentPresetUI(id);
-                      }}
-                      className={cn(
-                        'h-9 w-full rounded-lg border transition-all',
-                        accentPreset === id ? 'scale-105 shadow-md' : 'opacity-90 hover:opacity-100'
-                      )}
-                      style={{
-                        backgroundColor: color,
-                        borderColor: accentPreset === id ? '#ffffff' : 'color-mix(in srgb, var(--border-subtle) 75%, transparent)',
-                      }}
-                      title={id.charAt(0).toUpperCase() + id.slice(1)}
-                      aria-label={`Set accent ${id}`}
-                    />
-                  ))}
-                </div>
+                <ThemeSelector
+                  currentTheme={theme}
+                  onThemeChange={(t) => handleThemeChange(t)}
+                />
               </div>
               <div className="card-stack-relaxed">
                 <label className="block">
@@ -1031,11 +1382,17 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   </div>
                   <ToggleSwitch on={messageCompact} onToggle={() => setMessageCompact(!messageCompact)} />
                 </div>
+                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
+                  <CustomCSS
+                    initialCSS={customCss}
+                    onSave={(css) => setCustomCss(css)}
+                  />
+                </div>
               </div>
               <div className="settings-action-row">
-                <button className="btn-primary" onClick={() => void saveSettings()} disabled={saving}>
+                <Button onClick={() => void saveSettings()} disabled={saving}>
                   {saving ? 'Saving...' : 'Save Appearance'}
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -1082,6 +1439,30 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     ))}
                   </select>
                 </label>
+                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Input Mode</span>
+                  <div className="mt-3 flex gap-2">
+                    {(['voice_activity', 'push_to_talk'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        onClick={() => setNotifications((prev) => ({ ...prev, voiceInputMode: mode }))}
+                        className={cn(
+                          'flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
+                          (mergedNotifications['voiceInputMode'] ?? 'voice_activity') === mode
+                            ? 'border-accent-primary bg-accent-primary/10 text-accent-primary'
+                            : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-border-strong hover:text-text-primary'
+                        )}
+                      >
+                        {mode === 'voice_activity' ? 'Voice Activity' : 'Push to Talk'}
+                      </button>
+                    ))}
+                  </div>
+                  {(mergedNotifications['voiceInputMode'] ?? 'voice_activity') === 'push_to_talk' && (
+                    <p className="mt-2 text-xs text-text-muted">
+                      Set your Push to Talk key in the Keybinds section. You will be muted by default — hold the key to speak.
+                    </p>
+                  )}
+                </div>
                 <div className="card-surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
                   <div>
                     <div className="text-sm font-medium text-text-primary">Noise Suppression</div>
@@ -1114,7 +1495,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </div>
               </div>
               <div className="settings-action-row">
-                <button className="btn-primary" onClick={() => {
+                <Button onClick={() => {
                   void saveSettings().then(() => {
                     // Re-acquire the microphone with updated noise suppression /
                     // echo cancellation / auto gain constraints so changes take effect
@@ -1123,7 +1504,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   });
                 }} disabled={saving}>
                   {saving ? 'Saving...' : 'Save Voice Settings'}
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -1174,11 +1555,27 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     onToggle={() => setNotifications((prev) => ({ ...prev, messageSound: !Boolean(prev.messageSound) }))}
                   />
                 </div>
+                <div className="card-surface flex items-center justify-between rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
+                  <div>
+                    <div className="text-sm font-medium text-text-primary">Low Bandwidth Mode</div>
+                    <div className="text-xs text-text-muted">
+                      Hide heavy image previews and reduce automatic media loading.
+                    </div>
+                  </div>
+                  <ToggleSwitch
+                    on={Boolean(mergedNotifications.lowBandwidthMode)}
+                    onToggle={() => {
+                      const next = !Boolean(mergedNotifications.lowBandwidthMode);
+                      setLowBandwidthModeUI(next);
+                      setNotifications((prev) => ({ ...prev, lowBandwidthMode: next }));
+                    }}
+                  />
+                </div>
               </div>
               <div className="settings-action-row">
-                <button className="btn-primary" onClick={() => void saveSettings()} disabled={saving}>
+                <Button onClick={() => void saveSettings()} disabled={saving}>
                   {saving ? 'Saving...' : 'Save Notifications'}
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -1233,9 +1630,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </div>
               </div>
               <div className="settings-action-row">
-                <button className="btn-primary" onClick={() => void saveActivitySettings()} disabled={saving}>
+                <Button onClick={() => void saveActivitySettings()} disabled={saving}>
                   {saving ? 'Saving...' : 'Save Activity Privacy'}
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -1280,9 +1677,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 ))}
               </div>
               <div className="settings-action-row">
-                <button className="btn-primary" onClick={() => void saveSettings()} disabled={saving}>
+                <Button onClick={() => void saveSettings()} disabled={saving}>
                   {saving ? 'Saving...' : 'Save Keybinds'}
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -1301,6 +1698,25 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               )}
 
               <div className="card-stack-roomy">
+                <div className="card-surface rounded-2xl border border-border-subtle bg-bg-tertiary/80 p-8">
+                  <div className="mb-6">
+                    <div className="text-base font-semibold text-text-primary">Current Identity Key</div>
+                    <div className="mt-1 text-sm text-text-muted">
+                      Share and verify this fingerprint with trusted contacts.
+                    </div>
+                  </div>
+                  {ownIdentityFingerprint ? (
+                    <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-4 py-3">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Fingerprint</div>
+                      <div className="break-all font-mono text-xs text-text-primary">{ownIdentityFingerprint}</div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-4 py-3 text-sm text-text-muted">
+                      No public identity key attached to this account yet.
+                    </div>
+                  )}
+                </div>
+
                 {/* Export Section */}
                 <div className="card-surface rounded-2xl border border-border-subtle bg-bg-tertiary/80 p-8">
                   <div className="mb-6">
@@ -1326,13 +1742,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     </div>
                   </div>
                   <div className="settings-action-row">
-                    <button
-                      className="btn-primary"
+                    <Button
                       onClick={() => void handleExportIdentity()}
                       disabled={exporting}
                     >
                       {exporting ? 'Exporting...' : 'Export Identity'}
-                    </button>
+                    </Button>
                   </div>
                 </div>
 
@@ -1383,6 +1798,20 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                             </span>
                           </div>
                           <div className="flex justify-between">
+                            <span className="text-text-muted">Attachments</span>
+                            <span className="font-medium text-text-primary">
+                              {Array.isArray(importPreview.attachments) ? importPreview.attachments.length : 0}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-text-muted">Prekeys</span>
+                            <span className="font-medium text-text-primary">
+                              {Array.isArray((importPreview.prekeys as Record<string, unknown> | undefined)?.one_time_prekeys)
+                                ? ((importPreview.prekeys as Record<string, unknown>).one_time_prekeys as unknown[]).length
+                                : 0}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
                             <span className="text-text-muted">Relationships</span>
                             <span className="font-medium text-text-primary">
                               {Array.isArray(importPreview.relationships) ? importPreview.relationships.length : 0}
@@ -1408,13 +1837,12 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     )}
                   </div>
                   <div className="settings-action-row">
-                    <button
-                      className="btn-primary"
+                    <Button
                       onClick={() => void handleImportIdentity()}
                       disabled={importing || !importPreview}
                     >
                       {importing ? 'Importing...' : 'Import Identity'}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -1432,19 +1860,17 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                   </div>
                   <div className="mt-4">
                     {!restartConfirm ? (
-                      <button
-                        className="btn-primary"
+                      <Button
                         style={{ backgroundColor: 'var(--accent-warning, #f59e0b)' }}
                         onClick={() => setRestartConfirm(true)}
                         disabled={restarting}
                       >
                         Update & Restart Server
-                      </button>
+                      </Button>
                     ) : (
                       <div className="flex flex-wrap items-center gap-3">
                         <span className="text-sm font-medium text-text-primary">Are you sure?</span>
-                        <button
-                          className="btn-primary"
+                        <Button
                           style={{ backgroundColor: 'var(--accent-danger)' }}
                           disabled={restarting}
                           onClick={async () => {
@@ -1454,20 +1880,19 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                             } catch {
                               setRestarting(false);
                               setRestartConfirm(false);
-                              setStatusText('Failed to trigger restart.');
+                              setErrorStatus('Failed to trigger restart.');
                             }
                           }}
                         >
                           {restarting ? 'Restarting...' : 'Yes, restart now'}
-                        </button>
-                        <button
-                          className="btn-primary"
+                        </Button>
+                        <Button
                           style={{ backgroundColor: 'var(--bg-tertiary)' }}
                           onClick={() => setRestartConfirm(false)}
                           disabled={restarting}
                         >
                           Cancel
-                        </button>
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -1491,7 +1916,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             </div>
           )}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

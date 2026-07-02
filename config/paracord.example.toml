@@ -1,6 +1,7 @@
 [server]
 bind_address = "0.0.0.0:8080"
 server_name = "paracord.example.com"
+permission_cache_max_entries = 10000
 # Optional: serve the built web UI from this directory. Can also be set via --web-dir CLI arg.
 # web_dir = "./web"
 # For internet deployments, set public DNS name above and terminate TLS at a reverse proxy.
@@ -48,9 +49,14 @@ max_connections = 5
 # statement_timeout_secs = 30
 # Idle-in-transaction timeout in seconds for PostgreSQL (0 = disabled).
 # idle_in_transaction_timeout_secs = 60
+# Per-connection PostgreSQL memory for sorts/hash operations (0 = server default).
+# work_mem_mb = 16
+# Per-connection PostgreSQL memory for maintenance ops (0 = server default).
+# maintenance_work_mem_mb = 64
 # Env overrides: PARACORD_DATABASE_URL, PARACORD_DATABASE_ENGINE,
 #   PARACORD_DATABASE_MAX_CONNECTIONS, PARACORD_DATABASE_STATEMENT_TIMEOUT_SECS,
-#   PARACORD_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_SECS
+#   PARACORD_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_SECS, PARACORD_DATABASE_WORK_MEM_MB,
+#   PARACORD_DATABASE_MAINTENANCE_WORK_MEM_MB
 
 [auth]
 # jwt_secret is auto-generated on first run. Override here or via PARACORD_JWT_SECRET env var.
@@ -61,24 +67,38 @@ registration_enabled = true
 allow_username_login = true
 # Require email during password registration.
 require_email = false
+# Optional email verification enforcement.
+# require_email_verification = false
+# SMTP delivery is configured via env vars:
+#   PARACORD_SMTP_HOST=smtp.example.com
+#   PARACORD_SMTP_PORT=587
+#   PARACORD_SMTP_STARTTLS=true
+#   PARACORD_SMTP_USERNAME=mailer-user
+#   PARACORD_SMTP_PASSWORD=mailer-pass
+#   PARACORD_SMTP_FROM="Paracord <no-reply@example.com>"
 
 [storage]
-# Storage backend: "local" (default) or "s3".
-# When set to "s3", configure the [s3] section below and build with `--features s3`.
+# Upload storage backend: "local" (default) or optional S3-compatible object storage.
+# S3-compatible storage is disabled by default. To enable it, set storage_type = "s3",
+# configure the [s3] section below, and build the server with `--features s3`.
 storage_type = "local"
 path = "./data/uploads"
 # max_upload_size is optional and defaults to 50MB.
 
 # [s3]
-# # S3-compatible object storage (MinIO, AWS S3, R2, DigitalOcean Spaces, etc.).
+# # Optional S3-compatible object storage (MinIO, Cloudflare R2, AWS S3,
+# # DigitalOcean Spaces, etc.).
 # # Only used when storage.storage_type = "s3".
 # bucket = "paracord-uploads"
 # region = "us-east-1"
-# # Custom endpoint for non-AWS providers:
+# # Custom endpoint for non-default providers:
 # # endpoint_url = "https://minio.example.com"
 # # force_path_style = true
 # # access_key_id = "your-access-key"
 # # secret_access_key = "your-secret-key"
+# # Disabled by default. Set true only when intentionally using AWS env/profile/
+# # SSO/instance-role credentials instead of explicit keys above.
+# # use_aws_credential_chain = false
 # # Optional key prefix for all objects:
 # # prefix = "paracord/"
 # # Optional CDN base URL (skips presigned URLs):
@@ -90,6 +110,22 @@ path = "./data/uploads"
 storage_path = "./data/files"
 max_file_size = 1073741824  # 1GB in bytes
 p2p_threshold = 1073741824  # Files over 1GB use P2P
+
+[voice]
+# Native QUIC/WebTransport voice stack. Disabled by default; enable this to
+# make native media the primary path while keeping LiveKit as an optional fallback.
+# Env override: PARACORD_VOICE_NATIVE_MEDIA
+native_media = false
+# Unified UDP port for raw QUIC desktop clients and browser WebTransport.
+# Forward this port over UDP in addition to the HTTPS TCP port above.
+# Env override: PARACORD_VOICE_PORT
+port = 8443
+# Env override: PARACORD_VOICE_MAX_PARTICIPANTS_PER_ROOM
+max_participants_per_room = 64
+# Env override: PARACORD_VOICE_AUDIO_BITRATE
+audio_bitrate = 64000
+# Env override: PARACORD_VOICE_E2EE_REQUIRED
+e2ee_required = true
 
 [livekit]
 # Use long random values in production.
@@ -105,7 +141,7 @@ http_url = "http://localhost:7880"
 # public_url = "wss://chat.example.com/livekit"
 
 [federation]
-enabled = true
+enabled = false
 # The domain name used in federated identities (e.g., @user:chat.example.com).
 # Defaults to server.server_name if not set.
 # domain = "chat.example.com"

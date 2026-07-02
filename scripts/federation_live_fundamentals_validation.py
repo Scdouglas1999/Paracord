@@ -575,6 +575,12 @@ def main() -> int:
 
         livekit_binary = ensure_livekit_binary()
         log(f"Using LiveKit binary: {livekit_binary}")
+        child_env = os.environ.copy()
+        # This script intentionally validates loopback-only local federation.
+        # Production deployments should leave this unset so SSRF protections
+        # continue blocking private/internal federation endpoints by default.
+        child_env["PARACORD_ALLOW_PRIVATE_FEDERATION_URLS"] = "true"
+        child_env["PARACORD_FEDERATION_ALLOWED_GUILD_IDS"] = "*"
 
         log("[2/14] Building paracord-server binary")
         run(["cargo", "build", "-p", "paracord-server"], cwd=ROOT)
@@ -594,6 +600,7 @@ def main() -> int:
                 stdout=fh,
                 stderr=subprocess.STDOUT,
                 text=True,
+                env=child_env,
             )
             procs.append(proc)
 

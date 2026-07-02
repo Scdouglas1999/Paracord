@@ -6,6 +6,14 @@ import { setStoredServerUrl } from '../lib/apiBaseUrl';
 import { isPortableLink, decodePortableLink } from '../lib/portableLinks';
 import { confirm } from '../stores/confirmStore';
 import { OnboardingWizard, hasCompletedOnboarding } from '../components/onboarding/OnboardingWizard';
+import { ErrorBanner } from '../components/ui/Feedback';
+import { Button } from '../components/ui/Button';
+import { syncTrustedHosts } from '../lib/trustedHosts';
+import { isTauri } from '../lib/tauriEnv';
+
+const PUBLIC_DEMO_SERVER_URL = (
+  import.meta.env.VITE_PUBLIC_DEMO_SERVER_URL || 'https://demo.paracord.chat'
+).trim();
 
 /**
  * Normalise a raw server address into a full URL with protocol.
@@ -78,12 +86,43 @@ function isLocalhostHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
-/** Probe /health and verify this is a Paracord server. Returns canonical server base + name. */
-async function probeServer(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
-  const resp = await fetch(`${serverUrl}/health`, {
-    method: 'GET',
-    signal: AbortSignal.timeout(10_000),
-  });
+/** Probe /health via Tauri's Rust-side HTTP client (bypasses WebView2 TLS restrictions). */
+async function probeServerViaTauri(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const data = await invoke<{ service?: string; name?: string }>('probe_server', { serverUrl });
+  if (data.service !== 'paracord') {
+    throw new Error('Not a Paracord server');
+  }
+  const canonicalServerUrl = canonicalServerBaseFromResolvedUrl(serverUrl);
+  let fallbackName = canonicalServerUrl;
+  try {
+    fallbackName = new URL(canonicalServerUrl).host;
+  } catch {
+    // keep canonical URL as fallback
+  }
+  return {
+    name: data.name || fallbackName,
+    canonicalServerUrl,
+  };
+}
+
+/** Probe /health via browser fetch (works in web builds). */
+async function probeServerViaFetch(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
+  let resp: Response;
+  try {
+    resp = await fetch(`${serverUrl}/health`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new Error('Connection timed out while probing server health endpoint.');
+    }
+    if (err instanceof TypeError) {
+      throw new Error('Network request failed. Check DNS, protocol, CORS, and TLS certificate settings.');
+    }
+    throw err;
+  }
   if (!resp.ok) throw new Error('Server returned an error');
   const data = await resp.json();
   if (data.service !== 'paracord') {
@@ -102,18 +141,66 @@ async function probeServer(serverUrl: string): Promise<{ name: string; canonical
   };
 }
 
+/** Probe /health and verify this is a Paracord server. Uses Rust-side HTTP in Tauri, fetch in browser. */
+async function probeServer(serverUrl: string): Promise<{ name: string; canonicalServerUrl: string }> {
+  if (isTauri()) {
+    return probeServerViaTauri(serverUrl);
+  }
+  return probeServerViaFetch(serverUrl);
+}
+
+function toFriendlyConnectionError(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return 'Could not connect. Check the URL and ensure the server is running.';
+  }
+
+  const msg = err.message.trim();
+  const lower = msg.toLowerCase();
+  if (!msg) {
+    return 'Could not connect. Check the URL and ensure the server is running.';
+  }
+  if (lower.includes('not a paracord server')) {
+    return 'Connected endpoint is reachable, but it does not identify as a Paracord server.';
+  }
+  if (lower.includes('timed out')) {
+    return 'Connection timed out. The server may be offline, blocked by firewall, or too slow to respond.';
+  }
+  if (lower.includes('network request failed') || lower.includes('failed to fetch')) {
+    return 'Network request failed. Verify DNS, protocol (http/https), CORS configuration, and TLS certificate trust.';
+  }
+  if (lower.includes('certificate') || lower.includes('tls') || lower.includes('ssl')) {
+    return 'TLS handshake failed. Verify server certificate chain and hostname.';
+  }
+  if (lower.includes('account not unlocked')) {
+    return 'Unlock your local account before connecting to this server.';
+  }
+  if (lower.includes('authentication failed') || lower.includes('challenge-response')) {
+    return 'Server authentication failed. Ensure this server supports challenge-response auth and your account exists.';
+  }
+  return msg;
+}
+
 export function ServerConnectPage() {
   const [url, setUrl] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [showOnboarding, setShowOnboarding] = useState(() => !hasCompletedOnboarding());
+  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
   const navigate = useNavigate();
   const servers = useServerListStore((s) => s.servers);
 
   // Show onboarding wizard for first-time users with no servers
   if (showOnboarding && servers.length === 0) {
-    return <OnboardingWizard onComplete={() => setShowOnboarding(false)} />;
+    return (
+      <OnboardingWizard
+        onComplete={() => setShowOnboarding(false)}
+        onTryDemo={() => {
+          setUrl(PUBLIC_DEMO_SERVER_URL);
+          setShowOnboarding(false);
+        }}
+      />
+    );
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -145,40 +232,49 @@ export function ServerConnectPage() {
         }
       }
 
+      // Ask Rust to verify/trust the host so WebView2 allows self-signed certs during probe.
+      const existingUrls = useServerListStore.getState().servers.map((s) => s.url);
+      await syncTrustedHosts([...existingUrls, serverUrl]);
+
       setStatus('Probing server...');
       const probe = await probeServer(serverUrl);
       const canonicalServerUrl = probe.canonicalServerUrl;
       const serverName = probe.name;
 
       // Add server to the multi-server list
-      setStatus('Authenticating...');
       const serverId = useServerListStore.getState().addServer(canonicalServerUrl, serverName);
-
-      // Also store as legacy server URL for backward compat
       setStoredServerUrl(canonicalServerUrl);
 
-      // Connect and authenticate via challenge-response
+      // Try challenge-response auth if the local account is set up.
+      // If not, just save the server and redirect to login for password auth.
+      setStatus('Authenticating...');
       try {
         await gateway.connectServer(serverId);
       } catch (authErr) {
-        // If challenge-response fails, the server might not support it yet.
-        // Keep the server in the list but without a token — user can try legacy login.
-        if (authErr instanceof Error && authErr.message === 'Account not unlocked') {
-          console.info('Challenge-response auth skipped: local identity is locked.');
-        } else {
-          console.warn('Challenge-response auth failed, falling back to legacy:', authErr);
+        gateway.disconnectServer(serverId);
+        const msg = authErr instanceof Error ? authErr.message : '';
+        if (msg.includes('not unlocked') || msg.includes('No server token')) {
+          // Account not set up for challenge-response — fall through to login
+          if (inviteCode) {
+            navigate(`/invite/${inviteCode}`);
+          } else {
+            navigate('/login');
+          }
+          return;
         }
+        useServerListStore.getState().removeServer(serverId);
+        throw new Error(
+          msg || 'Server authentication failed.',
+        );
       }
 
       if (inviteCode) {
-        // Navigate to the invite acceptance page
         navigate(`/invite/${inviteCode}`);
       } else {
-        // Navigate to the main app
         navigate('/app');
       }
-    } catch {
-      setError('Could not connect. Check the URL and ensure the server is running.');
+    } catch (err) {
+      setError(toFriendlyConnectionError(err));
     } finally {
       setLoading(false);
       setStatus('');
@@ -188,6 +284,24 @@ export function ServerConnectPage() {
   const handleRemoveServer = (serverId: string) => {
     gateway.disconnectServer(serverId);
     useServerListStore.getState().removeServer(serverId);
+  };
+
+  const handleReconnectServer = async (serverId: string) => {
+    const server = servers.find((entry) => entry.id === serverId);
+    if (!server) return;
+    setError('');
+    setStatus('');
+    setReconnectingId(serverId);
+    try {
+      useServerListStore.getState().setActive(serverId);
+      setStoredServerUrl(server.url);
+      await gateway.connectServer(serverId);
+      navigate('/app');
+    } catch (err) {
+      setError(toFriendlyConnectionError(err));
+    } finally {
+      setReconnectingId(null);
+    }
   };
 
   return (
@@ -201,11 +315,7 @@ export function ServerConnectPage() {
             </p>
           </div>
 
-          {error && (
-            <div className="rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-5 py-4 text-sm font-medium text-accent-danger">
-              {error}
-            </div>
-          )}
+          {error && <ErrorBanner message={error} />}
 
           <div className="card-stack-roomy">
             <label className="block">
@@ -235,15 +345,24 @@ export function ServerConnectPage() {
             </div>
           </div>
 
+          <Button
+            type="button"
+            onClick={() => setUrl(PUBLIC_DEMO_SERVER_URL)}
+            variant="outline"
+            className="w-full border-accent-primary/40 bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/20"
+          >
+            Try a public demo server
+          </Button>
+
           {status && (
             <div className="text-center text-sm text-text-muted">
               {status}
             </div>
           )}
 
-          <button type="submit" disabled={loading} className="btn-primary mt-10 w-full">
+          <Button type="submit" disabled={loading} className="mt-10 w-full">
             {loading ? 'Connecting...' : 'Add Server'}
-          </button>
+          </Button>
         </form>
 
         {/* Existing servers */}
@@ -276,6 +395,15 @@ export function ServerConnectPage() {
                             : 'bg-text-muted'
                       }`}
                     />
+                    {!server.connected && (
+                      <button
+                        onClick={() => void handleReconnectServer(server.id)}
+                        disabled={reconnectingId === server.id}
+                        className="text-xs text-accent-primary transition-colors hover:text-accent-primary-hover disabled:opacity-60"
+                      >
+                        {reconnectingId === server.id ? 'Reconnecting...' : 'Reconnect'}
+                      </button>
+                    )}
                     <button
                       onClick={() => handleRemoveServer(server.id)}
                       className="text-xs text-text-muted transition-colors hover:text-accent-danger"
@@ -287,12 +415,12 @@ export function ServerConnectPage() {
               ))}
             </div>
             {servers.length > 0 && (
-              <button
+              <Button
                 onClick={() => navigate('/app')}
-                className="btn-primary mt-4 w-full"
+                className="mt-4 w-full"
               >
                 Continue to App
-              </button>
+              </Button>
             )}
           </div>
         )}

@@ -5,6 +5,7 @@ import { MessageInput } from './MessageInput';
 import type { Message } from '../../types';
 import { useChannelStore } from '../../stores/channelStore';
 import { channelApi } from '../../api/channels';
+import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { confirm } from '../../stores/confirmStore';
 
@@ -15,6 +16,11 @@ interface ThreadPanelProps {
   parentChannelName: string;
   onClose: () => void;
   className?: string;
+}
+
+function threadPanelError(action: string, err: unknown): string {
+  const detail = extractApiError(err);
+  return detail ? `${action}: ${detail}` : action;
 }
 
 export function ThreadPanel({
@@ -38,8 +44,8 @@ export function ThreadPanel({
     try {
       const { data: updated } = await channelApi.updateThread(threadChannel.parent_id, threadChannelId, { archived: false });
       useChannelStore.getState().updateChannel(updated);
-    } catch {
-      toast.error('Failed to restore thread.');
+    } catch (err: unknown) {
+      toast.error(threadPanelError('Failed to restore thread', err));
     } finally {
       setRestoring(false);
     }
@@ -55,8 +61,8 @@ export function ThreadPanel({
         useChannelStore.getState().removeChannel(guildId, threadChannelId);
       }
       onClose();
-    } catch {
-      toast.error('Failed to delete thread.');
+    } catch (err: unknown) {
+      toast.error(threadPanelError('Failed to delete thread', err));
     } finally {
       setDeleting(false);
     }

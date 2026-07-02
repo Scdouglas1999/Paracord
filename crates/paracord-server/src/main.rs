@@ -1,6 +1,9 @@
+#![allow(clippy::collapsible_if, clippy::derivable_impls)]
+
 use anyhow::{Context, Result};
 use axum::response::IntoResponse;
 use clap::Parser;
+use dashmap::{DashMap, DashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,10 +18,22 @@ mod embedded_ui;
 mod livekit_proc;
 mod tls;
 
+const PUBLIC_IP_DETECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const PUBLIC_IP_DETECTION_BODY_LIMIT: usize = 128;
+
+fn parse_detected_public_ip(text: &str) -> Option<String> {
+    let ip = text.trim();
+    if ip.is_empty() || ip.parse::<std::net::IpAddr>().is_err() {
+        return None;
+    }
+    Some(ip.to_string())
+}
+
 #[derive(Clone, Default)]
 struct AtRestRuntimeProfile {
     sqlite_key_hex: Option<String>,
     file_cryptor: Option<paracord_util::at_rest::FileCryptor>,
+    totp_cryptor: Option<paracord_util::at_rest::FileCryptor>,
 }
 
 fn map_db_engine(engine: config::DatabaseEngine) -> paracord_db::DatabaseEngine {
@@ -196,12 +211,27 @@ async fn main() -> Result<()> {
     if detected_external_ip.is_none()
         && (config.livekit.url.contains("localhost") || config.livekit.url.contains("127.0.0.1"))
     {
-        if let Ok(resp) = reqwest::get("https://api.ipify.org").await {
-            if let Ok(text) = resp.text().await {
-                let ip = text.trim().to_string();
-                if !ip.is_empty() {
-                    tracing::info!("Detected external IP via HTTP: {}", ip);
-                    detected_external_ip = Some(ip);
+        let public_ip_client = reqwest::Client::builder()
+            .timeout(PUBLIC_IP_DETECTION_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build();
+        if let Ok(client) = public_ip_client {
+            let response = client.get("https://api.ipify.org").send().await;
+            if let Ok(resp) = response {
+                if resp.status().is_success() {
+                    let text = match axum::body::to_bytes(
+                        axum::body::Body::from_stream(resp.bytes_stream()),
+                        PUBLIC_IP_DETECTION_BODY_LIMIT,
+                    )
+                    .await
+                    {
+                        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                        Err(_) => String::new(),
+                    };
+                    if let Some(ip) = parse_detected_public_ip(&text) {
+                        tracing::info!("Detected external IP via HTTP: {}", ip);
+                        detected_external_ip = Some(ip);
+                    }
                 }
             }
         }
@@ -258,6 +288,8 @@ async fn main() -> Result<()> {
     let pg_options = paracord_db::PgConnectOptions {
         statement_timeout_secs: config.database.statement_timeout_secs,
         idle_in_transaction_timeout_secs: config.database.idle_in_transaction_timeout_secs,
+        work_mem_mb: config.database.work_mem_mb,
+        maintenance_work_mem_mb: config.database.maintenance_work_mem_mb,
     };
     let db = paracord_db::create_pool_full(
         &config.database.url,
@@ -455,6 +487,7 @@ async fn main() -> Result<()> {
             media_max_file_size: config.media.max_file_size,
             media_p2p_threshold: config.media.p2p_threshold,
             file_cryptor: at_rest_profile.file_cryptor.clone(),
+            totp_cryptor: at_rest_profile.totp_cryptor.clone(),
             backup_dir: config.backup.backup_dir.clone(),
             database_url: config.database.url.clone(),
             federation_max_events_per_peer_per_minute: config
@@ -471,17 +504,30 @@ async fn main() -> Result<()> {
             federation_file_cache_enabled: config.federation.file_cache_enabled,
             federation_file_cache_max_size: config.federation.file_cache_max_size,
             federation_file_cache_ttl_hours: config.federation.file_cache_ttl_hours,
+            tenor_api_key: config.integrations.tenor_api_key.clone(),
+            require_email_verification: config.auth.require_email_verification,
+            ai_provider: config.ai.provider.clone(),
+            ai_base_url: config.ai.base_url.clone(),
+            ai_api_key: config.ai.api_key.clone(),
+            ai_model: config.ai.model.clone(),
+            ai_timeout_seconds: config.ai.timeout_seconds,
         },
         voice,
         storage,
         storage_backend,
-        online_users: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
-        user_presences: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        permission_cache: paracord_core::build_permission_cache(),
+        online_users: Arc::new(DashSet::new()),
+        user_presences: Arc::new(DashMap::new()),
+        permission_cache: paracord_core::build_permission_cache(
+            config.server.permission_cache_max_entries,
+        ),
         federation_service,
         member_index: Arc::new(member_index),
         presence_manager: Arc::new(paracord_core::presence_manager::PresenceManager::new()),
         native_media: None,
+        mfa_tickets: moka::future::Cache::builder()
+            .max_capacity(10_000)
+            .time_to_live(std::time::Duration::from_secs(300))
+            .build(),
     };
 
     // ── Native QUIC media server ─────────────────────────────────────────────
@@ -590,6 +636,10 @@ async fn main() -> Result<()> {
         shutdown_notify.clone(),
     );
     spawn_federation_delivery_worker(state.clone(), shutdown_notify.clone());
+    spawn_federation_moderation_worker(state.clone(), shutdown_notify.clone());
+    spawn_scheduled_message_worker(state.clone(), shutdown_notify.clone());
+    spawn_disappearing_message_worker(state.clone(), shutdown_notify.clone());
+    spawn_scheduled_event_worker(state.clone(), shutdown_notify.clone());
     bots::spawn_bot_manager(state.clone(), shutdown_notify.clone());
 
     let router = paracord_api::build_router()
@@ -692,13 +742,34 @@ async fn main() -> Result<()> {
     // Graceful shutdown on ctrl-c or API-triggered restart
     let shutdown_notify_http = shutdown_notify.clone();
     let shutdown_signal_http = async move {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                println!();
-                tracing::info!("Shutting down (ctrl-c)...");
+        #[cfg(windows)]
+        {
+            let mut ctrl_break = tokio::signal::windows::ctrl_break()
+                .expect("failed to install ctrl-break signal handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    println!();
+                    tracing::info!("Shutting down (ctrl-c)...");
+                }
+                _ = ctrl_break.recv() => {
+                    println!();
+                    tracing::info!("Shutting down (ctrl-break)...");
+                }
+                _ = shutdown_notify_http.notified() => {
+                    tracing::info!("Shutting down (restart requested via API)...");
+                }
             }
-            _ = shutdown_notify_http.notified() => {
-                tracing::info!("Shutting down (restart requested via API)...");
+        }
+        #[cfg(not(windows))]
+        {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    println!();
+                    tracing::info!("Shutting down (ctrl-c)...");
+                }
+                _ = shutdown_notify_http.notified() => {
+                    tracing::info!("Shutting down (restart requested via API)...");
+                }
             }
         }
         if let Some(mut lk) = managed_livekit {
@@ -1112,8 +1183,18 @@ fn build_at_rest_profile(config: &config::Config) -> Result<AtRestRuntimeProfile
         None
     };
 
+    // Always create TOTP cryptor when at-rest encryption master key is available,
+    // with plaintext read fallback to handle pre-encryption secrets transparently.
+    let totp_cryptor = Some(
+        paracord_util::at_rest::FileCryptor::from_master_key_with_context(
+            &master_key,
+            b"totp",
+            true, // allow plaintext reads for migration of unencrypted secrets
+        ),
+    );
+
     tracing::info!(
-        "At-rest encryption enabled (sqlite={}, files={}, allow_plaintext_file_reads={})",
+        "At-rest encryption enabled (sqlite={}, files={}, totp=true, allow_plaintext_file_reads={})",
         encrypt_sqlite,
         config.at_rest.encrypt_files,
         config.at_rest.allow_plaintext_file_reads
@@ -1122,6 +1203,7 @@ fn build_at_rest_profile(config: &config::Config) -> Result<AtRestRuntimeProfile
     Ok(AtRestRuntimeProfile {
         sqlite_key_hex,
         file_cryptor,
+        totp_cryptor,
     })
 }
 
@@ -1199,6 +1281,517 @@ fn spawn_federation_delivery_worker(
             }
         }
     });
+}
+
+fn spawn_federation_moderation_worker(
+    state: paracord_core::AppState,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    let Some(ref service) = state.federation_service else {
+        return;
+    };
+    if !service.is_enabled() {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = interval.tick() => {
+                    paracord_api::routes::federation::sync_moderation_lists_once(&state).await;
+                }
+            }
+        }
+    });
+}
+
+fn truncate_worker_error(raw: &str) -> String {
+    const MAX_ERROR_LEN: usize = 512;
+    let trimmed = raw.trim();
+    if trimmed.len() <= MAX_ERROR_LEN {
+        trimmed.to_string()
+    } else {
+        format!("{}...", &trimmed[..MAX_ERROR_LEN.saturating_sub(3)])
+    }
+}
+
+fn parse_scheduled_dm_e2ee(
+    raw_payload: Option<&str>,
+) -> Result<Option<paracord_core::message::DmE2eePayload>> {
+    let Some(raw_payload) = raw_payload else {
+        return Ok(None);
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(raw_payload).context("invalid scheduled e2ee payload JSON")?;
+    let version = value
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("scheduled e2ee payload missing version"))?
+        as u8;
+    let nonce = value
+        .get("nonce")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("scheduled e2ee payload missing nonce"))?
+        .to_string();
+    let ciphertext = value
+        .get("ciphertext")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("scheduled e2ee payload missing ciphertext"))?
+        .to_string();
+    let header = value
+        .get("header")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Ok(Some(paracord_core::message::DmE2eePayload {
+        version,
+        nonce,
+        ciphertext,
+        header,
+    }))
+}
+
+fn spawn_scheduled_message_worker(
+    state: paracord_core::AppState,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = interval.tick() => {
+                    if let Err(err) = run_scheduled_message_worker_once(&state).await {
+                        tracing::warn!("scheduled message worker failed: {}", err);
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn run_scheduled_message_worker_once(state: &paracord_core::AppState) -> Result<()> {
+    let due = paracord_db::scheduled_messages::list_due_scheduled_messages(
+        &state.db,
+        chrono::Utc::now(),
+        64,
+    )
+    .await?;
+    if due.is_empty() {
+        return Ok(());
+    }
+
+    for scheduled in due {
+        let channel =
+            match paracord_db::channels::get_channel(&state.db, scheduled.channel_id).await {
+                Ok(Some(channel)) => channel,
+                Ok(None) => {
+                    let _ = paracord_db::scheduled_messages::mark_scheduled_message_failed(
+                        &state.db,
+                        scheduled.id,
+                        "channel no longer exists",
+                    )
+                    .await;
+                    continue;
+                }
+                Err(err) => {
+                    let _ = paracord_db::scheduled_messages::mark_scheduled_message_failed(
+                        &state.db,
+                        scheduled.id,
+                        &truncate_worker_error(&err.to_string()),
+                    )
+                    .await;
+                    continue;
+                }
+            };
+
+        let dm_e2ee = match parse_scheduled_dm_e2ee(scheduled.e2ee_payload.as_deref()) {
+            Ok(payload) => payload,
+            Err(err) => {
+                let _ = paracord_db::scheduled_messages::mark_scheduled_message_failed(
+                    &state.db,
+                    scheduled.id,
+                    &truncate_worker_error(&err.to_string()),
+                )
+                .await;
+                continue;
+            }
+        };
+        let content = scheduled.content.as_deref().unwrap_or_default();
+        let allow_empty = content.trim().is_empty();
+        let msg_id = paracord_util::snowflake::generate(1);
+        let create_result = paracord_core::message::create_message_with_options(
+            &state.db,
+            msg_id,
+            scheduled.channel_id,
+            scheduled.author_id,
+            content,
+            paracord_core::message::CreateMessageOptions {
+                message_type: 0,
+                reference_id: None,
+                allow_empty_content: allow_empty,
+                dm_e2ee,
+                nonce: scheduled.nonce.clone(),
+            },
+        )
+        .await;
+
+        let message = match create_result {
+            Ok(message) => message,
+            Err(err) => {
+                let _ = paracord_db::scheduled_messages::mark_scheduled_message_failed(
+                    &state.db,
+                    scheduled.id,
+                    &truncate_worker_error(&err.to_string()),
+                )
+                .await;
+                continue;
+            }
+        };
+
+        paracord_db::scheduled_messages::mark_scheduled_message_sent(
+            &state.db,
+            scheduled.id,
+            message.id,
+        )
+        .await?;
+
+        let payload =
+            paracord_api::routes::channels::message_to_json(state, &message, scheduled.author_id)
+                .await;
+        if let Some(guild_id) = channel.guild_id() {
+            state
+                .event_bus
+                .dispatch("MESSAGE_CREATE", payload, Some(guild_id));
+        } else {
+            let recipients =
+                paracord_db::dms::get_dm_recipient_ids(&state.db, scheduled.channel_id).await?;
+            state
+                .event_bus
+                .dispatch_to_users("MESSAGE_CREATE", payload, recipients);
+        }
+    }
+
+    Ok(())
+}
+
+fn spawn_disappearing_message_worker(
+    state: paracord_core::AppState,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = interval.tick() => {
+                    if let Err(err) = run_disappearing_message_worker_once(&state).await {
+                        tracing::warn!("disappearing-message worker failed: {}", err);
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn run_disappearing_message_worker_once(state: &paracord_core::AppState) -> Result<()> {
+    let channels =
+        paracord_db::channel_features::list_channels_with_disappearing(&state.db, 10_000).await?;
+    if channels.is_empty() {
+        return Ok(());
+    }
+
+    for (channel_id, disappearing_seconds) in channels {
+        let cutoff =
+            chrono::Utc::now() - chrono::Duration::seconds(i64::from(disappearing_seconds));
+        loop {
+            let ids = paracord_db::messages::get_channel_message_ids_older_than(
+                &state.db, channel_id, cutoff, 500,
+            )
+            .await?;
+            if ids.is_empty() {
+                break;
+            }
+
+            let deleted = paracord_db::messages::delete_messages_by_ids(&state.db, &ids).await?;
+            if deleted == 0 {
+                break;
+            }
+
+            if let Some(channel) = paracord_db::channels::get_channel(&state.db, channel_id).await?
+            {
+                let payload = serde_json::json!({
+                    "channel_id": channel_id.to_string(),
+                    "ids": ids.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+                });
+                if let Some(guild_id) = channel.guild_id() {
+                    state
+                        .event_bus
+                        .dispatch("MESSAGE_DELETE_BULK", payload, Some(guild_id));
+                } else {
+                    let recipients = paracord_db::dms::get_dm_recipient_ids(&state.db, channel_id)
+                        .await
+                        .unwrap_or_default();
+                    state
+                        .event_bus
+                        .dispatch_to_users("MESSAGE_DELETE_BULK", payload, recipients);
+                }
+            }
+
+            if ids.len() < 500 {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_event_time(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|v| v.with_timezone(&chrono::Utc))
+}
+
+fn normalize_event_channel_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if (ch.is_whitespace() || ch == '-' || ch == '_') && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "event-chat".to_string()
+    } else {
+        format!("event-{}", trimmed.chars().take(72).collect::<String>())
+    }
+}
+
+fn recurrence_delta(rule: Option<&str>) -> Option<chrono::Duration> {
+    match rule.map(|v| v.trim().to_ascii_lowercase()) {
+        Some(ref v) if v == "daily" => Some(chrono::Duration::days(1)),
+        Some(ref v) if v == "weekly" => Some(chrono::Duration::days(7)),
+        Some(ref v) if v == "monthly" => Some(chrono::Duration::days(30)),
+        _ => None,
+    }
+}
+
+fn spawn_scheduled_event_worker(
+    state: paracord_core::AppState,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = interval.tick() => {
+                    if let Err(err) = run_scheduled_event_worker_once(&state).await {
+                        tracing::warn!("scheduled-event worker failed: {}", err);
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn run_scheduled_event_worker_once(state: &paracord_core::AppState) -> Result<()> {
+    let now = chrono::Utc::now();
+    let events =
+        paracord_db::scheduled_events::list_events_by_status(&state.db, &[1, 2], 1_024).await?;
+    if events.is_empty() {
+        return Ok(());
+    }
+
+    for event in events {
+        let start_at = parse_event_time(&event.scheduled_start);
+        let end_at = event
+            .scheduled_end
+            .as_deref()
+            .and_then(parse_event_time)
+            .or(start_at);
+
+        if event.status == 1 {
+            if let (Some(reminder_minutes), Some(start_at)) = (event.reminder_minutes, start_at) {
+                if event.reminder_sent_at.is_none()
+                    && reminder_minutes > 0
+                    && now >= start_at - chrono::Duration::minutes(i64::from(reminder_minutes))
+                {
+                    let payload = serde_json::json!({
+                        "id": event.id.to_string(),
+                        "guild_id": event.guild_id.to_string(),
+                        "name": event.name,
+                        "scheduled_start": event.scheduled_start,
+                        "reminder_minutes": reminder_minutes,
+                    });
+                    state.event_bus.dispatch(
+                        "GUILD_SCHEDULED_EVENT_REMINDER",
+                        payload,
+                        Some(event.guild_id),
+                    );
+                    let _ =
+                        paracord_db::scheduled_events::mark_reminder_sent(&state.db, event.id, now)
+                            .await;
+                }
+            }
+
+            if event.event_channel_id.is_none()
+                && !event.event_channel_created
+                && start_at.is_some_and(|start| now >= start - chrono::Duration::minutes(30))
+            {
+                let next_position =
+                    paracord_db::channels::get_guild_channels(&state.db, event.guild_id)
+                        .await
+                        .map(|rows| rows.len() as i32)
+                        .unwrap_or(0);
+                let channel_name = normalize_event_channel_name(&event.name);
+                if let Ok(channel) = paracord_db::channels::create_channel(
+                    &state.db,
+                    paracord_util::snowflake::generate(1),
+                    event.guild_id,
+                    &channel_name,
+                    0,
+                    next_position,
+                    None,
+                    None,
+                )
+                .await
+                {
+                    let _ = paracord_db::scheduled_events::set_event_channel(
+                        &state.db, event.id, channel.id, true,
+                    )
+                    .await;
+                    state.event_bus.dispatch(
+                        "GUILD_SCHEDULED_EVENT_UPDATE",
+                        serde_json::json!({
+                            "id": event.id.to_string(),
+                            "guild_id": event.guild_id.to_string(),
+                            "event_channel_id": channel.id.to_string(),
+                            "event_channel_created": true,
+                        }),
+                        Some(event.guild_id),
+                    );
+                }
+            }
+
+            if start_at.is_some_and(|start| now >= start) {
+                let _ = paracord_db::scheduled_events::update_event_status(&state.db, event.id, 2)
+                    .await;
+                state.event_bus.dispatch(
+                    "GUILD_SCHEDULED_EVENT_UPDATE",
+                    serde_json::json!({
+                        "id": event.id.to_string(),
+                        "guild_id": event.guild_id.to_string(),
+                        "status": 2,
+                    }),
+                    Some(event.guild_id),
+                );
+            }
+        }
+
+        if (event.status == 1 || event.status == 2) && end_at.is_some_and(|end| now >= end) {
+            let _ =
+                paracord_db::scheduled_events::update_event_status(&state.db, event.id, 3).await;
+            state.event_bus.dispatch(
+                "GUILD_SCHEDULED_EVENT_UPDATE",
+                serde_json::json!({
+                    "id": event.id.to_string(),
+                    "guild_id": event.guild_id.to_string(),
+                    "status": 3,
+                }),
+                Some(event.guild_id),
+            );
+
+            if event.event_channel_created {
+                if let Some(event_channel_id) = event.event_channel_id {
+                    if let Err(err) =
+                        paracord_db::scheduled_events::clear_event_channel(&state.db, event.id)
+                            .await
+                    {
+                        tracing::warn!(
+                            "failed to clear scheduled event {} auto-channel reference: {}",
+                            event.id,
+                            err
+                        );
+                    } else {
+                        match paracord_db::channels::delete_channel(&state.db, event_channel_id)
+                            .await
+                        {
+                            Ok(()) => {
+                                state.event_bus.dispatch(
+                                    "CHANNEL_DELETE",
+                                    serde_json::json!({
+                                        "id": event_channel_id.to_string(),
+                                        "guild_id": event.guild_id.to_string(),
+                                    }),
+                                    Some(event.guild_id),
+                                );
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    "failed to delete scheduled event {} auto-channel {}: {}",
+                                    event.id,
+                                    event_channel_id,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let (Some(delta), Some(start_at)) =
+                (recurrence_delta(event.recurrence_rule.as_deref()), start_at)
+            {
+                let next_start = start_at + delta;
+                let next_end = end_at.map(|end| end + delta);
+                let next_end_text = next_end.map(|end| end.to_rfc3339());
+                if let Ok(next_event) = paracord_db::scheduled_events::create_event(
+                    &state.db,
+                    paracord_util::snowflake::generate(1),
+                    event.guild_id,
+                    event.creator_id,
+                    &event.name,
+                    event.description.as_deref(),
+                    &next_start.to_rfc3339(),
+                    next_end_text.as_deref(),
+                    event.entity_type,
+                    event.channel_id,
+                    event.location.as_deref(),
+                    event.image_url.as_deref(),
+                    event.recurrence_rule.as_deref(),
+                    event.reminder_minutes,
+                    event
+                        .event_channel_id
+                        .filter(|_| !event.event_channel_created),
+                )
+                .await
+                {
+                    state.event_bus.dispatch(
+                        "GUILD_SCHEDULED_EVENT_CREATE",
+                        serde_json::json!({
+                            "id": next_event.id.to_string(),
+                            "guild_id": next_event.guild_id.to_string(),
+                            "scheduled_start": next_event.scheduled_start,
+                            "scheduled_end": next_event.scheduled_end,
+                            "status": next_event.status,
+                        }),
+                        Some(next_event.guild_id),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn spawn_retention_jobs(
@@ -1769,23 +2362,177 @@ async fn handle_raw_quic_connection(
     let user_id = media_conn.meta().user_id;
     tracing::info!(user_id, addr = %remote_addr, "QUIC: authenticated");
 
-    // Look up user's voice state to determine room
-    let room_id = match paracord_db::voice_states::get_all_user_voice_states(&db, user_id).await {
-        Ok(states) if !states.is_empty() => {
-            let vs = &states[0];
-            let guild_id = vs.guild_id().unwrap_or(0);
-            format!("{}:{}", guild_id, vs.channel_id)
-        }
+    let session_id = match media_conn.meta().session_id.as_deref() {
+        Some(session_id) if !session_id.trim().is_empty() => session_id,
         _ => {
-            tracing::warn!(user_id, "QUIC: user not in any voice channel");
+            tracing::warn!(user_id, "QUIC: media token missing session id");
+            return;
+        }
+    };
+    let room_id = match resolve_active_media_room(
+        &db,
+        user_id,
+        session_id,
+        media_conn.meta().room_id.as_deref(),
+    )
+    .await
+    {
+        Some(room_id) => room_id,
+        None => {
+            tracing::warn!(
+                user_id,
+                "QUIC: media token no longer matches active voice state"
+            );
             return;
         }
     };
 
     let handle = paracord_relay::relay::ConnectionHandle::new(user_id, room_id.clone(), conn);
     relay.add_connection(handle.clone());
-    relay.spawn_forwarding_task(handle);
+    relay.spawn_forwarding_task(handle.clone());
+    relay.spawn_control_task(handle.clone());
+    {
+        let relay = relay.clone();
+        tokio::spawn(async move {
+            relay.send_initial_track_state(&handle).await;
+        });
+    }
     tracing::info!(user_id, room_id = %room_id, "QUIC: relay forwarding started");
+}
+
+async fn resolve_active_media_room(
+    db: &paracord_db::DbPool,
+    user_id: i64,
+    expected_session_id: &str,
+    claimed_room_id: Option<&str>,
+) -> Option<String> {
+    let states = paracord_db::voice_states::get_all_user_voice_states(db, user_id)
+        .await
+        .ok()?;
+    states.into_iter().find_map(|state| {
+        if state.session_id != expected_session_id {
+            return None;
+        }
+        let guild_id = state.guild_id().unwrap_or(0);
+        let active_room_id = format!("{}:{}", guild_id, state.channel_id);
+        if claimed_room_id.is_some_and(|claimed| claimed != active_room_id) {
+            return None;
+        }
+        Some(active_room_id)
+    })
+}
+
+#[cfg(test)]
+mod media_room_tests {
+    use super::*;
+
+    async fn media_room_test_db() -> Result<paracord_db::DbPool> {
+        let db = paracord_db::create_pool("sqlite::memory:", 1).await?;
+        paracord_db::run_migrations(&db).await?;
+        Ok(db)
+    }
+
+    #[tokio::test]
+    async fn resolve_active_media_room_requires_current_voice_session_and_claimed_room(
+    ) -> Result<()> {
+        let db = media_room_test_db().await?;
+        let user_id = 901_001;
+        let guild_id = 901_002;
+        let channel_id = 901_003;
+        let session_id = "voice-session-current";
+
+        paracord_db::users::create_user(
+            &db,
+            user_id,
+            "mediauser",
+            1,
+            "mediauser@example.com",
+            "hash",
+        )
+        .await?;
+        paracord_db::guilds::create_guild(&db, guild_id, "Media Guild", user_id, None).await?;
+        paracord_db::channels::create_channel(&db, channel_id, guild_id, "voice", 2, 0, None, None)
+            .await?;
+        paracord_db::voice_states::upsert_voice_state(
+            &db,
+            user_id,
+            Some(guild_id),
+            channel_id,
+            session_id,
+        )
+        .await?;
+        let states = paracord_db::voice_states::get_all_user_voice_states(&db, user_id).await?;
+        assert_eq!(states.len(), 1, "expected seeded active voice state");
+        assert_eq!(states[0].session_id, session_id);
+
+        let active_room = format!("{guild_id}:{channel_id}");
+        assert_eq!(
+            resolve_active_media_room(&db, user_id, session_id, Some(&active_room)).await,
+            Some(active_room.clone())
+        );
+        assert_eq!(
+            resolve_active_media_room(&db, user_id, session_id, Some("999:901003")).await,
+            None,
+            "media tokens must not authorize a claimed room that differs from DB voice state"
+        );
+        assert_eq!(
+            resolve_active_media_room(&db, user_id, "stale-session", Some(&active_room)).await,
+            None,
+            "stale media-token session IDs must not authorize the active room"
+        );
+
+        let removed = paracord_db::voice_states::remove_voice_state_if_session(
+            &db,
+            user_id,
+            Some(guild_id),
+            session_id,
+        )
+        .await?;
+        assert!(removed, "matching-session leave should clear voice state");
+        assert_eq!(
+            resolve_active_media_room(&db, user_id, session_id, Some(&active_room)).await,
+            None,
+            "media tokens must stop authorizing after the user leaves voice"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolve_active_media_room_scopes_dm_voice_to_zero_guild_room() -> Result<()> {
+        let db = media_room_test_db().await?;
+        let user_id = 902_001;
+        let channel_id = 902_002;
+        let session_id = "dm-voice-session";
+
+        paracord_db::users::create_user(
+            &db,
+            user_id,
+            "dmmediauser",
+            1,
+            "dmmediauser@example.com",
+            "hash",
+        )
+        .await?;
+        paracord_db::guilds::create_guild(&db, 0, "DM Voice Container", user_id, None).await?;
+        paracord_db::channels::create_channel(&db, channel_id, 0, "dm-voice", 1, 0, None, None)
+            .await?;
+        paracord_db::voice_states::upsert_voice_state(&db, user_id, None, channel_id, session_id)
+            .await?;
+
+        let active_room = format!("0:{channel_id}");
+        assert_eq!(
+            resolve_active_media_room(&db, user_id, session_id, Some(&active_room)).await,
+            Some(active_room.clone())
+        );
+        assert_eq!(
+            resolve_active_media_room(&db, user_id, session_id, Some("1:902002")).await,
+            None,
+            "DM media tokens must not be accepted for a guild-scoped room"
+        );
+
+        Ok(())
+    }
 }
 
 /// Handle an HTTP/3 WebTransport connection from a browser client.
@@ -1799,25 +2546,64 @@ async fn handle_webtransport_connection(
     tracing::info!(addr = %remote_addr, "WebTransport: new HTTP/3 connection");
 
     // Handle as HTTP/3 and accept WebTransport session
-    let mut h3_session =
-        match paracord_transport::webtransport::WebTransportServer::handle_connection(conn.clone())
-            .await
-        {
+    let mut h3_session = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        paracord_transport::webtransport::WebTransportServer::handle_connection(conn.clone()),
+    )
+    .await
+    {
+        Ok(result) => match result {
             Ok(s) => s,
             Err(e) => {
                 tracing::debug!(addr = %remote_addr, "WebTransport: HTTP/3 setup failed: {}", e);
                 return;
             }
-        };
+        },
+        Err(_) => {
+            tracing::debug!(addr = %remote_addr, "WebTransport: HTTP/3 setup timed out");
+            return;
+        }
+    };
 
-    let wt_session = match h3_session.accept_session().await {
-        Ok(Some(s)) => s,
-        Ok(None) => {
+    let wt_session = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        h3_session.accept_session(),
+    )
+    .await
+    {
+        Ok(Ok(Some(s))) => s,
+        Ok(Ok(None)) => {
             tracing::debug!(addr = %remote_addr, "WebTransport: no session received");
             return;
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::debug!(addr = %remote_addr, "WebTransport: session accept failed: {}", e);
+            return;
+        }
+        Err(_) => {
+            tracing::debug!(addr = %remote_addr, "WebTransport: session accept timed out");
+            return;
+        }
+    };
+
+    if wt_session.path() != "/media" {
+        tracing::warn!(addr = %remote_addr, path = %wt_session.path(), "WebTransport: invalid media path");
+        return;
+    }
+
+    let (mut send, mut recv) = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        wt_session.accept_bi(),
+    )
+    .await
+    {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(e)) => {
+            tracing::warn!(addr = %remote_addr, "WebTransport: no bidi stream for auth: {}", e);
+            return;
+        }
+        Err(_) => {
+            tracing::warn!(addr = %remote_addr, "WebTransport: timed out waiting for auth stream");
             return;
         }
     };
@@ -1828,15 +2614,9 @@ async fn handle_webtransport_connection(
         "WebTransport: session established"
     );
 
-    // Authenticate: read first bidi stream message (newline-delimited
-    // JSON `{ "type": "auth", "token": "..." }`).
-    let (mut send, mut recv) = match wt_session.accept_bi().await {
-        Ok(pair) => pair,
-        Err(e) => {
-            tracing::warn!(addr = %remote_addr, "WebTransport: no bidi stream for auth: {}", e);
-            return;
-        }
-    };
+    // Authenticate: read first bidi stream message. Accept both the legacy
+    // newline-delimited JSON auth format and the unified length-prefixed
+    // control-frame format used by the QUIC transport.
 
     // Read up to 8KB for the auth message
     let mut buf = vec![0u8; 8192];
@@ -1845,102 +2625,137 @@ async fn handle_webtransport_connection(
     let room_id: String;
 
     loop {
-        match recv.read(&mut buf[total..]).await {
-            Ok(Some(n)) => {
-                total += n;
-                // Look for newline delimiter
-                if let Some(nl_pos) = buf[..total].iter().position(|&b| b == b'\n') {
-                    let line = &buf[..nl_pos];
-                    let msg: serde_json::Value = match serde_json::from_slice(line) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            tracing::warn!(addr = %remote_addr, "WebTransport: invalid auth JSON: {}", e);
-                            return;
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            recv.read(&mut buf[total..]),
+        )
+        .await
+        {
+            Err(_) => {
+                tracing::warn!(addr = %remote_addr, "WebTransport: read timeout during auth");
+                return;
+            }
+            Ok(read_result) => match read_result {
+                Ok(Some(n)) => {
+                    total += n;
+                    let parsed_message = if total >= 4 {
+                        let frame_len =
+                            u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+                        if frame_len > 0 && frame_len <= buf.len() && total >= 4 + frame_len {
+                            serde_json::from_slice::<serde_json::Value>(&buf[4..4 + frame_len]).ok()
+                        } else {
+                            None
                         }
-                    };
-
-                    if msg.get("type").and_then(|t| t.as_str()) != Some("auth") {
-                        tracing::warn!(addr = %remote_addr, "WebTransport: first message not auth");
-                        return;
-                    }
-
-                    let token = match msg.get("token").and_then(|t| t.as_str()) {
-                        Some(t) => t,
-                        None => {
-                            tracing::warn!(addr = %remote_addr, "WebTransport: auth message missing token");
-                            return;
-                        }
-                    };
-
-                    // Validate JWT
-                    let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
-                    let token_data = match jsonwebtoken::decode::<serde_json::Value>(
-                        token,
-                        &jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_bytes()),
-                        &validation,
-                    ) {
-                        Ok(td) => td,
-                        Err(e) => {
-                            tracing::warn!(addr = %remote_addr, "WebTransport: JWT validation failed: {}", e);
-                            return;
-                        }
-                    };
-
-                    let claims = token_data.claims;
-                    user_id = claims
-                        .get("sub")
-                        .and_then(|s| s.as_str())
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .unwrap_or(0);
-
-                    if user_id == 0 {
-                        tracing::warn!(addr = %remote_addr, "WebTransport: invalid user_id in JWT");
-                        return;
-                    }
-
-                    // Try to get room from JWT claims first, fall back
-                    // to DB voice state lookup.
-                    room_id = if let Some(room) = claims.get("room").and_then(|r| r.as_str()) {
-                        room.to_string()
                     } else {
-                        match paracord_db::voice_states::get_all_user_voice_states(&db, user_id)
-                            .await
-                        {
-                            Ok(states) if !states.is_empty() => {
-                                let vs = &states[0];
-                                let guild_id = vs.guild_id().unwrap_or(0);
-                                format!("{}:{}", guild_id, vs.channel_id)
-                            }
-                            _ => {
-                                tracing::warn!(
-                                    user_id,
-                                    "WebTransport: user not in any voice channel"
-                                );
+                        None
+                    };
+
+                    let parsed_message = if let Some(message) = parsed_message {
+                        Some(message)
+                    } else if let Some(nl_pos) = buf[..total].iter().position(|&b| b == b'\n') {
+                        match serde_json::from_slice::<serde_json::Value>(&buf[..nl_pos]) {
+                            Ok(message) => Some(message),
+                            Err(e) => {
+                                tracing::warn!(addr = %remote_addr, "WebTransport: invalid auth JSON: {}", e);
                                 return;
                             }
                         }
+                    } else {
+                        None
                     };
 
-                    // Send ack
-                    let ack = b"{\"type\":\"auth_ok\"}\n";
-                    let _ = send.write_all(ack).await;
+                    if let Some(msg) = parsed_message {
+                        if msg.get("type").and_then(|t| t.as_str()) != Some("auth") {
+                            tracing::warn!(addr = %remote_addr, "WebTransport: first message not auth");
+                            return;
+                        }
 
-                    break;
+                        let token = match msg.get("token").and_then(|t| t.as_str()) {
+                            Some(t) => t,
+                            None => {
+                                tracing::warn!(addr = %remote_addr, "WebTransport: auth message missing token");
+                                return;
+                            }
+                        };
+
+                        // Validate JWT
+                        let validation =
+                            jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+                        let token_data = match jsonwebtoken::decode::<serde_json::Value>(
+                            token,
+                            &jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_bytes()),
+                            &validation,
+                        ) {
+                            Ok(td) => td,
+                            Err(e) => {
+                                tracing::warn!(addr = %remote_addr, "WebTransport: JWT validation failed: {}", e);
+                                return;
+                            }
+                        };
+
+                        let claims = token_data.claims;
+                        user_id = claims
+                            .get("sub")
+                            .and_then(|value| {
+                                value.as_i64().or_else(|| {
+                                    value.as_str().and_then(|raw| raw.parse::<i64>().ok())
+                                })
+                            })
+                            .unwrap_or(0);
+
+                        if user_id == 0 {
+                            tracing::warn!(addr = %remote_addr, "WebTransport: invalid user_id in JWT");
+                            return;
+                        }
+
+                        let session_id = claims
+                            .get("sid")
+                            .or_else(|| claims.get("session_id"))
+                            .and_then(|sid| sid.as_str())
+                            .map(str::trim)
+                            .filter(|sid| !sid.is_empty());
+                        let Some(session_id) = session_id else {
+                            tracing::warn!(addr = %remote_addr, "WebTransport: media token missing session id");
+                            return;
+                        };
+                        let claimed_room = claims.get("room").and_then(|r| r.as_str());
+                        room_id =
+                            match resolve_active_media_room(&db, user_id, session_id, claimed_room)
+                                .await
+                            {
+                                Some(room_id) => room_id,
+                                None => {
+                                    tracing::warn!(
+                                user_id,
+                                "WebTransport: media token no longer matches active voice state"
+                            );
+                                    return;
+                                }
+                            };
+
+                        // Send length-prefixed Pong acknowledgement.
+                        if let Ok(ack) = paracord_transport::control::ControlMessage::Pong.encode()
+                        {
+                            let _ = send.write_all(&ack).await;
+                        }
+
+                        break;
+                    }
+
+                    if total >= buf.len() {
+                        tracing::warn!(addr = %remote_addr, "WebTransport: auth message too large");
+                        return;
+                    }
                 }
-
-                if total >= buf.len() {
-                    tracing::warn!(addr = %remote_addr, "WebTransport: auth message too large");
+                Ok(None) => {
+                    tracing::warn!(addr = %remote_addr, "WebTransport: stream closed before auth");
                     return;
                 }
-            }
-            Ok(None) => {
-                tracing::warn!(addr = %remote_addr, "WebTransport: stream closed before auth");
-                return;
-            }
-            Err(e) => {
-                tracing::warn!(addr = %remote_addr, "WebTransport: read error during auth: {}", e);
-                return;
-            }
+                Err(e) => {
+                    tracing::warn!(addr = %remote_addr, "WebTransport: read error during auth: {}", e);
+                    return;
+                }
+            },
         }
     }
 
@@ -1964,9 +2779,17 @@ async fn handle_webtransport_connection(
         room_id.clone(),
         outbound_tx,
         inbound_rx,
+        Some(wt_session.quinn_conn().clone()),
     );
     relay.add_connection(handle.clone());
-    relay.spawn_forwarding_task(handle);
+    relay.spawn_forwarding_task(handle.clone());
+    relay.spawn_control_task(handle.clone());
+    {
+        let relay = relay.clone();
+        tokio::spawn(async move {
+            relay.send_initial_track_state(&handle).await;
+        });
+    }
     tracing::info!(
         user_id,
         room_id = %room_id,
@@ -1977,7 +2800,8 @@ async fn handle_webtransport_connection(
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_federation_signing_key_file, livekit_credentials_look_insecure, normalize_https_host,
+        ensure_federation_signing_key_file, livekit_credentials_look_insecure,
+        normalize_https_host, parse_detected_public_ip,
     };
 
     #[test]
@@ -1996,6 +2820,20 @@ mod tests {
             "paracord_0123456789abcdef",
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         ));
+    }
+
+    #[test]
+    fn parses_detected_public_ip_only_when_valid() {
+        assert_eq!(
+            parse_detected_public_ip(" 203.0.113.42\n"),
+            Some("203.0.113.42".to_string())
+        );
+        assert_eq!(
+            parse_detected_public_ip(" 2001:db8::1\n"),
+            Some("2001:db8::1".to_string())
+        );
+        assert_eq!(parse_detected_public_ip("not an ip"), None);
+        assert_eq!(parse_detected_public_ip(""), None);
     }
 
     #[test]

@@ -1,3 +1,18 @@
+#![allow(
+    clippy::clone_on_copy,
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::collapsible_str_replace,
+    clippy::manual_contains,
+    clippy::manual_is_multiple_of,
+    clippy::manual_pattern_char_comparison,
+    clippy::manual_range_contains,
+    clippy::mut_mutex_lock,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::while_let_on_iterator
+)]
+
 use axum::{
     extract::{ConnectInfo, DefaultBodyLimit, Request},
     http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
@@ -14,13 +29,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
+use uuid::Uuid;
 
+pub mod ai;
 pub mod error;
 pub mod middleware;
+pub mod opengraph;
 pub mod routes;
 
 const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 const ATTACHMENT_REQUEST_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+const TRACE_ID_HEADER: &str = "x-paracord-trace-id";
+const ACCESS_COOKIE_NAME: &str = "paracord_access";
+const CSRF_COOKIE_NAME: &str = "paracord_csrf";
+const CSRF_HEADER_NAME: &str = "x-paracord-csrf";
 
 pub fn build_router() -> Router<AppState> {
     let cors = build_cors_layer();
@@ -30,6 +52,8 @@ pub fn build_router() -> Router<AppState> {
         .route("/api/v1/health", get(health))
         .route("/metrics", get(metrics))
         .route("/api/v1/metrics", get(metrics))
+        .route("/api/docs", get(routes::docs::swagger_ui))
+        .route("/api/docs/openapi.json", get(routes::docs::openapi_spec))
         // Realtime v2 (SSE + HTTP command bus)
         .route("/api/v2/rt/session", post(routes::realtime::create_session))
         .route("/api/v2/rt/events", get(routes::realtime::stream_events))
@@ -92,6 +116,23 @@ pub fn build_router() -> Router<AppState> {
             "/_paracord/federation/v1/servers/{server_name}",
             get(routes::federation::get_server).delete(routes::federation::delete_server),
         )
+        .route(
+            "/_paracord/federation/v1/moderation/state",
+            get(routes::federation::list_peer_trust_state),
+        )
+        .route(
+            "/_paracord/federation/v1/moderation/apply",
+            post(routes::federation::apply_moderation_list),
+        )
+        .route(
+            "/_paracord/federation/v1/moderation/subscriptions",
+            get(routes::federation::list_moderation_subscriptions)
+                .post(routes::federation::upsert_moderation_subscription),
+        )
+        .route(
+            "/_paracord/federation/v1/moderation/subscriptions/{subscription_id}",
+            delete(routes::federation::delete_moderation_subscription),
+        )
         // Auth
         .route("/api/v1/auth/register", post(routes::auth::register))
         .route("/api/v1/auth/login", post(routes::auth::login))
@@ -109,6 +150,23 @@ pub fn build_router() -> Router<AppState> {
             "/api/v1/auth/sessions/{session_id}",
             delete(routes::auth::revoke_session),
         )
+        .route(
+            "/api/v1/auth/forgot-password",
+            post(routes::auth::forgot_password),
+        )
+        .route(
+            "/api/v1/auth/reset-password",
+            post(routes::auth::reset_password),
+        )
+        .route(
+            "/api/v1/auth/verify-email",
+            post(routes::auth::verify_email),
+        )
+        .route("/api/v1/auth/mfa/setup", post(routes::auth::mfa_setup))
+        .route("/api/v1/auth/mfa/verify", post(routes::auth::mfa_verify))
+        .route("/api/v1/auth/mfa/disable", post(routes::auth::mfa_disable))
+        .route("/api/v1/auth/mfa/status", get(routes::auth::mfa_status))
+        .route("/api/v1/auth/mfa/login", post(routes::auth::mfa_login))
         // Users
         .route(
             "/api/v1/users/@me",
@@ -147,6 +205,26 @@ pub fn build_router() -> Router<AppState> {
             get(routes::dms::list_dms).post(routes::dms::create_dm),
         )
         .route(
+            "/api/v1/users/@me/channels",
+            post(routes::dms::create_group_dm),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/recipients/{user_id}",
+            put(routes::dms::add_group_dm_recipient).delete(routes::dms::remove_group_dm_recipient),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/recipients",
+            get(routes::dms::list_group_dm_recipients),
+        )
+        .route(
+            "/api/v1/dms/{channel_id}/voice/join",
+            post(routes::dms::join_dm_voice),
+        )
+        .route(
+            "/api/v1/dms/{channel_id}/voice/leave",
+            post(routes::dms::leave_dm_voice),
+        )
+        .route(
             "/api/v1/users/@me/read-states",
             get(routes::users::get_read_states),
         )
@@ -169,12 +247,28 @@ pub fn build_router() -> Router<AppState> {
                 .patch(routes::guilds::update_channel_positions),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/channels/visible",
+            get(routes::channels::get_visible_channels),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/members",
             get(routes::members::list_members),
         )
         .route(
             "/api/v1/guilds/{guild_id}/members/{user_id}",
             patch(routes::members::update_member).delete(routes::members::kick_member),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/economy/me",
+            get(routes::economy::get_my_progress),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/economy/leaderboard",
+            get(routes::economy::get_leaderboard),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/economy/level-roles",
+            get(routes::economy::list_level_roles).put(routes::economy::update_level_roles),
         )
         .route(
             "/api/v1/guilds/{guild_id}/members/@me",
@@ -213,6 +307,18 @@ pub fn build_router() -> Router<AppState> {
             get(routes::emojis::get_emoji_image),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/stickers",
+            get(routes::stickers::list_guild_stickers).post(routes::stickers::create_sticker),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/stickers/{sticker_id}",
+            delete(routes::stickers::delete_sticker),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/stickers/{sticker_id}/image",
+            get(routes::stickers::get_sticker_image),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/webhooks",
             get(routes::webhooks::list_guild_webhooks).post(routes::webhooks::create_webhook),
         )
@@ -221,14 +327,32 @@ pub fn build_router() -> Router<AppState> {
             get(routes::events::list_events).post(routes::events::create_event),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/events.ics",
+            get(routes::events::export_guild_ical),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/events/{event_id}",
             get(routes::events::get_event)
                 .patch(routes::events::update_event)
                 .delete(routes::events::delete_event),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/events/{event_id}/ical",
+            get(routes::events::export_event_ical),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/events/{event_id}/rsvp",
             put(routes::events::add_rsvp).delete(routes::events::remove_rsvp),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/onboarding",
+            get(routes::onboarding::get_guild_onboarding)
+                .patch(routes::onboarding::update_guild_onboarding),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/onboarding/me",
+            get(routes::onboarding::get_my_onboarding_state)
+                .put(routes::onboarding::update_my_onboarding_state),
         )
         .route(
             "/api/v1/guilds/{guild_id}/bots",
@@ -247,8 +371,33 @@ pub fn build_router() -> Router<AppState> {
             get(routes::guilds::list_files).delete(routes::guilds::delete_files),
         )
         .route(
+            "/api/v1/guilds/{guild_id}/vanity-url",
+            get(routes::guilds::get_vanity_url).patch(routes::guilds::update_vanity_url),
+        )
+        .route(
             "/api/v1/guilds/{guild_id}/audit-logs",
             get(routes::audit_logs::get_audit_logs),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/reports",
+            get(routes::reports::list_reports).post(routes::reports::create_report),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/reports/{report_id}",
+            patch(routes::reports::resolve_report),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/moderation/templates",
+            get(routes::moderation_templates::list_templates)
+                .post(routes::moderation_templates::create_template),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/moderation/templates/{template_id}",
+            delete(routes::moderation_templates::delete_template),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/moderation/templates/{template_id}/apply",
+            post(routes::moderation_templates::apply_template),
         )
         // Channels
         .route(
@@ -266,12 +415,47 @@ pub fn build_router() -> Router<AppState> {
             get(routes::channels::search_messages),
         )
         .route(
+            "/api/v1/channels/{channel_id}/summary",
+            get(routes::channels::summarize_channel),
+        )
+        .route(
             "/api/v1/channels/{channel_id}/messages/bulk-delete",
             post(routes::channels::bulk_delete_messages),
         )
         .route(
             "/api/v1/channels/{channel_id}/messages/{message_id}",
             patch(routes::channels::edit_message).delete(routes::channels::delete_message),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/features",
+            get(routes::message_features::get_channel_feature_settings)
+                .patch(routes::message_features::update_channel_feature_settings),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/scheduled-messages",
+            get(routes::message_features::list_scheduled_messages)
+                .post(routes::message_features::create_scheduled_message),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/scheduled-messages/{scheduled_message_id}",
+            delete(routes::message_features::delete_scheduled_message),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/anonymous/deanonymize/{message_id}",
+            get(routes::message_features::deanonymize_message),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/e2ee/sender-keys",
+            post(routes::message_features::post_group_sender_keys)
+                .get(routes::message_features::get_group_sender_keys),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/e2ee/sender-keys/ack",
+            post(routes::message_features::ack_group_sender_keys),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/{message_id}/edits",
+            get(routes::channels::get_edit_history),
         )
         .route(
             "/api/v1/channels/{channel_id}/polls",
@@ -347,6 +531,15 @@ pub fn build_router() -> Router<AppState> {
             "/api/v1/channels/{channel_id}/forum/sort",
             patch(routes::channels::update_forum_sort_order),
         )
+        // Channel follows (announcement channels)
+        .route(
+            "/api/v1/channels/{channel_id}/followers",
+            get(routes::channels::list_channel_follows).post(routes::channels::add_channel_follow),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/followers/{target_channel_id}",
+            delete(routes::channels::remove_channel_follow),
+        )
         // Invites
         .route(
             "/api/v1/channels/{channel_id}/invites",
@@ -369,8 +562,27 @@ pub fn build_router() -> Router<AppState> {
             post(routes::webhooks::execute_webhook),
         )
         .route(
+            "/api/v1/webhooks/{webhook_id}/{token}/messages/{message_id}",
+            patch(routes::webhooks::edit_webhook_message)
+                .delete(routes::webhooks::delete_webhook_message),
+        )
+        .route(
             "/api/v1/discovery/guilds",
             get(routes::discovery::list_discoverable_guilds),
+        )
+        // Guild templates
+        .route(
+            "/api/v1/guilds/{guild_id}/template",
+            post(routes::templates::create_template_from_guild),
+        )
+        .route("/api/v1/templates", get(routes::templates::list_templates))
+        .route(
+            "/api/v1/templates/{template_id}/apply",
+            post(routes::templates::apply_template),
+        )
+        .route(
+            "/api/v1/templates/{template_id}",
+            delete(routes::templates::delete_template),
         )
         .route(
             "/api/v1/bots/applications",
@@ -395,8 +607,85 @@ pub fn build_router() -> Router<AppState> {
             get(routes::bots::list_bot_application_installs),
         )
         .route(
+            "/api/v1/bots/applications/{bot_app_id}/metrics",
+            get(routes::bots::get_bot_application_metrics),
+        )
+        // Application command management
+        .route(
+            "/api/v1/applications/{app_id}/commands",
+            get(routes::commands::list_global_commands)
+                .post(routes::commands::create_global_command)
+                .put(routes::commands::bulk_overwrite_global_commands),
+        )
+        .route(
+            "/api/v1/applications/{app_id}/commands/{cmd_id}",
+            get(routes::commands::get_global_command)
+                .patch(routes::commands::update_global_command)
+                .delete(routes::commands::delete_global_command),
+        )
+        .route(
+            "/api/v1/applications/{app_id}/guilds/{guild_id}/commands",
+            get(routes::commands::list_guild_commands)
+                .post(routes::commands::create_guild_command)
+                .put(routes::commands::bulk_overwrite_guild_commands),
+        )
+        .route(
+            "/api/v1/applications/{app_id}/guilds/{guild_id}/commands/{cmd_id}",
+            get(routes::commands::get_guild_command)
+                .patch(routes::commands::update_guild_command)
+                .delete(routes::commands::delete_guild_command),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/commands",
+            get(routes::commands::list_guild_available_commands_handler),
+        )
+        // Interaction lifecycle
+        .route(
+            "/api/v1/interactions",
+            post(routes::interactions::invoke_interaction),
+        )
+        .route(
+            "/api/v1/interactions/{interaction_id}/{token}/callback",
+            post(routes::interactions::interaction_callback),
+        )
+        .route(
+            "/api/v1/interactions/{app_id}/{token}/messages/@original",
+            patch(routes::interactions::edit_original_response)
+                .delete(routes::interactions::delete_original_response),
+        )
+        .route(
+            "/api/v1/interactions/{app_id}/{token}/followup",
+            post(routes::interactions::create_followup_message),
+        )
+        .route(
             "/api/v1/oauth2/authorize",
             post(routes::bots::oauth2_authorize),
+        )
+        // Bot presence
+        .route(
+            "/api/v1/bots/@me/presence",
+            patch(routes::bots::update_bot_presence),
+        )
+        // Tenor GIF proxy
+        .route("/api/v1/tenor/search", get(routes::tenor::search))
+        .route("/api/v1/tenor/trending", get(routes::tenor::trending))
+        // Bot store (public discovery)
+        .route("/api/v1/bots/store", get(routes::bots::store_search))
+        .route(
+            "/api/v1/bots/store/featured",
+            get(routes::bots::store_featured),
+        )
+        .route(
+            "/api/v1/bots/store/categories",
+            get(routes::bots::store_categories),
+        )
+        .route(
+            "/api/v1/bots/store/{bot_app_id}/reviews",
+            get(routes::bots::list_store_bot_reviews),
+        )
+        .route(
+            "/api/v1/bots/store/{bot_app_id}/reviews/@me",
+            put(routes::bots::upsert_store_bot_review),
         )
         // Signal prekey management
         .route("/api/v1/users/@me/keys", put(routes::keys::upload_keys))
@@ -405,6 +694,24 @@ pub fn build_router() -> Router<AppState> {
             get(routes::keys::get_key_count),
         )
         .route("/api/v1/users/{user_id}/keys", get(routes::keys::get_keys))
+        .route(
+            "/api/v1/channels/{channel_id}/stage-instance",
+            get(routes::stage::get_stage_instance_for_channel),
+        )
+        // Stage Instances
+        .route(
+            "/api/v1/stage-instances",
+            post(routes::stage::create_stage_instance),
+        )
+        .route(
+            "/api/v1/stage-instances/{stage_id}",
+            patch(routes::stage::update_stage_instance)
+                .delete(routes::stage::delete_stage_instance),
+        )
+        .route(
+            "/api/v1/stage-instances/{stage_id}/speakers/{user_id}",
+            post(routes::stage::invite_speaker).delete(routes::stage::remove_speaker),
+        )
         // Voice
         .route(
             "/api/v1/voice/{channel_id}/join",
@@ -513,6 +820,7 @@ pub fn build_router() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(DEFAULT_REQUEST_BODY_LIMIT_BYTES))
         .layer(from_fn(metrics_middleware))
         .layer(from_fn(rate_limit_middleware))
+        .layer(from_fn(csrf_middleware))
         .layer(from_fn(security_headers_middleware))
         .layer(cors)
         .layer(
@@ -588,6 +896,7 @@ pub fn build_router() -> Router<AppState> {
                     },
                 ),
         )
+        .layer(from_fn(request_trace_middleware))
 }
 
 fn build_cors_layer() -> tower_http::cors::CorsLayer {
@@ -783,7 +1092,8 @@ impl HttpRateLimiter {
         }
     }
 
-    fn check_rate_limit(&self, key: &str, window_seconds: i64, max_count: u32) -> bool {
+    /// Returns `None` if the request is allowed, or `Some(retry_after_seconds)` if rate-limited.
+    fn check_rate_limit(&self, key: &str, window_seconds: i64, max_count: u32) -> Option<i64> {
         let now = chrono::Utc::now().timestamp();
         let bucket = self.buckets.entry(key.to_string()).or_insert_with(|| {
             Mutex::new(RateBucket {
@@ -800,7 +1110,14 @@ impl HttpRateLimiter {
             guard.count = 0;
         }
         guard.count = guard.count.saturating_add(1);
-        guard.count <= max_count
+        if guard.count <= max_count {
+            None
+        } else {
+            // Time remaining until the current window resets
+            let elapsed = now.saturating_sub(guard.window_start);
+            let retry_after = (window_seconds - elapsed).max(1);
+            Some(retry_after)
+        }
     }
 
     fn cleanup_stale(&self, max_age_seconds: i64) {
@@ -838,6 +1155,17 @@ static DURATION_COUNT: AtomicU64 = AtomicU64::new(0);
 static STATUS_2XX: AtomicU64 = AtomicU64::new(0);
 static STATUS_4XX: AtomicU64 = AtomicU64::new(0);
 static STATUS_5XX: AtomicU64 = AtomicU64::new(0);
+static HTTP_SLOW_REQUEST_THRESHOLD_MS: OnceLock<u64> = OnceLock::new();
+
+fn slow_request_threshold_ms() -> u64 {
+    *HTTP_SLOW_REQUEST_THRESHOLD_MS.get_or_init(|| {
+        std::env::var("PARACORD_HTTP_SLOW_MS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(500)
+    })
+}
 
 fn prometheus_escape_label_value(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
@@ -921,6 +1249,7 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
     const GLOBAL_LIMIT_PER_SECOND: u32 = 120;
     const AUTH_LIMIT_PER_MINUTE: u32 = 60;
     const BOT_LIMIT_PER_MINUTE: u32 = 300;
+    const BOT_WRITE_LIMIT_PER_SECOND: u32 = 5;
 
     if req.method() == Method::OPTIONS {
         return next.run(req).await;
@@ -935,7 +1264,12 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
     }
 
     REQUEST_COUNT.fetch_add(1, Ordering::Relaxed);
+    let method = req.method().clone();
     let is_auth_path = path.starts_with("/api/v1/auth/");
+    let is_write_method = matches!(
+        method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    );
     let trust_proxy = std::env::var("PARACORD_TRUST_PROXY")
         .ok()
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -979,9 +1313,10 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
 
     if let Some(limiter) = HTTP_RATE_LIMITER.get() {
         let global_key = format!("http:global:{key}");
-        if !limiter.check_rate_limit(&global_key, 1, GLOBAL_LIMIT_PER_SECOND) {
+        if let Some(retry_after) = limiter.check_rate_limit(&global_key, 1, GLOBAL_LIMIT_PER_SECOND)
+        {
             RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
-            return crate::error::ApiError::RateLimited.into_response();
+            return crate::error::ApiError::RateLimited(retry_after).into_response();
         }
 
         if let Some(bot_token) = req
@@ -994,19 +1329,99 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
         {
             let token_hash = paracord_db::bot_applications::hash_token(bot_token);
             let bot_key = format!("http:bot:{}", &token_hash[..24]);
-            if !limiter.check_rate_limit(&bot_key, 60, BOT_LIMIT_PER_MINUTE) {
+            if let Some(retry_after) = limiter.check_rate_limit(&bot_key, 60, BOT_LIMIT_PER_MINUTE)
+            {
                 RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
-                return crate::error::ApiError::RateLimited.into_response();
+                return crate::error::ApiError::RateLimited(retry_after).into_response();
+            }
+
+            // Stricter limit for write operations (POST/PUT/PATCH/DELETE)
+            if is_write_method {
+                let bot_write_key = format!("http:bot:write:{}", &token_hash[..24]);
+                if let Some(retry_after) =
+                    limiter.check_rate_limit(&bot_write_key, 1, BOT_WRITE_LIMIT_PER_SECOND)
+                {
+                    RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
+                    return crate::error::ApiError::RateLimited(retry_after).into_response();
+                }
             }
         }
 
         if is_auth_path {
             let auth_key = format!("http:auth:{key}");
-            if !limiter.check_rate_limit(&auth_key, 60, AUTH_LIMIT_PER_MINUTE) {
+            if let Some(retry_after) =
+                limiter.check_rate_limit(&auth_key, 60, AUTH_LIMIT_PER_MINUTE)
+            {
                 RATE_LIMITED_COUNT.fetch_add(1, Ordering::Relaxed);
-                return crate::error::ApiError::RateLimited.into_response();
+                return crate::error::ApiError::RateLimited(retry_after).into_response();
             }
         }
+    }
+
+    next.run(req).await
+}
+
+fn get_cookie_value(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in raw.split(';') {
+        let trimmed = part.trim();
+        let Some((name, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if name == cookie_name {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn has_header_auth(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|raw| raw.starts_with("Bearer ") || raw.starts_with("Bot "))
+        .unwrap_or(false)
+}
+
+fn requires_csrf_check(method: &Method, path: &str) -> bool {
+    (method == Method::POST
+        || method == Method::PUT
+        || method == Method::PATCH
+        || method == Method::DELETE)
+        && path.starts_with("/api/")
+}
+
+async fn csrf_middleware(req: Request, next: Next) -> Response {
+    if !requires_csrf_check(req.method(), req.uri().path()) {
+        return next.run(req).await;
+    }
+
+    if has_header_auth(req.headers()) {
+        // Bearer/Bot auth is not ambient and not CSRF-prone.
+        return next.run(req).await;
+    }
+
+    let has_access_cookie = get_cookie_value(req.headers(), ACCESS_COOKIE_NAME)
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    if !has_access_cookie {
+        // Unauthenticated or token body-based requests don't use ambient auth cookies.
+        return next.run(req).await;
+    }
+
+    let csrf_cookie = get_cookie_value(req.headers(), CSRF_COOKIE_NAME)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let csrf_header = req
+        .headers()
+        .get(CSRF_HEADER_NAME)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+
+    if csrf_cookie.is_none() || csrf_header.is_none() || csrf_cookie != csrf_header {
+        return crate::error::ApiError::Forbidden.into_response();
     }
 
     next.run(req).await
@@ -1058,7 +1473,7 @@ async fn security_headers_middleware(req: Request, next: Next) -> Response {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
-                "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: http:; connect-src 'self' ws: wss: http: https:; media-src 'self' data: blob: https: http:",
+                "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: http:; connect-src 'self' ws: wss:; media-src 'self' data: blob: https: http:",
             ),
         );
     }
@@ -1079,5 +1494,42 @@ async fn metrics_middleware(req: Request, next: Next) -> Response {
     let elapsed_ms = start.elapsed().as_millis() as u64;
     record_request_duration(elapsed_ms);
     record_status_code(response.status().as_u16());
+    response
+}
+
+async fn request_trace_middleware(mut req: Request, next: Next) -> Response {
+    let request_started = Instant::now();
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let trace_id = Uuid::new_v4().to_string();
+    let trace_header = HeaderValue::from_str(&trace_id).ok();
+    if let Some(value) = trace_header.clone() {
+        req.headers_mut()
+            .insert(HeaderName::from_static(TRACE_ID_HEADER), value);
+    }
+
+    let mut response = next.run(req).await;
+    let elapsed_ms = request_started.elapsed().as_millis() as u64;
+
+    if let Some(value) = trace_header {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static(TRACE_ID_HEADER), value);
+    }
+
+    let slow_threshold_ms = slow_request_threshold_ms();
+    if elapsed_ms >= slow_threshold_ms {
+        tracing::warn!(
+            target: "perf",
+            trace_id = %trace_id,
+            method = %method,
+            path = %path,
+            status = %response.status().as_u16(),
+            latency_ms = elapsed_ms,
+            slow_threshold_ms,
+            "slow_http_request"
+        );
+    }
+
     response
 }

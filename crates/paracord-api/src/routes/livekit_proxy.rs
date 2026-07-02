@@ -10,14 +10,20 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use paracord_core::AppState;
 use serde::Deserialize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 const LIVEKIT_PROXY_MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 const LIVEKIT_PROXY_MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
+const LIVEKIT_PROXY_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+const LIVEKIT_PROXY_MAX_HTTP_REQUEST_BODY_SIZE: usize = 10 * 1024 * 1024;
+const LIVEKIT_PROXY_MAX_HTTP_RESPONSE_BODY_SIZE: usize = 1024 * 1024;
 static LIVEKIT_PROXY_CONN_SEQ: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +51,7 @@ fn query_param(uri: &axum::http::Uri, key: &str) -> Option<String> {
 fn is_livekit_access_token_valid(state: &AppState, uri: &axum::http::Uri) -> bool {
     let token = query_param(uri, "access_token").or_else(|| query_param(uri, "token"));
     let Some(token) = token else {
+        tracing::warn!("LiveKit proxy: no access_token or token query param found in URI");
         return false;
     };
 
@@ -52,17 +59,25 @@ fn is_livekit_access_token_valid(state: &AppState, uri: &axum::http::Uri) -> boo
     validation.validate_exp = true;
     validation.set_issuer(&[state.config.livekit_api_key.as_str()]);
 
-    decode::<LiveKitProxyClaims>(
+    match decode::<LiveKitProxyClaims>(
         &token,
         &DecodingKey::from_secret(state.config.livekit_api_secret.as_bytes()),
         &validation,
-    )
-    .map(|data| {
-        let _ = data.claims.exp;
-        let _ = data.claims.iss;
-        true
-    })
-    .unwrap_or(false)
+    ) {
+        Ok(data) => {
+            let _ = data.claims.exp;
+            let _ = data.claims.iss;
+            true
+        }
+        Err(err) => {
+            tracing::warn!(
+                "LiveKit proxy token validation failed: {} (issuer_configured={})",
+                err,
+                !state.config.livekit_api_key.is_empty(),
+            );
+            false
+        }
+    }
 }
 
 fn has_ws_upgrade_intent(headers: &HeaderMap) -> bool {
@@ -208,6 +223,19 @@ fn sanitize_request_uri_for_log(uri: &axum::http::Uri) -> String {
 
 fn sanitize_target_for_log(target: &str) -> String {
     target.split('?').next().unwrap_or(target).to_string()
+}
+
+fn sanitize_proxy_error_for_log(target: &str, error: impl std::fmt::Display) -> String {
+    let raw = error.to_string();
+    let redacted_target = sanitize_target_for_log(target);
+    raw.replace(target, &redacted_target)
+}
+
+fn livekit_http_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(LIVEKIT_PROXY_HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
 }
 
 fn handle_ws(state: AppState, ws: WebSocketUpgrade, req: Request) -> Response {
@@ -541,9 +569,16 @@ async fn proxy_ws(client_socket: WebSocket, target: String, conn_id: u64) {
 
 async fn handle_http(state: AppState, req: Request) -> Response {
     let target_uri = build_target(&state.config.livekit_http_url, &req, false);
+    let redacted_target = sanitize_target_for_log(&target_uri);
     let (parts, body) = req.into_parts();
 
-    let client = reqwest::Client::new();
+    let client = match livekit_http_client() {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::error!("LiveKit proxy error building HTTP client: {}", err);
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+    };
     let mut builder = client.request(parts.method, &target_uri);
 
     for (name, value) in &parts.headers {
@@ -554,27 +589,64 @@ async fn handle_http(state: AppState, req: Request) -> Response {
         builder = builder.header(name.clone(), value.clone());
     }
 
-    let body_bytes = match axum::body::to_bytes(Body::new(body), 10 * 1024 * 1024).await {
-        Ok(b) => b,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
-    };
+    let body_bytes =
+        match axum::body::to_bytes(Body::new(body), LIVEKIT_PROXY_MAX_HTTP_REQUEST_BODY_SIZE).await
+        {
+            Ok(b) => b,
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        };
 
     let resp = match builder.body(body_bytes).send().await {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("LiveKit proxy error: {}", e);
+            tracing::error!(
+                "LiveKit proxy error forwarding request to {}: {}",
+                redacted_target,
+                sanitize_proxy_error_for_log(&target_uri, e)
+            );
             return StatusCode::BAD_GATEWAY.into_response();
         }
     };
 
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let headers = resp.headers().clone();
-    let resp_body = match resp.bytes().await {
-        Ok(b) => b,
-        Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
-    };
+    if resp.content_length().is_some_and(|len| {
+        len > u64::try_from(LIVEKIT_PROXY_MAX_HTTP_RESPONSE_BODY_SIZE).unwrap_or(u64::MAX)
+    }) {
+        tracing::warn!(
+            "LiveKit proxy response from {} exceeded {} bytes",
+            redacted_target,
+            LIVEKIT_PROXY_MAX_HTTP_RESPONSE_BODY_SIZE
+        );
+        return StatusCode::BAD_GATEWAY.into_response();
+    }
+    let mut resp_body = Vec::new();
+    let mut body_stream = resp.bytes_stream();
+    loop {
+        let chunk = match body_stream.try_next().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(err) => {
+                tracing::error!(
+                    "LiveKit proxy error reading response from {}: {}",
+                    redacted_target,
+                    sanitize_proxy_error_for_log(&target_uri, err)
+                );
+                return StatusCode::BAD_GATEWAY.into_response();
+            }
+        };
+        if resp_body.len().saturating_add(chunk.len()) > LIVEKIT_PROXY_MAX_HTTP_RESPONSE_BODY_SIZE {
+            tracing::warn!(
+                "LiveKit proxy response from {} exceeded {} bytes",
+                redacted_target,
+                LIVEKIT_PROXY_MAX_HTTP_RESPONSE_BODY_SIZE
+            );
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+        resp_body.extend_from_slice(&chunk);
+    }
 
-    let mut response = (status, resp_body.to_vec()).into_response();
+    let mut response = (status, resp_body).into_response();
     for (name, value) in headers.iter() {
         let n = name.as_str();
         if n == "transfer-encoding" || n == "connection" {
@@ -588,7 +660,10 @@ async fn handle_http(state: AppState, req: Request) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::is_allowed_livekit_request;
+    use super::{
+        is_allowed_livekit_request, livekit_http_client, sanitize_proxy_error_for_log,
+        sanitize_request_uri_for_log, sanitize_target_for_log,
+    };
     use axum::http::Method;
 
     #[test]
@@ -613,5 +688,52 @@ mod tests {
             &Method::POST,
             false
         ));
+    }
+
+    #[test]
+    fn livekit_http_client_builds_with_release_hardening() {
+        let _ = livekit_http_client().expect("LiveKit HTTP proxy client should build");
+    }
+
+    #[test]
+    fn sanitize_request_uri_for_log_redacts_query_values() {
+        let uri: axum::http::Uri =
+            "/livekit/rtc/validate?access_token=secret-token&room=my-room&token=other-secret"
+                .parse()
+                .unwrap();
+
+        assert_eq!(
+            sanitize_request_uri_for_log(&uri),
+            "/livekit/rtc/validate?access_token=REDACTED&room=REDACTED&token=REDACTED"
+        );
+    }
+
+    #[test]
+    fn sanitize_request_uri_for_log_preserves_path_without_query() {
+        let uri: axum::http::Uri = "/livekit/rtc/validate".parse().unwrap();
+
+        assert_eq!(sanitize_request_uri_for_log(&uri), "/livekit/rtc/validate");
+    }
+
+    #[test]
+    fn sanitize_target_for_log_drops_backend_query() {
+        assert_eq!(
+            sanitize_target_for_log(
+                "ws://127.0.0.1:7880/rtc?access_token=secret-token&auto_subscribe=1"
+            ),
+            "ws://127.0.0.1:7880/rtc"
+        );
+    }
+
+    #[test]
+    fn sanitize_proxy_error_for_log_redacts_embedded_target_query() {
+        let target = "http://127.0.0.1:7880/rtc/validate?access_token=secret-token";
+        let message =
+            "error sending request for url (http://127.0.0.1:7880/rtc/validate?access_token=secret-token)";
+
+        assert_eq!(
+            sanitize_proxy_error_for_log(target, message),
+            "error sending request for url (http://127.0.0.1:7880/rtc/validate)"
+        );
     }
 }

@@ -76,6 +76,8 @@ pub async fn update_guild(
     icon_hash: Option<&str>,
     hub_settings: Option<&str>,
     bot_settings: Option<&str>,
+    visibility: Option<&str>,
+    discovery_tags: Option<&str>,
 ) -> Result<paracord_db::guilds::GuildRow, CoreError> {
     let guild = paracord_db::guilds::get_guild(pool, guild_id)
         .await?
@@ -85,7 +87,7 @@ pub async fn update_guild(
     let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
     permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
 
-    let updated = paracord_db::guilds::update_guild(
+    let mut updated = paracord_db::guilds::update_guild(
         pool,
         guild_id,
         name,
@@ -95,5 +97,16 @@ pub async fn update_guild(
         bot_settings,
     )
     .await?;
+    if visibility.is_some() || discovery_tags.is_some() {
+        let next_visibility = visibility.unwrap_or(&updated.visibility);
+        let next_allowed_roles = discovery_tags.unwrap_or(&updated.allowed_roles);
+        updated = paracord_db::guilds::update_space_visibility(
+            pool,
+            guild_id.into(),
+            next_visibility,
+            next_allowed_roles,
+        )
+        .await?;
+    }
     Ok(updated)
 }

@@ -8,21 +8,11 @@
       content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https: http:; connect-src 'self' ws: wss: http: https:; media-src 'self' data: blob: https: http:"
     />
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="description" content="Paracord – a decentralized, self-hostable chat platform">
+    <meta name="description" content="Paracord - a decentralized, self-hostable chat platform">
     <link rel="icon" href="/favicon.ico">
     <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png">
     <title>Paracord</title>
-    <script>
-      // In Tauri desktop, assets are embedded in the exe. An active PWA service
-      // worker caches stale assets that override updates. Unregister before the
-      // app module loads so the current build's assets are used immediately.
-      if (window.__TAURI_INTERNALS__ && navigator.serviceWorker) {
-        navigator.serviceWorker.getRegistrations().then(function(r) {
-          r.forEach(function(reg) { reg.unregister(); });
-        });
-      }
-    </script>
   </head>
   <body class="bg-gray-900 text-gray-100">
     <div id="root"></div>

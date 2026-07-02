@@ -37,13 +37,13 @@ pub async fn create_emoji(
     let row = sqlx::query_as::<_, EmojiRow>(
         "INSERT INTO emojis (id, space_id, name, creator_id, animated)
          VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, space_id AS guild_id, name, creator_id, animated, created_at",
+         RETURNING id, space_id AS guild_id, name, creator_id, CAST(animated AS INTEGER) AS animated, created_at",
     )
     .bind(id)
     .bind(guild_id)
     .bind(name)
     .bind(creator_id)
-    .bind(animated)
+    .bind(i64::from(animated))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -51,7 +51,7 @@ pub async fn create_emoji(
 
 pub async fn get_emoji(pool: &DbPool, id: i64) -> Result<Option<EmojiRow>, DbError> {
     let row = sqlx::query_as::<_, EmojiRow>(
-        "SELECT id, space_id AS guild_id, name, creator_id, animated, created_at
+        "SELECT id, space_id AS guild_id, name, creator_id, CAST(animated AS INTEGER) AS animated, created_at
          FROM emojis WHERE id = $1",
     )
     .bind(id)
@@ -62,7 +62,7 @@ pub async fn get_emoji(pool: &DbPool, id: i64) -> Result<Option<EmojiRow>, DbErr
 
 pub async fn get_guild_emojis(pool: &DbPool, guild_id: i64) -> Result<Vec<EmojiRow>, DbError> {
     let rows = sqlx::query_as::<_, EmojiRow>(
-        "SELECT id, space_id AS guild_id, name, creator_id, animated, created_at
+        "SELECT id, space_id AS guild_id, name, creator_id, CAST(animated AS INTEGER) AS animated, created_at
          FROM emojis WHERE space_id = $1 ORDER BY name",
     )
     .bind(guild_id)
@@ -75,7 +75,7 @@ pub async fn update_emoji(pool: &DbPool, id: i64, name: &str) -> Result<EmojiRow
     let row = sqlx::query_as::<_, EmojiRow>(
         "UPDATE emojis SET name = $2
          WHERE id = $1
-         RETURNING id, space_id AS guild_id, name, creator_id, animated, created_at",
+         RETURNING id, space_id AS guild_id, name, creator_id, CAST(animated AS INTEGER) AS animated, created_at",
     )
     .bind(id)
     .bind(name)
@@ -90,4 +90,43 @@ pub async fn delete_emoji(pool: &DbPool, id: i64) -> Result<(), DbError> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_pool() -> DbPool {
+        let pool = crate::create_pool("sqlite::memory:", 1).await.unwrap();
+        crate::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    async fn setup_guild(pool: &DbPool) -> (i64, i64) {
+        let user_id = 101;
+        let guild_id = 201;
+        crate::users::create_user(pool, user_id, "emojiuser", 1, "emoji@example.test", "hash")
+            .await
+            .unwrap();
+        crate::guilds::create_guild(pool, guild_id, "Emoji Guild", user_id, None)
+            .await
+            .unwrap();
+        (user_id, guild_id)
+    }
+
+    #[tokio::test]
+    async fn create_emoji_decodes_sqlite_returning_animated_flag() {
+        let pool = test_pool().await;
+        let (user_id, guild_id) = setup_guild(&pool).await;
+
+        let static_emoji = create_emoji(&pool, 301, guild_id, "static", user_id, false)
+            .await
+            .unwrap();
+        assert!(!static_emoji.animated);
+
+        let animated_emoji = create_emoji(&pool, 302, guild_id, "animated", user_id, true)
+            .await
+            .unwrap();
+        assert!(animated_emoji.animated);
+    }
 }

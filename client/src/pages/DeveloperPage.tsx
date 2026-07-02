@@ -1,8 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Bot, RefreshCw, Trash2, Copy, Check, Key, ChevronDown, ChevronRight } from 'lucide-react';
+import { Bot, RefreshCw, Trash2, Copy, Check, Key, ChevronDown, ChevronRight, Star, BookOpen, Terminal, Shield, Zap } from 'lucide-react';
 import { botApi, type BotApplication, type BotGuildInstall } from '../api/bots';
+import { botStoreApi, type BotMetricsResult } from '../api/botStore';
+import { commandApi } from '../api/commands';
+import { extractApiError } from '../api/client';
+import type { ApplicationCommand } from '../types/commands';
 import { cn } from '../lib/utils';
 import { confirm } from '../stores/confirmStore';
+import { ErrorBanner, LoadingSpinner } from '../components/ui/Feedback';
+import { Button } from '../components/ui/Button';
+import { CommandBuilder } from '../components/developer/CommandBuilder';
+import { IntentSelector } from '../components/developer/IntentSelector';
+import { PermissionCalculator } from '../components/developer/PermissionCalculator';
+import { writeClipboardText } from '../lib/clipboard';
 
 export function DeveloperPage() {
   const [apps, setApps] = useState<BotApplication[]>([]);
@@ -26,6 +36,17 @@ export function DeveloperPage() {
   // Install expansion
   const [expandedInstalls, setExpandedInstalls] = useState<Record<string, BotGuildInstall[]>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [metricsByApp, setMetricsByApp] = useState<Record<string, BotMetricsResult>>({});
+
+  // Advanced sections (commands / intents / permissions)
+  type AdvancedTab = 'guilds' | 'commands' | 'intents' | 'permissions';
+  const [advancedTab, setAdvancedTab] = useState<Record<string, AdvancedTab>>({});
+  const [commandsByApp, setCommandsByApp] = useState<Record<string, ApplicationCommand[]>>({});
+  const [showCommandBuilder, setShowCommandBuilder] = useState<Record<string, boolean>>({});
+  const [editingCommand, setEditingCommand] = useState<Record<string, ApplicationCommand | undefined>>({});
+  const [pendingIntents, setPendingIntents] = useState<Record<string, number>>({});
+  const [pendingPermissions, setPendingPermissions] = useState<Record<string, string>>({});
+  const [savingSettings, setSavingSettings] = useState<Record<string, boolean>>({});
 
   const fetchApps = useCallback(async () => {
     setLoading(true);
@@ -33,8 +54,8 @@ export function DeveloperPage() {
     try {
       const { data } = await botApi.list();
       setApps(data);
-    } catch {
-      setError('Failed to load bot applications');
+    } catch (err) {
+      setError(`Failed to load bot applications: ${extractApiError(err)}`);
     } finally {
       setLoading(false);
     }
@@ -59,8 +80,8 @@ export function DeveloperPage() {
       setNewName('');
       setNewDescription('');
       await fetchApps();
-    } catch {
-      setError('Failed to create bot application');
+    } catch (err) {
+      setError(`Failed to create bot application: ${extractApiError(err)}`);
     }
   };
 
@@ -79,8 +100,8 @@ export function DeveloperPage() {
       });
       setEditingId(null);
       await fetchApps();
-    } catch {
-      setError('Failed to update bot application');
+    } catch (err) {
+      setError(`Failed to update bot application: ${extractApiError(err)}`);
     }
   };
 
@@ -95,8 +116,8 @@ export function DeveloperPage() {
         return next;
       });
       await fetchApps();
-    } catch {
-      setError('Failed to delete bot application');
+    } catch (err) {
+      setError(`Failed to delete bot application: ${extractApiError(err)}`);
     }
   };
 
@@ -109,8 +130,8 @@ export function DeveloperPage() {
         setRevealedTokens((prev) => ({ ...prev, [appId]: data.token! }));
       }
       await fetchApps();
-    } catch {
-      setError('Failed to regenerate token');
+    } catch (err) {
+      setError(`Failed to regenerate token: ${extractApiError(err)}`);
     }
   };
 
@@ -118,13 +139,13 @@ export function DeveloperPage() {
     const token = revealedTokens[appId];
     if (!token) return;
     try {
-      await navigator.clipboard.writeText(token);
+      await writeClipboardText(token);
       setCopiedId(appId);
       window.setTimeout(() => {
         setCopiedId((c) => (c === appId ? null : c));
       }, 1800);
-    } catch {
-      setError('Could not copy token to clipboard');
+    } catch (err) {
+      setError(`Could not copy token to clipboard: ${extractApiError(err)}`);
     }
   };
 
@@ -144,13 +165,13 @@ export function DeveloperPage() {
     const inviteUrl = buildInstallUrl(app);
     if (!inviteUrl) return;
     try {
-      await navigator.clipboard.writeText(inviteUrl);
+      await writeClipboardText(inviteUrl);
       setCopiedInviteId(app.id);
       window.setTimeout(() => {
         setCopiedInviteId((curr) => (curr === app.id ? null : curr));
       }, 1800);
-    } catch {
-      setError('Could not copy install link');
+    } catch (err) {
+      setError(`Could not copy install link: ${extractApiError(err)}`);
     }
   };
 
@@ -160,13 +181,48 @@ export function DeveloperPage() {
       return;
     }
     setExpandedId(appId);
+    setAdvancedTab((prev) => ({ ...prev, [appId]: prev[appId] ?? 'guilds' }));
     if (!expandedInstalls[appId]) {
       try {
         const { data } = await botApi.listInstalls(appId);
         setExpandedInstalls((prev) => ({ ...prev, [appId]: data }));
-      } catch {
-        setError('Failed to load guild installs');
+      } catch (err) {
+        setError(`Failed to load guild installs: ${extractApiError(err)}`);
       }
+    }
+  };
+
+  const loadCommands = async (appId: string) => {
+    try {
+      const { data } = await commandApi.listGlobalCommands(appId);
+      setCommandsByApp((prev) => ({ ...prev, [appId]: data }));
+    } catch (err) {
+      setCommandsByApp((prev) => ({ ...prev, [appId]: [] }));
+      setError(`Failed to load commands: ${extractApiError(err)}`);
+    }
+  };
+
+  const deleteCommand = async (appId: string, cmdId: string) => {
+    if (!(await confirm({ title: 'Delete command?', description: 'This cannot be undone.', confirmLabel: 'Delete', variant: 'danger' }))) return;
+    try {
+      await commandApi.deleteGlobalCommand(appId, cmdId);
+      setCommandsByApp((prev) => ({ ...prev, [appId]: (prev[appId] ?? []).filter((c) => c.id !== cmdId) }));
+    } catch (err) {
+      setError(`Failed to delete command: ${extractApiError(err)}`);
+    }
+  };
+
+  const saveAppSettings = async (appId: string, app: BotApplication) => {
+    setSavingSettings((prev) => ({ ...prev, [appId]: true }));
+    try {
+      const intents = pendingIntents[appId] ?? app.intents;
+      const permissions = pendingPermissions[appId] ?? app.permissions;
+      await botApi.update(appId, { intents, permissions });
+      setApps((prev) => prev.map((a) => (a.id === appId ? { ...a, intents, permissions } : a)));
+    } catch (err) {
+      setError(`Failed to save bot settings: ${extractApiError(err)}`);
+    } finally {
+      setSavingSettings((prev) => ({ ...prev, [appId]: false }));
     }
   };
 
@@ -179,8 +235,17 @@ export function DeveloperPage() {
         const { data: installs } = await botApi.listInstalls(appId);
         setExpandedInstalls((prev) => ({ ...prev, [appId]: installs }));
       }
+    } catch (err) {
+      setError(`Failed to load bot details: ${extractApiError(err)}`);
+    }
+  };
+
+  const loadMetrics = async (appId: string) => {
+    try {
+      const { data } = await botStoreApi.getDeveloperMetrics(appId);
+      setMetricsByApp((prev) => ({ ...prev, [appId]: data }));
     } catch {
-      setError('Failed to load bot details');
+      // Keep page usable even if metrics endpoint fails.
     }
   };
 
@@ -191,22 +256,29 @@ export function DeveloperPage() {
         <div className="flex items-center gap-3">
           <Bot size={24} className="text-accent-primary" />
           <h1 className="text-xl font-bold text-text-primary">Developer Portal</h1>
-          <button
-            onClick={() => void fetchApps()}
-            className="ml-auto inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
-          >
-            <RefreshCw size={14} />
-            Refresh
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <a
+              href="/api/docs"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
+            >
+              <BookOpen size={14} />
+              API Docs
+            </a>
+            <button
+              type="button"
+              onClick={() => void fetchApps()}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
+            >
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+          </div>
         </div>
 
-        {error && (
-          <div className="rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-4 py-2.5 text-sm font-medium text-accent-danger">
-            {error}
-          </div>
-        )}
-
-        {loading && <p className="text-sm text-text-muted">Loading...</p>}
+        {error && <ErrorBanner message={error} onRetry={() => void fetchApps()} />}
+        {loading && <LoadingSpinner size="sm" label="Loading developer apps..." />}
 
         {/* Create new bot application */}
         <div className="rounded-xl border border-border-subtle bg-bg-secondary/60 p-5 space-y-4">
@@ -214,7 +286,11 @@ export function DeveloperPage() {
             Create Bot Application
           </h2>
           <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+            <label htmlFor="new-bot-name" className="sr-only">
+              Bot name
+            </label>
             <input
+              id="new-bot-name"
               className="input-field"
               placeholder="Bot name"
               value={newName}
@@ -224,19 +300,23 @@ export function DeveloperPage() {
                 if (e.key === 'Enter') void createApp();
               }}
             />
+            <label htmlFor="new-bot-description" className="sr-only">
+              Description
+            </label>
             <input
+              id="new-bot-description"
               className="input-field"
               placeholder="Description (optional)"
               value={newDescription}
               maxLength={400}
               onChange={(e) => setNewDescription(e.target.value)}
             />
-            <button
-              className="btn-primary h-[2.9rem] min-w-[7rem]"
+            <Button
+              className="h-[2.9rem] min-w-[7rem]"
               onClick={() => void createApp()}
             >
               Create
-            </button>
+            </Button>
           </div>
           <p className="text-xs text-text-muted">
             A bot user account will be created automatically. The token is shown only once on creation -- copy it immediately.
@@ -252,6 +332,7 @@ export function DeveloperPage() {
             const installs = expandedInstalls[app.id];
             const installUrl = buildInstallUrl(app);
 
+            const metrics = metricsByApp[app.id];
             return (
               <div
                 key={app.id}
@@ -300,6 +381,7 @@ export function DeveloperPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <code className="flex-1 break-all text-xs text-text-secondary">{token}</code>
                       <button
+                        type="button"
                         className="inline-flex items-center gap-1 rounded-lg border border-border-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
                         onClick={() => void copyToken(app.id)}
                       >
@@ -325,6 +407,7 @@ export function DeveloperPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <code className="flex-1 break-all text-xs text-text-secondary">{installUrl}</code>
                     <button
+                      type="button"
                       className="inline-flex items-center gap-1 rounded-lg border border-border-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
                       onClick={() => void copyInstallUrl(app)}
                     >
@@ -353,10 +436,11 @@ export function DeveloperPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   {isEditing ? (
                     <>
-                      <button className="btn-primary" onClick={() => void saveEdit(app.id)}>
+                      <Button onClick={() => void saveEdit(app.id)}>
                         Save
-                      </button>
+                      </Button>
                       <button
+                        type="button"
                         className="rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
                         onClick={() => setEditingId(null)}
                       >
@@ -365,6 +449,7 @@ export function DeveloperPage() {
                     </>
                   ) : (
                     <button
+                      type="button"
                       className="rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
                       onClick={() => startEditing(app)}
                     >
@@ -372,6 +457,7 @@ export function DeveloperPage() {
                     </button>
                   )}
                   <button
+                    type="button"
                     className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
                     onClick={() => void regenerateToken(app.id)}
                   >
@@ -379,6 +465,7 @@ export function DeveloperPage() {
                     Regen Token
                   </button>
                   <button
+                    type="button"
                     className={cn(
                       'inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
                       isExpanded && 'bg-bg-mod-strong text-text-primary'
@@ -386,9 +473,10 @@ export function DeveloperPage() {
                     onClick={() => void toggleInstalls(app.id)}
                   >
                     {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                    Guilds
+                    Advanced
                   </button>
                   <button
+                    type="button"
                     className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
                     onClick={() => void reloadAppDetails(app.id)}
                   >
@@ -396,6 +484,7 @@ export function DeveloperPage() {
                     Reload
                   </button>
                   <button
+                    type="button"
                     className="ml-auto inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-semibold text-accent-danger hover:bg-accent-danger/12"
                     onClick={() => void deleteApp(app.id)}
                   >
@@ -404,34 +493,222 @@ export function DeveloperPage() {
                   </button>
                 </div>
 
-                {/* Guild installs expansion */}
-                {isExpanded && (
-                  <div className="rounded-lg border border-border-subtle bg-bg-primary/40 p-3">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                      Installed Guilds
-                    </p>
-                    {installs && installs.length > 0 ? (
-                      <div className="space-y-1.5">
-                        {installs.map((install) => (
-                          <div
-                            key={install.guild_id}
-                            className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle/60 px-3 py-2 text-xs text-text-secondary"
+                {/* Advanced expansion with tabs */}
+                {isExpanded && (() => {
+                  const tab = advancedTab[app.id] ?? 'guilds';
+                  const appCommands = commandsByApp[app.id];
+                  const appIntents = pendingIntents[app.id] ?? app.intents;
+                  const appPermissions = pendingPermissions[app.id] ?? app.permissions;
+                  const intentsOrPermsDirty =
+                    (pendingIntents[app.id] !== undefined && pendingIntents[app.id] !== app.intents) ||
+                    (pendingPermissions[app.id] !== undefined && pendingPermissions[app.id] !== app.permissions);
+
+                  return (
+                    <div className="rounded-lg border border-border-subtle bg-bg-primary/40">
+                      {/* Tab bar */}
+                      <div className="flex border-b border-border-subtle">
+                        {((['guilds', 'commands', 'intents', 'permissions'] as const)).map((t) => (
+                          <button
+                            type="button"
+                            key={t}
+                            className={cn(
+                              'flex items-center gap-1.5 px-3 py-2 text-xs font-semibold capitalize text-text-secondary transition-colors hover:text-text-primary',
+                              tab === t && 'border-b-2 border-accent-primary text-accent-primary',
+                            )}
+                            onClick={() => {
+                              setAdvancedTab((prev) => ({ ...prev, [app.id]: t }));
+                              if (t === 'commands' && !commandsByApp[app.id]) {
+                                void loadCommands(app.id);
+                              }
+                            }}
                           >
-                            <span className="flex-1">Guild {install.guild_id}</span>
-                            <span>Perms: {install.permissions}</span>
-                            <span>
-                              Added {new Date(install.created_at).toLocaleDateString()}
-                            </span>
-                          </div>
+                            {t === 'guilds' && <ChevronRight size={12} />}
+                            {t === 'commands' && <Terminal size={12} />}
+                            {t === 'intents' && <Zap size={12} />}
+                            {t === 'permissions' && <Shield size={12} />}
+                            {t.charAt(0).toUpperCase() + t.slice(1)}
+                          </button>
                         ))}
                       </div>
-                    ) : (
-                      <p className="text-xs text-text-muted">
-                        Not installed in any guilds yet.
-                      </p>
-                    )}
+
+                      <div className="p-3">
+                        {/* Guilds tab */}
+                        {tab === 'guilds' && (
+                          <>
+                            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                              Installed Guilds
+                            </p>
+                            {installs && installs.length > 0 ? (
+                              <div className="space-y-1.5">
+                                {installs.map((install) => (
+                                  <div
+                                    key={install.guild_id}
+                                    className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle/60 px-3 py-2 text-xs text-text-secondary"
+                                  >
+                                    <span className="flex-1">Guild {install.guild_id}</span>
+                                    <span>Perms: {install.permissions}</span>
+                                    <span>Added {new Date(install.created_at).toLocaleDateString()}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-text-muted">Not installed in any guilds yet.</p>
+                            )}
+                          </>
+                        )}
+
+                        {/* Commands tab */}
+                        {tab === 'commands' && (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                                Global Commands
+                              </p>
+                              <Button
+                                size="sm"
+                                onClick={() => setShowCommandBuilder((prev) => ({ ...prev, [app.id]: !prev[app.id] }))}
+                              >
+                                {showCommandBuilder[app.id] ? 'Cancel' : '+ New Command'}
+                              </Button>
+                            </div>
+
+                            {showCommandBuilder[app.id] && (
+                              <CommandBuilder
+                                appId={app.id}
+                                editingCommand={editingCommand[app.id]}
+                                onSaved={() => {
+                                  setShowCommandBuilder((prev) => ({ ...prev, [app.id]: false }));
+                                  setEditingCommand((prev) => ({ ...prev, [app.id]: undefined }));
+                                  void loadCommands(app.id);
+                                }}
+                                onCancel={() => {
+                                  setShowCommandBuilder((prev) => ({ ...prev, [app.id]: false }));
+                                  setEditingCommand((prev) => ({ ...prev, [app.id]: undefined }));
+                                }}
+                              />
+                            )}
+
+                            {appCommands === undefined ? (
+                              <LoadingSpinner size="sm" label="Loading commands..." />
+                            ) : appCommands.length === 0 ? (
+                              <p className="text-xs text-text-muted">No global commands registered yet.</p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {appCommands.map((cmd) => (
+                                  <div
+                                    key={cmd.id}
+                                    className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle/60 px-3 py-2 text-xs"
+                                  >
+                                    <code className="font-semibold text-text-primary">/{cmd.name}</code>
+                                    <span className="flex-1 text-text-muted">{cmd.description}</span>
+                                    <button
+                                      type="button"
+                                      className="text-text-secondary hover:text-text-primary"
+                                      onClick={() => {
+                                        setEditingCommand((prev) => ({ ...prev, [app.id]: cmd }));
+                                        setShowCommandBuilder((prev) => ({ ...prev, [app.id]: true }));
+                                      }}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="text-accent-danger hover:text-accent-danger/80"
+                                      onClick={() => void deleteCommand(app.id, cmd.id)}
+                                      aria-label={`Delete command ${cmd.name}`}
+                                      title={`Delete command ${cmd.name}`}
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Intents tab */}
+                        {tab === 'intents' && (
+                          <div className="space-y-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                              Gateway Intents
+                            </p>
+                            <IntentSelector
+                              value={appIntents}
+                              onChange={(v) => setPendingIntents((prev) => ({ ...prev, [app.id]: v }))}
+                            />
+                            {intentsOrPermsDirty && (
+                              <Button
+                                size="sm"
+                                onClick={() => void saveAppSettings(app.id, app)}
+                                disabled={savingSettings[app.id]}
+                              >
+                                {savingSettings[app.id] ? 'Saving...' : 'Save Changes'}
+                              </Button>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Permissions tab */}
+                        {tab === 'permissions' && (
+                          <div className="space-y-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                              Default Bot Permissions
+                            </p>
+                            <PermissionCalculator
+                              value={appPermissions}
+                              onChange={(v) => setPendingPermissions((prev) => ({ ...prev, [app.id]: v }))}
+                            />
+                            {intentsOrPermsDirty && (
+                              <Button
+                                size="sm"
+                                onClick={() => void saveAppSettings(app.id, app)}
+                                disabled={savingSettings[app.id]}
+                              >
+                                {savingSettings[app.id] ? 'Saving...' : 'Save Changes'}
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <div className="rounded-lg border border-border-subtle bg-bg-primary/40 px-3 py-2.5 text-xs text-text-secondary">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="font-semibold uppercase tracking-wide text-text-secondary">Metrics (30d)</span>
+                    <button
+                      type="button"
+                      className="rounded-md border border-border-subtle px-2 py-0.5 text-[11px] font-semibold hover:bg-bg-mod-strong"
+                      onClick={() => void loadMetrics(app.id)}
+                    >
+                      Refresh Metrics
+                    </button>
                   </div>
-                )}
+                  {metrics ? (
+                    <div className="space-y-1.5">
+                      <div>
+                        Installs: <span className="font-semibold text-text-primary">{metrics.install_count}</span>
+                        {' · '}
+                        Active Guilds: <span className="font-semibold text-text-primary">{metrics.active_guild_count}</span>
+                      </div>
+                      <div className="inline-flex items-center gap-1.5">
+                        <Star size={12} className="text-accent-warning" />
+                        {metrics.average_rating.toFixed(1)} ({metrics.review_count} reviews)
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {metrics.metrics_30d.map((bucket) => (
+                          <span key={bucket.event_type} className="rounded-full border border-border-subtle px-2 py-0.5 text-[11px]">
+                            {bucket.event_type}: {bucket.count}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-text-muted">No metrics loaded yet.</div>
+                  )}
+                </div>
               </div>
             );
           })}

@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::routes::audit;
+use crate::routes::mod_log;
 
 pub async fn list_members(
     State(state): State<AppState>,
@@ -185,6 +186,7 @@ pub async fn update_member(
     }
 
     let mut timed_out_until = updated.communication_disabled_until;
+    let touched_timeout = body.communication_disabled_until.is_some();
     if let Some(raw_until) = body.communication_disabled_until {
         paracord_core::permissions::require_permission(actor_perms, Permissions::MUTE_MEMBERS)?;
         if user_id == guild.owner_id {
@@ -255,6 +257,26 @@ pub async fn update_member(
     )
     .await;
 
+    if touched_timeout {
+        mod_log::emit_mod_log(
+            &state,
+            guild_id,
+            "Member Timeout Updated",
+            "A member timeout/mute state was changed.",
+            &[
+                ("Actor", auth.user_id.to_string()),
+                ("Target", user_id.to_string()),
+                (
+                    "Timeout Until",
+                    timed_out_until
+                        .map(|v| v.to_rfc3339())
+                        .unwrap_or_else(|| "cleared".to_string()),
+                ),
+            ],
+        )
+        .await;
+    }
+
     Ok(Json(member_json))
 }
 
@@ -282,6 +304,18 @@ pub async fn kick_member(
         Some(user_id),
         None,
         None,
+    )
+    .await;
+
+    mod_log::emit_mod_log(
+        &state,
+        guild_id,
+        "Member Kicked",
+        "A member was removed from the server.",
+        &[
+            ("Actor", auth.user_id.to_string()),
+            ("Target", user_id.to_string()),
+        ],
     )
     .await;
 
