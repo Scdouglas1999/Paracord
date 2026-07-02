@@ -79,4 +79,54 @@ mod tests {
         let result = verify(b"tampered", &sig, &public_hex);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn verify_rejects_wrong_length_signature() {
+        let (_key, public_hex) = generate_keypair();
+        // 4 hex chars = 2 bytes, far short of a 64-byte ed25519 signature.
+        let result = verify(b"payload", "abcd", &public_hex);
+        assert!(matches!(result, Err(FederationError::InvalidSignature)));
+    }
+
+    #[test]
+    fn verify_rejects_non_hex_signature() {
+        let (_key, public_hex) = generate_keypair();
+        let result = verify(b"payload", "zzzz", &public_hex);
+        assert!(matches!(result, Err(FederationError::InvalidSignature)));
+    }
+
+    #[test]
+    fn verify_rejects_empty_signature() {
+        let (_key, public_hex) = generate_keypair();
+        let result = verify(b"payload", "", &public_hex);
+        assert!(matches!(result, Err(FederationError::InvalidSignature)));
+    }
+
+    #[test]
+    fn verify_rejects_multibyte_signature_without_panic() {
+        let (_key, public_hex) = generate_keypair();
+        // Even byte-length multi-byte UTF-8 input must return an error, never
+        // panic on a mid-codepoint slice.
+        let result = verify(b"payload", "ffé", &public_hex);
+        assert!(matches!(result, Err(FederationError::InvalidSignature)));
+    }
+
+    #[test]
+    fn verify_rejects_all_zero_public_key() {
+        let (key, _public_hex) = generate_keypair();
+        let sig = sign(&key, b"payload");
+        // 32 zero bytes is not a valid ed25519 point (small-order / rejected).
+        let zero_pk = hex_encode(&[0u8; 32]);
+        let result = verify(b"payload", &sig, &zero_pk);
+        assert!(matches!(result, Err(FederationError::InvalidSignature)));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_length_public_key() {
+        let (key, _public_hex) = generate_keypair();
+        let sig = sign(&key, b"payload");
+        // Valid hex but only 2 bytes, not 32.
+        let result = verify(b"payload", &sig, "abcd");
+        assert!(matches!(result, Err(FederationError::InvalidSignature)));
+    }
 }

@@ -524,6 +524,18 @@ pub async fn create_followup_message(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let token_row = validate_webhook_token(&state, app_id, &token).await?;
 
+    // M14: Verify the bot is still installed in the guild before allowing a
+    // followup (mirrors edit_original_response / delete_original_response).
+    if let Some(guild_id) = token_row.guild_id {
+        let is_installed =
+            paracord_db::bot_applications::is_bot_in_guild(&state.db, app_id, guild_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if !is_installed {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
     // Look up the bot application to get the real bot_user_id for message authorship
     let bot_app = paracord_db::bot_applications::get_bot_application(&state.db, app_id)
         .await

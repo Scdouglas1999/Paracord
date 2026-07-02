@@ -60,5 +60,21 @@ describe('crypto/util', () => {
       expect(buf).toBeInstanceOf(ArrayBuffer);
       expect(new Uint8Array(buf)).toEqual(bytes);
     });
+
+    it('returns only the view region for a subarray, not the backing buffer', () => {
+      const backing = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
+      const view = backing.subarray(2, 5); // [2, 3, 4], byteOffset 2
+      const buf = toArrayBuffer(view);
+      expect(buf.byteLength).toBe(3);
+      expect(new Uint8Array(buf)).toEqual(new Uint8Array([2, 3, 4]));
+      // Mutating the copy must not touch the original backing buffer.
+      new Uint8Array(buf)[0] = 99;
+      expect(backing[2]).toBe(2);
+    });
+
+    it('returns the backing buffer directly for a full-span view', () => {
+      const bytes = new Uint8Array([9, 8, 7]);
+      expect(toArrayBuffer(bytes)).toBe(bytes.buffer);
+    });
   });
 });

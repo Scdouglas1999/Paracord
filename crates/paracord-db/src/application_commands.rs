@@ -1,4 +1,4 @@
-use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
@@ -135,7 +135,7 @@ pub async fn update_command(
             dm_permission = COALESCE($6, dm_permission),
             nsfw = COALESCE($7, nsfw),
             version = version + 1,
-            updated_at = datetime('now')
+            updated_at = $8
          WHERE id = $1
          RETURNING {SELECT_COLS}"
     );
@@ -147,6 +147,7 @@ pub async fn update_command(
         .bind(default_member_permissions)
         .bind(dm_permission)
         .bind(nsfw)
+        .bind(datetime_to_db_text(Utc::now()))
         .fetch_one(pool)
         .await?;
     Ok(row)

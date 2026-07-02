@@ -109,13 +109,6 @@ export async function unwrapDeliveredMediaSenderKey(
   senderUserId: string,
   payload: Uint8Array,
 ): Promise<{ epoch: number; rawKey: Uint8Array }> {
-  if (payload.byteLength === 16) {
-    return {
-      epoch: 0,
-      rawKey: payload,
-    };
-  }
-
   const senderPublicKey = resolveMediaUserPublicKey(senderUserId);
   if (!senderPublicKey) {
     throw new Error(`missing sender public key for user ${senderUserId}`);

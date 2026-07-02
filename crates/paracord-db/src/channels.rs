@@ -1,6 +1,6 @@
 use crate::{
-    active_database_engine, bool_from_any_row, datetime_from_db_text, DatabaseEngine, DbError,
-    DbPool,
+    active_database_engine, bool_from_any_row, datetime_from_db_text, datetime_to_db_text,
+    DatabaseEngine, DbError, DbPool,
 };
 use chrono::{DateTime, Utc};
 use paracord_models::id::{ChannelId, GuildId, MessageId, UserId};
@@ -217,7 +217,7 @@ pub async fn update_channel_typed(
              bitrate = COALESCE($6, bitrate),
              user_limit = COALESCE($7, user_limit),
              nsfw = {nsfw_expr},
-             updated_at = datetime('now')
+             updated_at = $8
          WHERE id = $1
          RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
     );
@@ -229,6 +229,7 @@ pub async fn update_channel_typed(
         .bind(rate_limit_per_user)
         .bind(bitrate)
         .bind(user_limit)
+        .bind(datetime_to_db_text(Utc::now()))
         .fetch_one(pool)
         .await?;
     Ok(row)
@@ -286,13 +287,16 @@ pub async fn reorder_channels(pool: &DbPool, updates: &[(i64, i32)]) -> Result<(
         return Ok(());
     }
 
+    let updated_at_param = updates.len() * 3 + 1;
     let mut sql = String::from("UPDATE channels SET position = CASE id ");
     for (idx, _) in updates.iter().enumerate() {
         let id_param = idx * 2 + 1;
         let pos_param = idx * 2 + 2;
         sql.push_str(&format!("WHEN ${id_param} THEN ${pos_param} "));
     }
-    sql.push_str("ELSE position END, updated_at = datetime('now') WHERE id IN (");
+    sql.push_str(&format!(
+        "ELSE position END, updated_at = ${updated_at_param} WHERE id IN ("
+    ));
     for idx in 0..updates.len() {
         if idx > 0 {
             sql.push_str(", ");
@@ -309,6 +313,7 @@ pub async fn reorder_channels(pool: &DbPool, updates: &[(i64, i32)]) -> Result<(
     for (channel_id, _) in updates {
         query = query.bind(*channel_id);
     }
+    query = query.bind(datetime_to_db_text(Utc::now()));
     query.execute(pool).await?;
 
     Ok(())
@@ -345,13 +350,14 @@ pub async fn update_channel_positions_typed(
         }
 
         let row = sqlx::query_as::<_, ChannelRow>(
-            "UPDATE channels SET position = $2, parent_id = $3, updated_at = datetime('now')
+            "UPDATE channels SET position = $2, parent_id = $3, updated_at = $4
              WHERE id = $1
              RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at"
         )
         .bind(channel_id)
         .bind(position)
         .bind(new_parent)
+        .bind(datetime_to_db_text(Utc::now()))
         .fetch_one(pool)
         .await?;
         changed.push(row);
@@ -582,13 +588,14 @@ pub async fn update_thread_typed(
         "UPDATE channels
          SET name = COALESCE($2, name),
              thread_metadata = $3,
-             updated_at = datetime('now')
+             updated_at = $4
          WHERE id = $1 AND channel_type = 6
          RETURNING id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at",
     )
     .bind(thread_id)
     .bind(name)
     .bind(metadata_raw)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -875,11 +882,14 @@ pub async fn update_post_tags_typed(
     thread_id: ChannelId,
     applied_tags: &str,
 ) -> Result<(), DbError> {
-    sqlx::query("UPDATE channels SET applied_tags = $2, updated_at = datetime('now') WHERE id = $1 AND channel_type = 6")
-        .bind(thread_id)
-        .bind(applied_tags)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE channels SET applied_tags = $2, updated_at = $3 WHERE id = $1 AND channel_type = 6",
+    )
+    .bind(thread_id)
+    .bind(applied_tags)
+    .bind(datetime_to_db_text(Utc::now()))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -898,9 +908,10 @@ pub async fn update_forum_sort_order_typed(
     channel_id: ChannelId,
     sort_order: i32,
 ) -> Result<(), DbError> {
-    sqlx::query("UPDATE channels SET default_sort_order = $2, updated_at = datetime('now') WHERE id = $1 AND channel_type = 7")
+    sqlx::query("UPDATE channels SET default_sort_order = $2, updated_at = $3 WHERE id = $1 AND channel_type = 7")
         .bind(channel_id)
         .bind(sort_order)
+        .bind(datetime_to_db_text(Utc::now()))
         .execute(pool)
         .await?;
     Ok(())

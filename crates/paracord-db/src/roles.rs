@@ -50,9 +50,15 @@ pub async fn create_role(
     name: &str,
     permissions: i64,
 ) -> Result<RoleRow, DbError> {
+    // Assign the next position within the guild so freshly created roles are
+    // ordered above the @everyone role (position 0) and above one another. The
+    // subquery computes MAX(position)+1 for the guild atomically as part of the
+    // INSERT so two concurrent creates cannot collide on the same position.
     let row = sqlx::query_as::<_, RoleRow>(
-        "INSERT INTO roles (id, space_id, name, permissions)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO roles (id, space_id, name, permissions, position)
+         VALUES ($1, $2, $3, $4, (
+             SELECT COALESCE(MAX(position), 0) + 1 FROM roles WHERE space_id = $2
+         ))
          RETURNING id, space_id, name, color, CASE WHEN hoist THEN 1 ELSE 0 END AS hoist, position, permissions, CASE WHEN managed THEN 1 ELSE 0 END AS managed, CASE WHEN mentionable THEN 1 ELSE 0 END AS mentionable, CASE WHEN server_wide THEN 1 ELSE 0 END AS server_wide, created_at"
     )
     .bind(id)
@@ -62,6 +68,18 @@ pub async fn create_role(
     .fetch_one(pool)
     .await?;
     Ok(row)
+}
+
+/// Set the hierarchy position of a role directly. Used to clamp a freshly
+/// created role below the creating manager's top role so a non-owner cannot
+/// spawn a role at or above their own rank.
+pub async fn set_role_position(pool: &DbPool, id: i64, position: i32) -> Result<(), DbError> {
+    sqlx::query("UPDATE roles SET position = $2 WHERE id = $1")
+        .bind(id)
+        .bind(position)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn get_role(pool: &DbPool, id: i64) -> Result<Option<RoleRow>, DbError> {
@@ -265,6 +283,38 @@ mod tests {
         assert_eq!(role.color, 0);
         assert!(!role.hoist);
         assert!(!role.mentionable);
+    }
+
+    #[tokio::test]
+    async fn test_create_role_assigns_incrementing_positions() {
+        let pool = test_pool().await;
+        let (_user_id, guild_id) = setup_guild(&pool).await;
+        // @everyone (id == guild_id) is auto-created at position 0.
+        let first = create_role(&pool, 540, guild_id, "First", 0).await.unwrap();
+        let second = create_role(&pool, 541, guild_id, "Second", 0)
+            .await
+            .unwrap();
+        assert!(first.position >= 1, "first role should be above @everyone");
+        assert_ne!(
+            first.position, second.position,
+            "sequential roles must have distinct positions"
+        );
+        assert!(
+            second.position > first.position,
+            "second role should be ordered above the first"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_role_position() {
+        let pool = test_pool().await;
+        let (_user_id, guild_id) = setup_guild(&pool).await;
+        create_role(&pool, 542, guild_id, "Movable", 0)
+            .await
+            .unwrap();
+        set_role_position(&pool, 542, 7).await.unwrap();
+        let role = get_role(&pool, 542).await.unwrap().unwrap();
+        assert_eq!(role.position, 7);
     }
 
     #[tokio::test]

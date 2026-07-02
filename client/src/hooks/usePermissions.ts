@@ -33,11 +33,16 @@ function getUserIdFromToken(token: string | null): string | null {
   }
 }
 
-function toPermissionBits(value: string | number | undefined): bigint {
+export function toPermissionBits(value: string | number | undefined): bigint {
   if (value == null) return 0n;
   if (typeof value === 'string') {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? BigInt(parsed) : 0n;
+    // parseInt+BigInt truncates bits >= 2^53; convert the string directly so
+    // the full 64-bit permission set survives.
+    try {
+      return BigInt(value);
+    } catch {
+      return 0n;
+    }
   }
   return BigInt(value);
 }

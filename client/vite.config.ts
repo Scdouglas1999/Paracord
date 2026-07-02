@@ -45,6 +45,13 @@ export default defineConfig(({ mode }) => {
       }),
     ],
     clearScreen: false,
+    // The DM decrypt worker is instantiated as a module worker
+    // (`new Worker(url, { type: 'module' })`). Vite's default worker bundle
+    // format is "iife", which Rollup refuses to emit once the main build is
+    // code-split (manualChunks + vite-plugin-pwa). Emit ES modules to match.
+    worker: {
+      format: "es",
+    },
     server: {
       port: 1420,
       strictPort: true,

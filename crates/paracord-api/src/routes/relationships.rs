@@ -79,20 +79,56 @@ pub async fn add_friend(
         ));
     }
 
-    // Check if this is a block request
+    // Only "friend" (1) and "block" (2) are valid request types. Friend requests
+    // are represented internally as an outgoing-pending row (type=4); callers must
+    // not be able to inject arbitrary rel_type values.
     let rel_type = body.rel_type.unwrap_or(1);
+    if !matches!(rel_type, 1 | 2) {
+        return Err(ApiError::BadRequest("Invalid relationship type".into()));
+    }
+
     if rel_type == 2 {
-        // Block: store directly
+        // Block: normalize the reverse direction (drop any friend/pending row the
+        // target had toward us) before recording the block for our direction.
+        paracord_db::relationships::delete_relationship(&state.db, target_id, auth.user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
         paracord_db::relationships::create_relationship(&state.db, auth.user_id, target_id, 2)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+        // Tell the (now ex-)friend to drop us from their relationship list.
+        state.event_bus.dispatch_to_users(
+            "RELATIONSHIP_REMOVE",
+            json!({ "user_id": auth.user_id.to_string() }),
+            vec![target_id],
+        );
         return Ok(StatusCode::NO_CONTENT);
     }
 
-    // Check if the target already sent us a pending request
+    // Friend request. Load the target's row toward us first: if they blocked the
+    // requester, refuse and create no row.
     let incoming = paracord_db::relationships::get_relationship(&state.db, target_id, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if incoming.as_ref().map(|r| r.rel_type) == Some(2) {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Short-circuit when a relationship already exists in our direction so the
+    // request is idempotent (and cannot silently overwrite a block we placed).
+    let outgoing = paracord_db::relationships::get_relationship(&state.db, auth.user_id, target_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if let Some(rel) = outgoing {
+        match rel.rel_type {
+            // Already friends, or an outgoing request is already pending.
+            1 | 4 => return Ok(StatusCode::NO_CONTENT),
+            // We have the target blocked — they must be unblocked via DELETE first.
+            2 => return Err(ApiError::Forbidden),
+            _ => {}
+        }
+    }
 
     if let Some(rel) = incoming {
         if rel.rel_type == 4 {

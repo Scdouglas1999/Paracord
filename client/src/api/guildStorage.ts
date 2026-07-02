@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 
 export interface GuildStoragePolicy {
   max_file_size: number | null;
@@ -25,14 +25,14 @@ export interface GuildFile {
 
 export const guildStorageApi = {
   getUsage: (guildId: string) =>
-    apiClient.get<GuildStorageInfo>(`/guilds/${guildId}/storage`),
+    getApi().get<GuildStorageInfo>(`/guilds/${guildId}/storage`),
 
   updatePolicy: (guildId: string, policy: Partial<GuildStoragePolicy>) =>
-    apiClient.patch(`/guilds/${guildId}/storage`, policy),
+    getApi().patch(`/guilds/${guildId}/storage`, policy),
 
   listFiles: (guildId: string, params?: { before?: string; limit?: number }) =>
-    apiClient.get<GuildFile[]>(`/guilds/${guildId}/files`, { params }),
+    getApi().get<GuildFile[]>(`/guilds/${guildId}/files`, { params }),
 
   deleteFiles: (guildId: string, ids: string[]) =>
-    apiClient.delete(`/guilds/${guildId}/files`, { data: { attachment_ids: ids } }),
+    getApi().delete(`/guilds/${guildId}/files`, { data: { attachment_ids: ids } }),
 };

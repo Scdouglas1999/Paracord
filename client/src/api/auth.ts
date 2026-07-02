@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import type { LoginRequest, LoginResponse, RegisterRequest, ReadState, User, UserSettings } from '../types';
 
 export interface AuthSession {
@@ -18,49 +18,49 @@ export interface AuthOptions {
 }
 
 export const authApi = {
-  options: () => apiClient.get<AuthOptions>('/auth/options'),
-  login: (data: LoginRequest) => apiClient.post<LoginResponse>('/auth/login', data),
-  register: (data: RegisterRequest) => apiClient.post<LoginResponse>('/auth/register', data),
+  options: () => getApi().get<AuthOptions>('/auth/options'),
+  login: (data: LoginRequest) => getApi().post<LoginResponse>('/auth/login', data),
+  register: (data: RegisterRequest) => getApi().post<LoginResponse>('/auth/register', data),
   refresh: (refreshToken?: string) =>
-    apiClient.post<{ token: string; refresh_token?: string }>(
+    getApi().post<{ token: string; refresh_token?: string }>(
       '/auth/refresh',
       refreshToken ? { refresh_token: refreshToken } : undefined,
     ),
-  logout: () => apiClient.post('/auth/logout'),
-  listSessions: () => apiClient.get<AuthSession[]>('/auth/sessions'),
-  revokeSession: (sessionId: string) => apiClient.delete(`/auth/sessions/${sessionId}`),
+  logout: () => getApi().post('/auth/logout'),
+  listSessions: () => getApi().get<AuthSession[]>('/auth/sessions'),
+  revokeSession: (sessionId: string) => getApi().delete(`/auth/sessions/${sessionId}`),
   attachPublicKey: (publicKey: string) =>
-    apiClient.post<LoginResponse>('/auth/attach-public-key', { public_key: publicKey }),
-  getMe: () => apiClient.get<User>('/users/@me'),
-  updateMe: (data: Partial<User>) => apiClient.patch<User>('/users/@me', data),
-  getSettings: () => apiClient.get<UserSettings>('/users/@me/settings'),
-  updateSettings: (data: Partial<UserSettings>) => apiClient.patch<UserSettings>('/users/@me/settings', data),
-  getReadStates: () => apiClient.get<ReadState[]>('/users/@me/read-states'),
+    getApi().post<LoginResponse>('/auth/attach-public-key', { public_key: publicKey }),
+  getMe: () => getApi().get<User>('/users/@me'),
+  updateMe: (data: Partial<User>) => getApi().patch<User>('/users/@me', data),
+  getSettings: () => getApi().get<UserSettings>('/users/@me/settings'),
+  updateSettings: (data: Partial<UserSettings>) => getApi().patch<UserSettings>('/users/@me/settings', data),
+  getReadStates: () => getApi().get<ReadState[]>('/users/@me/read-states'),
   changePassword: (currentPassword: string, newPassword: string) =>
-    apiClient.put('/users/@me/password', {
+    getApi().put('/users/@me/password', {
       current_password: currentPassword,
       new_password: newPassword,
     }),
   changeEmail: (currentPassword: string, newEmail: string) =>
-    apiClient.put('/users/@me/email', {
+    getApi().put('/users/@me/email', {
       current_password: currentPassword,
       new_email: newEmail,
     }),
-  exportMyData: () => apiClient.get<Record<string, unknown>>('/users/@me/data-export'),
+  exportMyData: () => getApi().get<Record<string, unknown>>('/users/@me/data-export'),
   forgotPassword: (identifier: string) =>
-    apiClient.post<{ message: string }>('/auth/forgot-password', { identifier }),
+    getApi().post<{ message: string }>('/auth/forgot-password', { identifier }),
   resetPassword: (token: string, newPassword: string) =>
-    apiClient.post<{ message: string }>('/auth/reset-password', { token, new_password: newPassword }),
+    getApi().post<{ message: string }>('/auth/reset-password', { token, new_password: newPassword }),
   verifyEmail: (token: string) =>
-    apiClient.post<{ message: string }>('/auth/verify-email', { token }),
+    getApi().post<{ message: string }>('/auth/verify-email', { token }),
   mfaStatus: () =>
-    apiClient.get<{ mfa_enabled: boolean; backup_codes_remaining: number }>('/auth/mfa/status'),
+    getApi().get<{ mfa_enabled: boolean; backup_codes_remaining: number }>('/auth/mfa/status'),
   mfaSetup: () =>
-    apiClient.post<{ secret: string; otpauth_url: string; qr_code: string }>('/auth/mfa/setup'),
+    getApi().post<{ secret: string; otpauth_url: string; qr_code: string }>('/auth/mfa/setup'),
   mfaVerify: (code: string) =>
-    apiClient.post<{ mfa_enabled: boolean; backup_codes: string[]; message: string }>('/auth/mfa/verify', { code }),
+    getApi().post<{ mfa_enabled: boolean; backup_codes: string[]; message: string }>('/auth/mfa/verify', { code }),
   mfaDisable: (code: string) =>
-    apiClient.post<{ mfa_enabled: boolean; message: string }>('/auth/mfa/disable', { code }),
+    getApi().post<{ mfa_enabled: boolean; message: string }>('/auth/mfa/disable', { code }),
   mfaLogin: (ticket: string, code: string) =>
-    apiClient.post<LoginResponse>('/auth/mfa/login', { ticket, code }),
+    getApi().post<LoginResponse>('/auth/mfa/login', { ticket, code }),
 };

@@ -6,6 +6,7 @@ interface TypingState {
   typingByChannel: Record<string, string[]>;
   addTyping: (channelId: string, userId: string) => void;
   clearChannel: (channelId: string) => void;
+  reset: () => void;
 }
 
 export const useTypingStore = create<TypingState>()((set) => ({
@@ -46,10 +47,31 @@ export const useTypingStore = create<TypingState>()((set) => ({
     }),
 
   clearChannel: (channelId) =>
-    set((state) => ({
-      typingByChannel: {
-        ...state.typingByChannel,
-        [channelId]: [],
-      },
-    })),
+    set((state) => {
+      // Cancel any pending per-user expiry timers for this channel so they
+      // don't fire after the channel has been cleared (and leak in the Map).
+      const prefix = `${channelId}:`;
+      for (const [key, timer] of typingTimeouts) {
+        if (key.startsWith(prefix)) {
+          clearTimeout(timer);
+          typingTimeouts.delete(key);
+        }
+      }
+      return {
+        typingByChannel: {
+          ...state.typingByChannel,
+          [channelId]: [],
+        },
+      };
+    }),
+
+  // Clears all typing state and cancels every pending timer. Wire this into the
+  // auth logout flow alongside the other per-session store resets.
+  reset: () => {
+    for (const timer of typingTimeouts.values()) {
+      clearTimeout(timer);
+    }
+    typingTimeouts.clear();
+    set({ typingByChannel: {} });
+  },
 }));

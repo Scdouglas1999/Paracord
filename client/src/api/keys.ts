@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 
 export interface UploadKeysRequest {
   signed_prekey?: {
@@ -38,11 +38,11 @@ export interface KeyCountResponse {
 
 export const keysApi = {
   uploadKeys: (data: UploadKeysRequest) =>
-    apiClient.put<UploadKeysResponse>('/users/@me/keys', data),
+    getApi().put<UploadKeysResponse>('/users/@me/keys', data),
 
   getBundle: (userId: string) =>
-    apiClient.get<PrekeyBundleResponse>(`/users/${userId}/keys`),
+    getApi().get<PrekeyBundleResponse>(`/users/${userId}/keys`),
 
   getKeyCount: () =>
-    apiClient.get<KeyCountResponse>('/users/@me/keys/count'),
+    getApi().get<KeyCountResponse>('/users/@me/keys/count'),
 };

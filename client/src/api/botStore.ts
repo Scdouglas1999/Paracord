@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 
 export interface StoreBot {
   id: string;
@@ -61,17 +61,17 @@ export interface BotMetricsResult {
 
 export const botStoreApi = {
   search: (params?: { q?: string; category?: string; limit?: number; offset?: number }) =>
-    apiClient.get<StoreBotSearchResult>('/bots/store', { params }),
+    getApi().get<StoreBotSearchResult>('/bots/store', { params }),
   featured: () =>
-    apiClient.get<StoreBotFeaturedResult>('/bots/store/featured'),
+    getApi().get<StoreBotFeaturedResult>('/bots/store/featured'),
   categories: () =>
-    apiClient.get<StoreBotCategoriesResult>('/bots/store/categories'),
+    getApi().get<StoreBotCategoriesResult>('/bots/store/categories'),
   listReviews: (botAppId: string, params?: { limit?: number; offset?: number }) =>
-    apiClient.get<BotReviewListResult>(`/bots/store/${botAppId}/reviews`, { params }),
+    getApi().get<BotReviewListResult>(`/bots/store/${botAppId}/reviews`, { params }),
   upsertMyReview: (
     botAppId: string,
     payload: { rating: number; title?: string; body?: string },
-  ) => apiClient.put<BotReviewListResult>(`/bots/store/${botAppId}/reviews/@me`, payload),
+  ) => getApi().put<BotReviewListResult>(`/bots/store/${botAppId}/reviews/@me`, payload),
   getDeveloperMetrics: (botAppId: string) =>
-    apiClient.get<BotMetricsResult>(`/bots/applications/${botAppId}/metrics`),
+    getApi().get<BotMetricsResult>(`/bots/applications/${botAppId}/metrics`),
 };

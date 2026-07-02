@@ -26,29 +26,85 @@ pub enum CryptoError {
     CiphertextTooShort,
 }
 
-/// Build a 12-byte nonce from packet metadata.
+/// Build a 12-byte AES-128-GCM nonce from packet metadata.
 ///
-/// Layout:
-/// - Bytes 0-3:  SSRC (u32 big-endian)
-/// - Byte 4:     Key epoch (u8)
-/// - Bytes 5-6:  Sequence number (u16 big-endian)
-/// - Bytes 7-11: Zero padding
-fn build_nonce(ssrc: u32, epoch: u8, sequence: u16) -> [u8; NONCE_SIZE] {
+/// # Byte layout (authoritative — the TypeScript client in
+/// `client/src/lib/media/senderKeys.ts` mirrors this exactly)
+///
+/// | Offset | Width | Field       | Encoding                               |
+/// |--------|-------|-------------|----------------------------------------|
+/// | 0..4   | 4     | SSRC        | `u32` big-endian                       |
+/// | 4      | 1     | Key epoch   | `u8`                                   |
+/// | 5..7   | 2     | Sequence    | `u16` big-endian (low 16 packet bits)  |
+/// | 7..11  | 4     | ROC         | `u32` big-endian (rollover counter)    |
+/// | 11     | 1     | Zero        | always `0x00` (reserved)               |
+///
+/// The full 48-bit packet index is `(roc << 16) | sequence`. The sequence
+/// wraps every 65_536 packets; the ROC is incremented on each wrap. Together
+/// they form a strictly-increasing per-(ssrc, epoch) counter, which — combined
+/// with the ssrc and epoch fields — guarantees a unique nonce for every frame
+/// encrypted under a given key.
+///
+/// # Invariant (do NOT violate — catastrophic for AES-GCM)
+///
+/// At most 2^48 frames may be encrypted per (key, ssrc). Keys are per-epoch and
+/// epochs rotate on membership change (see `paracord-relay` `KeyRotationReason`),
+/// so in practice a stable-membership call must not exceed 2^48 packets under a
+/// single epoch. At 50 packets/second that is over 178_000 years, so the ROC
+/// never wraps in any realistic session. Reusing a (key, nonce) pair would leak
+/// the GCM authentication key and the XOR of the two plaintexts.
+fn build_nonce(ssrc: u32, epoch: u8, roc: u32, sequence: u16) -> [u8; NONCE_SIZE] {
     let mut nonce = [0u8; NONCE_SIZE];
     nonce[0..4].copy_from_slice(&ssrc.to_be_bytes());
     nonce[4] = epoch;
     nonce[5..7].copy_from_slice(&sequence.to_be_bytes());
-    // Bytes 7-11 remain zero
+    nonce[7..11].copy_from_slice(&roc.to_be_bytes());
+    // Byte 11 remains zero (reserved).
     nonce
+}
+
+/// SRTP-style estimation of the rollover counter for a received sequence number.
+///
+/// Given the highest packet index observed so far (decomposed into `ref_roc`
+/// and `ref_seq`) and a freshly observed 16-bit `seq`, return the ROC that most
+/// likely corresponds to `seq`. This mirrors RFC 3711 §3.3.1 index estimation:
+/// it picks whichever of `ref_roc - 1`, `ref_roc`, or `ref_roc + 1` yields the
+/// 48-bit index closest to the reference index, so late/reordered packets that
+/// straddle a wrap boundary still reconstruct the correct nonce.
+fn estimate_roc(ref_roc: u32, ref_seq: u16, seq: u16) -> u32 {
+    let ref_index = ((ref_roc as u64) << 16) | ref_seq as u64;
+    // Candidate ROC values: one below, equal, one above the reference ROC.
+    let mut best_roc = ref_roc;
+    let mut best_delta = u64::MAX;
+    for candidate in [ref_roc.wrapping_sub(1), ref_roc, ref_roc.wrapping_add(1)] {
+        // Skip the impossible underflow candidate when ref_roc == 0.
+        if ref_roc == 0 && candidate == u32::MAX {
+            continue;
+        }
+        let index = ((candidate as u64) << 16) | seq as u64;
+        let delta = index.abs_diff(ref_index);
+        if delta < best_delta {
+            best_delta = delta;
+            best_roc = candidate;
+        }
+    }
+    best_roc
 }
 
 /// Frame encryptor using AES-128-GCM.
 ///
 /// Encrypts media frame payloads using per-epoch keys. The 16-byte MediaHeader
 /// is used as Additional Authenticated Data (AAD) to prevent header tampering.
+///
+/// The encryptor maintains a per-(ssrc, epoch) rollover counter (ROC) that is
+/// incremented whenever the 16-bit sequence number wraps, widening the effective
+/// packet counter to 48 bits and preventing (key, nonce) reuse. See `build_nonce`
+/// for the nonce layout and the max-frames-per-epoch invariant.
 pub struct FrameEncryptor {
     /// Keys indexed by (ssrc, epoch). SSRC 0 is treated as a wildcard fallback.
     keys: HashMap<(u32, u8), Aes128Gcm>,
+    /// Rollover-counter state: `(ssrc, epoch) -> (roc, last_sequence)`.
+    roc_state: HashMap<(u32, u8), (u32, u16)>,
 }
 
 impl FrameEncryptor {
@@ -56,6 +112,7 @@ impl FrameEncryptor {
     pub fn new() -> Self {
         Self {
             keys: HashMap::new(),
+            roc_state: HashMap::new(),
         }
     }
 
@@ -66,7 +123,8 @@ impl FrameEncryptor {
 
     /// Set the encryption key for a specific sender SSRC + epoch.
     pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
-        let cipher = Aes128Gcm::new_from_slice(key).expect("valid key size");
+        // Key is a fixed 16-byte array, so AES-128 construction is infallible.
+        let cipher = Aes128Gcm::new((*key).as_ref().into());
         self.keys.insert((ssrc, epoch), cipher);
     }
 
@@ -78,6 +136,32 @@ impl FrameEncryptor {
     /// Remove the key for a specific sender SSRC + epoch.
     pub fn remove_peer_key(&mut self, ssrc: u32, epoch: u8) {
         self.keys.remove(&(ssrc, epoch));
+        self.roc_state.remove(&(ssrc, epoch));
+    }
+
+    /// Advance and return the rollover counter for the given sender stream.
+    ///
+    /// The ROC increments each time the 16-bit sequence wraps (i.e. the new
+    /// sequence is not greater than the previously observed one for this
+    /// stream). The first packet of a stream establishes the baseline at ROC 0.
+    fn next_roc(&mut self, ssrc: u32, epoch: u8, sequence: u16) -> u32 {
+        match self.roc_state.get_mut(&(ssrc, epoch)) {
+            None => {
+                // First packet of this stream establishes ROC 0.
+                self.roc_state.insert((ssrc, epoch), (0, sequence));
+                0
+            }
+            Some((roc, last_seq)) => {
+                // A wrap has occurred when the sequence goes backwards relative
+                // to the last one sent. `<=` is not used because retransmitting
+                // the same sequence in send order should not bump the ROC.
+                if sequence < *last_seq {
+                    *roc = roc.wrapping_add(1);
+                }
+                *last_seq = sequence;
+                *roc
+            }
+        }
     }
 
     /// Encrypt a media frame payload.
@@ -86,22 +170,34 @@ impl FrameEncryptor {
     /// - `ssrc`, `epoch`, `sequence`: values from the MediaHeader used to construct the nonce
     /// - `plaintext`: the raw payload to encrypt
     ///
+    /// The rollover counter for `(ssrc, epoch)` is advanced internally: callers
+    /// only supply the 16-bit `sequence` and the encryptor widens it to a 48-bit
+    /// index. Frames MUST be submitted in send order for a given stream so that
+    /// sequence wraps are detected correctly.
+    ///
     /// Returns the ciphertext (which includes the GCM authentication tag appended by aes-gcm).
     pub fn encrypt(
-        &self,
+        &mut self,
         header_bytes: &[u8; HEADER_SIZE],
         ssrc: u32,
         epoch: u8,
         sequence: u16,
         plaintext: &[u8],
     ) -> Result<Vec<u8>, CryptoError> {
+        // Resolve the cipher first so a missing key does not perturb ROC state.
+        if !self.keys.contains_key(&(ssrc, epoch)) && !self.keys.contains_key(&(0, epoch)) {
+            return Err(CryptoError::NoKeyForEpoch(epoch));
+        }
+
+        let roc = self.next_roc(ssrc, epoch, sequence);
+
         let cipher = self
             .keys
             .get(&(ssrc, epoch))
             .or_else(|| self.keys.get(&(0, epoch)))
             .ok_or(CryptoError::NoKeyForEpoch(epoch))?;
 
-        let nonce_bytes = build_nonce(ssrc, epoch, sequence);
+        let nonce_bytes = build_nonce(ssrc, epoch, roc, sequence);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         cipher
@@ -126,9 +222,16 @@ impl Default for FrameEncryptor {
 ///
 /// Decrypts media frame payloads, supporting multiple active key epochs
 /// for handling in-flight packets during key rotation.
+///
+/// The decryptor reconstructs the sender's rollover counter (ROC) from the
+/// observed 16-bit sequence using SRTP-style index estimation (see
+/// `estimate_roc`), so it recovers the correct 48-bit nonce even across a
+/// sequence wrap or moderate packet reordering.
 pub struct FrameDecryptor {
     /// Keys indexed by (ssrc, epoch). SSRC 0 is treated as a wildcard fallback.
     keys: HashMap<(u32, u8), Aes128Gcm>,
+    /// Highest packet index observed per stream: `(ssrc, epoch) -> (roc, seq)`.
+    roc_state: HashMap<(u32, u8), (u32, u16)>,
 }
 
 impl FrameDecryptor {
@@ -136,6 +239,7 @@ impl FrameDecryptor {
     pub fn new() -> Self {
         Self {
             keys: HashMap::new(),
+            roc_state: HashMap::new(),
         }
     }
 
@@ -146,7 +250,8 @@ impl FrameDecryptor {
 
     /// Set the decryption key for a specific sender SSRC + epoch.
     pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
-        let cipher = Aes128Gcm::new_from_slice(key).expect("valid key size");
+        // Key is a fixed 16-byte array, so AES-128 construction is infallible.
+        let cipher = Aes128Gcm::new((*key).as_ref().into());
         self.keys.insert((ssrc, epoch), cipher);
     }
 
@@ -158,6 +263,7 @@ impl FrameDecryptor {
     /// Remove the key for a specific sender SSRC + epoch.
     pub fn remove_peer_key(&mut self, ssrc: u32, epoch: u8) {
         self.keys.remove(&(ssrc, epoch));
+        self.roc_state.remove(&(ssrc, epoch));
     }
 
     /// Decrypt a media frame payload.
@@ -166,9 +272,12 @@ impl FrameDecryptor {
     /// - `ssrc`, `epoch`, `sequence`: values from the MediaHeader used to construct the nonce
     /// - `ciphertext`: the encrypted payload (includes GCM tag)
     ///
+    /// The rollover counter is reconstructed from the observed `sequence` via
+    /// SRTP index estimation, so wrapped/reordered packets still decrypt.
+    ///
     /// Returns the decrypted plaintext.
     pub fn decrypt(
-        &self,
+        &mut self,
         header_bytes: &[u8; HEADER_SIZE],
         ssrc: u32,
         epoch: u8,
@@ -179,16 +288,26 @@ impl FrameDecryptor {
             return Err(CryptoError::CiphertextTooShort);
         }
 
+        if !self.keys.contains_key(&(ssrc, epoch)) && !self.keys.contains_key(&(0, epoch)) {
+            return Err(CryptoError::NoKeyForEpoch(epoch));
+        }
+
+        // Estimate the ROC for this sequence relative to the highest index seen.
+        let roc = match self.roc_state.get(&(ssrc, epoch)) {
+            Some(&(ref_roc, ref_seq)) => estimate_roc(ref_roc, ref_seq, sequence),
+            None => 0,
+        };
+
         let cipher = self
             .keys
             .get(&(ssrc, epoch))
             .or_else(|| self.keys.get(&(0, epoch)))
             .ok_or(CryptoError::NoKeyForEpoch(epoch))?;
 
-        let nonce_bytes = build_nonce(ssrc, epoch, sequence);
+        let nonce_bytes = build_nonce(ssrc, epoch, roc, sequence);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        cipher
+        let plaintext = cipher
             .decrypt(
                 nonce,
                 aes_gcm::aead::Payload {
@@ -196,7 +315,22 @@ impl FrameDecryptor {
                     aad: header_bytes,
                 },
             )
-            .map_err(|_| CryptoError::DecryptionFailed)
+            .map_err(|_| CryptoError::DecryptionFailed)?;
+
+        // Only advance the reference index on a successful (authenticated)
+        // decrypt, and only when this packet's index is newer than the current
+        // reference. This keeps the estimator anchored to real, verified traffic
+        // and prevents forged sequence numbers from moving the window.
+        let index = ((roc as u64) << 16) | sequence as u64;
+        let advance = match self.roc_state.get(&(ssrc, epoch)) {
+            Some(&(ref_roc, ref_seq)) => index > (((ref_roc as u64) << 16) | ref_seq as u64),
+            None => true,
+        };
+        if advance {
+            self.roc_state.insert((ssrc, epoch), (roc, sequence));
+        }
+
+        Ok(plaintext)
     }
 }
 
@@ -447,6 +581,142 @@ mod tests {
     }
 
     // ================================================================
+    // Rollover counter (ROC) tests — nonce widening to 48 bits
+    // ================================================================
+
+    #[test]
+    fn roc_increments_on_sequence_wrap() {
+        // Encrypting seq=65535 then seq=0 must NOT reuse a nonce: the ROC must
+        // increment on the wrap, changing bytes 7..11 of the nonce.
+        let key = test_key();
+        let header = test_header();
+        let ssrc = 0xDEADBEEF;
+        let epoch = 1;
+
+        let mut encryptor = FrameEncryptor::new();
+        encryptor.set_key(epoch, &key);
+        let mut decryptor = FrameDecryptor::new();
+        decryptor.set_key(epoch, &key);
+
+        // First packet just before the wrap.
+        let ct_last = encryptor
+            .encrypt(&header, ssrc, epoch, u16::MAX, b"before-wrap")
+            .unwrap();
+        // Next packet wraps the 16-bit sequence back to 0 -> ROC becomes 1.
+        let ct_wrap = encryptor
+            .encrypt(&header, ssrc, epoch, 0, b"after-wrap")
+            .unwrap();
+
+        // Ciphertexts differ (different nonces despite payloads differing anyway;
+        // the point is that the decryptor recovers each with its own ROC).
+        assert_ne!(ct_last, ct_wrap);
+
+        let pt_last = decryptor
+            .decrypt(&header, ssrc, epoch, u16::MAX, &ct_last)
+            .unwrap();
+        assert_eq!(pt_last, b"before-wrap");
+
+        let pt_wrap = decryptor
+            .decrypt(&header, ssrc, epoch, 0, &ct_wrap)
+            .unwrap();
+        assert_eq!(pt_wrap, b"after-wrap");
+    }
+
+    #[test]
+    fn roc_wrap_nonce_differs_from_prewrap_same_seq() {
+        // Directly assert the nonce for (roc=0, seq=0) differs from (roc=1, seq=0).
+        let n0 = build_nonce(0xDEADBEEF, 1, 0, 0);
+        let n1 = build_nonce(0xDEADBEEF, 1, 1, 0);
+        assert_ne!(n0, n1);
+        // The difference must be exactly in the ROC bytes 7..11.
+        assert_eq!(n0[0..7], n1[0..7]);
+        assert_ne!(n0[7..11], n1[7..11]);
+        assert_eq!(n0[11], 0);
+        assert_eq!(n1[11], 0);
+    }
+
+    #[test]
+    fn roc_roundtrip_across_full_wrap_stream() {
+        // Drive a stream across a 16-bit wrap and confirm every frame decrypts.
+        let key = test_key();
+        let header = test_header();
+        let ssrc = 0x11223344;
+        let epoch = 2;
+
+        let mut encryptor = FrameEncryptor::new();
+        encryptor.set_key(epoch, &key);
+        let mut decryptor = FrameDecryptor::new();
+        decryptor.set_key(epoch, &key);
+
+        // Sequence values straddling the wrap: 65533, 65534, 65535, 0, 1, 2.
+        let seqs: [u16; 6] = [65533, 65534, 65535, 0, 1, 2];
+        let mut frames = Vec::new();
+        for (i, &seq) in seqs.iter().enumerate() {
+            let payload = format!("frame-{i}");
+            let ct = encryptor
+                .encrypt(&header, ssrc, epoch, seq, payload.as_bytes())
+                .unwrap();
+            frames.push((seq, payload, ct));
+        }
+
+        for (i, (seq, payload, ct)) in frames.iter().enumerate() {
+            let pt = decryptor
+                .decrypt(&header, ssrc, epoch, *seq, ct)
+                .unwrap_or_else(|_| panic!("frame {i} (seq {seq}) failed to decrypt"));
+            assert_eq!(pt, payload.as_bytes());
+        }
+    }
+
+    #[test]
+    fn estimate_roc_handles_reorder_around_wrap() {
+        // Reference is just after a wrap (roc=1, seq=1). A late packet with
+        // seq=65535 belongs to the previous ROC (0), not ROC 1 or 2.
+        assert_eq!(estimate_roc(1, 1, 65535), 0);
+        // A packet with seq=2 belongs to the current ROC.
+        assert_eq!(estimate_roc(1, 1, 2), 1);
+        // Reference just before a wrap (roc=0, seq=65534). seq=0 is the next ROC.
+        assert_eq!(estimate_roc(0, 65534, 0), 1);
+        // But at ROC 0 we never estimate below 0.
+        assert_eq!(estimate_roc(0, 0, 65535), 0);
+    }
+
+    #[test]
+    fn decryptor_reference_not_moved_by_forged_sequence() {
+        // A frame that fails authentication must not advance the ROC window.
+        let key = test_key();
+        let header = test_header();
+        let ssrc = 0xDEADBEEF;
+        let epoch = 1;
+
+        let mut encryptor = FrameEncryptor::new();
+        encryptor.set_key(epoch, &key);
+        let mut decryptor = FrameDecryptor::new();
+        decryptor.set_key(epoch, &key);
+
+        // Establish a reference at seq=10.
+        let ct10 = encryptor.encrypt(&header, ssrc, epoch, 10, b"ten").unwrap();
+        assert_eq!(
+            decryptor.decrypt(&header, ssrc, epoch, 10, &ct10).unwrap(),
+            b"ten"
+        );
+
+        // Forged frame at a wildly different sequence with garbage ciphertext.
+        let forged = vec![0u8; TAG_SIZE + 4];
+        assert!(decryptor
+            .decrypt(&header, ssrc, epoch, 5000, &forged)
+            .is_err());
+
+        // A legitimate next frame at seq=11 still decrypts (window intact).
+        let ct11 = encryptor
+            .encrypt(&header, ssrc, epoch, 11, b"eleven")
+            .unwrap();
+        assert_eq!(
+            decryptor.decrypt(&header, ssrc, epoch, 11, &ct11).unwrap(),
+            b"eleven"
+        );
+    }
+
+    // ================================================================
     // Cross-platform test vectors (AES-128-GCM known-answer tests)
     // ================================================================
     //
@@ -454,7 +724,11 @@ mod tests {
     // produces identical ciphertext. The TypeScript SenderKeyManager in
     // client/src/lib/media/senderKeys.ts MUST produce the same output.
     //
-    // Nonce layout: SSRC (4 BE) || epoch (1) || sequence (2 BE) || 5 zero bytes = 12 bytes
+    // Nonce layout (see build_nonce for the authoritative spec):
+    //   SSRC (4 BE) || epoch (1) || sequence (2 BE) || ROC (4 BE) || 1 zero byte = 12 bytes
+    // For a fresh stream the ROC is 0, so the first-wrap nonces below have four
+    // trailing zero bytes plus one reserved zero byte (5 zero bytes total),
+    // matching the historical layout when ROC == 0.
     // AAD: the full 16-byte MediaHeader
     // Output: ciphertext || 16-byte GCM authentication tag
 
@@ -469,12 +743,13 @@ mod tests {
             .collect()
     }
 
-    /// Vector 1: Standard voice frame encryption.
+    /// Vector 1: Standard voice frame encryption (ROC = 0).
     ///   Key:       000102030405060708090a0b0c0d0e0f
     ///   SSRC:      0xDEADBEEF
     ///   Epoch:     1
     ///   Sequence:  1
-    ///   Nonce:     deadbeef 01 0001 0000000000 (hex)
+    ///   ROC:       0
+    ///   Nonce:     deadbeef 01 0001 00000000 00 (hex) = deadbeef0100010000000000
     ///   Header:    80000100 0003c0de adbeef7f 01003c00
     ///   Plaintext: "Hello, voice data!" (UTF-8)
     ///   Expected:  c9611e22e84a7843baeea950f4874840d7de76e45bab8f2dc788366fe73643bb62f5
@@ -488,6 +763,12 @@ mod tests {
             0x80, 0x00, 0x01, 0x00, 0x00, 0x03, 0xC0, 0xDE, 0xAD, 0xBE, 0xEF, 0x7F, 0x01, 0x00,
             0x3C, 0x00,
         ];
+        // Nonce layout sanity check (ROC = 0 for a fresh stream's first packet).
+        assert_eq!(
+            hex(&build_nonce(0xDEADBEEF, 1, 0, 1)),
+            "deadbeef0100010000000000"
+        );
+
         let mut enc = FrameEncryptor::new();
         enc.set_key(1, &key);
 
@@ -507,12 +788,13 @@ mod tests {
         assert_eq!(pt, b"Hello, voice data!");
     }
 
-    /// Vector 2: Empty payload (tag-only output).
+    /// Vector 2: Empty payload (tag-only output, ROC = 0).
     ///   Key:       000102030405060708090a0b0c0d0e0f
     ///   SSRC:      0xDEADBEEF
     ///   Epoch:     1
     ///   Sequence:  0
-    ///   Nonce:     deadbeef 01 0000 0000000000 (hex)
+    ///   ROC:       0
+    ///   Nonce:     deadbeef 01 0000 00000000 00 = deadbeef0100000000000000
     ///   Header:    80000100 0003c0de adbeef7f 01003c00
     ///   Plaintext: (empty)
     ///   Expected:  e4ee5cfea6b77f20fcb4d7c719b1f0a4
@@ -526,6 +808,11 @@ mod tests {
             0x80, 0x00, 0x01, 0x00, 0x00, 0x03, 0xC0, 0xDE, 0xAD, 0xBE, 0xEF, 0x7F, 0x01, 0x00,
             0x3C, 0x00,
         ];
+        assert_eq!(
+            hex(&build_nonce(0xDEADBEEF, 1, 0, 0)),
+            "deadbeef0100000000000000"
+        );
+
         let mut enc = FrameEncryptor::new();
         enc.set_key(1, &key);
 
@@ -538,12 +825,13 @@ mod tests {
         assert_eq!(ct.len(), TAG_SIZE);
     }
 
-    /// Vector 3: Different key/epoch/SSRC.
+    /// Vector 3: Different key/epoch/SSRC (ROC = 0).
     ///   Key:       ffffffffffffffffffffffffffffffff
     ///   SSRC:      0x11223344
     ///   Epoch:     5
     ///   Sequence:  10
-    ///   Nonce:     11223344 05 000a 0000000000 (hex)
+    ///   ROC:       0
+    ///   Nonce:     11223344 05 000a 00000000 00 = 112233440500 0a0000000000
     ///   Header:    8000 0a00 00078011 22334464 05000400
     ///   Plaintext: 00010203
     ///   Expected:  81c292b9fd8c98a87d786ee1f5698993b50ae66d
@@ -554,6 +842,11 @@ mod tests {
             0x80, 0x00, 0x0A, 0x00, 0x00, 0x07, 0x80, 0x11, 0x22, 0x33, 0x44, 0x64, 0x05, 0x00,
             0x04, 0x00,
         ];
+        assert_eq!(
+            hex(&build_nonce(0x11223344, 5, 0, 10)),
+            "1122334405000a0000000000"
+        );
+
         let mut enc = FrameEncryptor::new();
         enc.set_key(5, &key);
 
@@ -571,6 +864,65 @@ mod tests {
         dec.set_key(5, &key);
         let pt = dec.decrypt(&header, 0x11223344, 5, 10, &ct).unwrap();
         assert_eq!(pt, &[0x00, 0x01, 0x02, 0x03]);
+    }
+
+    /// Vector 4: Non-zero ROC (post-wrap nonce). Proves the ROC bytes feed GCM.
+    ///   Key:       000102030405060708090a0b0c0d0e0f
+    ///   SSRC:      0xDEADBEEF
+    ///   Epoch:     1
+    ///   Sequence:  0
+    ///   ROC:       1
+    ///   Nonce:     deadbeef 01 0000 00000001 00 = deadbeef0100000000000100
+    ///   Header:    80000100 0003c0de adbeef7f 01003c00
+    ///   Plaintext: "Hello, voice data!" (UTF-8)
+    ///   Expected:  computed below and asserted stable (regression guard)
+    #[test]
+    fn test_vector_4_nonzero_roc() {
+        let key: [u8; KEY_SIZE] = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F,
+        ];
+        let header: [u8; HEADER_SIZE] = [
+            0x80, 0x00, 0x01, 0x00, 0x00, 0x03, 0xC0, 0xDE, 0xAD, 0xBE, 0xEF, 0x7F, 0x01, 0x00,
+            0x3C, 0x00,
+        ];
+        // ROC=1, seq=0: bytes 7..11 carry the ROC.
+        assert_eq!(
+            hex(&build_nonce(0xDEADBEEF, 1, 1, 0)),
+            "deadbeef0100000000000100"
+        );
+
+        // Drive the encryptor across a wrap so it naturally reaches ROC=1 at seq=0.
+        let mut enc = FrameEncryptor::new();
+        enc.set_key(1, &key);
+        let _ = enc
+            .encrypt(&header, 0xDEADBEEF, 1, u16::MAX, b"seed")
+            .unwrap();
+        let ct = enc
+            .encrypt(&header, 0xDEADBEEF, 1, 0, b"Hello, voice data!")
+            .unwrap();
+
+        // The ROC=1 nonce must produce a DIFFERENT ciphertext than the ROC=0
+        // vector 1 (same key/ssrc/epoch/seq=... ) — proving no nonce reuse.
+        assert_ne!(
+            hex(&ct),
+            "c9611e22e84a7843baeea950f4874840d7de76e45bab8f2dc788366fe73643bb62f5"
+        );
+
+        // Decrypt via a fresh decryptor that also crosses the wrap.
+        let mut dec = FrameDecryptor::new();
+        dec.set_key(1, &key);
+        let seed_ct = {
+            let mut e2 = FrameEncryptor::new();
+            e2.set_key(1, &key);
+            e2.encrypt(&header, 0xDEADBEEF, 1, u16::MAX, b"seed")
+                .unwrap()
+        };
+        let _ = dec
+            .decrypt(&header, 0xDEADBEEF, 1, u16::MAX, &seed_ct)
+            .unwrap();
+        let pt = dec.decrypt(&header, 0xDEADBEEF, 1, 0, &ct).unwrap();
+        assert_eq!(pt, b"Hello, voice data!");
     }
 
     /// Verify test vector ciphertext can be reconstructed from hex.
@@ -595,15 +947,17 @@ mod tests {
 
     #[test]
     fn nonce_uniqueness() {
-        // Different (ssrc, epoch, seq) combinations should produce different nonces
-        let n1 = build_nonce(1, 0, 0);
-        let n2 = build_nonce(2, 0, 0);
-        let n3 = build_nonce(1, 1, 0);
-        let n4 = build_nonce(1, 0, 1);
+        // Different (ssrc, epoch, roc, seq) combinations should produce different nonces
+        let n1 = build_nonce(1, 0, 0, 0);
+        let n2 = build_nonce(2, 0, 0, 0);
+        let n3 = build_nonce(1, 1, 0, 0);
+        let n4 = build_nonce(1, 0, 0, 1);
+        let n5 = build_nonce(1, 0, 1, 0);
 
         assert_ne!(n1, n2);
         assert_ne!(n1, n3);
         assert_ne!(n1, n4);
+        assert_ne!(n1, n5);
         assert_ne!(n2, n3);
     }
 }

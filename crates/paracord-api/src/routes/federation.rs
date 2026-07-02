@@ -669,11 +669,35 @@ async fn ingest_verified_payload(
         payload.depth = payload.origin_ts.max(1);
     }
 
+    // Enforce that the immediate transport sender is authorized to deliver this
+    // envelope: either it IS the envelope origin, or it is an allowed relay
+    // (a currently-trusted federated server delivering on the origin's behalf in
+    // a non-full-mesh topology). Reject hard otherwise so a peer cannot smuggle
+    // events attributed to an origin it has no relationship with.
+    if let Some(origin) = transport_origin {
+        if !origin.eq_ignore_ascii_case(&payload.origin_server) {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let relay_trusted =
+                paracord_db::federation::is_federated_server_trusted(&state.db, origin, now_ms)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            if !relay_trusted {
+                tracing::warn!(
+                    "federation: rejected event {} relayed by untrusted server {} for origin {}",
+                    payload.event_id,
+                    origin,
+                    payload.origin_server
+                );
+                return Err(ApiError::Forbidden);
+            }
+        }
+    }
+
     // Update last_seen_at for the envelope origin and immediate transport sender.
     let _ =
         paracord_db::federation::touch_federated_server(&state.db, &payload.origin_server).await;
     if let Some(origin) = transport_origin {
-        if origin != payload.origin_server {
+        if !origin.eq_ignore_ascii_case(&payload.origin_server) {
             let _ = paracord_db::federation::touch_federated_server(&state.db, origin).await;
         }
     }
@@ -855,6 +879,31 @@ pub async fn ingest_event(
 /// Handle an inbound federated message event: store it as a local message and
 /// dispatch a `MESSAGE_CREATE` gateway event so connected clients see it.
 async fn dispatch_federated_message(state: &AppState, payload: &FederationEventEnvelope) {
+    // Bind the message sender to the envelope origin: a validly-signed peer may
+    // only assert messages authored by identities that belong to it (or one of
+    // its trusted domain aliases). Otherwise a trusted peer could impersonate
+    // another server's users.
+    let Some(identity) = FederatedIdentity::parse(&payload.sender) else {
+        tracing::warn!(
+            "federation: cannot store inbound message from event {} because sender identity is invalid: {}",
+            payload.event_id,
+            payload.sender
+        );
+        return;
+    };
+    if ensure_identity_matches_origin_or_alias(state, &identity, &payload.origin_server)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "federation: rejected m.message event {} because sender {} does not belong to origin {}",
+            payload.event_id,
+            payload.sender,
+            payload.origin_server
+        );
+        return;
+    }
+
     // Extract remote IDs and map them into local namespace.
     let mapping_namespace = mapping_namespace_from_room(&payload.room_id, &payload.origin_server);
     let remote_channel_id = content_i64(&payload.content, "channel_id");
@@ -1007,24 +1056,14 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
     // Generate a local message ID for storage
     let local_msg_id = paracord_util::snowflake::generate(1);
 
-    let author_id = match FederatedIdentity::parse(&payload.sender) {
-        Some(identity) => match ensure_remote_user_mapping(state, &identity).await {
-            Ok(uid) => uid,
-            Err(e) => {
-                tracing::warn!(
-                    "federation: failed to map sender identity {} for event {}: {}",
-                    payload.sender,
-                    payload.event_id,
-                    e
-                );
-                return;
-            }
-        },
-        None => {
+    let author_id = match ensure_remote_user_mapping(state, &identity).await {
+        Ok(uid) => uid,
+        Err(e) => {
             tracing::warn!(
-                "federation: cannot store inbound message from event {} because sender identity is invalid: {}",
+                "federation: failed to map sender identity {} for event {}: {}",
+                payload.sender,
                 payload.event_id,
-                payload.sender
+                e
             );
             return;
         }
@@ -1425,8 +1464,12 @@ async fn resolve_local_message_id_from_payload(
         }
     }
     if let Some(target_event_id) = content_str(&payload.content, "target_event_id") {
-        if let Ok(id) =
-            paracord_db::federation::get_local_message_id_by_event(&state.db, target_event_id).await
+        if let Ok(id) = paracord_db::federation::get_local_message_id_by_event(
+            &state.db,
+            &payload.origin_server,
+            target_event_id,
+        )
+        .await
         {
             if id.is_some() {
                 return id;
@@ -1437,6 +1480,31 @@ async fn resolve_local_message_id_from_payload(
 }
 
 async fn dispatch_federated_message_edit(state: &AppState, payload: &FederationEventEnvelope) {
+    // Bind the editing sender to the envelope origin so a trusted peer cannot
+    // edit messages on behalf of another server's users.
+    let Some(identity) = FederatedIdentity::parse(&payload.sender) else {
+        tracing::warn!(
+            "federation: rejected m.message.edit {} because sender identity is invalid: {}",
+            payload.event_id,
+            payload.sender
+        );
+        return;
+    };
+    if ensure_identity_matches_origin_or_alias(state, &identity, &payload.origin_server)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "federation: rejected m.message.edit {} because sender {} does not belong to origin {}",
+            payload.event_id,
+            payload.sender,
+            payload.origin_server
+        );
+        return;
+    }
+
+    // Edit target resolution is scoped to the envelope origin, so a peer can only
+    // edit messages it originally authored, never another server's messages.
     let Some(local_message_id) = resolve_local_message_id_from_payload(state, payload).await else {
         tracing::warn!(
             "federation: m.message.edit {} did not resolve to a local message",
@@ -1507,6 +1575,31 @@ async fn dispatch_federated_message_edit(state: &AppState, payload: &FederationE
 }
 
 async fn dispatch_federated_message_delete(state: &AppState, payload: &FederationEventEnvelope) {
+    // Bind the deleting sender to the envelope origin so a trusted peer cannot
+    // delete messages on behalf of another server's users.
+    let Some(identity) = FederatedIdentity::parse(&payload.sender) else {
+        tracing::warn!(
+            "federation: rejected m.message.delete {} because sender identity is invalid: {}",
+            payload.event_id,
+            payload.sender
+        );
+        return;
+    };
+    if ensure_identity_matches_origin_or_alias(state, &identity, &payload.origin_server)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "federation: rejected m.message.delete {} because sender {} does not belong to origin {}",
+            payload.event_id,
+            payload.sender,
+            payload.origin_server
+        );
+        return;
+    }
+
+    // Delete target resolution is scoped to the envelope origin, so a peer can
+    // only delete messages it originally authored.
     let Some(local_message_id) = resolve_local_message_id_from_payload(state, payload).await else {
         tracing::warn!(
             "federation: m.message.delete {} did not resolve to a local message",
@@ -1824,7 +1917,17 @@ pub async fn list_events(
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| uri.path().to_string());
-    authorize_federation_read_request(&state, &service, &headers, &path_and_query).await?;
+    let auth =
+        authorize_federation_read_request(&state, &service, &headers, &path_and_query).await?;
+
+    // Read scoping: a signed peer may only pull history for rooms it actually
+    // participates in. Deny by default. The operator read token bypasses this
+    // (it is an explicit local-operator escape hatch, not a remote peer).
+    if let FederationReadAuth::Peer { origin } = &auth {
+        if !server_participates_in_room(&state, origin, &query.room_id).await? {
+            return Err(ApiError::Forbidden);
+        }
+    }
 
     let since_depth = query.since_depth.unwrap_or(0).max(0);
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
@@ -2002,25 +2105,76 @@ pub async fn run_federation_catchup_once(
     }
 }
 
+/// Outcome of authorizing an inbound federation read request.
+enum FederationReadAuth {
+    /// Authorized by the operator-provisioned read token; not tied to any peer,
+    /// so per-room membership scoping does not apply.
+    OperatorToken,
+    /// Authorized by a signed transport from the named federated server.
+    Peer { origin: String },
+}
+
 async fn authorize_federation_read_request(
     state: &AppState,
     service: &FederationService,
     headers: &HeaderMap,
     path: &str,
-) -> Result<(), ApiError> {
+) -> Result<FederationReadAuth, ApiError> {
     if let Some(expected) = optional_federation_read_token() {
         let presented = headers
             .get("x-paracord-federation-token")
             .and_then(|v| v.to_str().ok())
             .map(str::trim);
         if presented == Some(expected.as_str()) {
-            return Ok(());
+            return Ok(FederationReadAuth::OperatorToken);
         }
     }
 
-    verify_transport_request(state, service, headers, "GET", path, &[], None, false)
+    let transport =
+        verify_transport_request(state, service, headers, "GET", path, &[], None, false).await?;
+    Ok(FederationReadAuth::Peer {
+        origin: transport.origin,
+    })
+}
+
+/// Return true if `candidate_server` participates in `room_id`, matching by the
+/// server's own name/domain or by any trusted-peer alias of it. Deny by default.
+async fn server_participates_in_room(
+    state: &AppState,
+    candidate_server: &str,
+    room_id: &str,
+) -> Result<bool, ApiError> {
+    let member_servers = paracord_db::federation::list_room_member_servers(&state.db, room_id)
         .await
-        .map(|_| ())
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if member_servers
+        .iter()
+        .any(|server| server.eq_ignore_ascii_case(candidate_server))
+    {
+        return Ok(true);
+    }
+
+    // The candidate may present under a name that differs from how memberships
+    // were recorded (e.g. server_name vs domain). Resolve trusted-peer aliases
+    // and check those too, mirroring `ensure_identity_matches_origin_or_alias`.
+    let peers = paracord_db::federation::list_trusted_federated_servers(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    for peer in peers {
+        let is_candidate = peer.server_name.eq_ignore_ascii_case(candidate_server)
+            || peer.domain.eq_ignore_ascii_case(candidate_server);
+        if !is_candidate {
+            continue;
+        }
+        if member_servers.iter().any(|server| {
+            server.eq_ignore_ascii_case(&peer.server_name)
+                || server.eq_ignore_ascii_case(&peer.domain)
+        }) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 
 export interface EconomyLeaderboardEntry {
   rank: number;
@@ -59,18 +59,18 @@ export interface LevelRolesResponse {
 
 export const economyApi = {
   getMyProgress: (guildId: string) =>
-    apiClient.get<EconomyProgressResponse>(`/guilds/${guildId}/economy/me`),
+    getApi().get<EconomyProgressResponse>(`/guilds/${guildId}/economy/me`),
 
   getLeaderboard: (guildId: string, limit = 20) =>
-    apiClient.get<EconomyLeaderboardResponse>(`/guilds/${guildId}/economy/leaderboard`, {
+    getApi().get<EconomyLeaderboardResponse>(`/guilds/${guildId}/economy/leaderboard`, {
       params: { limit },
     }),
 
   getLevelRoles: (guildId: string) =>
-    apiClient.get<LevelRolesResponse>(`/guilds/${guildId}/economy/level-roles`),
+    getApi().get<LevelRolesResponse>(`/guilds/${guildId}/economy/level-roles`),
 
   updateLevelRoles: (guildId: string, mappings: LevelRoleMapping[]) =>
-    apiClient.put<LevelRolesResponse>(`/guilds/${guildId}/economy/level-roles`, {
+    getApi().put<LevelRolesResponse>(`/guilds/${guildId}/economy/level-roles`, {
       mappings,
     }),
 };

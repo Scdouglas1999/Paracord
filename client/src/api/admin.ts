@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import { resolveServerRootUrl } from '../lib/apiBaseUrl';
 
 export interface SecurityEvent {
@@ -27,7 +27,7 @@ export interface FederatedServer {
 }
 
 export const adminApi = {
-  getStats: () => apiClient.get<{
+  getStats: () => getApi().get<{
     total_users: number;
     total_guilds: number;
     total_messages: number;
@@ -35,15 +35,15 @@ export const adminApi = {
   }>('/admin/stats'),
 
   listSecurityEvents: (params?: { before?: string; limit?: number; action?: string }) =>
-    apiClient.get<SecurityEvent[]>('/admin/security-events', { params }),
+    getApi().get<SecurityEvent[]>('/admin/security-events', { params }),
 
-  getSettings: () => apiClient.get<Record<string, string>>('/admin/settings'),
+  getSettings: () => getApi().get<Record<string, string>>('/admin/settings'),
 
   updateSettings: (data: Record<string, string>) =>
-    apiClient.patch<Record<string, string>>('/admin/settings', data),
+    getApi().patch<Record<string, string>>('/admin/settings', data),
 
   getUsers: (params?: { cursor?: number; offset?: number; limit?: number }) =>
-    apiClient.get<{
+    getApi().get<{
       users: Array<{
         id: string;
         username: string;
@@ -62,13 +62,13 @@ export const adminApi = {
     }>('/admin/users', { params }),
 
   updateUser: (userId: string, data: { flags: number }) =>
-    apiClient.patch(`/admin/users/${userId}`, data),
+    getApi().patch(`/admin/users/${userId}`, data),
 
   deleteUser: (userId: string) =>
-    apiClient.delete(`/admin/users/${userId}`),
+    getApi().delete(`/admin/users/${userId}`),
 
   getGuilds: () =>
-    apiClient.get<{
+    getApi().get<{
       guilds: Array<{
         id: string;
         name: string;
@@ -83,7 +83,7 @@ export const adminApi = {
     guildId: string,
     data: { name?: string; description?: string; icon?: string }
   ) =>
-    apiClient.patch<{
+    getApi().patch<{
       id: string;
       name: string;
       description: string | null;
@@ -93,25 +93,25 @@ export const adminApi = {
     }>(`/admin/guilds/${guildId}`, data),
 
   deleteGuild: (guildId: string) =>
-    apiClient.delete(`/admin/guilds/${guildId}`),
+    getApi().delete(`/admin/guilds/${guildId}`),
 
   restartUpdate: () =>
-    apiClient.post<{ status: string }>('/admin/restart-update'),
+    getApi().post<{ status: string }>('/admin/restart-update'),
 
   // ── Backups ──────────────────────────────────────────────────────────
 
   createBackup: (includeMedia?: boolean) =>
-    apiClient.post<{ filename: string }>('/admin/backup', {
+    getApi().post<{ filename: string }>('/admin/backup', {
       include_media: includeMedia ?? true,
     }),
 
   restoreBackup: (name: string) =>
-    apiClient.post<{ message: string; filename: string }>('/admin/restore', {
+    getApi().post<{ message: string; filename: string }>('/admin/restore', {
       name,
     }),
 
   listBackups: () =>
-    apiClient.get<{
+    getApi().get<{
       backups: Array<{
         name: string;
         size_bytes: number;
@@ -120,17 +120,17 @@ export const adminApi = {
     }>('/admin/backups'),
 
   downloadBackup: (name: string) =>
-    apiClient.get(`/admin/backups/${encodeURIComponent(name)}`, {
+    getApi().get(`/admin/backups/${encodeURIComponent(name)}`, {
       responseType: 'blob',
       timeout: 300_000, // 5 min timeout for large backups
     }),
 
   deleteBackup: (name: string) =>
-    apiClient.delete(`/admin/backups/${encodeURIComponent(name)}`),
+    getApi().delete(`/admin/backups/${encodeURIComponent(name)}`),
 
   // Federation server management (admin only)
   listFederatedServers: () =>
-    apiClient.get<{ servers: FederatedServer[] }>(
+    getApi().get<{ servers: FederatedServer[] }>(
       resolveServerRootUrl('/_paracord/federation/v1/servers')
     ),
 
@@ -143,15 +143,15 @@ export const adminApi = {
     trusted?: boolean;
     discover?: boolean;
   }) =>
-    apiClient.post(resolveServerRootUrl('/_paracord/federation/v1/servers'), data),
+    getApi().post(resolveServerRootUrl('/_paracord/federation/v1/servers'), data),
 
   getFederatedServer: (serverName: string) =>
-    apiClient.get<FederatedServer>(
+    getApi().get<FederatedServer>(
       resolveServerRootUrl(`/_paracord/federation/v1/servers/${encodeURIComponent(serverName)}`)
     ),
 
   deleteFederatedServer: (serverName: string) =>
-    apiClient.delete(
+    getApi().delete(
       resolveServerRootUrl(`/_paracord/federation/v1/servers/${encodeURIComponent(serverName)}`)
     ),
 };

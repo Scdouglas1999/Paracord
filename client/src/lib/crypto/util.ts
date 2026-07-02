@@ -16,9 +16,12 @@ export function fromBase64(b64: string): Uint8Array {
 }
 
 export function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer instanceof ArrayBuffer
-    ? bytes.buffer
-    : (new Uint8Array(bytes).buffer as ArrayBuffer);
+  // Only hand back the underlying buffer when the view spans it exactly;
+  // otherwise a subarray/DataView would leak (or truncate) neighbouring bytes,
+  // so copy just the view's region.
+  return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+    ? (bytes.buffer as ArrayBuffer)
+    : (bytes.slice().buffer as ArrayBuffer);
 }
 
 export function bytesToHex(bytes: Uint8Array): string {

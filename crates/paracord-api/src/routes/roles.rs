@@ -95,15 +95,34 @@ pub async fn create_role(
         guild.owner_id,
         auth.user_id,
     );
-    if !paracord_core::permissions::is_server_admin(perms) {
-        return Err(ApiError::Forbidden);
-    }
+    paracord_core::permissions::require_permission(
+        perms,
+        paracord_models::permissions::Permissions::MANAGE_ROLES,
+    )?;
     validate_role_permission_assignment(guild.owner_id, auth.user_id, perms, body.permissions)?;
 
     let role_id = paracord_util::snowflake::generate(1);
-    paracord_db::roles::create_role(&state.db, role_id, guild_id, &body.name, body.permissions)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    // create_role assigns the next position (MAX(position)+1 for the guild). A
+    // non-owner manager must not create a role at or above their own top role,
+    // so cap the new role below their highest position. If that would collide
+    // with an existing role's position it is still strictly below the actor's
+    // top role, preserving the hierarchy invariant enforced on edits/deletes.
+    let created =
+        paracord_db::roles::create_role(&state.db, role_id, guild_id, &body.name, body.permissions)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if auth.user_id != guild.owner_id {
+        let actor_top_role_pos = user_roles.iter().map(|r| r.position).max().unwrap_or(0);
+        if created.position >= actor_top_role_pos {
+            paracord_db::roles::set_role_position(
+                &state.db,
+                role_id,
+                (actor_top_role_pos - 1).max(0),
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        }
+    }
     let role = paracord_db::roles::update_role(
         &state.db,
         role_id,
@@ -178,9 +197,10 @@ pub async fn update_role(
         guild.owner_id,
         auth.user_id,
     );
-    if !paracord_core::permissions::is_server_admin(perms) {
-        return Err(ApiError::Forbidden);
-    }
+    paracord_core::permissions::require_permission(
+        perms,
+        paracord_models::permissions::Permissions::MANAGE_ROLES,
+    )?;
     if let Some(requested_permissions) = body.permissions {
         validate_role_permission_assignment(
             guild.owner_id,
@@ -280,9 +300,10 @@ pub async fn delete_role(
         guild.owner_id,
         auth.user_id,
     );
-    if !paracord_core::permissions::is_server_admin(perms) {
-        return Err(ApiError::Forbidden);
-    }
+    paracord_core::permissions::require_permission(
+        perms,
+        paracord_models::permissions::Permissions::MANAGE_ROLES,
+    )?;
 
     let target_role = paracord_db::roles::get_role(&state.db, role_id)
         .await

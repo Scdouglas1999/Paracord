@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import type { User } from '../types';
 
 export interface Relationship {
@@ -27,7 +27,7 @@ function normalizeRelationship(rel: RawRelationship): Relationship {
 
 export const relationshipApi = {
   list: async () => {
-    const response = await apiClient.get<RawRelationship[]>('/users/@me/relationships');
+    const response = await getApi().get<RawRelationship[]>('/users/@me/relationships');
     return {
       ...response,
       data: response.data.map(normalizeRelationship),
@@ -36,14 +36,14 @@ export const relationshipApi = {
   addFriend: (identifier: string) => {
     const trimmed = identifier.trim();
     const isNumericId = /^\d+$/.test(trimmed);
-    return apiClient.post('/users/@me/relationships', isNumericId
+    return getApi().post('/users/@me/relationships', isNumericId
       ? { user_id: trimmed, type: 1 }
       : { username: trimmed, type: 1 });
   },
   accept: (userId: string) =>
-    apiClient.put(`/users/@me/relationships/${userId}`),
+    getApi().put(`/users/@me/relationships/${userId}`),
   block: (userId: string) =>
-    apiClient.post('/users/@me/relationships', { user_id: userId, type: 2 }),
+    getApi().post('/users/@me/relationships', { user_id: userId, type: 2 }),
   remove: (userId: string) =>
-    apiClient.delete(`/users/@me/relationships/${userId}`),
+    getApi().delete(`/users/@me/relationships/${userId}`),
 };

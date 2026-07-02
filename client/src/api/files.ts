@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import type { Attachment } from '../types';
 import {
   QUICFileUploader,
@@ -24,7 +24,7 @@ async function getUploadToken(
   channelId: string,
   file: File,
 ): Promise<UploadTokenResponse> {
-  const resp = await apiClient.post<UploadTokenResponse>(
+  const resp = await getApi().post<UploadTokenResponse>(
     resolveV2ApiUrl(`/channels/${channelId}/upload-token`),
     {
       filename: file.name,
@@ -75,7 +75,7 @@ async function httpUpload(
 ): Promise<Attachment> {
   const formData = new FormData();
   formData.append('file', file);
-  const resp = await apiClient.post<Attachment>(
+  const resp = await getApi().post<Attachment>(
     `/channels/${channelId}/attachments`,
     formData,
     {
@@ -126,7 +126,7 @@ export const fileApi = {
     id: string,
     onProgress?: (percent: number) => void,
   ): Promise<{ data: Blob }> => {
-    return apiClient.get(`/attachments/${id}`, {
+    return getApi().get(`/attachments/${id}`, {
       responseType: 'blob',
       onDownloadProgress: (e) => {
         if (onProgress && e.total) {
@@ -137,5 +137,5 @@ export const fileApi = {
   },
 
   /** Delete an attachment. */
-  delete: (id: string) => apiClient.delete(`/attachments/${id}`),
+  delete: (id: string) => getApi().delete(`/attachments/${id}`),
 };

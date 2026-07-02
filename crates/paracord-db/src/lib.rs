@@ -158,6 +158,8 @@ pub async fn create_pool_full(
 
     let after_connect_key = sqlite_key_hex.clone();
     let pg_opts = pg_options.unwrap_or_default();
+    let sqlite_in_memory =
+        matches!(engine, DatabaseEngine::Sqlite) && is_in_memory_sqlite_url(&connect_url);
     AnyPoolOptions::new()
         .max_connections(max_connections)
         .after_connect(move |conn, _meta| {
@@ -187,10 +189,8 @@ pub async fn create_pool_full(
                         }
                     }
 
-                    // Tune SQLite for concurrent access.
-                    sqlx::query("PRAGMA journal_mode = WAL;")
-                        .execute(&mut *conn)
-                        .await?;
+                    // Tune SQLite for concurrent access. These apply to every
+                    // connection regardless of storage backing.
                     sqlx::query("PRAGMA foreign_keys = ON;")
                         .execute(&mut *conn)
                         .await?;
@@ -203,16 +203,24 @@ pub async fn create_pool_full(
                     sqlx::query("PRAGMA cache_size = -8000;")
                         .execute(&mut *conn)
                         .await?;
-                    sqlx::query("PRAGMA mmap_size = 67108864;")
-                        .execute(&mut *conn)
-                        .await?;
-                    sqlx::query("PRAGMA journal_size_limit = 67108864;")
-                        .execute(&mut *conn)
-                        .await?;
-                    // Slightly larger checkpoint interval to reduce checkpoint churn.
-                    sqlx::query("PRAGMA wal_autocheckpoint = 2000;")
-                        .execute(&mut *conn)
-                        .await?;
+
+                    // File-oriented PRAGMAs are meaningless (and WAL journaling
+                    // is unsupported) on in-memory databases, so skip them.
+                    if !sqlite_in_memory {
+                        sqlx::query("PRAGMA journal_mode = WAL;")
+                            .execute(&mut *conn)
+                            .await?;
+                        sqlx::query("PRAGMA mmap_size = 67108864;")
+                            .execute(&mut *conn)
+                            .await?;
+                        sqlx::query("PRAGMA journal_size_limit = 67108864;")
+                            .execute(&mut *conn)
+                            .await?;
+                        // Slightly larger checkpoint interval to reduce checkpoint churn.
+                        sqlx::query("PRAGMA wal_autocheckpoint = 2000;")
+                            .execute(&mut *conn)
+                            .await?;
+                    }
                 } else {
                     // Tune PostgreSQL connections.
                     if pg_opts.statement_timeout_secs > 0 {
@@ -286,6 +294,13 @@ pub fn detect_database_engine(database_url: &str) -> Result<DatabaseEngine, sqlx
 
 pub fn active_database_engine() -> DatabaseEngine {
     *ACTIVE_DB_ENGINE.get().unwrap_or(&DatabaseEngine::Sqlite)
+}
+
+/// Returns true when a SQLite connection URL refers to an in-memory database,
+/// for which file-oriented PRAGMAs (WAL, mmap, checkpoint) are meaningless.
+fn is_in_memory_sqlite_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains(":memory:") || lower.contains("mode=memory")
 }
 
 fn normalize_sqlite_url_for_any(url: &str) -> String {

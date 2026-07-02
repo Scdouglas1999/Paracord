@@ -1,4 +1,4 @@
-use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
@@ -97,10 +97,11 @@ pub async fn enable_mfa(pool: &DbPool, user_id: i64) -> Result<(), DbError> {
     .await?;
 
     sqlx::query(
-        "UPDATE users SET mfa_enabled = TRUE, updated_at = datetime('now')
+        "UPDATE users SET mfa_enabled = TRUE, updated_at = $2
          WHERE id = $1",
     )
     .bind(user_id)
+    .bind(datetime_to_db_text(Utc::now()))
     .execute(&mut *tx)
     .await?;
 
@@ -122,8 +123,9 @@ pub async fn disable_mfa(pool: &DbPool, user_id: i64) -> Result<(), DbError> {
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("UPDATE users SET mfa_enabled = FALSE, updated_at = datetime('now') WHERE id = $1")
+    sqlx::query("UPDATE users SET mfa_enabled = FALSE, updated_at = $2 WHERE id = $1")
         .bind(user_id)
+        .bind(datetime_to_db_text(Utc::now()))
         .execute(&mut *tx)
         .await?;
 

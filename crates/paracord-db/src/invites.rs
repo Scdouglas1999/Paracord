@@ -1,6 +1,27 @@
-use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
+use crate::{
+    bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DatabaseEngine, DbError, DbPool,
+};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
+
+/// Build an engine-agnostic predicate that is true when an invite has not yet
+/// expired, given the (possibly table-aliased) column names for `created_at`
+/// and `max_age`. `now_param` is the bind placeholder (e.g. `"$1"`) that must be
+/// bound to the current time via [`datetime_to_db_text`]. Timestamps are stored
+/// as ISO-8601 UTC TEXT, so on SQLite we use `datetime()` arithmetic and on
+/// PostgreSQL we cast the TEXT columns to timestamps and add an interval.
+fn invite_not_expired_predicate(created_at: &str, max_age: &str, now_param: &str) -> String {
+    match crate::active_database_engine() {
+        DatabaseEngine::Postgres => format!(
+            "({max_age} IS NULL OR {max_age} = 0 \
+             OR ({created_at}::timestamptz + ({max_age} * INTERVAL '1 second')) > {now_param}::timestamptz)"
+        ),
+        DatabaseEngine::Sqlite => format!(
+            "({max_age} IS NULL OR {max_age} = 0 \
+             OR datetime({created_at}, '+' || {max_age} || ' seconds') > {now_param})"
+        ),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct InviteRow {
@@ -62,33 +83,36 @@ pub async fn create_invite(
 }
 
 pub async fn get_invite(pool: &DbPool, code: &str) -> Result<Option<InviteRow>, DbError> {
-    let row = sqlx::query_as::<_, InviteRow>(
+    let not_expired = invite_not_expired_predicate("created_at", "max_age", "$2");
+    let sql = format!(
         "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at
          FROM invites WHERE code = $1
            AND (max_uses IS NULL OR max_uses = 0 OR uses < max_uses)
-           AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))",
-    )
-    .bind(code)
-    .fetch_optional(pool)
-    .await?;
+           AND {not_expired}"
+    );
+    let row = sqlx::query_as::<_, InviteRow>(&sql)
+        .bind(code)
+        .bind(datetime_to_db_text(Utc::now()))
+        .fetch_optional(pool)
+        .await?;
     Ok(row)
 }
 
 pub async fn use_invite(pool: &DbPool, code: &str) -> Result<Option<InviteRow>, DbError> {
-    let row = sqlx::query_as::<_, InviteRow>(
+    let not_expired = invite_not_expired_predicate("created_at", "max_age", "$2");
+    let sql = format!(
         "UPDATE invites
          SET uses = uses + 1
          WHERE code = $1
            AND (max_uses IS NULL OR max_uses = 0 OR uses < max_uses)
-           AND (
-                max_age IS NULL OR max_age = 0
-                OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now')
-           )
-         RETURNING code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at",
-    )
-    .bind(code)
-    .fetch_optional(pool)
-    .await?;
+           AND {not_expired}
+         RETURNING code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at"
+    );
+    let row = sqlx::query_as::<_, InviteRow>(&sql)
+        .bind(code)
+        .bind(datetime_to_db_text(Utc::now()))
+        .fetch_optional(pool)
+        .await?;
     Ok(row)
 }
 
@@ -101,31 +125,37 @@ pub async fn delete_invite(pool: &DbPool, code: &str) -> Result<(), DbError> {
 }
 
 pub async fn get_guild_invites(pool: &DbPool, guild_id: i64) -> Result<Vec<InviteRow>, DbError> {
-    let rows = sqlx::query_as::<_, InviteRow>(
+    let not_expired = invite_not_expired_predicate("i.created_at", "i.max_age", "$2");
+    let sql = format!(
         "SELECT i.code, i.channel_id, i.inviter_id, i.max_uses, i.uses, i.max_age, CASE WHEN i.temporary THEN 1 ELSE 0 END AS temporary, i.created_at
          FROM invites i
          INNER JOIN channels c ON c.id = i.channel_id
          WHERE c.space_id = $1
            AND (i.max_uses IS NULL OR i.max_uses = 0 OR i.uses < i.max_uses)
-           AND (i.max_age IS NULL OR i.max_age = 0 OR datetime(i.created_at, '+' || i.max_age || ' seconds') > datetime('now'))
-         ORDER BY i.created_at DESC",
-    )
-    .bind(guild_id)
-    .fetch_all(pool)
-    .await?;
+           AND {not_expired}
+         ORDER BY i.created_at DESC"
+    );
+    let rows = sqlx::query_as::<_, InviteRow>(&sql)
+        .bind(guild_id)
+        .bind(datetime_to_db_text(Utc::now()))
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
 pub async fn get_all_invites(pool: &DbPool) -> Result<Vec<InviteRow>, DbError> {
-    let rows = sqlx::query_as::<_, InviteRow>(
+    let not_expired = invite_not_expired_predicate("created_at", "max_age", "$1");
+    let sql = format!(
         "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at
          FROM invites
          WHERE (max_uses IS NULL OR max_uses = 0 OR uses < max_uses)
-           AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))
-         ORDER BY created_at DESC",
-    )
-    .fetch_all(pool)
-    .await?;
+           AND {not_expired}
+         ORDER BY created_at DESC"
+    );
+    let rows = sqlx::query_as::<_, InviteRow>(&sql)
+        .bind(datetime_to_db_text(Utc::now()))
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
@@ -133,17 +163,20 @@ pub async fn get_channel_invites(
     pool: &DbPool,
     channel_id: i64,
 ) -> Result<Vec<InviteRow>, DbError> {
-    let rows = sqlx::query_as::<_, InviteRow>(
+    let not_expired = invite_not_expired_predicate("created_at", "max_age", "$2");
+    let sql = format!(
         "SELECT code, channel_id, inviter_id, max_uses, uses, max_age, CASE WHEN temporary THEN 1 ELSE 0 END AS temporary, created_at
          FROM invites
          WHERE channel_id = $1
            AND (max_uses IS NULL OR max_uses = 0 OR uses < max_uses)
-           AND (max_age IS NULL OR max_age = 0 OR datetime(created_at, '+' || max_age || ' seconds') > datetime('now'))
-         ORDER BY created_at DESC",
-    )
-    .bind(channel_id)
-    .fetch_all(pool)
-    .await?;
+           AND {not_expired}
+         ORDER BY created_at DESC"
+    );
+    let rows = sqlx::query_as::<_, InviteRow>(&sql)
+        .bind(channel_id)
+        .bind(datetime_to_db_text(Utc::now()))
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
@@ -240,13 +273,14 @@ mod tests {
         )
         .await
         .unwrap();
-        sqlx::query(
-            "UPDATE invites SET created_at = datetime('now', '-5 seconds') WHERE code = $1",
-        )
-        .bind("expired_read")
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("UPDATE invites SET created_at = $2 WHERE code = $1")
+            .bind("expired_read")
+            .bind(datetime_to_db_text(
+                Utc::now() - chrono::Duration::seconds(5),
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let invite = get_invite(&pool, "expired_read").await.unwrap();
         assert!(invite.is_none());
@@ -371,13 +405,14 @@ mod tests {
         )
         .await
         .unwrap();
-        sqlx::query(
-            "UPDATE invites SET created_at = datetime('now', '-5 seconds') WHERE code = $1",
-        )
-        .bind("expired_list")
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("UPDATE invites SET created_at = $2 WHERE code = $1")
+            .bind("expired_list")
+            .bind(datetime_to_db_text(
+                Utc::now() - chrono::Duration::seconds(5),
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let invites = get_guild_invites(&pool, guild_id).await.unwrap();
         assert_eq!(invites.len(), 1);

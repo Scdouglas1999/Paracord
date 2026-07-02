@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import type { ApplicationCommand } from '../types/commands';
 import type { ApplicationCommandType, CommandOption } from '../types/commands';
 
@@ -24,33 +24,33 @@ export interface UpdateCommandRequest {
 export const commandApi = {
   // Global commands
   listGlobalCommands: (appId: string) =>
-    apiClient.get<ApplicationCommand[]>(`/applications/${appId}/commands`),
+    getApi().get<ApplicationCommand[]>(`/applications/${appId}/commands`),
   createGlobalCommand: (appId: string, data: CreateCommandRequest) =>
-    apiClient.post<ApplicationCommand>(`/applications/${appId}/commands`, data),
+    getApi().post<ApplicationCommand>(`/applications/${appId}/commands`, data),
   getGlobalCommand: (appId: string, cmdId: string) =>
-    apiClient.get<ApplicationCommand>(`/applications/${appId}/commands/${cmdId}`),
+    getApi().get<ApplicationCommand>(`/applications/${appId}/commands/${cmdId}`),
   updateGlobalCommand: (appId: string, cmdId: string, data: UpdateCommandRequest) =>
-    apiClient.patch<ApplicationCommand>(`/applications/${appId}/commands/${cmdId}`, data),
+    getApi().patch<ApplicationCommand>(`/applications/${appId}/commands/${cmdId}`, data),
   deleteGlobalCommand: (appId: string, cmdId: string) =>
-    apiClient.delete(`/applications/${appId}/commands/${cmdId}`),
+    getApi().delete(`/applications/${appId}/commands/${cmdId}`),
   bulkOverwriteGlobalCommands: (appId: string, commands: CreateCommandRequest[]) =>
-    apiClient.put<ApplicationCommand[]>(`/applications/${appId}/commands`, commands),
+    getApi().put<ApplicationCommand[]>(`/applications/${appId}/commands`, commands),
 
   // Guild commands
   listGuildCommands: (appId: string, guildId: string) =>
-    apiClient.get<ApplicationCommand[]>(`/applications/${appId}/guilds/${guildId}/commands`),
+    getApi().get<ApplicationCommand[]>(`/applications/${appId}/guilds/${guildId}/commands`),
   createGuildCommand: (appId: string, guildId: string, data: CreateCommandRequest) =>
-    apiClient.post<ApplicationCommand>(`/applications/${appId}/guilds/${guildId}/commands`, data),
+    getApi().post<ApplicationCommand>(`/applications/${appId}/guilds/${guildId}/commands`, data),
   getGuildCommand: (appId: string, guildId: string, cmdId: string) =>
-    apiClient.get<ApplicationCommand>(`/applications/${appId}/guilds/${guildId}/commands/${cmdId}`),
+    getApi().get<ApplicationCommand>(`/applications/${appId}/guilds/${guildId}/commands/${cmdId}`),
   updateGuildCommand: (appId: string, guildId: string, cmdId: string, data: UpdateCommandRequest) =>
-    apiClient.patch<ApplicationCommand>(`/applications/${appId}/guilds/${guildId}/commands/${cmdId}`, data),
+    getApi().patch<ApplicationCommand>(`/applications/${appId}/guilds/${guildId}/commands/${cmdId}`, data),
   deleteGuildCommand: (appId: string, guildId: string, cmdId: string) =>
-    apiClient.delete(`/applications/${appId}/guilds/${guildId}/commands/${cmdId}`),
+    getApi().delete(`/applications/${appId}/guilds/${guildId}/commands/${cmdId}`),
   bulkOverwriteGuildCommands: (appId: string, guildId: string, commands: CreateCommandRequest[]) =>
-    apiClient.put<ApplicationCommand[]>(`/applications/${appId}/guilds/${guildId}/commands`, commands),
+    getApi().put<ApplicationCommand[]>(`/applications/${appId}/guilds/${guildId}/commands`, commands),
 
   // All commands available in a guild (global + guild-specific)
   listGuildAvailableCommands: (guildId: string) =>
-    apiClient.get<ApplicationCommand[]>(`/guilds/${guildId}/commands`),
+    getApi().get<ApplicationCommand[]>(`/guilds/${guildId}/commands`),
 };

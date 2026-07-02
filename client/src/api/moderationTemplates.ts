@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 
 export interface ModerationTemplate {
   id: string;
@@ -29,13 +29,13 @@ export interface ApplyModerationTemplateRequest {
 
 export const moderationTemplateApi = {
   list: (guildId: string) =>
-    apiClient.get<ModerationTemplate[]>(`/guilds/${guildId}/moderation/templates`),
+    getApi().get<ModerationTemplate[]>(`/guilds/${guildId}/moderation/templates`),
   create: (guildId: string, data: CreateModerationTemplateRequest) =>
-    apiClient.post<ModerationTemplate>(`/guilds/${guildId}/moderation/templates`, data),
+    getApi().post<ModerationTemplate>(`/guilds/${guildId}/moderation/templates`, data),
   delete: (guildId: string, templateId: string) =>
-    apiClient.delete(`/guilds/${guildId}/moderation/templates/${templateId}`),
+    getApi().delete(`/guilds/${guildId}/moderation/templates/${templateId}`),
   apply: (guildId: string, templateId: string, data: ApplyModerationTemplateRequest) =>
-    apiClient.post(`/guilds/${guildId}/moderation/templates/${templateId}/apply`, data),
+    getApi().post(`/guilds/${guildId}/moderation/templates/${templateId}/apply`, data),
 };
 
 export const ACTION_TYPE_LABELS: Record<number, string> = {

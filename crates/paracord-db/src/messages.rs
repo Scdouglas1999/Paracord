@@ -376,12 +376,13 @@ pub async fn update_message_typed(
     content: &str,
 ) -> Result<MessageRow, DbError> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "UPDATE messages SET content = $2, edited_at = datetime('now')
+        "UPDATE messages SET content = $2, edited_at = $3
          WHERE id = $1
          RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components",
     )
     .bind(id)
     .bind(content)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -445,7 +446,7 @@ pub async fn update_message_authorized_typed(
          )
          UPDATE messages
          SET content = $4,
-             edited_at = datetime('now'),
+             edited_at = $9,
              nonce = $7,
              flags = COALESCE($8, flags)
          WHERE id = $1
@@ -461,6 +462,7 @@ pub async fn update_message_authorized_typed(
     .bind(administrator)
     .bind(nonce)
     .bind(flags)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_optional(pool)
     .await?;
     Ok(row)
@@ -747,8 +749,16 @@ pub async fn search_messages_typed(
 
             match fts_result {
                 Ok(rows) => Ok(rows),
-                Err(_) => {
-                    // Fallback to LIKE search if FTS table doesn't exist
+                Err(err) if is_missing_fts_table(&err) => {
+                    // The FTS5 virtual table hasn't been created yet (e.g. the
+                    // migration has not run). Degrade to a LIKE scan only in
+                    // this specific case; any other error (SQLITE_BUSY, IO,
+                    // malformed MATCH) must propagate so we don't silently
+                    // mask failures behind a full-table scan.
+                    tracing::warn!(
+                        error = %err,
+                        "messages_fts unavailable; falling back to LIKE search"
+                    );
                     let escaped = query
                         .replace('\\', "\\\\")
                         .replace('%', "\\%")
@@ -777,9 +787,19 @@ pub async fn search_messages_typed(
                     .await?;
                     Ok(rows)
                 }
+                Err(err) => Err(DbError::from(err)),
             }
         }
     }
+}
+
+/// Returns true when `err` is a SQLite "no such table: messages_fts" error,
+/// meaning the FTS5 virtual table has not been created yet.
+fn is_missing_fts_table(err: &sqlx::Error) -> bool {
+    matches!(err, sqlx::Error::Database(db) if {
+        let msg = db.message().to_ascii_lowercase();
+        msg.contains("no such table") && msg.contains("messages_fts")
+    })
 }
 
 /// Raw i64 shim kept for API compat.
@@ -1191,6 +1211,246 @@ pub async fn get_message_with_embeds(
     id: i64,
 ) -> Result<Option<MessageRow>, DbError> {
     get_message_with_embeds_typed(pool, MessageId::new(id)).await
+}
+
+/// Maximum number of message ids accepted by a single batch lookup. Message
+/// list endpoints cap their page size well below this (<= 100), so the limit is
+/// a defensive guard against unbounded IN-lists, matching the other batch
+/// helpers in this crate.
+const MAX_BATCH_MESSAGE_IDS: usize = 500;
+
+fn message_id_placeholders(count: usize) -> String {
+    (1..=count)
+        .map(|i| format!("${}", i))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Batch-load the distinct author [`UserRow`](crate::users::UserRow)s for a page
+/// of messages in a single query. Missing authors are simply absent from the
+/// result; callers fall back to an "Unknown" placeholder.
+pub async fn get_authors_for_message_ids(
+    pool: &DbPool,
+    author_ids: &[i64],
+) -> Result<Vec<crate::users::UserRow>, DbError> {
+    if author_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if author_ids.len() > MAX_BATCH_MESSAGE_IDS {
+        return Err(DbError::Sqlx(sqlx::Error::Protocol(
+            "too many author ids in author lookup".to_string(),
+        )));
+    }
+    let sql = format!(
+        "SELECT id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified
+         FROM users WHERE id IN ({})",
+        message_id_placeholders(author_ids.len()),
+    );
+    let mut query = sqlx::query_as::<_, crate::users::UserRow>(&sql);
+    for author_id in author_ids {
+        query = query.bind(author_id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows)
+}
+
+/// A [`StickerRow`](crate::stickers::StickerRow) tagged with the message it is
+/// attached to, so a batched result can be grouped back onto messages.
+pub struct BatchStickerRow {
+    pub message_id: i64,
+    pub sticker: crate::stickers::StickerRow,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for BatchStickerRow {
+    fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            message_id: row.try_get("message_id")?,
+            sticker: crate::stickers::StickerRow::from_row(row)?,
+        })
+    }
+}
+
+/// Batch-load stickers for a page of messages in a single query, preserving the
+/// per-message ordering (`created_at ASC`) used by
+/// [`list_message_stickers`](crate::stickers::list_message_stickers).
+pub async fn get_stickers_for_message_ids(
+    pool: &DbPool,
+    message_ids: &[i64],
+) -> Result<Vec<BatchStickerRow>, DbError> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if message_ids.len() > MAX_BATCH_MESSAGE_IDS {
+        return Err(DbError::Sqlx(sqlx::Error::Protocol(
+            "too many message ids in sticker lookup".to_string(),
+        )));
+    }
+    let sql = format!(
+        "SELECT ms.message_id AS message_id, s.id, s.guild_id, s.name, s.description, s.format_type,
+                s.asset_key, s.asset_content_type, s.creator_id, s.created_at
+         FROM message_stickers ms
+         INNER JOIN stickers s ON s.id = ms.sticker_id
+         WHERE ms.message_id IN ({})
+         ORDER BY ms.message_id, s.created_at ASC",
+        message_id_placeholders(message_ids.len()),
+    );
+    let mut query = sqlx::query_as::<_, BatchStickerRow>(&sql);
+    for message_id in message_ids {
+        query = query.bind(message_id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows)
+}
+
+/// Batch-load anonymous-message records for a page of messages in a single
+/// query. Only messages posted anonymously appear in the result.
+pub async fn get_anonymous_messages_for_message_ids(
+    pool: &DbPool,
+    message_ids: &[i64],
+) -> Result<Vec<crate::anonymous_messages::AnonymousMessageRow>, DbError> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if message_ids.len() > MAX_BATCH_MESSAGE_IDS {
+        return Err(DbError::Sqlx(sqlx::Error::Protocol(
+            "too many message ids in anonymous message lookup".to_string(),
+        )));
+    }
+    let sql = format!(
+        "SELECT message_id, channel_id, user_id, alias, created_at
+         FROM anonymous_messages
+         WHERE message_id IN ({})",
+        message_id_placeholders(message_ids.len()),
+    );
+    let mut query = sqlx::query_as::<_, crate::anonymous_messages::AnonymousMessageRow>(&sql);
+    for message_id in message_ids {
+        query = query.bind(message_id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows)
+}
+
+#[derive(sqlx::FromRow)]
+struct OptionVoteCountRow {
+    option_id: i64,
+    count: i64,
+}
+
+/// Batch-load fully-assembled polls (options + vote counts + the viewer's votes)
+/// for a page of messages using a bounded, constant number of queries
+/// regardless of how many messages carry a poll. Returns each poll paired with
+/// its owning message id. Ordering of options matches
+/// [`get_message_poll`](crate::polls::get_message_poll).
+pub async fn get_polls_for_message_ids(
+    pool: &DbPool,
+    message_ids: &[i64],
+    viewer_id: i64,
+) -> Result<Vec<(i64, crate::polls::PollWithOptions)>, DbError> {
+    use std::collections::HashMap;
+
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if message_ids.len() > MAX_BATCH_MESSAGE_IDS {
+        return Err(DbError::Sqlx(sqlx::Error::Protocol(
+            "too many message ids in poll lookup".to_string(),
+        )));
+    }
+
+    // 1. Polls attached to any of the messages.
+    let sql = format!(
+        "SELECT id, message_id, channel_id, question, allow_multiselect, expires_at, created_at
+         FROM polls WHERE message_id IN ({})",
+        message_id_placeholders(message_ids.len()),
+    );
+    let mut query = sqlx::query_as::<_, crate::polls::PollRow>(&sql);
+    for message_id in message_ids {
+        query = query.bind(message_id);
+    }
+    let polls = query.fetch_all(pool).await?;
+    if polls.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let poll_ids: Vec<i64> = polls.iter().map(|p| p.id).collect();
+    let poll_placeholders = message_id_placeholders(poll_ids.len());
+
+    // 2. Options for those polls.
+    let options_sql = format!(
+        "SELECT id, poll_id, text, emoji, position
+         FROM poll_options WHERE poll_id IN ({poll_placeholders})
+         ORDER BY poll_id, position",
+    );
+    let mut options_query = sqlx::query_as::<_, crate::polls::PollOptionRow>(&options_sql);
+    for poll_id in &poll_ids {
+        options_query = options_query.bind(poll_id);
+    }
+    let option_rows = options_query.fetch_all(pool).await?;
+
+    // 3. Vote counts per option across all polls.
+    let counts_sql = format!(
+        "SELECT option_id, COUNT(*) as count
+         FROM poll_votes WHERE poll_id IN ({poll_placeholders})
+         GROUP BY option_id",
+    );
+    let mut counts_query = sqlx::query_as::<_, OptionVoteCountRow>(&counts_sql);
+    for poll_id in &poll_ids {
+        counts_query = counts_query.bind(poll_id);
+    }
+    let count_rows = counts_query.fetch_all(pool).await?;
+    let mut vote_counts: HashMap<i64, i64> = HashMap::new();
+    for row in count_rows {
+        vote_counts.insert(row.option_id, row.count);
+    }
+
+    // 4. The viewer's own votes across all polls.
+    let viewer_bind_index = poll_ids.len() + 1;
+    let voted_sql = format!(
+        "SELECT DISTINCT option_id
+         FROM poll_votes WHERE poll_id IN ({poll_placeholders}) AND user_id = ${viewer_bind_index}",
+    );
+    let mut voted_query = sqlx::query_as::<_, (i64,)>(&voted_sql);
+    for poll_id in &poll_ids {
+        voted_query = voted_query.bind(poll_id);
+    }
+    voted_query = voted_query.bind(viewer_id);
+    let voted_rows = voted_query.fetch_all(pool).await?;
+    let voted_options: std::collections::HashSet<i64> =
+        voted_rows.into_iter().map(|r| r.0).collect();
+
+    // Group options by poll, preserving the position ordering from the query.
+    let mut options_by_poll: HashMap<i64, Vec<crate::polls::PollOptionWithVotes>> = HashMap::new();
+    for opt in option_rows {
+        let vote_count = vote_counts.get(&opt.id).copied().unwrap_or(0) as i32;
+        let voted = voted_options.contains(&opt.id);
+        options_by_poll
+            .entry(opt.poll_id)
+            .or_default()
+            .push(crate::polls::PollOptionWithVotes {
+                id: opt.id,
+                text: opt.text,
+                emoji: opt.emoji,
+                position: opt.position,
+                vote_count,
+                voted,
+            });
+    }
+
+    let mut result = Vec::with_capacity(polls.len());
+    for poll in polls {
+        let options = options_by_poll.remove(&poll.id).unwrap_or_default();
+        let total_votes: i32 = options.iter().map(|o| o.vote_count).sum();
+        let message_id = poll.message_id;
+        result.push((
+            message_id,
+            crate::polls::PollWithOptions {
+                poll,
+                options,
+                total_votes,
+            },
+        ));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

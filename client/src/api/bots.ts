@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 
 export interface BotApplication {
   id: string;
@@ -61,25 +61,25 @@ interface UpdateBotRequest {
 }
 
 export const botApi = {
-  list: () => apiClient.get<BotApplication[]>('/bots/applications'),
+  list: () => getApi().get<BotApplication[]>('/bots/applications'),
   create: (data: CreateBotRequest) =>
-    apiClient.post<BotApplication>('/bots/applications', data),
+    getApi().post<BotApplication>('/bots/applications', data),
   get: (appId: string) =>
-    apiClient.get<BotApplication>(`/bots/applications/${appId}`),
+    getApi().get<BotApplication>(`/bots/applications/${appId}`),
   getPublic: (appId: string) =>
-    apiClient.get<PublicBotApplication>(`/bots/applications/${appId}/public`),
+    getApi().get<PublicBotApplication>(`/bots/applications/${appId}/public`),
   update: (appId: string, data: UpdateBotRequest) =>
-    apiClient.patch<BotApplication>(`/bots/applications/${appId}`, data),
+    getApi().patch<BotApplication>(`/bots/applications/${appId}`, data),
   delete: (appId: string) =>
-    apiClient.delete(`/bots/applications/${appId}`),
+    getApi().delete(`/bots/applications/${appId}`),
   regenerateToken: (appId: string) =>
-    apiClient.post<BotApplication>(`/bots/applications/${appId}/token`),
+    getApi().post<BotApplication>(`/bots/applications/${appId}/token`),
   listInstalls: (appId: string) =>
-    apiClient.get<BotGuildInstall[]>(`/bots/applications/${appId}/installs`),
+    getApi().get<BotGuildInstall[]>(`/bots/applications/${appId}/installs`),
 
   // Guild bot management
   listGuildBots: (guildId: string) =>
-    apiClient.get<GuildBotEntry[]>(`/guilds/${guildId}/bots`),
+    getApi().get<GuildBotEntry[]>(`/guilds/${guildId}/bots`),
   addBotToGuild: (
     guildId: string,
     data: {
@@ -89,7 +89,7 @@ export const botApi = {
       state?: string;
     }
   ) =>
-    apiClient.post(`/oauth2/authorize`, {
+    getApi().post(`/oauth2/authorize`, {
       application_id: data.application_id,
       guild_id: guildId,
       permissions: data.permissions,
@@ -97,5 +97,5 @@ export const botApi = {
       state: data.state,
     }),
   removeBotFromGuild: (guildId: string, botAppId: string) =>
-    apiClient.delete(`/guilds/${guildId}/bots/${botAppId}`),
+    getApi().delete(`/guilds/${guildId}/bots/${botAppId}`),
 };

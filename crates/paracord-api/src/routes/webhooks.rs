@@ -434,6 +434,19 @@ fn webhook_message_to_json(
     })
 }
 
+/// Truncate a string to at most `max_bytes`, snapping down to the nearest UTF-8
+/// character boundary so we never slice through a multi-byte code point.
+fn truncate_on_char_boundary(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
 fn format_github_event(event_type: &str, payload: &Value) -> String {
     match event_type {
         "push" => {
@@ -517,7 +530,7 @@ fn format_github_event(event_type: &str, payload: &Value) -> String {
                 .unwrap_or("unknown/repo");
             let body = payload["comment"]["body"].as_str().unwrap_or("");
             let preview = if body.len() > 200 {
-                format!("{}...", &body[..200])
+                format!("{}...", truncate_on_char_boundary(body, 200))
             } else {
                 body.to_string()
             };
@@ -592,11 +605,19 @@ pub async fn execute_webhook(
         .ok_or(ApiError::NotFound)?;
 
     // Check for GitHub webhook
-    let (content, display_name, avatar_url, embeds) = if let Some(github_event) =
-        headers.get("X-GitHub-Event")
-    {
-        // H6: Verify GitHub webhook signature if github_secret is configured
-        if let Some(ref secret) = webhook.github_secret {
+    let (content, display_name, avatar_url, embeds) =
+        if let Some(github_event) = headers.get("X-GitHub-Event") {
+            // H6: GitHub webhook signature verification is fail-closed. A webhook that
+            // receives GitHub events MUST have a github_secret configured, and every
+            // request must carry a valid HMAC signature. Without both we refuse the
+            // request rather than accepting unauthenticated payloads.
+            let Some(ref secret) = webhook.github_secret else {
+                tracing::warn!(
+                    webhook_id = webhook_id,
+                    "Rejecting GitHub webhook event: no github_secret configured"
+                );
+                return Err(ApiError::Unauthorized);
+            };
             let sig_header = headers
                 .get("X-Hub-Signature-256")
                 .and_then(|v| v.to_str().ok())
@@ -604,46 +625,50 @@ pub async fn execute_webhook(
             if !verify_github_signature(secret, &body, sig_header) {
                 return Err(ApiError::Unauthorized);
             }
-        } else {
-            // No github_secret configured: log a warning but still process
-            tracing::warn!(
-                    webhook_id = webhook_id,
-                    "GitHub webhook event received without github_secret configured -- signature not verified"
-                );
-        }
 
-        let event_type = github_event.to_str().unwrap_or("unknown");
-        let payload: Value = serde_json::from_slice(&body)
-            .map_err(|_| ApiError::BadRequest("Invalid JSON payload".into()))?;
-        let content = format_github_event(event_type, &payload);
-        (content, "GitHub".to_string(), None, Vec::new())
-    } else {
-        // Normal webhook execution
-        let req: ExecuteWebhookRequest = serde_json::from_slice(&body)
-            .map_err(|_| ApiError::BadRequest("Invalid JSON payload".into()))?;
-        let content = req
-            .content
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let embeds = req.embeds.unwrap_or_default();
-        if content.is_empty() && embeds.is_empty() {
-            return Err(ApiError::BadRequest("Content must not be empty".into()));
-        }
-        if content.len() > 2000 {
-            return Err(ApiError::BadRequest(
-                "Content must be 2000 characters or fewer".into(),
-            ));
-        }
-        let name = req.username.unwrap_or_else(|| webhook.name.clone());
-        if name.trim().is_empty() || name.len() > 80 {
-            return Err(ApiError::BadRequest(
-                "username must be between 1 and 80 characters".into(),
-            ));
-        }
-        (content, name, req.avatar_url, embeds)
-    };
+            let event_type = github_event.to_str().unwrap_or("unknown");
+            let payload: Value = serde_json::from_slice(&body)
+                .map_err(|_| ApiError::BadRequest("Invalid JSON payload".into()))?;
+            let content = format_github_event(event_type, &payload);
+            // Run the constructed content (which embeds user-controlled fields such as
+            // commit messages and issue titles) through the same guards as a normal
+            // webhook execution.
+            if content.trim().is_empty() {
+                return Err(ApiError::BadRequest("Content must not be empty".into()));
+            }
+            if content.len() > 2000 {
+                return Err(ApiError::BadRequest(
+                    "Content must be 2000 characters or fewer".into(),
+                ));
+            }
+            (content, "GitHub".to_string(), None, Vec::new())
+        } else {
+            // Normal webhook execution
+            let req: ExecuteWebhookRequest = serde_json::from_slice(&body)
+                .map_err(|_| ApiError::BadRequest("Invalid JSON payload".into()))?;
+            let content = req
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let embeds = req.embeds.unwrap_or_default();
+            if content.is_empty() && embeds.is_empty() {
+                return Err(ApiError::BadRequest("Content must not be empty".into()));
+            }
+            if content.len() > 2000 {
+                return Err(ApiError::BadRequest(
+                    "Content must be 2000 characters or fewer".into(),
+                ));
+            }
+            let name = req.username.unwrap_or_else(|| webhook.name.clone());
+            if name.trim().is_empty() || name.len() > 80 {
+                return Err(ApiError::BadRequest(
+                    "username must be between 1 and 80 characters".into(),
+                ));
+            }
+            (content, name, req.avatar_url, embeds)
+        };
 
     // Create the message using the webhook creator as the author
     let msg_id = paracord_util::snowflake::generate(1);

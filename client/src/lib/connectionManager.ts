@@ -8,7 +8,7 @@ import {
   hasUnlockedPrivateKey,
   signServerChallengeWithUnlockedKey,
 } from './accountSession';
-import { setAccessToken } from './authToken';
+import { getRefreshToken, setAccessToken, setRefreshToken } from './authToken';
 import { getCurrentOriginServerUrl, getStoredServerUrl } from './apiBaseUrl';
 import { inflateSync } from 'fflate';
 import type { Activity, GatewayPayload } from '../types';
@@ -215,15 +215,18 @@ class ConnectionManager {
     const client = createApiClient(
       apiBaseUrl,
       () => useAuthStore.getState().token,
-      (nextToken) => {
+      (nextToken, nextRefreshToken) => {
         setAccessToken(nextToken);
         useAuthStore.setState({ token: nextToken });
+        if (nextRefreshToken) setRefreshToken(nextRefreshToken);
       },
       () => {
         setAccessToken(null);
         useAuthStore.setState({ token: null, user: null });
         this.disconnectServer(LOCAL_SERVER_ID);
       },
+      undefined,
+      () => getRefreshToken(),
     );
 
     const conn: ServerConnection = {
@@ -276,14 +279,21 @@ class ConnectionManager {
     const client = createApiClient(
       apiBaseUrl,
       () => useServerListStore.getState().getServer(serverId)?.token || null,
-      (token) => useServerListStore.getState().updateToken(serverId, token),
+      (token, refreshToken) => {
+        useServerListStore.getState().updateToken(serverId, token);
+        if (refreshToken) {
+          useServerListStore.getState().updateRefreshToken(serverId, refreshToken);
+        }
+      },
       () => {
         // Auth failed; clear token and disconnect.
         useServerListStore.getState().updateToken(serverId, '');
+        useServerListStore.getState().updateRefreshToken(serverId, null);
         useServerListStore.getState().setApiReachable(serverId, false);
         this.disconnectServer(serverId);
       },
       (reachable) => useServerListStore.getState().setApiReachable(serverId, reachable),
+      () => useServerListStore.getState().getServer(serverId)?.refreshToken || null,
     );
 
     // If we don't have a valid token, do challenge-response auth.
@@ -363,6 +373,7 @@ class ConnectionManager {
     const displayName = useAccountStore.getState().displayName;
     const { data: authResponse } = await client.post<{
       token: string;
+      refresh_token?: string;
       user: { id: string; username: string; flags: number; public_key: string };
     }>('/auth/verify', {
       public_key: publicKey,
@@ -373,24 +384,19 @@ class ConnectionManager {
       display_name: displayName || undefined,
     });
 
-    // Store the user's server-local ID
+    // Store the user's server-local ID. The remote identity lives on the
+    // per-server entry (consumed via `activeServer?.userId`); the global
+    // authStore stays LOCAL-only so a remote connection never clobbers the
+    // local session token/user or the LOCAL-only `apiClient` singleton.
     useServerListStore.getState().updateServerInfo(server.id, {
       userId: authResponse.user.id,
     });
 
-    // Also update the legacy authStore for backward compat during migration
-    // so that existing components that read useAuthStore.user still work
-    useAuthStore.setState({
-      token: authResponse.token,
-      user: {
-        ...authResponse.user,
-        discriminator: 0,
-        bot: false,
-        system: false,
-        created_at: new Date().toISOString(),
-      },
-    });
-    setAccessToken(authResponse.token);
+    // Persist the per-server refresh token so a later 401 can refresh
+    // cross-origin (the HttpOnly cookie is unavailable to remote origins).
+    if (authResponse.refresh_token) {
+      useServerListStore.getState().updateRefreshToken(server.id, authResponse.refresh_token);
+    }
 
     return authResponse.token;
   }

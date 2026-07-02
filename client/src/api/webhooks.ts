@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import type { Webhook } from '../types';
 
 interface CreateWebhookRequest {
@@ -24,23 +24,23 @@ interface EditWebhookMessageRequest {
 
 export const webhookApi = {
   create: (guildId: string, data: CreateWebhookRequest) =>
-    apiClient.post<Webhook>(`/guilds/${guildId}/webhooks`, data),
-  listGuild: (guildId: string) => apiClient.get<Webhook[]>(`/guilds/${guildId}/webhooks`),
-  listChannel: (channelId: string) => apiClient.get<Webhook[]>(`/channels/${channelId}/webhooks`),
-  get: (webhookId: string) => apiClient.get<Webhook>(`/webhooks/${webhookId}`),
+    getApi().post<Webhook>(`/guilds/${guildId}/webhooks`, data),
+  listGuild: (guildId: string) => getApi().get<Webhook[]>(`/guilds/${guildId}/webhooks`),
+  listChannel: (channelId: string) => getApi().get<Webhook[]>(`/channels/${channelId}/webhooks`),
+  get: (webhookId: string) => getApi().get<Webhook>(`/webhooks/${webhookId}`),
   update: (webhookId: string, data: UpdateWebhookRequest) =>
-    apiClient.patch<Webhook>(`/webhooks/${webhookId}`, data),
-  delete: (webhookId: string) => apiClient.delete(`/webhooks/${webhookId}`),
+    getApi().patch<Webhook>(`/webhooks/${webhookId}`, data),
+  delete: (webhookId: string) => getApi().delete(`/webhooks/${webhookId}`),
   execute: (webhookId: string, token: string, data: ExecuteWebhookRequest) =>
-    apiClient.post(`/webhooks/${webhookId}/${token}`, data),
+    getApi().post(`/webhooks/${webhookId}/${token}`, data),
   executeNoWait: (webhookId: string, token: string, data: ExecuteWebhookRequest) =>
-    apiClient.post(`/webhooks/${webhookId}/${token}?wait=false`, data),
+    getApi().post(`/webhooks/${webhookId}/${token}?wait=false`, data),
   editMessage: (
     webhookId: string,
     token: string,
     messageId: string,
     data: EditWebhookMessageRequest,
-  ) => apiClient.patch(`/webhooks/${webhookId}/${token}/messages/${messageId}`, data),
+  ) => getApi().patch(`/webhooks/${webhookId}/${token}/messages/${messageId}`, data),
   deleteMessage: (webhookId: string, token: string, messageId: string) =>
-    apiClient.delete(`/webhooks/${webhookId}/${token}/messages/${messageId}`),
+    getApi().delete(`/webhooks/${webhookId}/${token}/messages/${messageId}`),
 };

@@ -1,16 +1,16 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import type { Invite, Guild, CreateInviteRequest, InviteAcceptResponse } from '../types';
 
 export const inviteApi = {
-  get: (code: string) => apiClient.get<Invite>(`/invites/${code}`),
+  get: (code: string) => getApi().get<Invite>(`/invites/${code}`),
   accept: (
     code: string,
     data?: {
       verification_ack?: boolean;
       verification_answers?: string[];
     },
-  ) => apiClient.post<InviteAcceptResponse | Guild>(`/invites/${code}`, data ?? {}),
+  ) => getApi().post<InviteAcceptResponse | Guild>(`/invites/${code}`, data ?? {}),
   create: (channelId: string, data?: CreateInviteRequest) =>
-    apiClient.post<Invite>(`/channels/${channelId}/invites`, data),
-  delete: (code: string) => apiClient.delete(`/invites/${code}`),
+    getApi().post<Invite>(`/channels/${channelId}/invites`, data),
+  delete: (code: string) => getApi().delete(`/invites/${code}`),
 };

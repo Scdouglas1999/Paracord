@@ -80,9 +80,10 @@ pub fn create_encoder(
         #[cfg(feature = "vpx")]
         VideoCodec::Vp9 => Ok(Box::new(Vp9Encoder::new(config)?)),
         #[cfg(not(feature = "vpx"))]
-        VideoCodec::Vp9 => Err(VideoError::CodecUnavailable(
-            "vp9 encoder unavailable without 'vpx' feature".into(),
-        )),
+        VideoCodec::Vp9 => Err(VideoError::CodecUnavailable(format!(
+            "vp9 encoder unavailable without 'vpx' feature (requested {}x{})",
+            config.width, config.height
+        ))),
         #[cfg(target_os = "windows")]
         VideoCodec::Av1 => Ok(Box::new(MfAv1Encoder::new(config)?)),
         #[cfg(not(target_os = "windows"))]

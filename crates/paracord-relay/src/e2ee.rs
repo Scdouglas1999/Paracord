@@ -196,9 +196,12 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    /// Log of `(recipient_user_id, delivered payload)` captured during a test.
+    type DeliveredKeys = Arc<Mutex<Vec<(i64, MediaKeyDeliver)>>>;
+
     /// Collects delivered keys for test assertions.
-    fn mock_delivery() -> (KeyDeliveryFn, Arc<Mutex<Vec<(i64, MediaKeyDeliver)>>>) {
-        let delivered: Arc<Mutex<Vec<(i64, MediaKeyDeliver)>>> = Arc::new(Mutex::new(Vec::new()));
+    fn mock_delivery() -> (KeyDeliveryFn, DeliveredKeys) {
+        let delivered: DeliveredKeys = Arc::new(Mutex::new(Vec::new()));
         let delivered_clone = delivered.clone();
         let f: KeyDeliveryFn = Arc::new(move |user_id, deliver| {
             delivered_clone.lock().unwrap().push((user_id, deliver));

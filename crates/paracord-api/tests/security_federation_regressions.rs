@@ -1,9 +1,6 @@
 mod common;
 
-use std::{
-    net::SocketAddr,
-    sync::{Mutex, OnceLock},
-};
+use std::{net::SocketAddr, sync::OnceLock};
 
 use axum::{
     body::Body,
@@ -16,7 +13,12 @@ use common::{build_test_app, dispatch_json, TestApp, TestAppOptions};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 
+// Serializes tests that mutate process-global federation env vars. A tokio
+// mutex is used (not `std::sync::Mutex`) because the guard is held across the
+// `.await` points of each test body; an async-aware guard avoids blocking the
+// runtime and the `await_holding_lock` lint.
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -225,7 +227,7 @@ async fn password_reset_completion_updates_password_revokes_sessions_and_consume
 
 #[tokio::test]
 async fn federation_read_rejects_unsigned_requests_without_token() -> anyhow::Result<()> {
-    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
     std::env::remove_var("PARACORD_FEDERATION_READ_TOKEN");
 
@@ -287,7 +289,7 @@ async fn csrf_blocks_cookie_authenticated_mutations_without_matching_header() ->
 
 #[tokio::test]
 async fn federation_read_accepts_configured_token() -> anyhow::Result<()> {
-    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
     std::env::set_var("PARACORD_FEDERATION_READ_TOKEN", "token-123");
 
@@ -308,7 +310,7 @@ async fn federation_read_accepts_configured_token() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn federation_media_token_requires_existing_room_membership() -> anyhow::Result<()> {
-    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
 
     let harness = TestHarness::new(true).await?;
@@ -402,7 +404,7 @@ async fn federation_media_token_requires_existing_room_membership() -> anyhow::R
 
 #[tokio::test]
 async fn federation_message_ingest_materializes_missing_space_and_channel() -> anyhow::Result<()> {
-    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
 
     let harness = TestHarness::new(true).await?;
@@ -533,7 +535,7 @@ async fn federation_message_ingest_materializes_missing_space_and_channel() -> a
 
 #[tokio::test]
 async fn federation_transport_rejects_unsupported_protocol_version() -> anyhow::Result<()> {
-    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
 
     let harness = TestHarness::new(true).await?;
@@ -576,7 +578,7 @@ async fn federation_transport_rejects_unsupported_protocol_version() -> anyhow::
 
 #[tokio::test]
 async fn discovery_includes_federated_guilds_when_requested() -> anyhow::Result<()> {
-    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_ALLOW_PRIVATE_FEDERATION_URLS", "true");
     let harness = TestHarness::new(true).await?;
 
@@ -783,7 +785,7 @@ async fn moderation_subscription_crud_round_trip() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn federation_ingest_does_not_collide_with_existing_local_ids() -> anyhow::Result<()> {
-    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
 
     let harness = TestHarness::new(true).await?;
@@ -937,10 +939,467 @@ async fn federation_ingest_does_not_collide_with_existing_local_ids() -> anyhow:
     Ok(())
 }
 
+/// Register a trusted federated peer plus its signing key, returning the
+/// signing key for producing envelope/transport signatures in tests.
+async fn register_signed_peer(
+    harness: &TestHarness,
+    peer_id: i64,
+    server_name: &str,
+    key_id: &str,
+) -> anyhow::Result<ed25519_dalek::SigningKey> {
+    let (signing_key, public_key_hex) = paracord_federation::signing::generate_keypair();
+    paracord_db::federation::upsert_federated_server(
+        &harness.db,
+        peer_id,
+        server_name,
+        server_name,
+        &format!("https://{server_name}/_paracord/federation/v1"),
+        Some(&public_key_hex),
+        Some(key_id),
+        true,
+    )
+    .await?;
+    let service =
+        paracord_federation::FederationService::new(paracord_federation::FederationConfig {
+            enabled: true,
+            server_name: "local.example".to_string(),
+            domain: "local.example".to_string(),
+            key_id: "ed25519:local".to_string(),
+            signing_key: None,
+            allow_discovery: false,
+        });
+    service
+        .upsert_server_key(
+            &harness.db,
+            &paracord_federation::FederationServerKey {
+                server_name: server_name.to_string(),
+                key_id: key_id.to_string(),
+                public_key: public_key_hex,
+                valid_until: chrono::Utc::now().timestamp_millis() + 600_000,
+            },
+        )
+        .await?;
+    Ok(signing_key)
+}
+
+/// Build a signed POST /event request for an envelope from `transport_origin`.
+fn signed_event_request(
+    envelope: &mut paracord_federation::FederationEventEnvelope,
+    signing_key: &ed25519_dalek::SigningKey,
+    transport_origin: &str,
+    key_id: &str,
+) -> anyhow::Result<Request<Body>> {
+    let payload_sig = paracord_federation::signing::sign(
+        signing_key,
+        &paracord_federation::canonical_envelope_bytes(envelope),
+    );
+    envelope.signatures = json!({
+        envelope.origin_server.clone(): { key_id: payload_sig },
+    });
+    let body_bytes = serde_json::to_vec(envelope)?;
+    let timestamp_ms = chrono::Utc::now().timestamp_millis();
+    let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
+        "POST",
+        "/_paracord/federation/v1/event",
+        timestamp_ms,
+        &body_bytes,
+    );
+    let transport_sig = paracord_federation::signing::sign(signing_key, &canonical);
+    Ok(Request::builder()
+        .method("POST")
+        .uri("/_paracord/federation/v1/event")
+        .header("content-type", "application/json")
+        .header("x-paracord-origin", transport_origin)
+        .header("x-paracord-key-id", key_id)
+        .header("x-paracord-timestamp", timestamp_ms.to_string())
+        .header("x-paracord-signature", transport_sig)
+        .body(Body::from(body_bytes))?)
+}
+
+/// A validly-signed peer must not be able to assert a message authored by an
+/// identity that belongs to a different server (sender-vs-origin binding).
+#[tokio::test]
+async fn federation_message_forged_sender_is_rejected() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+
+    let harness = TestHarness::new(true).await?;
+    let origin_server = "attacker.example";
+    let key_id = "ed25519:test";
+    let signing_key = register_signed_peer(&harness, 9401, origin_server, key_id).await?;
+
+    let mut envelope = paracord_federation::FederationEventEnvelope {
+        event_id: "$forged:attacker.example".to_string(),
+        room_id: "!7010:attacker.example".to_string(),
+        event_type: "m.message".to_string(),
+        // Sender claims to be a user on a DIFFERENT server than the origin.
+        sender: "@victim:trusted.example".to_string(),
+        origin_server: origin_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "body": "forged message",
+            "msgtype": "m.text",
+            "guild_id": "7010",
+            "guild_name": "Attacker Guild",
+            "channel_id": "7020",
+            "channel_name": "general",
+            "channel_type": 0,
+            "message_id": "93001",
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut envelope, &signing_key, origin_server, key_id)?;
+    // Transport/signature are valid, so ingestion is accepted at the wire level;
+    // the forged sender is dropped during dispatch and never stored.
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    // No space/channel should have been materialized and no message stored.
+    let space_mapping =
+        paracord_db::federation::get_space_mapping_by_remote(&harness.db, origin_server, "7010")
+            .await?;
+    assert!(
+        space_mapping.is_none(),
+        "forged-sender message must not materialize a space"
+    );
+    let local_msg = paracord_db::federation::get_local_message_id_by_remote(
+        &harness.db,
+        origin_server,
+        "93001",
+    )
+    .await?;
+    assert!(
+        local_msg.is_none(),
+        "forged-sender message must not be stored locally"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+/// A trusted peer that learns another server's event_id must not be able to
+/// edit or delete that message: resolution is scoped to the envelope origin and
+/// the editing sender must belong to the origin.
+#[tokio::test]
+async fn federation_cross_origin_edit_and_delete_are_rejected() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+
+    let harness = TestHarness::new(true).await?;
+    let victim_server = "victim.example";
+    let attacker_server = "attacker.example";
+    let key_id = "ed25519:test";
+    let victim_key = register_signed_peer(&harness, 9501, victim_server, key_id).await?;
+    let attacker_key = register_signed_peer(&harness, 9502, attacker_server, key_id).await?;
+
+    // Victim server sends a legitimate message.
+    let victim_event_id = "$victimmsg:victim.example";
+    let mut victim_msg = paracord_federation::FederationEventEnvelope {
+        event_id: victim_event_id.to_string(),
+        room_id: "!8010:victim.example".to_string(),
+        event_type: "m.message".to_string(),
+        sender: "@alice:victim.example".to_string(),
+        origin_server: victim_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "body": "original victim message",
+            "msgtype": "m.text",
+            "guild_id": "8010",
+            "guild_name": "Victim Guild",
+            "channel_id": "8020",
+            "channel_name": "general",
+            "channel_type": 0,
+            "message_id": "94001",
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut victim_msg, &victim_key, victim_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let local_msg_id = paracord_db::federation::get_local_message_id_by_remote(
+        &harness.db,
+        victim_server,
+        "94001",
+    )
+    .await?
+    .expect("victim message should be stored");
+    let original = paracord_db::messages::get_message(&harness.db, local_msg_id)
+        .await?
+        .expect("stored victim message");
+    assert_eq!(original.content.as_deref(), Some("original victim message"));
+
+    // Attacker, who learned the victim's event_id, tries to edit it.
+    let mut attacker_edit = paracord_federation::FederationEventEnvelope {
+        event_id: "$attackeredit:attacker.example".to_string(),
+        room_id: "!8010:victim.example".to_string(),
+        event_type: "m.message.edit".to_string(),
+        sender: "@mallory:attacker.example".to_string(),
+        origin_server: attacker_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "body": "TAMPERED by attacker",
+            "target_event_id": victim_event_id,
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut attacker_edit, &attacker_key, attacker_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let after_edit = paracord_db::messages::get_message(&harness.db, local_msg_id)
+        .await?
+        .expect("victim message still present");
+    assert_eq!(
+        after_edit.content.as_deref(),
+        Some("original victim message"),
+        "cross-origin edit must not modify another server's message"
+    );
+
+    // Attacker tries to delete the victim's message.
+    let mut attacker_delete = paracord_federation::FederationEventEnvelope {
+        event_id: "$attackerdelete:attacker.example".to_string(),
+        room_id: "!8010:victim.example".to_string(),
+        event_type: "m.message.delete".to_string(),
+        sender: "@mallory:attacker.example".to_string(),
+        origin_server: attacker_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "target_event_id": victim_event_id,
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request =
+        signed_event_request(&mut attacker_delete, &attacker_key, attacker_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let after_delete = paracord_db::messages::get_message(&harness.db, local_msg_id).await?;
+    assert!(
+        after_delete.is_some(),
+        "cross-origin delete must not remove another server's message"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+/// The origin server can legitimately edit its own message (valid-path guard).
+#[tokio::test]
+async fn federation_same_origin_edit_succeeds() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+
+    let harness = TestHarness::new(true).await?;
+    let origin_server = "victim.example";
+    let key_id = "ed25519:test";
+    let signing_key = register_signed_peer(&harness, 9601, origin_server, key_id).await?;
+
+    let event_id = "$origmsg:victim.example";
+    let mut msg = paracord_federation::FederationEventEnvelope {
+        event_id: event_id.to_string(),
+        room_id: "!8110:victim.example".to_string(),
+        event_type: "m.message".to_string(),
+        sender: "@alice:victim.example".to_string(),
+        origin_server: origin_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "body": "original",
+            "msgtype": "m.text",
+            "guild_id": "8110",
+            "guild_name": "Guild",
+            "channel_id": "8120",
+            "channel_name": "general",
+            "channel_type": 0,
+            "message_id": "95001",
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut msg, &signing_key, origin_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let local_msg_id = paracord_db::federation::get_local_message_id_by_remote(
+        &harness.db,
+        origin_server,
+        "95001",
+    )
+    .await?
+    .expect("message stored");
+
+    let mut edit = paracord_federation::FederationEventEnvelope {
+        event_id: "$origedit:victim.example".to_string(),
+        room_id: "!8110:victim.example".to_string(),
+        event_type: "m.message.edit".to_string(),
+        sender: "@alice:victim.example".to_string(),
+        origin_server: origin_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "body": "edited by origin",
+            "target_event_id": event_id,
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut edit, &signing_key, origin_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let after = paracord_db::messages::get_message(&harness.db, local_msg_id)
+        .await?
+        .expect("message present");
+    assert_eq!(
+        after.content.as_deref(),
+        Some("edited by origin"),
+        "same-origin edit should apply"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+/// /events must only serve room history to a peer that participates in the room.
+#[tokio::test]
+async fn federation_list_events_enforces_room_membership() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    std::env::remove_var("PARACORD_FEDERATION_READ_TOKEN");
+
+    let harness = TestHarness::new(true).await?;
+    let member_server = "member.example";
+    let outsider_server = "outsider.example";
+    let key_id = "ed25519:test";
+    let member_key = register_signed_peer(&harness, 9701, member_server, key_id).await?;
+    let outsider_key = register_signed_peer(&harness, 9702, outsider_server, key_id).await?;
+
+    // A room with a single event and one participating member from member.example.
+    let room_id = "!8210:local.example";
+    let owner_id = 8290;
+    paracord_db::users::create_user(
+        &harness.db,
+        owner_id,
+        "guild_owner",
+        1,
+        "owner8290@example.com",
+        "hash",
+    )
+    .await?;
+    paracord_db::guilds::create_guild(&harness.db, 8210, "Guild", owner_id, None).await?;
+    paracord_db::users::create_user(
+        &harness.db,
+        8299,
+        "member_user",
+        1,
+        "member@example.com",
+        "hash",
+    )
+    .await?;
+    paracord_db::federation::upsert_room_membership(
+        &harness.db,
+        room_id,
+        "@bob:member.example",
+        8299,
+        8210,
+    )
+    .await?;
+
+    let mut room_event = paracord_federation::FederationEventEnvelope {
+        event_id: "$roomevt:member.example".to_string(),
+        room_id: room_id.to_string(),
+        event_type: "m.message".to_string(),
+        sender: "@bob:member.example".to_string(),
+        origin_server: member_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({ "body": "room history", "msgtype": "m.text" }),
+        depth: 5,
+        state_key: None,
+        signatures: json!({}),
+    };
+    // Persist the event directly so /events has something to return.
+    let payload_sig = paracord_federation::signing::sign(
+        &member_key,
+        &paracord_federation::canonical_envelope_bytes(&room_event),
+    );
+    room_event.signatures = json!({ member_server: { key_id: payload_sig } });
+    let service =
+        paracord_federation::FederationService::new(paracord_federation::FederationConfig {
+            enabled: true,
+            server_name: "local.example".to_string(),
+            domain: "local.example".to_string(),
+            key_id: "ed25519:local".to_string(),
+            signing_key: None,
+            allow_discovery: false,
+        });
+    service.persist_event(&harness.db, &room_event).await?;
+
+    let sign_get =
+        |origin: &str, key: &ed25519_dalek::SigningKey| -> anyhow::Result<Request<Body>> {
+            let path = format!("/_paracord/federation/v1/events?room_id={room_id}");
+            let timestamp_ms = chrono::Utc::now().timestamp_millis();
+            let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
+                "GET",
+                &path,
+                timestamp_ms,
+                &[],
+            );
+            let sig = paracord_federation::signing::sign(key, &canonical);
+            Ok(Request::builder()
+                .method("GET")
+                .uri(path)
+                .header("x-paracord-origin", origin)
+                .header("x-paracord-key-id", key_id)
+                .header("x-paracord-timestamp", timestamp_ms.to_string())
+                .header("x-paracord-signature", sig)
+                .body(Body::empty())?)
+        };
+
+    // Outsider (not a member of the room) is denied.
+    let (status, _) = harness
+        .request(sign_get(outsider_server, &outsider_key)?)
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "non-participant peer must not read room history"
+    );
+
+    // Participating member gets the history.
+    let (status, body) = harness
+        .request(sign_get(member_server, &member_key)?)
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "participating peer should read room history"
+    );
+    let events = body
+        .get("events")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("events should be array"))?;
+    assert!(
+        !events.is_empty(),
+        "participating peer should receive room events"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
 #[tokio::test]
 async fn federation_room_namespace_mapping_is_used_even_when_sender_differs() -> anyhow::Result<()>
 {
-    let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
 
     let harness = TestHarness::new(true).await?;

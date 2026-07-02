@@ -243,6 +243,22 @@ pub async fn add_vote(
     Ok(())
 }
 
+pub async fn remove_vote(
+    pool: &DbPool,
+    poll_id: i64,
+    option_id: i64,
+    user_id: i64,
+) -> Result<(), DbError> {
+    sqlx::query("DELETE FROM poll_votes WHERE poll_id = $1 AND option_id = $2 AND user_id = $3")
+        .bind(poll_id)
+        .bind(option_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,20 +327,4 @@ mod tests {
         let updated = get_poll(&pool, 501, user_id).await.unwrap().unwrap();
         assert!(updated.options[0].voted);
     }
-}
-
-pub async fn remove_vote(
-    pool: &DbPool,
-    poll_id: i64,
-    option_id: i64,
-    user_id: i64,
-) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM poll_votes WHERE poll_id = $1 AND option_id = $2 AND user_id = $3")
-        .bind(poll_id)
-        .bind(option_id)
-        .bind(user_id)
-        .execute(pool)
-        .await?;
-
-    Ok(())
 }

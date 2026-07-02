@@ -50,6 +50,8 @@ function installWorkerBridgeListener(): void {
   });
 }
 
+const WORKER_BRIDGE_TIMEOUT_MS = 10_000;
+
 function workerBridgeRequest(
   op: 'get' | 'set' | 'delete',
   key: string,
@@ -58,7 +60,22 @@ function workerBridgeRequest(
   installWorkerBridgeListener();
   const id = ++workerBridgeRequestId;
   return new Promise((resolve, reject) => {
-    workerBridgePending.set(id, { resolve, reject });
+    // Without a timeout the promise hangs forever if the main thread never
+    // replies (e.g. the bridge was never wired up), stalling worker startup.
+    const timer = setTimeout(() => {
+      workerBridgePending.delete(id);
+      reject(new Error('secure storage bridge timed out'));
+    }, WORKER_BRIDGE_TIMEOUT_MS);
+    workerBridgePending.set(id, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    });
     self.postMessage({
       type: 'pc-secure-storage-request',
       id,

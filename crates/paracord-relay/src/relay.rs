@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -11,6 +12,88 @@ use paracord_transport::stream::{PublishedTrack, StreamId, TrackId, VideoCodecCa
 
 use crate::room::MediaRoomManager;
 use crate::speaker::SpeakerDetector;
+
+/// Maximum sustained media packets per second a single sender may forward.
+///
+/// The relay clones every accepted datagram to every subscriber, so an
+/// unthrottled sender amplifies proportionally to the room size. This ceiling
+/// caps a single authenticated participant's ingress. It is a per-sender rate
+/// across all of that sender's tracks (audio + simulcast video). A busy sender
+/// carrying stereo Opus at 50 pps plus several simulcast video layers stays
+/// comfortably under this; sustained traffic above it is abusive.
+const MAX_SENDER_PACKETS_PER_SECOND: f64 = 1500.0;
+
+/// Burst allowance for the sender rate limiter, expressed in packets.
+///
+/// The token bucket is allowed to accumulate up to this many tokens so brief,
+/// legitimate bursts (e.g. a video keyframe fragmented across many datagrams)
+/// are not dropped, while the long-run average is still bounded by
+/// [`MAX_SENDER_PACKETS_PER_SECOND`].
+const SENDER_RATE_BURST_PACKETS: f64 = 3000.0;
+
+/// Per-sender token-bucket packet-rate limiter keyed by `user_id`.
+///
+/// Each sender accrues tokens at [`MAX_SENDER_PACKETS_PER_SECOND`] up to a cap
+/// of [`SENDER_RATE_BURST_PACKETS`]; forwarding a packet consumes one token.
+/// When the bucket is empty the packet is dropped before fan-out.
+struct SenderRateLimiter {
+    refill_per_second: f64,
+    burst: f64,
+    buckets: DashMap<i64, TokenBucket>,
+}
+
+#[derive(Clone, Copy)]
+struct TokenBucket {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+impl SenderRateLimiter {
+    fn new(refill_per_second: f64, burst: f64) -> Self {
+        Self {
+            refill_per_second,
+            burst,
+            buckets: DashMap::new(),
+        }
+    }
+
+    /// Attempt to consume one token for `user_id` at real time `now`.
+    /// Returns `true` if the packet may be forwarded, `false` if it must be dropped.
+    fn try_acquire_at(&self, user_id: i64, now: Instant) -> bool {
+        let mut entry = self.buckets.entry(user_id).or_insert(TokenBucket {
+            tokens: self.burst,
+            last_refill: now,
+        });
+        let elapsed = now
+            .saturating_duration_since(entry.last_refill)
+            .as_secs_f64();
+        entry.tokens = (entry.tokens + elapsed * self.refill_per_second).min(self.burst);
+        entry.last_refill = now;
+        if entry.tokens >= 1.0 {
+            entry.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Attempt to consume one token for `user_id` at the current instant.
+    fn try_acquire(&self, user_id: i64) -> bool {
+        self.try_acquire_at(user_id, Instant::now())
+    }
+
+    /// Forget a sender's bucket once they disconnect.
+    fn forget(&self, user_id: i64) {
+        self.buckets.remove(&user_id);
+    }
+}
+
+/// Validate that a raw datagram's length is exactly the header plus the
+/// header-declared payload length. Malformed or oversized packets that fail
+/// this check are dropped before any fan-out.
+fn datagram_length_is_consistent(datagram_len: usize, header: &MediaHeader) -> bool {
+    datagram_len == HEADER_SIZE + header.payload_length as usize
+}
 
 /// Transport abstraction for relay connections.
 /// Raw QUIC is used for Tauri desktop and federation; channel-bridged
@@ -162,6 +245,8 @@ pub struct RelayForwarder {
     active_sessions: DashMap<i64, ActiveSessionInfo>,
     /// Speaker detector for audio level tracking.
     speaker_detector: Arc<SpeakerDetector>,
+    /// Per-sender packet-rate limiter guarding the forwarding hot path.
+    sender_rate_limiter: SenderRateLimiter,
     /// Notify signal for shutdown.
     shutdown: Notify,
 }
@@ -183,6 +268,10 @@ impl RelayForwarder {
             room_manager,
             active_sessions: DashMap::new(),
             speaker_detector,
+            sender_rate_limiter: SenderRateLimiter::new(
+                MAX_SENDER_PACKETS_PER_SECOND,
+                SENDER_RATE_BURST_PACKETS,
+            ),
             shutdown: Notify::new(),
         }
     }
@@ -248,6 +337,28 @@ impl RelayForwarder {
                     }
                 };
 
+                // Drop packets whose wire length disagrees with the header-declared
+                // payload length before any further processing or fan-out.
+                if !datagram_length_is_consistent(datagram.len(), &header) {
+                    warn!(
+                        user_id,
+                        len = datagram.len(),
+                        payload_length = header.payload_length,
+                        "relay: datagram length inconsistent with header, dropping"
+                    );
+                    continue;
+                }
+
+                // Throttle abusive senders before amplifying the packet to every
+                // subscriber. Excess packets are dropped, not queued.
+                if !forwarder.sender_rate_limiter.try_acquire(user_id) {
+                    debug!(
+                        user_id,
+                        "relay: sender rate limit exceeded, dropping datagram"
+                    );
+                    continue;
+                }
+
                 // Feed audio level to speaker detector
                 forwarder.speaker_detector.report_audio_level(
                     user_id,
@@ -261,6 +372,7 @@ impl RelayForwarder {
 
             // Clean up on disconnect
             let had_active_session = forwarder.active_sessions.remove(&user_id).is_some();
+            forwarder.sender_rate_limiter.forget(user_id);
             forwarder.remove_connection(user_id);
             if had_active_session {
                 forwarder
@@ -1022,6 +1134,94 @@ mod tests {
             &header,
             Some(&track)
         ));
+    }
+
+    #[test]
+    fn rate_limiter_drops_packets_beyond_ceiling() {
+        use std::time::Duration;
+
+        // Small deterministic bucket: 10 pps, burst of 5 tokens.
+        let limiter = SenderRateLimiter::new(10.0, 5.0);
+        let user_id = 42;
+        let start = Instant::now();
+
+        // The first 5 packets (the full burst) are accepted at t=0.
+        let mut accepted = 0;
+        for _ in 0..20 {
+            if limiter.try_acquire_at(user_id, start) {
+                accepted += 1;
+            }
+        }
+        assert_eq!(accepted, 5, "burst should cap accepted packets");
+
+        // No tokens remain until time advances.
+        assert!(!limiter.try_acquire_at(user_id, start));
+
+        // After 1 second at 10 pps, ~10 more tokens have refilled (capped at burst=5).
+        let later = start + Duration::from_secs(1);
+        let mut refilled = 0;
+        for _ in 0..20 {
+            if limiter.try_acquire_at(user_id, later) {
+                refilled += 1;
+            }
+        }
+        assert_eq!(refilled, 5, "refill is capped at the burst allowance");
+    }
+
+    #[test]
+    fn rate_limiter_is_per_sender() {
+        let limiter = SenderRateLimiter::new(1.0, 1.0);
+        let now = Instant::now();
+
+        // Each distinct sender gets its own independent bucket.
+        assert!(limiter.try_acquire_at(1, now));
+        assert!(limiter.try_acquire_at(2, now));
+        // But a second immediate packet from the same sender is dropped.
+        assert!(!limiter.try_acquire_at(1, now));
+        assert!(!limiter.try_acquire_at(2, now));
+    }
+
+    #[test]
+    fn rate_limiter_forget_resets_sender() {
+        let limiter = SenderRateLimiter::new(1.0, 1.0);
+        let now = Instant::now();
+
+        assert!(limiter.try_acquire_at(7, now));
+        assert!(!limiter.try_acquire_at(7, now));
+        limiter.forget(7);
+        // A reconnecting sender starts with a fresh full burst.
+        assert!(limiter.try_acquire_at(7, now));
+    }
+
+    #[test]
+    fn datagram_length_validation_rejects_inconsistent_payload_length() {
+        let mut header = MediaHeader {
+            version: 1,
+            track_type: paracord_transport::protocol::TrackType::Audio,
+            simulcast_layer: 0,
+            sequence: 1,
+            timestamp: 123,
+            ssrc: 55,
+            audio_level: 100,
+            key_epoch: 1,
+            payload_length: 8,
+            codec: 0,
+        };
+
+        // Exactly HEADER_SIZE + payload_length is accepted.
+        assert!(datagram_length_is_consistent(HEADER_SIZE + 8, &header));
+
+        // A datagram claiming more payload than it carries is rejected.
+        assert!(!datagram_length_is_consistent(HEADER_SIZE + 4, &header));
+        // A datagram carrying more bytes than declared is rejected (padding/amplification).
+        assert!(!datagram_length_is_consistent(HEADER_SIZE + 16, &header));
+        // A header-only datagram with a nonzero payload_length is rejected.
+        assert!(!datagram_length_is_consistent(HEADER_SIZE, &header));
+
+        // A zero-payload packet must be exactly HEADER_SIZE.
+        header.payload_length = 0;
+        assert!(datagram_length_is_consistent(HEADER_SIZE, &header));
+        assert!(!datagram_length_is_consistent(HEADER_SIZE + 1, &header));
     }
 
     #[test]

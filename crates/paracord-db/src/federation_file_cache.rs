@@ -1,4 +1,5 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_to_db_text, DbError, DbPool};
+use chrono::Utc;
 use sqlx::Row;
 
 #[derive(Debug, Clone)]
@@ -86,12 +87,11 @@ pub async fn insert_cached_file(
 }
 
 pub async fn update_cache_access_time(pool: &DbPool, id: i64) -> Result<(), DbError> {
-    sqlx::query(
-        "UPDATE federation_file_cache SET last_accessed_at = datetime('now') WHERE id = $1",
-    )
-    .bind(id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE federation_file_cache SET last_accessed_at = $2 WHERE id = $1")
+        .bind(id)
+        .bind(datetime_to_db_text(Utc::now()))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

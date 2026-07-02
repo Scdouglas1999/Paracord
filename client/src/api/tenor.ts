@@ -1,8 +1,8 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 
 export const tenorApi = {
   search: (query: string, limit = 20) =>
-    apiClient.get('/tenor/search', { params: { q: query, limit } }),
+    getApi().get('/tenor/search', { params: { q: query, limit } }),
   trending: (limit = 20) =>
-    apiClient.get('/tenor/trending', { params: { limit } }),
+    getApi().get('/tenor/trending', { params: { limit } }),
 };

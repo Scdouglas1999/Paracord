@@ -42,6 +42,37 @@ fn parse_mentions(content: &str) -> Vec<i64> {
     ids
 }
 
+/// Detects a mass-mention token (`@everyone` or `@here`) using word boundaries so
+/// that embedded occurrences such as `foo@everyone.com` or `@everyone` glued to a
+/// surrounding word do not trigger a guild-wide fan-out. A token matches only when
+/// it is preceded by the start of input or whitespace and followed by the end of
+/// input or a non-word character (anything other than an ASCII alphanumeric or `_`).
+/// Trailing sentence punctuation (`@everyone!`, `@everyone.`) is therefore a valid
+/// boundary, while a directly attached word character (`@everyoneish`) is not.
+fn contains_mass_mention(content: &str) -> bool {
+    fn is_word_char(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_'
+    }
+    for token in ["@everyone", "@here"] {
+        let mut search_start = 0;
+        while let Some(rel) = content[search_start..].find(token) {
+            let idx = search_start + rel;
+            let preceded_ok = idx == 0
+                || content[..idx]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_whitespace());
+            let after = &content[idx + token.len()..];
+            let followed_ok = after.chars().next().is_none_or(|c| !is_word_char(c));
+            if preceded_ok && followed_ok {
+                return true;
+            }
+            search_start = idx + token.len();
+        }
+    }
+    false
+}
+
 const MAX_CHANNEL_TOPIC_LEN: usize = 1_024;
 const MAX_BULK_DELETE_REQUEST_IDS: usize = 500;
 const MAX_POLL_QUESTION_LEN: usize = 300;
@@ -331,12 +362,10 @@ async fn ensure_channel_permissions(
     Ok(())
 }
 
-async fn author_to_json(state: &AppState, author_id: i64) -> Value {
-    if let Some(author) = paracord_db::users::get_user_by_id(&state.db, author_id)
-        .await
-        .ok()
-        .flatten()
-    {
+/// Build the author JSON payload from an already-fetched user row (or a fallback
+/// "Unknown" author when the row is missing).
+fn author_json_from_row(author_id: i64, author: Option<&paracord_db::users::UserRow>) -> Value {
+    if let Some(author) = author {
         json!({
             "id": author.id.to_string(),
             "username": author.username,
@@ -388,10 +417,186 @@ fn poll_to_json(poll: &paracord_db::polls::PollWithOptions) -> Value {
     })
 }
 
-pub async fn message_to_json(
+/// Per-page batch-loaded collections used to assemble message JSON without
+/// per-message queries. Every field is keyed by message id (or, for authors, by
+/// author id) so [`build_message_json`] can look up a message's data in memory.
+#[derive(Default)]
+struct MessageJsonBatch {
+    /// Author user rows keyed by author id (missing => "Unknown" fallback).
+    authors: HashMap<i64, paracord_db::users::UserRow>,
+    /// Channel rows keyed by channel id, loaded once per distinct channel.
+    channels: HashMap<i64, paracord_db::channels::ChannelRow>,
+    /// Channel feature rows keyed by channel id, loaded once per distinct channel.
+    channel_features: HashMap<i64, paracord_db::channel_features::ChannelFeatureSettingsRow>,
+    /// Anonymous-message records keyed by message id (only anonymous messages).
+    anonymous: HashMap<i64, paracord_db::anonymous_messages::AnonymousMessageRow>,
+    /// `can_deanonymize` decision for each anonymous message, keyed by message id.
+    can_deanonymize: HashMap<i64, bool>,
+    /// Attachment rows keyed by message id, preserving `upload_created_at` order.
+    attachments: HashMap<i64, Vec<paracord_db::attachments::AttachmentRow>>,
+    /// Sticker rows keyed by message id, preserving `created_at` order.
+    stickers: HashMap<i64, Vec<paracord_db::stickers::StickerRow>>,
+    /// Aggregated reaction counts keyed by message id, preserving emoji order.
+    reactions: HashMap<i64, Vec<paracord_db::reactions::BatchReactionCountRow>>,
+    /// Set of `(message_id, emoji_name)` the viewer reacted to, for the `me` flag.
+    viewer_reactions: std::collections::HashSet<(i64, String)>,
+    /// Fully assembled polls keyed by message id.
+    polls: HashMap<i64, paracord_db::polls::PollWithOptions>,
+}
+
+/// Load every per-message collection for a page of messages using a bounded,
+/// constant number of batched queries (independent of the message count).
+async fn load_message_json_batch(
     state: &AppState,
+    messages: &[paracord_db::messages::MessageRow],
+    viewer_id: i64,
+) -> MessageJsonBatch {
+    let mut batch = MessageJsonBatch::default();
+    if messages.is_empty() {
+        return batch;
+    }
+
+    let message_ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
+
+    // Authors: one query for the distinct set of author ids.
+    let mut author_ids: Vec<i64> = messages.iter().map(|m| m.author_id).collect();
+    author_ids.sort_unstable();
+    author_ids.dedup();
+    if let Ok(authors) =
+        paracord_db::messages::get_authors_for_message_ids(&state.db, &author_ids).await
+    {
+        for author in authors {
+            batch.authors.insert(author.id, author);
+        }
+    }
+
+    // Channels + channel features: one query each per distinct channel id.
+    let mut channel_ids: Vec<i64> = messages.iter().map(|m| m.channel_id).collect();
+    channel_ids.sort_unstable();
+    channel_ids.dedup();
+    for channel_id in &channel_ids {
+        if let Ok(Some(channel)) = paracord_db::channels::get_channel(&state.db, *channel_id).await
+        {
+            batch.channels.insert(*channel_id, channel);
+        }
+        if let Ok(features) =
+            paracord_db::channel_features::get_or_default(&state.db, *channel_id).await
+        {
+            batch.channel_features.insert(*channel_id, features);
+        }
+    }
+
+    // Anonymous records: one query for the whole page.
+    if let Ok(anon_rows) =
+        paracord_db::messages::get_anonymous_messages_for_message_ids(&state.db, &message_ids).await
+    {
+        for anon in anon_rows {
+            batch.anonymous.insert(anon.message_id, anon);
+        }
+    }
+    // De-anonymization permission is per (channel, viewer); resolve it once per
+    // message that is actually anonymous (typically none on a page).
+    for msg in messages {
+        if !batch.anonymous.contains_key(&msg.id) {
+            continue;
+        }
+        let mut can_deanonymize = false;
+        if let Some(channel_row) = batch.channels.get(&msg.channel_id) {
+            if let Some(guild_id) = channel_row.guild_id() {
+                if let Ok(Some(guild)) = paracord_db::guilds::get_guild(&state.db, guild_id).await {
+                    if let Ok(perms) = paracord_core::permissions::compute_channel_permissions(
+                        &state.db,
+                        guild_id,
+                        msg.channel_id,
+                        guild.owner_id,
+                        viewer_id,
+                    )
+                    .await
+                    {
+                        can_deanonymize = perms.contains(Permissions::MANAGE_MESSAGES)
+                            || perms.contains(Permissions::MANAGE_GUILD);
+                    }
+                }
+            }
+        }
+        batch.can_deanonymize.insert(msg.id, can_deanonymize);
+    }
+
+    // Attachments: one query for the whole page.
+    if let Ok(attachments) = paracord_db::attachments::get_attachments_for_message_ids(
+        &state.db,
+        &message_ids,
+        message_ids.len() as i64 * 100,
+    )
+    .await
+    {
+        for attachment in attachments {
+            // The batch query filters on `message_id IN (...)`, so every row has
+            // an owning message; skip defensively if the column is somehow NULL.
+            if let Some(message_id) = attachment.message_id {
+                batch
+                    .attachments
+                    .entry(message_id)
+                    .or_default()
+                    .push(attachment);
+            }
+        }
+    }
+
+    // Stickers: one query for the whole page.
+    if let Ok(stickers) =
+        paracord_db::messages::get_stickers_for_message_ids(&state.db, &message_ids).await
+    {
+        for row in stickers {
+            batch
+                .stickers
+                .entry(row.message_id)
+                .or_default()
+                .push(row.sticker);
+        }
+    }
+
+    // Reaction counts + the viewer's own reactions: two queries for the page.
+    if let Ok(reactions) =
+        paracord_db::reactions::get_reactions_for_message_ids(&state.db, &message_ids).await
+    {
+        for row in reactions {
+            batch.reactions.entry(row.message_id).or_default().push(row);
+        }
+    }
+    if let Ok(viewer_reactions) = paracord_db::reactions::get_viewer_reactions_for_message_ids(
+        &state.db,
+        &message_ids,
+        viewer_id,
+    )
+    .await
+    {
+        for row in viewer_reactions {
+            batch
+                .viewer_reactions
+                .insert((row.message_id, row.emoji_name));
+        }
+    }
+
+    // Polls: a bounded number of queries for any polls attached to the page.
+    if let Ok(polls) =
+        paracord_db::messages::get_polls_for_message_ids(&state.db, &message_ids, viewer_id).await
+    {
+        for (message_id, poll) in polls {
+            batch.polls.insert(message_id, poll);
+        }
+    }
+
+    batch
+}
+
+/// Assemble a single message's JSON from the pre-loaded [`MessageJsonBatch`].
+/// This is a pure, in-memory transform and issues no queries. The output is
+/// byte-stable with the pre-batch implementation.
+fn build_message_json(
     msg: &paracord_db::messages::MessageRow,
     viewer_id: i64,
+    batch: &MessageJsonBatch,
 ) -> Value {
     let is_dm_e2ee = (msg.flags & MESSAGE_FLAG_DM_E2EE) != 0;
     let e2ee_payload = if is_dm_e2ee {
@@ -419,43 +624,11 @@ pub async fn message_to_json(
         json!(msg.content)
     };
 
-    let channel = paracord_db::channels::get_channel(&state.db, msg.channel_id)
-        .await
-        .ok()
-        .flatten();
-    let channel_features = paracord_db::channel_features::get_or_default(&state.db, msg.channel_id)
-        .await
-        .ok();
-    let mut author = author_to_json(state, msg.author_id).await;
+    let mut author = author_json_from_row(msg.author_id, batch.authors.get(&msg.author_id));
 
-    let anonymous_record =
-        paracord_db::anonymous_messages::get_anonymous_message(&state.db, msg.id)
-            .await
-            .ok()
-            .flatten();
     let mut anonymous_json: Option<Value> = None;
-    if let Some(anonymous) = anonymous_record {
-        let mut can_deanonymize = false;
-        if let Some(channel_row) = channel.as_ref() {
-            if let Some(guild_id) = channel_row.guild_id() {
-                if let Ok(guild) = paracord_db::guilds::get_guild(&state.db, guild_id).await {
-                    if let Some(guild) = guild {
-                        if let Ok(perms) = paracord_core::permissions::compute_channel_permissions(
-                            &state.db,
-                            guild_id,
-                            msg.channel_id,
-                            guild.owner_id,
-                            viewer_id,
-                        )
-                        .await
-                        {
-                            can_deanonymize = perms.contains(Permissions::MANAGE_MESSAGES)
-                                || perms.contains(Permissions::MANAGE_GUILD);
-                        }
-                    }
-                }
-            }
-        }
+    if let Some(anonymous) = batch.anonymous.get(&msg.id) {
+        let can_deanonymize = batch.can_deanonymize.get(&msg.id).copied().unwrap_or(false);
         if !can_deanonymize {
             author = json!({
                 "id": format!("anon:{}:{}", anonymous.channel_id, anonymous.alias),
@@ -474,69 +647,70 @@ pub async fn message_to_json(
         }));
     }
 
-    let attachments = paracord_db::attachments::get_message_attachments(&state.db, msg.id)
-        .await
-        .unwrap_or_default();
-    let attachment_json: Vec<Value> = attachments
-        .iter()
-        .map(|a| {
-            json!({
-                "id": a.id.to_string(),
-                "filename": a.filename,
-                "size": a.size,
-                "content_type": a.content_type,
-                "url": a.url,
-                "width": a.width,
-                "height": a.height,
-            })
+    let attachment_json: Vec<Value> = batch
+        .attachments
+        .get(&msg.id)
+        .map(|attachments| {
+            attachments
+                .iter()
+                .map(|a| {
+                    json!({
+                        "id": a.id.to_string(),
+                        "filename": a.filename,
+                        "size": a.size,
+                        "content_type": a.content_type,
+                        "url": a.url,
+                        "width": a.width,
+                        "height": a.height,
+                    })
+                })
+                .collect()
         })
-        .collect();
-    let stickers = paracord_db::stickers::list_message_stickers(&state.db, msg.id)
-        .await
         .unwrap_or_default();
-    let sticker_json: Vec<Value> = stickers
-        .iter()
-        .map(|sticker| {
-            json!({
-                "id": sticker.id.to_string(),
-                "guild_id": sticker.guild_id.to_string(),
-                "name": sticker.name,
-                "description": sticker.description,
-                "format_type": sticker.format_type,
-                "image_url": sticker.asset_key.as_ref().map(|_| format!("/api/v1/guilds/{}/stickers/{}/image", sticker.guild_id, sticker.id)),
-                "asset_content_type": sticker.asset_content_type,
-                "creator_id": sticker.creator_id.map(|id| id.to_string()),
-                "created_at": sticker.created_at.to_rfc3339(),
-            })
+    let sticker_json: Vec<Value> = batch
+        .stickers
+        .get(&msg.id)
+        .map(|stickers| {
+            stickers
+                .iter()
+                .map(|sticker| {
+                    json!({
+                        "id": sticker.id.to_string(),
+                        "guild_id": sticker.guild_id.to_string(),
+                        "name": sticker.name,
+                        "description": sticker.description,
+                        "format_type": sticker.format_type,
+                        "image_url": sticker.asset_key.as_ref().map(|_| format!("/api/v1/guilds/{}/stickers/{}/image", sticker.guild_id, sticker.id)),
+                        "asset_content_type": sticker.asset_content_type,
+                        "creator_id": sticker.creator_id.map(|id| id.to_string()),
+                        "created_at": sticker.created_at.to_rfc3339(),
+                    })
+                })
+                .collect()
         })
-        .collect();
-
-    let reactions = paracord_db::reactions::get_message_reactions(&state.db, msg.id)
-        .await
         .unwrap_or_default();
-    let mut reaction_json = Vec::with_capacity(reactions.len());
-    for reaction in reactions {
-        let me = paracord_db::reactions::get_reaction_users(
-            &state.db,
-            msg.id,
-            &reaction.emoji_name,
-            1000,
-        )
-        .await
-        .map(|users| users.contains(&viewer_id))
-        .unwrap_or(false);
-        reaction_json.push(json!({
-            "emoji": reaction.emoji_name,
-            "count": reaction.count,
-            "me": me,
-        }));
-    }
 
-    let poll_json = paracord_db::polls::get_message_poll(&state.db, msg.id, viewer_id)
-        .await
-        .ok()
-        .flatten()
-        .map(|poll| poll_to_json(&poll));
+    let reaction_json: Vec<Value> = batch
+        .reactions
+        .get(&msg.id)
+        .map(|reactions| {
+            reactions
+                .iter()
+                .map(|reaction| {
+                    let me = batch
+                        .viewer_reactions
+                        .contains(&(msg.id, reaction.emoji_name.clone()));
+                    json!({
+                        "emoji": reaction.emoji_name,
+                        "count": reaction.count,
+                        "me": me,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let poll_json = batch.polls.get(&msg.id).map(poll_to_json);
 
     let embeds_value: serde_json::Value = msg
         .embeds
@@ -548,13 +722,19 @@ pub async fn message_to_json(
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(serde_json::json!([]));
-    let expires_at = channel_features
-        .as_ref()
+    let expires_at = batch
+        .channel_features
+        .get(&msg.channel_id)
         .filter(|features| features.disappearing_seconds > 0)
         .map(|features| {
             (msg.created_at + chrono::Duration::seconds(i64::from(features.disappearing_seconds)))
                 .to_rfc3339()
         });
+
+    // Note on `viewer_id`: only used above for the anonymous/reaction `me`
+    // decisions, which are pre-resolved into the batch; kept in the signature
+    // for parity with the single-message wrapper.
+    let _ = viewer_id;
 
     json!({
         "id": msg.id.to_string(),
@@ -579,6 +759,35 @@ pub async fn message_to_json(
         "anonymous": anonymous_json,
         "expires_at": expires_at,
     })
+}
+
+/// Serialize a whole page of messages to JSON, batch-loading every per-message
+/// collection up front so the endpoint issues a bounded, constant number of
+/// queries instead of the previous O(messages x reactions) fan-out.
+pub async fn messages_to_json(
+    state: &AppState,
+    messages: &[paracord_db::messages::MessageRow],
+    viewer_id: i64,
+) -> Vec<Value> {
+    if messages.is_empty() {
+        return Vec::new();
+    }
+    let batch = load_message_json_batch(state, messages, viewer_id).await;
+    messages
+        .iter()
+        .map(|msg| build_message_json(msg, viewer_id, &batch))
+        .collect()
+}
+
+/// Serialize a single message to JSON. Thin wrapper over [`messages_to_json`]
+/// with a one-element page, kept for send/edit/fetch responses.
+pub async fn message_to_json(
+    state: &AppState,
+    msg: &paracord_db::messages::MessageRow,
+    viewer_id: i64,
+) -> Value {
+    let batch = load_message_json_batch(state, std::slice::from_ref(msg), viewer_id).await;
+    build_message_json(msg, viewer_id, &batch)
 }
 
 /// Returns the IDs of channels the requesting user can see in a guild.
@@ -876,10 +1085,7 @@ pub async fn get_messages(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let mut result = Vec::new();
-    for msg in &messages {
-        result.push(message_to_json(&state, msg, auth.user_id).await);
-    }
+    let result = messages_to_json(&state, &messages, auth.user_id).await;
 
     Ok(Json(json!(result)))
 }
@@ -963,10 +1169,7 @@ pub async fn search_messages(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
     };
 
-    let mut result = Vec::with_capacity(messages.len());
-    for msg in &messages {
-        result.push(message_to_json(&state, msg, auth.user_id).await);
-    }
+    let result = messages_to_json(&state, &messages, auth.user_id).await;
     Ok(Json(json!(result)))
 }
 
@@ -1468,14 +1671,35 @@ pub async fn send_message(
                 .into_iter()
                 .filter(|&uid| uid != auth.user_id)
                 .collect();
-            if body.content.contains("@everyone") || body.content.contains("@here") {
+            if contains_mass_mention(&body.content) {
                 if let Some(gid) = guild_id {
-                    if let Ok(member_ids) =
-                        paracord_db::members::get_guild_member_user_ids(&state.db, gid).await
+                    // Only fan out @everyone/@here to the whole guild when the author
+                    // actually holds MENTION_EVERYONE in this channel. Otherwise the
+                    // text is still delivered unchanged, but the mass-mention side
+                    // effect (incrementing every member's mention count) is skipped.
+                    let can_mention_everyone = match paracord_db::guilds::get_guild(&state.db, gid)
+                        .await
                     {
-                        for mid in member_ids {
-                            if mid != auth.user_id && !all_mentioned.contains(&mid) {
-                                all_mentioned.push(mid);
+                        Ok(Some(guild)) => paracord_core::permissions::compute_channel_permissions(
+                            &state.db,
+                            gid,
+                            channel_id,
+                            guild.owner_id,
+                            auth.user_id,
+                        )
+                        .await
+                        .map(|perms| perms.contains(Permissions::MENTION_EVERYONE))
+                        .unwrap_or(false),
+                        _ => false,
+                    };
+                    if can_mention_everyone {
+                        if let Ok(member_ids) =
+                            paracord_db::members::get_guild_member_user_ids(&state.db, gid).await
+                        {
+                            for mid in member_ids {
+                                if mid != auth.user_id && !all_mentioned.contains(&mid) {
+                                    all_mentioned.push(mid);
+                                }
                             }
                         }
                     }
@@ -1580,7 +1804,7 @@ pub async fn create_poll(
     Json(body): Json<CreatePollRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let question = body.question.trim();
-    if question.is_empty() || question.len() > MAX_POLL_QUESTION_LEN {
+    if question.is_empty() || question.chars().count() > MAX_POLL_QUESTION_LEN {
         return Err(ApiError::BadRequest(
             "Poll question must be between 1 and 300 characters".into(),
         ));
@@ -1599,7 +1823,7 @@ pub async fn create_poll(
     let mut options = Vec::with_capacity(body.options.len());
     for option in &body.options {
         let text = option.text.trim();
-        if text.is_empty() || text.len() > MAX_POLL_OPTION_LEN {
+        if text.is_empty() || text.chars().count() > MAX_POLL_OPTION_LEN {
             return Err(ApiError::BadRequest(
                 "Poll options must be between 1 and 100 characters".into(),
             ));
@@ -1911,8 +2135,8 @@ pub async fn edit_message(
         mod_log::emit_mod_log(
             &state,
             gid,
-            "Message Deleted",
-            "A message was deleted by a moderator.",
+            "Message Edited",
+            "A message was edited by a moderator.",
             &[
                 ("Actor", auth.user_id.to_string()),
                 ("Channel", channel_id.to_string()),
@@ -2078,10 +2302,7 @@ pub async fn get_pins(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let mut pinned = Vec::with_capacity(messages.len());
-    for msg in &messages {
-        pinned.push(message_to_json(&state, msg, auth.user_id).await);
-    }
+    let pinned = messages_to_json(&state, &messages, auth.user_id).await;
 
     Ok(Json(json!(pinned)))
 }
@@ -2368,7 +2589,11 @@ pub async fn add_reaction(
         &state,
         &channel,
         auth.user_id,
-        &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
+        &[
+            Permissions::VIEW_CHANNEL,
+            Permissions::READ_MESSAGE_HISTORY,
+            Permissions::ADD_REACTIONS,
+        ],
     )
     .await?;
 
@@ -2550,7 +2775,7 @@ pub async fn create_thread(
     Path(channel_id): Path<i64>,
     Json(body): Json<CreateThreadRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if body.name.trim().is_empty() || body.name.len() > 100 {
+    if body.name.trim().is_empty() || body.name.trim().chars().count() > 100 {
         return Err(ApiError::BadRequest(
             "Thread name must be 1-100 characters".into(),
         ));
@@ -2757,7 +2982,7 @@ pub async fn update_thread(
     Json(body): Json<UpdateThreadRequest>,
 ) -> Result<Json<Value>, ApiError> {
     if let Some(ref name) = body.name {
-        if name.trim().is_empty() || name.len() > 100 {
+        if name.trim().is_empty() || name.trim().chars().count() > 100 {
             return Err(ApiError::BadRequest(
                 "Thread name must be 1-100 characters".into(),
             ));
@@ -2927,7 +3152,7 @@ pub async fn create_forum_post(
     Json(body): Json<CreateForumPostRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let name = body.name.trim();
-    if name.is_empty() || name.len() > 100 {
+    if name.is_empty() || name.chars().count() > 100 {
         return Err(ApiError::BadRequest(
             "Post title must be 1-100 characters".into(),
         ));
@@ -3020,7 +3245,7 @@ pub async fn create_forum_tag(
     Json(body): Json<CreateForumTagRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let name = body.name.trim();
-    if name.is_empty() || name.len() > 30 {
+    if name.is_empty() || name.chars().count() > 30 {
         return Err(ApiError::BadRequest(
             "Tag name must be 1-30 characters".into(),
         ));
@@ -3507,4 +3732,36 @@ pub async fn list_channel_follows(
         .collect();
 
     Ok(Json(json!(json_follows)))
+}
+
+#[cfg(test)]
+mod mass_mention_tests {
+    use super::contains_mass_mention;
+
+    #[test]
+    fn matches_bare_tokens() {
+        assert!(contains_mass_mention("@everyone"));
+        assert!(contains_mass_mention("@here"));
+        assert!(contains_mass_mention("hey @everyone read this"));
+        assert!(contains_mass_mention("please @here now"));
+        // Trailing punctuation is a valid boundary; the preceding side must be the
+        // start of input or whitespace.
+        assert!(contains_mass_mention("@everyone!"));
+        assert!(contains_mass_mention("meeting, @everyone."));
+    }
+
+    #[test]
+    fn ignores_embedded_occurrences() {
+        // Part of an email / domain must not trigger a mass mention.
+        assert!(!contains_mass_mention("foo@everyone.com"));
+        assert!(!contains_mass_mention("mailto:bob@here.example"));
+        // Only start-of-input or whitespace counts as a leading boundary, so a
+        // token glued to any preceding non-whitespace character is ignored.
+        assert!(!contains_mass_mention("notan@everyone"));
+        assert!(!contains_mass_mention("(@here)"));
+        // Substrings of longer words are not tokens.
+        assert!(!contains_mass_mention("@everyoneish"));
+        assert!(!contains_mass_mention("@hereafter"));
+        assert!(!contains_mass_mention("say hello to everyone"));
+    }
 }

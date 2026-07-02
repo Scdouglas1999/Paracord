@@ -324,17 +324,19 @@ pub async fn purge_expired_sessions(
     now: DateTime<Utc>,
     limit: i64,
 ) -> Result<u64, DbError> {
+    let revoked_cutoff = now - chrono::Duration::days(7);
     let result = sqlx::query(
         "DELETE FROM auth_sessions
          WHERE id IN (
              SELECT id FROM auth_sessions
              WHERE expires_at <= $1
-                OR (revoked_at IS NOT NULL AND revoked_at <= datetime($1, '-7 days'))
+                OR (revoked_at IS NOT NULL AND revoked_at <= $3)
              LIMIT $2
          )",
     )
     .bind(datetime_to_db_text(now))
     .bind(limit)
+    .bind(datetime_to_db_text(revoked_cutoff))
     .execute(pool)
     .await?;
     Ok(result.rows_affected())

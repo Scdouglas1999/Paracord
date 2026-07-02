@@ -655,7 +655,7 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
 
     // Wait for IDENTIFY (timeout 30s)
     let identify_timeout = Duration::from_secs(30);
-    let (session, resumed, requested_seq) = match tokio::time::timeout(
+    let (mut session, resumed, requested_seq) = match tokio::time::timeout(
         identify_timeout,
         wait_for_identify_or_resume(&mut receiver, &state),
     )
@@ -914,10 +914,15 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
         let guild_results = futures_util::future::join_all(guild_futures).await;
         let guilds_json: Vec<Value> = guild_results.into_iter().flatten().collect();
 
+        // Consume a sequence number for READY so it doesn't collide with the
+        // first dispatched event.  READY becomes s=1, the first real event s=2,
+        // keeping every dispatched sequence unique and monotonic (otherwise the
+        // first event would reuse s=1 and be silently dropped on resume).
+        let ready_seq = session.next_sequence();
         let ready = json!({
             "op": OP_DISPATCH,
             "t": EVENT_READY,
-            "s": session.sequence.max(1),
+            "s": ready_seq,
             "d": {
                 "user": user_json,
                 "guilds": guilds_json,
@@ -933,7 +938,7 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
             "ready",
             Some(OP_DISPATCH),
             Some(EVENT_READY),
-            Some(session.sequence.max(1)),
+            Some(ready_seq),
         )
         .await
         .is_err()
@@ -2072,14 +2077,14 @@ async fn handle_client_message(
                                 "ciphertext": encrypted_key.ciphertext,
                             },
                         });
-                        // Dispatch scoped to the guild
-                        state.event_bus.dispatch(
+                        // Deliver each per-recipient encrypted key only to its
+                        // intended recipient.  A guild-scoped dispatch would leak
+                        // every participant's per-recipient ciphertext to every
+                        // session in the guild.
+                        state.event_bus.dispatch_to_users(
                             EVENT_MEDIA_KEY_DELIVER,
-                            json!({
-                                "target_user_id": encrypted_key.recipient_user_id,
-                                "payload": deliver,
-                            }),
-                            vs.guild_id(),
+                            deliver,
+                            vec![encrypted_key.recipient_user_id],
                         );
                     }
                 }

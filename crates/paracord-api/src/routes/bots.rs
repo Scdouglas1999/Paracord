@@ -675,7 +675,24 @@ pub async fn oauth2_authorize(
         }
     }
 
-    let effective_permissions = requested_permissions.unwrap_or(app.permissions);
+    // Cap the granted permissions to the intersection of what was requested (or
+    // the application default) and what the authorizing user actually holds in
+    // this guild. A user must never be able to grant a bot more power than they
+    // possess themselves.
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let authorizer_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let authorizer_bits = paracord_core::permissions::compute_permissions_from_roles(
+        &authorizer_roles,
+        guild.owner_id,
+        auth.user_id,
+    )
+    .bits();
+    let effective_permissions = requested_permissions.unwrap_or(app.permissions) & authorizer_bits;
     let _ = paracord_db::bot_applications::add_bot_to_guild(
         &state.db,
         app_id,

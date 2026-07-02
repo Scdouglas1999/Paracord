@@ -21,6 +21,10 @@ mod tls;
 const PUBLIC_IP_DETECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const PUBLIC_IP_DETECTION_BODY_LIMIT: usize = 128;
 
+/// Bounded grace period granted to background workers to drain their current
+/// batch after shutdown is signalled, before the process tears down.
+const WORKER_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 fn parse_detected_public_ip(text: &str) -> Option<String> {
     let ip = text.trim();
     if ip.is_empty() || ip.parse::<std::net::IpAddr>().is_err() {
@@ -739,7 +743,12 @@ async fn main() -> Result<()> {
         &voice_status,
     );
 
-    // Graceful shutdown on ctrl-c or API-triggered restart
+    // Graceful shutdown on ctrl-c / ctrl-break.
+    //
+    // The API-triggered restart path is intentionally unwired: the
+    // `admin::restart_update` endpoint is permanently disabled for security
+    // (it returns Forbidden and never signals shutdown), so no in-process
+    // caller fires `shutdown_notify`. Only OS signals initiate shutdown here.
     let shutdown_notify_http = shutdown_notify.clone();
     let shutdown_signal_http = async move {
         #[cfg(windows)]
@@ -755,23 +764,29 @@ async fn main() -> Result<()> {
                     println!();
                     tracing::info!("Shutting down (ctrl-break)...");
                 }
-                _ = shutdown_notify_http.notified() => {
-                    tracing::info!("Shutting down (restart requested via API)...");
-                }
             }
         }
         #[cfg(not(windows))]
         {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    println!();
-                    tracing::info!("Shutting down (ctrl-c)...");
-                }
-                _ = shutdown_notify_http.notified() => {
-                    tracing::info!("Shutting down (restart requested via API)...");
-                }
-            }
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install ctrl-c signal handler");
+            println!();
+            tracing::info!("Shutting down (ctrl-c)...");
         }
+
+        // Signal every background worker (retention, backups, federation
+        // delivery, scheduled/disappearing messages, bot manager, rate-limit
+        // and attachment cleanup, ...) to stop. They all park on
+        // `shutdown.notified()` inside their select loops, so a single
+        // `notify_waiters()` wakes all of them at once.
+        shutdown_notify_http.notify_waiters();
+
+        // Give workers a bounded grace period to finish the current iteration
+        // (e.g. a retention or backup batch already in flight) before we return
+        // and let axum tear down the HTTP servers.
+        tokio::time::sleep(WORKER_SHUTDOWN_GRACE).await;
+
         if let Some(mut lk) = managed_livekit {
             lk.kill().await;
         }

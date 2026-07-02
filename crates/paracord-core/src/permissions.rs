@@ -148,6 +148,57 @@ pub async fn ensure_guild_member(
     Ok(())
 }
 
+/// Apply a channel's permission overwrites on top of a member's base
+/// permissions, following Discord precedence:
+/// base -> @everyone overwrite -> combined role overwrites -> member overwrite.
+///
+/// `role_ids` is the set of role ids the member holds; `guild_id` doubles as
+/// the id of the @everyone role.  This is the single source of truth used by
+/// both the single-channel and batch permission paths so the two cannot
+/// diverge.
+fn apply_overwrites(
+    base: Permissions,
+    role_ids: &std::collections::HashSet<i64>,
+    guild_id: i64,
+    user_id: i64,
+    overwrites: &[paracord_db::channel_overwrites::ChannelOverwriteRow],
+) -> Permissions {
+    let mut perms = base;
+
+    // @everyone role overwrite (target_id == guild_id)
+    if let Some(everyone) = overwrites
+        .iter()
+        .find(|o| o.target_type == OVERWRITE_TARGET_ROLE && o.target_id == guild_id)
+    {
+        perms &= !Permissions::from_bits_truncate(everyone.deny_perms);
+        perms |= Permissions::from_bits_truncate(everyone.allow_perms);
+    }
+
+    // Combined role overwrites for the roles the member holds.
+    let mut role_deny = Permissions::empty();
+    let mut role_allow = Permissions::empty();
+    for overwrite in overwrites
+        .iter()
+        .filter(|o| o.target_type == OVERWRITE_TARGET_ROLE && role_ids.contains(&o.target_id))
+    {
+        role_deny |= Permissions::from_bits_truncate(overwrite.deny_perms);
+        role_allow |= Permissions::from_bits_truncate(overwrite.allow_perms);
+    }
+    perms &= !role_deny;
+    perms |= role_allow;
+
+    // Member-specific overwrite (highest precedence).
+    if let Some(member_ow) = overwrites
+        .iter()
+        .find(|o| o.target_type == OVERWRITE_TARGET_MEMBER && o.target_id == user_id)
+    {
+        perms &= !Permissions::from_bits_truncate(member_ow.deny_perms);
+        perms |= Permissions::from_bits_truncate(member_ow.allow_perms);
+    }
+
+    perms
+}
+
 /// If the user is a bot account, intersect the given permissions with the
 /// bot's install-time permissions for the guild.  Returns the capped
 /// permissions, or the original permissions unchanged for non-bot users.
@@ -157,11 +208,35 @@ pub async fn cap_bot_install_permissions(
     user_id: i64,
     perms: Permissions,
 ) -> Result<Permissions, CoreError> {
-    let user = paracord_db::users::get_user_by_id(pool, user_id).await?;
-    let Some(user) = user else {
-        return Ok(perms);
+    cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, None).await
+}
+
+/// Like [`cap_bot_install_permissions`], but accepts an optional `is_bot`
+/// hint so hot paths that already know the account type (or know the caller is
+/// an ordinary human) can skip the `get_user_by_id` round-trip entirely.
+///
+/// - `Some(false)`: known non-bot, return `perms` unchanged with no DB access.
+/// - `Some(true)`: known bot, skip the user lookup and go straight to the
+///   install-permission cap.
+/// - `None`: unknown, fall back to loading the user to determine bot status.
+async fn cap_bot_install_permissions_hinted(
+    pool: &DbPool,
+    guild_id: i64,
+    user_id: i64,
+    perms: Permissions,
+    is_bot: Option<bool>,
+) -> Result<Permissions, CoreError> {
+    let is_bot = match is_bot {
+        Some(false) => return Ok(perms),
+        Some(true) => true,
+        None => {
+            let Some(user) = paracord_db::users::get_user_by_id(pool, user_id).await? else {
+                return Ok(perms);
+            };
+            crate::is_bot(user.flags)
+        }
     };
-    if !crate::is_bot(user.flags) {
+    if !is_bot {
         return Ok(perms);
     }
     // Look up the bot's install-time permissions for this guild
@@ -203,41 +278,7 @@ pub async fn compute_channel_permissions(
 
     let overwrites =
         paracord_db::channel_overwrites::get_channel_overwrites(pool, channel_id).await?;
-    if overwrites.is_empty() {
-        return cap_bot_install_permissions(pool, guild_id, user_id, perms).await;
-    }
-
-    if let Some(everyone) = overwrites
-        .iter()
-        .find(|o| o.target_type == OVERWRITE_TARGET_ROLE && o.target_id == guild_id)
-    {
-        let deny = Permissions::from_bits_truncate(everyone.deny_perms);
-        let allow = Permissions::from_bits_truncate(everyone.allow_perms);
-        perms &= !deny;
-        perms |= allow;
-    }
-
-    let mut role_deny = Permissions::empty();
-    let mut role_allow = Permissions::empty();
-    for overwrite in overwrites
-        .iter()
-        .filter(|o| o.target_type == OVERWRITE_TARGET_ROLE && role_ids.contains(&o.target_id))
-    {
-        role_deny |= Permissions::from_bits_truncate(overwrite.deny_perms);
-        role_allow |= Permissions::from_bits_truncate(overwrite.allow_perms);
-    }
-    perms &= !role_deny;
-    perms |= role_allow;
-
-    if let Some(member_ow) = overwrites
-        .iter()
-        .find(|o| o.target_type == OVERWRITE_TARGET_MEMBER && o.target_id == user_id)
-    {
-        let deny = Permissions::from_bits_truncate(member_ow.deny_perms);
-        let allow = Permissions::from_bits_truncate(member_ow.allow_perms);
-        perms &= !deny;
-        perms |= allow;
-    }
+    let perms = apply_overwrites(perms, &role_ids, guild_id, user_id, &overwrites);
 
     cap_bot_install_permissions(pool, guild_id, user_id, perms).await
 }
@@ -290,59 +331,38 @@ pub async fn compute_all_channel_permissions(
             .push(ow);
     }
 
+    // Determine bot status once for the whole batch so the per-channel bot cap
+    // does not issue a `get_user_by_id` round-trip for each channel. Bots are
+    // rare on this path, so the single lookup is cheap and, more importantly,
+    // keeps the batch result identical to the single-channel path.
+    let is_bot = match paracord_db::users::get_user_by_id(pool, user_id).await? {
+        Some(user) => crate::is_bot(user.flags),
+        None => false,
+    };
+
     // Compute permissions per channel
     let mut result = HashMap::with_capacity(channels.len());
     for channel in channels {
-        let mut perms = base_perms;
-
         // Check required_role_ids
         let required_role_ids =
             paracord_db::channels::parse_required_role_ids(&channel.required_role_ids);
-        if !required_role_ids.is_empty()
+        let perms = if !required_role_ids.is_empty()
             && !required_role_ids.iter().any(|id| role_ids.contains(id))
         {
+            let mut perms = base_perms;
             perms.remove(Permissions::VIEW_CHANNEL);
-            result.insert(channel.id, perms);
-            continue;
-        }
+            perms
+        } else {
+            let empty = Vec::new();
+            let overwrites = overwrites_by_channel.get(&channel.id).unwrap_or(&empty);
+            apply_overwrites(base_perms, &role_ids, guild_id, user_id, overwrites)
+        };
 
-        // Apply overwrites
-        let overwrites = overwrites_by_channel.get(&channel.id);
-        if let Some(overwrites) = overwrites {
-            // @everyone role overwrite
-            if let Some(everyone) = overwrites
-                .iter()
-                .find(|o| o.target_type == OVERWRITE_TARGET_ROLE && o.target_id == guild_id)
-            {
-                let deny = Permissions::from_bits_truncate(everyone.deny_perms);
-                let allow = Permissions::from_bits_truncate(everyone.allow_perms);
-                perms &= !deny;
-                perms |= allow;
-            }
-
-            // Role overwrites
-            let mut role_deny = Permissions::empty();
-            let mut role_allow = Permissions::empty();
-            for overwrite in overwrites.iter().filter(|o| {
-                o.target_type == OVERWRITE_TARGET_ROLE && role_ids.contains(&o.target_id)
-            }) {
-                role_deny |= Permissions::from_bits_truncate(overwrite.deny_perms);
-                role_allow |= Permissions::from_bits_truncate(overwrite.allow_perms);
-            }
-            perms &= !role_deny;
-            perms |= role_allow;
-
-            // Member overwrite
-            if let Some(member_ow) = overwrites
-                .iter()
-                .find(|o| o.target_type == OVERWRITE_TARGET_MEMBER && o.target_id == user_id)
-            {
-                let deny = Permissions::from_bits_truncate(member_ow.deny_perms);
-                let allow = Permissions::from_bits_truncate(member_ow.allow_perms);
-                perms &= !deny;
-                perms |= allow;
-            }
-        }
+        // Apply the bot install-permission cap consistently with the
+        // single-channel path (this was previously omitted in the batch path).
+        let perms =
+            cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, Some(is_bot))
+                .await?;
 
         result.insert(channel.id, perms);
     }
@@ -463,5 +483,387 @@ mod tests {
         let roles: Vec<RoleRow> = vec![];
         let perms = compute_permissions_from_roles(&roles, 99, 1);
         assert_eq!(perms, Permissions::empty());
+    }
+
+    // ── apply_overwrites: table-driven precedence tests ──────────────────────
+
+    use paracord_db::channel_overwrites::ChannelOverwriteRow;
+    use std::collections::HashSet;
+
+    const GUILD_ID: i64 = 100; // doubles as the @everyone role id
+    const USER_ID: i64 = 7;
+
+    fn ow(
+        target_id: i64,
+        target_type: i16,
+        allow: Permissions,
+        deny: Permissions,
+    ) -> ChannelOverwriteRow {
+        ChannelOverwriteRow {
+            channel_id: 1,
+            target_id,
+            target_type,
+            allow_perms: allow.bits(),
+            deny_perms: deny.bits(),
+        }
+    }
+
+    fn role_set(ids: &[i64]) -> HashSet<i64> {
+        ids.iter().copied().collect()
+    }
+
+    #[test]
+    fn apply_overwrites_precedence_table() {
+        let view = Permissions::VIEW_CHANNEL;
+        let send = Permissions::SEND_MESSAGES;
+        let react = Permissions::ADD_REACTIONS;
+
+        struct Case {
+            name: &'static str,
+            base: Permissions,
+            roles: Vec<i64>,
+            overwrites: Vec<ChannelOverwriteRow>,
+            expected: Permissions,
+        }
+
+        let role_a = 200_i64;
+
+        let cases = vec![
+            Case {
+                name: "no overwrites returns base unchanged",
+                base: view | send,
+                roles: vec![role_a],
+                overwrites: vec![],
+                expected: view | send,
+            },
+            Case {
+                name: "@everyone deny is applied",
+                base: view | send,
+                roles: vec![role_a],
+                overwrites: vec![ow(
+                    GUILD_ID,
+                    OVERWRITE_TARGET_ROLE,
+                    Permissions::empty(),
+                    send,
+                )],
+                expected: view,
+            },
+            Case {
+                name: "@everyone allow grants a bit not in base",
+                base: view,
+                roles: vec![role_a],
+                overwrites: vec![ow(
+                    GUILD_ID,
+                    OVERWRITE_TARGET_ROLE,
+                    react,
+                    Permissions::empty(),
+                )],
+                expected: view | react,
+            },
+            Case {
+                name: "role allow overrides @everyone deny",
+                base: view,
+                roles: vec![role_a],
+                overwrites: vec![
+                    ow(GUILD_ID, OVERWRITE_TARGET_ROLE, Permissions::empty(), send),
+                    ow(role_a, OVERWRITE_TARGET_ROLE, send, Permissions::empty()),
+                ],
+                expected: view | send,
+            },
+            Case {
+                name: "member overwrite overrides role overwrite",
+                base: view,
+                roles: vec![role_a],
+                overwrites: vec![
+                    ow(role_a, OVERWRITE_TARGET_ROLE, send, Permissions::empty()),
+                    ow(USER_ID, OVERWRITE_TARGET_MEMBER, Permissions::empty(), send),
+                ],
+                expected: view,
+            },
+            Case {
+                name: "member allow is the final word",
+                base: Permissions::empty(),
+                roles: vec![role_a],
+                overwrites: vec![
+                    ow(GUILD_ID, OVERWRITE_TARGET_ROLE, Permissions::empty(), view),
+                    ow(role_a, OVERWRITE_TARGET_ROLE, Permissions::empty(), send),
+                    ow(
+                        USER_ID,
+                        OVERWRITE_TARGET_MEMBER,
+                        view | send,
+                        Permissions::empty(),
+                    ),
+                ],
+                expected: view | send,
+            },
+            Case {
+                name: "overwrite for a role the member lacks is ignored",
+                base: view,
+                roles: vec![role_a],
+                overwrites: vec![ow(999, OVERWRITE_TARGET_ROLE, send, Permissions::empty())],
+                expected: view,
+            },
+        ];
+
+        for case in cases {
+            let got = apply_overwrites(
+                case.base,
+                &role_set(&case.roles),
+                GUILD_ID,
+                USER_ID,
+                &case.overwrites,
+            );
+            assert_eq!(got, case.expected, "case failed: {}", case.name);
+        }
+    }
+
+    // ── DB-backed precedence + single/batch parity ───────────────────────────
+
+    use paracord_db::DbPool;
+
+    async fn mem_pool() -> DbPool {
+        let pool = paracord_db::create_pool("sqlite::memory:", 1)
+            .await
+            .expect("create in-memory pool");
+        paracord_db::run_migrations(&pool)
+            .await
+            .expect("run migrations");
+        pool
+    }
+
+    /// Build a guild owned by `owner_id`, a channel, a member `user_id` with a
+    /// single role granting `role_perms`, and the supplied channel overwrites.
+    /// Returns (guild_id, channel_id, role_id).
+    async fn seed_guild(
+        pool: &DbPool,
+        owner_id: i64,
+        user_id: i64,
+        user_flags: i32,
+        role_perms: i64,
+        required_role_ids: Option<&str>,
+        overwrites: &[(i64, i16, Permissions, Permissions)],
+    ) -> (i64, i64, i64) {
+        let guild_id = 100;
+        let channel_id = 500;
+        let role_id = 300;
+
+        paracord_db::users::create_user(pool, owner_id, "owner", 1, "owner@x", "h")
+            .await
+            .unwrap();
+        paracord_db::users::create_user(pool, user_id, "member", 2, "member@x", "h")
+            .await
+            .unwrap();
+        if user_flags != 0 {
+            paracord_db::users::update_user_flags(pool, user_id, user_flags)
+                .await
+                .unwrap();
+        }
+        paracord_db::guilds::create_guild(pool, guild_id, "g", owner_id, None)
+            .await
+            .unwrap();
+        paracord_db::members::add_member(pool, user_id, guild_id)
+            .await
+            .unwrap();
+        paracord_db::roles::create_role(pool, role_id, guild_id, "r", role_perms)
+            .await
+            .unwrap();
+        paracord_db::roles::add_member_role(pool, user_id, guild_id, role_id)
+            .await
+            .unwrap();
+        paracord_db::channels::create_channel(
+            pool,
+            channel_id,
+            guild_id,
+            "c",
+            0,
+            0,
+            None,
+            required_role_ids,
+        )
+        .await
+        .unwrap();
+        for (target_id, target_type, allow, deny) in overwrites {
+            paracord_db::channel_overwrites::upsert_channel_overwrite(
+                pool,
+                channel_id,
+                *target_id,
+                *target_type,
+                allow.bits(),
+                deny.bits(),
+            )
+            .await
+            .unwrap();
+        }
+        (guild_id, channel_id, role_id)
+    }
+
+    async fn batch_perms(
+        pool: &DbPool,
+        guild_id: i64,
+        channel_id: i64,
+        owner_id: i64,
+        user_id: i64,
+    ) -> Permissions {
+        let channel = paracord_db::channels::get_channel(pool, channel_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let map = compute_all_channel_permissions(pool, guild_id, &[channel], owner_id, user_id)
+            .await
+            .unwrap();
+        *map.get(&channel_id).unwrap()
+    }
+
+    #[tokio::test]
+    async fn single_and_batch_parity_with_overwrites() {
+        let pool = mem_pool().await;
+        let owner_id = 1;
+        let user_id = 7;
+        let role_perms = (Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES).bits();
+        let (guild_id, channel_id, role_id) = seed_guild(
+            &pool,
+            owner_id,
+            user_id,
+            0,
+            role_perms,
+            None,
+            &[
+                // @everyone denies SEND (@everyone role id == guild id == 100)
+                (
+                    100,
+                    OVERWRITE_TARGET_ROLE,
+                    Permissions::empty(),
+                    Permissions::SEND_MESSAGES,
+                ),
+            ],
+        )
+        .await;
+        // Re-grant SEND via the member's role overwrite (role wins over @everyone).
+        paracord_db::channel_overwrites::upsert_channel_overwrite(
+            &pool,
+            channel_id,
+            role_id,
+            OVERWRITE_TARGET_ROLE,
+            Permissions::SEND_MESSAGES.bits(),
+            Permissions::empty().bits(),
+        )
+        .await
+        .unwrap();
+
+        let single = compute_channel_permissions(&pool, guild_id, channel_id, owner_id, user_id)
+            .await
+            .unwrap();
+        let batch = batch_perms(&pool, guild_id, channel_id, owner_id, user_id).await;
+
+        assert_eq!(single, batch, "single and batch results must match");
+        assert!(single.contains(Permissions::VIEW_CHANNEL));
+        assert!(single.contains(Permissions::SEND_MESSAGES));
+    }
+
+    #[tokio::test]
+    async fn required_role_removes_view_channel_in_both_paths() {
+        let pool = mem_pool().await;
+        let owner_id = 1;
+        let user_id = 7;
+        let role_perms = (Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES).bits();
+        // Require a role the member does NOT hold (id 999).
+        let (guild_id, channel_id, _role_id) =
+            seed_guild(&pool, owner_id, user_id, 0, role_perms, Some("[999]"), &[]).await;
+
+        let single = compute_channel_permissions(&pool, guild_id, channel_id, owner_id, user_id)
+            .await
+            .unwrap();
+        let batch = batch_perms(&pool, guild_id, channel_id, owner_id, user_id).await;
+
+        assert_eq!(single, batch);
+        assert!(!single.contains(Permissions::VIEW_CHANNEL));
+    }
+
+    #[tokio::test]
+    async fn bot_install_cap_applies_in_both_paths() {
+        let pool = mem_pool().await;
+        let owner_id = 1;
+        let bot_user_id = 7;
+        let bot_app_id = 900;
+        // Role grants VIEW + SEND + MANAGE_MESSAGES.
+        let role_perms =
+            (Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES | Permissions::MANAGE_MESSAGES)
+                .bits();
+        let (guild_id, channel_id, _role_id) = seed_guild(
+            &pool,
+            owner_id,
+            bot_user_id,
+            crate::USER_FLAG_BOT,
+            role_perms,
+            None,
+            &[],
+        )
+        .await;
+
+        // Register the bot application and install it with a permission cap of
+        // VIEW_CHANNEL only. The effective permission must be capped to VIEW.
+        paracord_db::bot_applications::create_bot_application(
+            &pool,
+            bot_app_id,
+            "bot",
+            None,
+            owner_id,
+            bot_user_id,
+            "tokenhash",
+            None,
+            Permissions::VIEW_CHANNEL.bits(),
+        )
+        .await
+        .unwrap();
+        paracord_db::bot_applications::add_bot_to_guild(
+            &pool,
+            bot_app_id,
+            guild_id,
+            owner_id,
+            Permissions::VIEW_CHANNEL.bits(),
+        )
+        .await
+        .unwrap();
+
+        let single =
+            compute_channel_permissions(&pool, guild_id, channel_id, owner_id, bot_user_id)
+                .await
+                .unwrap();
+        let batch = batch_perms(&pool, guild_id, channel_id, owner_id, bot_user_id).await;
+
+        assert_eq!(single, batch, "bot cap must be identical in both paths");
+        assert_eq!(
+            single,
+            Permissions::VIEW_CHANNEL,
+            "bot must be capped to its install permissions"
+        );
+    }
+
+    #[tokio::test]
+    async fn uninstalled_bot_denied_in_both_paths() {
+        let pool = mem_pool().await;
+        let owner_id = 1;
+        let bot_user_id = 7;
+        let role_perms = (Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES).bits();
+        // Bot user with roles but NO bot_application/install row => denied all.
+        let (guild_id, channel_id, _role_id) = seed_guild(
+            &pool,
+            owner_id,
+            bot_user_id,
+            crate::USER_FLAG_BOT,
+            role_perms,
+            None,
+            &[],
+        )
+        .await;
+
+        let single =
+            compute_channel_permissions(&pool, guild_id, channel_id, owner_id, bot_user_id)
+                .await
+                .unwrap();
+        let batch = batch_perms(&pool, guild_id, channel_id, owner_id, bot_user_id).await;
+
+        assert_eq!(single, batch);
+        assert_eq!(single, Permissions::empty());
     }
 }

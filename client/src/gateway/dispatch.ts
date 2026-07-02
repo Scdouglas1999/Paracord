@@ -26,6 +26,8 @@ interface ReadyGuildPayload extends Partial<Guild> {
   presences?: Presence[];
 }
 
+type EmojiRef = string | { name?: string | null; id?: string | null };
+
 type GatewayDispatchData = Partial<Message> &
   Partial<Guild> &
   Partial<Channel> &
@@ -34,9 +36,28 @@ type GatewayDispatchData = Partial<Message> &
     guilds?: ReadyGuildPayload[];
     ids?: string[];
     message_id?: string;
-    emoji?: string | { name?: string };
+    emoji?: EmojiRef;
     poll?: unknown;
   };
+
+/**
+ * Resolve a reaction emoji to its stable reaction key. Unicode emoji arrive as
+ * a bare string; custom emoji arrive as `{ id, name }`. Custom emoji are keyed
+ * by id (names are not unique per guild); unicode emoji are keyed by name.
+ * Returns `undefined` when neither is present so callers can skip the event.
+ */
+export function resolveEmojiKey(emoji: EmojiRef | undefined): string | undefined {
+  if (emoji == null) return undefined;
+  if (typeof emoji === 'string') return emoji || undefined;
+  if (emoji.id) return emoji.id;
+  if (emoji.name) return emoji.name;
+  return undefined;
+}
+
+function warnDispatchParseFailure(event: string, reason: string): void {
+  // Redacted: never log payload contents, only the event name and cause.
+  console.warn(`[gateway] dropping malformed ${event} payload: ${reason}`);
+}
 
 export function dispatchGatewayEvent(serverId: string, event: string, data: GatewayDispatchData): void {
   switch (event) {
@@ -50,12 +71,23 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
 
       const readyGuildIds: string[] = [];
       data.guilds?.forEach((g) => {
+        // id and owner_id are required. Fabricating them (e.g. owner_id: '')
+        // briefly flips owner-only UI to the wrong state, so skip the guild and
+        // let the REST fetch supply an authoritative copy instead of guessing.
+        if (!g?.id) {
+          warnDispatchParseFailure('READY', 'guild missing id');
+          return;
+        }
+        if (!g.owner_id) {
+          warnDispatchParseFailure('READY', 'guild missing owner_id');
+          return;
+        }
         readyGuildIds.push(g.id);
         const normalizedGuild: Guild = {
           ...(g as Guild),
           id: g.id,
+          owner_id: g.owner_id,
           name: g.name ?? 'Unnamed Server',
-          owner_id: g.owner_id ?? '',
           created_at: g.created_at ?? new Date().toISOString(),
           member_count: g.member_count ?? 0,
           features: g.features ?? [],
@@ -69,7 +101,10 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         const guildChannels = g.channels ?? [];
         if (guildChannels.length > 0) {
           guildChannels.forEach((c) => {
-            if (!c.id) return;
+            if (!c.id) {
+              warnDispatchParseFailure('READY', 'channel missing id');
+              return;
+            }
             useChannelStore.getState().addChannel({
               ...c,
               id: c.id,
@@ -277,11 +312,16 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
 
     case GatewayEvents.MESSAGE_REACTION_ADD: {
       if (!data.channel_id || !data.message_id || !data.user_id) break;
+      const emojiKey = resolveEmojiKey(data.emoji);
+      if (!emojiKey) {
+        warnDispatchParseFailure('MESSAGE_REACTION_ADD', 'missing emoji');
+        break;
+      }
       const currentUserId = useAuthStore.getState().user?.id || '';
       useMessageStore.getState().handleReactionAdd(
         data.channel_id,
         data.message_id,
-        (typeof data.emoji === 'object' && data.emoji ? data.emoji.name : data.emoji) as string,
+        emojiKey,
         data.user_id,
         currentUserId
       );
@@ -289,11 +329,16 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
     }
     case GatewayEvents.MESSAGE_REACTION_REMOVE: {
       if (!data.channel_id || !data.message_id || !data.user_id) break;
+      const emojiKey = resolveEmojiKey(data.emoji);
+      if (!emojiKey) {
+        warnDispatchParseFailure('MESSAGE_REACTION_REMOVE', 'missing emoji');
+        break;
+      }
       const currentUserId2 = useAuthStore.getState().user?.id || '';
       useMessageStore.getState().handleReactionRemove(
         data.channel_id,
         data.message_id,
-        (typeof data.emoji === 'object' && data.emoji ? data.emoji.name : data.emoji) as string,
+        emojiKey,
         data.user_id,
         currentUserId2
       );
@@ -318,9 +363,19 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       }
       break;
 
-    case GatewayEvents.USER_UPDATE:
-      useAuthStore.getState().fetchUser();
+    case GatewayEvents.USER_UPDATE: {
+      // USER_UPDATE fans out for every guild member. Only react when it targets
+      // the current user, and apply the payload directly when present to avoid
+      // a /users/@me round-trip on each member's update.
+      const currentUserId = useAuthStore.getState().user?.id;
+      if (!currentUserId || data.user?.id !== currentUserId) break;
+      if (data.user) {
+        useAuthStore.setState({ user: data.user });
+      } else {
+        void useAuthStore.getState().fetchUser();
+      }
       break;
+    }
 
     case GatewayEvents.RELATIONSHIP_ADD:
     case GatewayEvents.RELATIONSHIP_REMOVE:

@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 
 export interface StageInstance {
   id: string;
@@ -22,20 +22,20 @@ export interface UpdateStageInstanceRequest {
 
 export const stageApi = {
   getForChannel: (channelId: string) =>
-    apiClient.get<StageInstance>(`/channels/${channelId}/stage-instance`),
+    getApi().get<StageInstance>(`/channels/${channelId}/stage-instance`),
 
   create: (data: CreateStageInstanceRequest) =>
-    apiClient.post<StageInstance>('/stage-instances', data),
+    getApi().post<StageInstance>('/stage-instances', data),
 
   update: (stageId: string, data: UpdateStageInstanceRequest) =>
-    apiClient.patch<StageInstance>(`/stage-instances/${stageId}`, data),
+    getApi().patch<StageInstance>(`/stage-instances/${stageId}`, data),
 
-  remove: (stageId: string) => apiClient.delete(`/stage-instances/${stageId}`),
+  remove: (stageId: string) => getApi().delete(`/stage-instances/${stageId}`),
 
   inviteSpeaker: (stageId: string, userId: string) =>
-    apiClient.post(`/stage-instances/${stageId}/speakers/${userId}`),
+    getApi().post(`/stage-instances/${stageId}/speakers/${userId}`),
 
   removeSpeaker: (stageId: string, userId: string) =>
-    apiClient.delete(`/stage-instances/${stageId}/speakers/${userId}`),
+    getApi().delete(`/stage-instances/${stageId}/speakers/${userId}`),
 };
 

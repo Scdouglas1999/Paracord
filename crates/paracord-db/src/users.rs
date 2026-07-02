@@ -1,4 +1,7 @@
-use crate::{bool_from_any_row, datetime_from_db_text, json_from_db_text, DbError, DbPool};
+use crate::{
+    bool_from_any_row, datetime_from_db_text, datetime_to_db_text, json_from_db_text, DbError,
+    DbPool,
+};
 use chrono::{DateTime, Utc};
 use paracord_models::id::UserId;
 use sqlx::Row;
@@ -398,7 +401,7 @@ pub async fn update_user_typed(
     avatar_hash: Option<&str>,
 ) -> Result<UserRow, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "UPDATE users SET display_name = COALESCE($2, display_name), bio = COALESCE($3, bio), avatar_hash = COALESCE($4, avatar_hash), updated_at = datetime('now')
+        "UPDATE users SET display_name = COALESCE($2, display_name), bio = COALESCE($3, bio), avatar_hash = COALESCE($4, avatar_hash), updated_at = $5
          WHERE id = $1
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
     )
@@ -406,6 +409,7 @@ pub async fn update_user_typed(
     .bind(display_name)
     .bind(bio)
     .bind(avatar_hash)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -459,12 +463,13 @@ pub async fn update_user_flags_typed(
     flags: i32,
 ) -> Result<UserRow, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "UPDATE users SET flags = $2, updated_at = datetime('now')
+        "UPDATE users SET flags = $2, updated_at = $3
          WHERE id = $1
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
     )
     .bind(id)
     .bind(flags)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -581,7 +586,7 @@ pub async fn upsert_user_settings_typed(
             crypto_auth_enabled = COALESCE($6, user_settings.crypto_auth_enabled),
             notifications = COALESCE($7, user_settings.notifications),
             keybinds = COALESCE($8, user_settings.keybinds),
-            updated_at = datetime('now')
+            updated_at = $9
          RETURNING user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, notifications, keybinds, updated_at",
     )
     .bind(user_id)
@@ -592,6 +597,7 @@ pub async fn upsert_user_settings_typed(
     .bind(crypto_auth_enabled)
     .bind(notifications)
     .bind(keybinds)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -631,12 +637,13 @@ pub async fn update_user_public_key_typed(
     public_key: &str,
 ) -> Result<UserRow, DbError> {
     let row = sqlx::query_as::<_, UserRow>(
-        "UPDATE users SET public_key = $2, updated_at = datetime('now')
+        "UPDATE users SET public_key = $2, updated_at = $3
          WHERE id = $1
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
     )
     .bind(id)
     .bind(public_key)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -659,11 +666,12 @@ pub async fn update_user_password_hash_typed(
 ) -> Result<(), DbError> {
     sqlx::query(
         "UPDATE users
-         SET password_hash = $2, updated_at = datetime('now')
+         SET password_hash = $2, updated_at = $3
          WHERE id = $1",
     )
     .bind(id)
     .bind(password_hash)
+    .bind(datetime_to_db_text(Utc::now()))
     .execute(pool)
     .await?;
     Ok(())
@@ -687,12 +695,13 @@ pub async fn update_user_email_typed(
     let normalized_email = normalize_email(email);
     let row = sqlx::query_as::<_, UserRow>(
         "UPDATE users
-         SET email = $2, updated_at = datetime('now')
+         SET email = $2, updated_at = $3
          WHERE id = $1
          RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
     )
     .bind(id)
     .bind(normalized_email)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -701,6 +710,41 @@ pub async fn update_user_email_typed(
 /// Raw i64 shim kept for API compat.
 pub async fn update_user_email(pool: &DbPool, id: i64, email: &str) -> Result<UserRow, DbError> {
     update_user_email_typed(pool, UserId::new(id), email).await
+}
+
+/// Update a user's email and mark it unverified in a single statement.
+///
+/// Used when a user changes their email address: the new address has not been
+/// proven to belong to the account, so `email_verified` must be reset to false.
+/// Core implementation using newtype ID.
+pub async fn update_user_email_unverified_typed(
+    pool: &DbPool,
+    id: UserId,
+    email: &str,
+) -> Result<UserRow, DbError> {
+    let normalized_email = normalize_email(email);
+    let row = sqlx::query_as::<_, UserRow>(
+        "UPDATE users
+         SET email = $2, email_verified = $3, updated_at = $4
+         WHERE id = $1
+         RETURNING id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified",
+    )
+    .bind(id)
+    .bind(normalized_email)
+    .bind(false)
+    .bind(datetime_to_db_text(Utc::now()))
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn update_user_email_unverified(
+    pool: &DbPool,
+    id: i64,
+    email: &str,
+) -> Result<UserRow, DbError> {
+    update_user_email_unverified_typed(pool, UserId::new(id), email).await
 }
 
 pub async fn get_user_by_public_key(
@@ -885,9 +929,10 @@ pub async fn set_email_verified_typed(
     user_id: UserId,
     verified: bool,
 ) -> Result<(), DbError> {
-    sqlx::query("UPDATE users SET email_verified = $2, updated_at = datetime('now') WHERE id = $1")
+    sqlx::query("UPDATE users SET email_verified = $2, updated_at = $3 WHERE id = $1")
         .bind(user_id)
         .bind(verified)
+        .bind(datetime_to_db_text(Utc::now()))
         .execute(pool)
         .await?;
     Ok(())
@@ -1410,6 +1455,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(updated.email, "new@example.com");
+    }
+
+    #[tokio::test]
+    async fn test_update_user_email_unverified_clears_verified() {
+        let pool = test_pool().await;
+        create_user_typed(
+            &pool,
+            UserId::new(81),
+            "verifieduser",
+            1,
+            "old2@example.com",
+            "h",
+        )
+        .await
+        .unwrap();
+        set_email_verified_typed(&pool, UserId::new(81), true)
+            .await
+            .unwrap();
+        let before = get_user_by_id_typed(&pool, UserId::new(81))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(before.email_verified);
+
+        let updated =
+            update_user_email_unverified_typed(&pool, UserId::new(81), "New2@Example.com")
+                .await
+                .unwrap();
+        assert_eq!(updated.email, "new2@example.com");
+        assert!(
+            !updated.email_verified,
+            "email_verified must be cleared after email change"
+        );
     }
 
     #[tokio::test]

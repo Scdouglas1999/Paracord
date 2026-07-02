@@ -10,42 +10,60 @@
 // below MUST produce identical ciphertext for the same inputs.
 // AES-128-GCM is deterministic for identical (key, nonce, plaintext, AAD).
 //
-// Nonce layout: SSRC (4 bytes BE) || epoch (1 byte) || sequence (2 bytes BE) || 5 zero bytes = 12 bytes
+// Nonce layout (authoritative spec: crates/paracord-codec/src/crypto.rs build_nonce):
+//   Offset 0..4  : SSRC     — u32 big-endian
+//   Offset 4     : epoch    — u8
+//   Offset 5..7  : sequence — u16 big-endian (low 16 packet bits)
+//   Offset 7..11 : ROC      — u32 big-endian (rollover counter)
+//   Offset 11    : 0x00     — reserved
+// The full 48-bit packet index is (roc << 16) | sequence. The sender increments
+// the ROC each time the 16-bit sequence wraps; the receiver reconstructs it with
+// SRTP-style index estimation (RFC 3711 §3.3.1). For a fresh stream ROC is 0, so
+// the first-wrap nonces below have four trailing zero ROC bytes plus one reserved
+// zero byte (5 zero bytes total), matching the legacy layout when ROC == 0.
 // AAD: the full 16-byte MediaHeader
 // Output: ciphertext || 16-byte GCM authentication tag
 //
-// --- Vector 1: Standard voice frame ---
+// --- Vector 1: Standard voice frame (ROC = 0) ---
 //   Key:       000102030405060708090a0b0c0d0e0f
 //   SSRC:      0xDEADBEEF
 //   Epoch:     1
 //   Sequence:  1
-//   Nonce:     deadbeef 01 0001 0000000000
+//   Nonce:     deadbeef 01 0001 00000000 00
 //   Header:    80000100 0003c0de adbeef7f 01003c00
 //   Plaintext: "Hello, voice data!" (UTF-8, 18 bytes)
 //   Expected:  c9611e22e84a7843baeea950f4874840d7de76e45bab8f2dc788366fe73643bb62f5
 //   (18 bytes ciphertext + 16 bytes tag = 34 bytes)
 //
-// --- Vector 2: Empty payload (tag-only) ---
+// --- Vector 2: Empty payload (tag-only, ROC = 0) ---
 //   Key:       000102030405060708090a0b0c0d0e0f
 //   SSRC:      0xDEADBEEF
 //   Epoch:     1
 //   Sequence:  0
-//   Nonce:     deadbeef 01 0000 0000000000
+//   Nonce:     deadbeef 01 0000 00000000 00
 //   Header:    80000100 0003c0de adbeef7f 01003c00
 //   Plaintext: (empty, 0 bytes)
 //   Expected:  e4ee5cfea6b77f20fcb4d7c719b1f0a4
 //   (0 bytes ciphertext + 16 bytes tag = 16 bytes)
 //
-// --- Vector 3: Different key/epoch/SSRC ---
+// --- Vector 3: Different key/epoch/SSRC (ROC = 0) ---
 //   Key:       ffffffffffffffffffffffffffffffff
 //   SSRC:      0x11223344
 //   Epoch:     5
 //   Sequence:  10
-//   Nonce:     11223344 05 000a 0000000000
+//   Nonce:     11223344 05 000a 00000000 00
 //   Header:    8000 0a00 00078011 22334464 05000400
 //   Plaintext: 00010203 (4 bytes)
 //   Expected:  81c292b9fd8c98a87d786ee1f5698993b50ae66d
 //   (4 bytes ciphertext + 16 bytes tag = 20 bytes)
+//
+// --- Vector 4: Non-zero ROC (post-wrap nonce, ROC = 1) ---
+//   Key:       000102030405060708090a0b0c0d0e0f
+//   SSRC:      0xDEADBEEF
+//   Epoch:     1
+//   Sequence:  0
+//   ROC:       1
+//   Nonce:     deadbeef 01 0000 00000001 00
 // ================================================================
 
 /** Callback type for key distribution events. */
@@ -58,11 +76,56 @@ export type KeyDistributionCallback = (
 /** Callback type for key rotation notifications. */
 export type KeyRotationCallback = (reason: 'join' | 'leave', userId: string) => void;
 
+/** Highest 48-bit packet index observed for a stream, decomposed into ROC + sequence. */
+interface RocState {
+  roc: number;
+  seq: number;
+}
+
+/**
+ * SRTP-style estimation of the rollover counter for a received sequence number.
+ *
+ * Mirrors `estimate_roc` in crates/paracord-codec/src/crypto.rs (RFC 3711
+ * §3.3.1). Given the highest packet index observed so far (`refRoc`, `refSeq`)
+ * and a freshly observed 16-bit `seq`, return whichever of `refRoc - 1`,
+ * `refRoc`, or `refRoc + 1` yields the 48-bit index closest to the reference,
+ * so late/reordered packets straddling a wrap boundary reconstruct the correct
+ * ROC. The ROC is treated as an unsigned 32-bit counter.
+ */
+function estimateRoc(refRoc: number, refSeq: number, seq: number): number {
+  const refIndex = refRoc * 0x1_0000 + refSeq;
+  let bestRoc = refRoc;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  const candidates = [
+    refRoc === 0 ? 0xffff_ffff : refRoc - 1,
+    refRoc,
+    refRoc === 0xffff_ffff ? 0 : refRoc + 1,
+  ];
+  for (const candidate of candidates) {
+    // Skip the impossible underflow candidate when refRoc == 0.
+    if (refRoc === 0 && candidate === 0xffff_ffff) {
+      continue;
+    }
+    const index = candidate * 0x1_0000 + seq;
+    const delta = Math.abs(index - refIndex);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestRoc = candidate;
+    }
+  }
+  return bestRoc;
+}
+
 export class SenderKeyManager {
   private localKey: CryptoKey | null = null;
   private localEpoch = 0;
   private localRawKey: Uint8Array | null = null;
   private peerKeys: Map<string, CryptoKey> = new Map(); // "ssrc:epoch" -> key
+  // Rollover-counter state keyed by "ssrc:epoch". Send state tracks the last
+  // sequence we emitted (incrementing the ROC on each wrap); receive state
+  // tracks the highest authenticated index seen (for SRTP index estimation).
+  private sendRocState: Map<string, RocState> = new Map();
+  private recvRocState: Map<string, RocState> = new Map();
   private participantIds: Set<string> = new Set();
   private onKeyDistribution: KeyDistributionCallback | null = null;
   private onKeyRotation: KeyRotationCallback | null = null;
@@ -168,9 +231,17 @@ export class SenderKeyManager {
 
   /** Remove all stored peer keys for a given SSRC (all epochs). */
   removePeerKeys(ssrc: number): void {
+    const prefix = `${ssrc}:`;
     for (const key of this.peerKeys.keys()) {
-      if (key.startsWith(`${ssrc}:`)) {
+      if (key.startsWith(prefix)) {
         this.peerKeys.delete(key);
+      }
+    }
+    // Drop the receive-side rollover-counter window for this stream so a later
+    // re-key on the same SSRC starts a fresh estimation baseline.
+    for (const key of this.recvRocState.keys()) {
+      if (key.startsWith(prefix)) {
+        this.recvRocState.delete(key);
       }
     }
   }
@@ -187,8 +258,12 @@ export class SenderKeyManager {
 
   /**
    * Encrypt a media frame payload.
-   * Nonce (12 bytes): SSRC (4) || epoch (1) || sequence (2) || 5 zero bytes
+   * Nonce (12 bytes): SSRC (4 BE) || epoch (1) || sequence (2 BE) || ROC (4 BE) || 1 zero byte
    * AAD: the 16-byte MediaHeader
+   *
+   * Frames MUST be submitted in send order for a given (ssrc, epoch) stream so
+   * that sequence wraps are detected and the rollover counter advances,
+   * widening the effective packet counter to 48 bits and preventing nonce reuse.
    */
   async encrypt(
     header: Uint8Array,
@@ -200,7 +275,9 @@ export class SenderKeyManager {
     if (!this.localKey) {
       throw new Error('No local sender key generated');
     }
-    const iv = this.buildNonce(ssrc, epoch, sequence);
+    const seq = sequence & 0xffff;
+    const roc = this.nextRoc(ssrc, epoch, seq);
+    const iv = this.buildNonce(ssrc, epoch, seq, roc);
     const ciphertext = await crypto.subtle.encrypt(
       {
         name: 'AES-GCM',
@@ -216,6 +293,12 @@ export class SenderKeyManager {
   /**
    * Decrypt a received media frame payload.
    * Uses the peer's sender key identified by SSRC + epoch.
+   *
+   * The rollover counter is reconstructed from the observed 16-bit sequence via
+   * SRTP index estimation (see {@link estimateRoc}), so wrapped/reordered
+   * packets still decrypt. The reference window is only advanced on a
+   * successful (authenticated) decrypt, so forged sequence numbers cannot move
+   * it.
    */
   async decrypt(
     header: Uint8Array,
@@ -228,7 +311,11 @@ export class SenderKeyManager {
     if (!peerKey) {
       throw new Error(`No sender key for SSRC ${ssrc} epoch ${epoch}`);
     }
-    const iv = this.buildNonce(ssrc, epoch, sequence);
+    const seq = sequence & 0xffff;
+    const stateKey = `${ssrc}:${epoch}`;
+    const ref = this.recvRocState.get(stateKey);
+    const roc = ref ? estimateRoc(ref.roc, ref.seq, seq) : 0;
+    const iv = this.buildNonce(ssrc, epoch, seq, roc);
     const plaintext = await crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
@@ -238,6 +325,12 @@ export class SenderKeyManager {
       peerKey,
       payload.buffer as ArrayBuffer,
     );
+    // Only advance the reference window on a verified decrypt, and only when
+    // this packet's 48-bit index is newer than the current reference.
+    const index = roc * 0x1_0000 + seq;
+    if (!ref || index > ref.roc * 0x1_0000 + ref.seq) {
+      this.recvRocState.set(stateKey, { roc, seq });
+    }
     return new Uint8Array(plaintext);
   }
 
@@ -272,16 +365,41 @@ export class SenderKeyManager {
   }
 
   /**
-   * Build a 12-byte nonce for AES-GCM.
-   * Layout: SSRC (4 bytes BE) || epoch (1 byte) || sequence (2 bytes BE) || 5 zero bytes
+   * Advance and return the send-side rollover counter for a stream.
+   *
+   * Mirrors `FrameEncryptor::next_roc` in crates/paracord-codec/src/crypto.rs:
+   * the first packet of a stream establishes ROC 0, and the ROC increments
+   * (wrapping at 2^32) whenever the 16-bit sequence goes backwards relative to
+   * the previously emitted one. `<` (not `<=`) is used so retransmitting the
+   * same sequence in send order does not bump the ROC.
    */
-  private buildNonce(ssrc: number, epoch: number, sequence: number): Uint8Array {
+  private nextRoc(ssrc: number, epoch: number, sequence: number): number {
+    const stateKey = `${ssrc}:${epoch}`;
+    const state = this.sendRocState.get(stateKey);
+    if (!state) {
+      this.sendRocState.set(stateKey, { roc: 0, seq: sequence });
+      return 0;
+    }
+    if (sequence < state.seq) {
+      state.roc = (state.roc + 1) >>> 0;
+    }
+    state.seq = sequence;
+    return state.roc;
+  }
+
+  /**
+   * Build a 12-byte nonce for AES-GCM.
+   * Layout (authoritative: crates/paracord-codec/src/crypto.rs build_nonce):
+   *   SSRC (4 BE) || epoch (1) || sequence (2 BE) || ROC (4 BE) || 1 zero byte
+   */
+  private buildNonce(ssrc: number, epoch: number, sequence: number, roc: number): Uint8Array {
     const nonce = new Uint8Array(12);
     const view = new DataView(nonce.buffer as ArrayBuffer);
     view.setUint32(0, ssrc, false);
     nonce[4] = epoch & 0xff;
-    view.setUint16(5, sequence, false);
-    // bytes 7-11 remain zero
+    view.setUint16(5, sequence & 0xffff, false);
+    view.setUint32(7, roc >>> 0, false);
+    // byte 11 remains zero (reserved)
     return nonce;
   }
 }

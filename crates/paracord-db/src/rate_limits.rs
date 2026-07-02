@@ -1,4 +1,5 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_to_db_text, DbError, DbPool};
+use chrono::Utc;
 
 const MAX_AUTH_GUARD_KEYS: usize = 32;
 const AUTH_GUARD_LOCK_THRESHOLD: i64 = 5;
@@ -22,16 +23,17 @@ pub async fn increment_window_counter(
 ) -> Result<i64, DbError> {
     let row: (i64,) = sqlx::query_as(
         "INSERT INTO rate_limit_counters (bucket_key, window_start, window_seconds, count, updated_at)
-         VALUES ($1, $2, $3, 1, datetime('now'))
+         VALUES ($1, $2, $3, 1, $4)
          ON CONFLICT(bucket_key, window_start) DO UPDATE SET
             count = rate_limit_counters.count + 1,
-            updated_at = datetime('now'),
+            updated_at = $4,
             window_seconds = excluded.window_seconds
          RETURNING count",
     )
     .bind(bucket_key)
     .bind(window_start)
     .bind(window_seconds)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row.0)

@@ -1,4 +1,4 @@
-use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -217,7 +217,7 @@ pub async fn update_bot_application(
             redirect_uri = COALESCE($4, redirect_uri),
             permissions = COALESCE($5, permissions),
             intents = COALESCE($6, intents),
-            updated_at = datetime('now')
+            updated_at = $7
          WHERE id = $1
          RETURNING {BOT_APP_SELECT_COLS}"
     );
@@ -228,6 +228,7 @@ pub async fn update_bot_application(
         .bind(redirect_uri)
         .bind(permissions)
         .bind(intents)
+        .bind(datetime_to_db_text(Utc::now()))
         .fetch_one(pool)
         .await?;
     Ok(row)
@@ -251,13 +252,14 @@ pub async fn regenerate_bot_token(
     new_token_hash: &str,
 ) -> Result<BotApplicationRow, DbError> {
     let sql = format!(
-        "UPDATE bot_applications SET token_hash = $2, updated_at = datetime('now')
+        "UPDATE bot_applications SET token_hash = $2, updated_at = $3
          WHERE id = $1
          RETURNING {BOT_APP_SELECT_COLS}"
     );
     let row = sqlx::query_as::<_, BotApplicationRow>(&sql)
         .bind(id)
         .bind(new_token_hash)
+        .bind(datetime_to_db_text(Utc::now()))
         .fetch_one(pool)
         .await?;
     Ok(row)
@@ -297,10 +299,11 @@ pub async fn add_bot_to_guild(
          SET install_count = (
             SELECT COUNT(*) FROM bot_guild_installs WHERE bot_app_id = $1
          ),
-             updated_at = datetime('now')
+             updated_at = $2
          WHERE id = $1",
     )
     .bind(bot_app_id)
+    .bind(datetime_to_db_text(Utc::now()))
     .execute(pool)
     .await?;
     Ok(row)
@@ -321,10 +324,11 @@ pub async fn remove_bot_from_guild(
          SET install_count = (
             SELECT COUNT(*) FROM bot_guild_installs WHERE bot_app_id = $1
          ),
-             updated_at = datetime('now')
+             updated_at = $2
          WHERE id = $1",
     )
     .bind(bot_app_id)
+    .bind(datetime_to_db_text(Utc::now()))
     .execute(pool)
     .await?;
     Ok(())
@@ -409,13 +413,13 @@ pub async fn list_store_bots(
     match (q, cat) {
         (None, None) => {
             let (total,) = sqlx::query_as::<_, (i64,)>(
-                "SELECT COUNT(*) FROM bot_applications WHERE public_listed = 1",
+                "SELECT COUNT(*) FROM bot_applications WHERE public_listed = TRUE",
             )
             .fetch_one(pool)
             .await?;
             let rows = sqlx::query_as::<_, BotStoreRow>(
                 "SELECT id, name, description, bot_user_id, permissions, category, tags, icon_hash, install_count \
-                 FROM bot_applications WHERE public_listed = 1 \
+                 FROM bot_applications WHERE public_listed = TRUE \
                  ORDER BY install_count DESC, id ASC LIMIT $1 OFFSET $2",
             )
             .bind(limit)
@@ -428,14 +432,14 @@ pub async fn list_store_bots(
             let pattern = format!("%{q}%");
             let (total,) = sqlx::query_as::<_, (i64,)>(
                 "SELECT COUNT(*) FROM bot_applications \
-                 WHERE public_listed = 1 AND (name LIKE $1 OR description LIKE $1)",
+                 WHERE public_listed = TRUE AND (name LIKE $1 OR description LIKE $1)",
             )
             .bind(&pattern)
             .fetch_one(pool)
             .await?;
             let rows = sqlx::query_as::<_, BotStoreRow>(
                 "SELECT id, name, description, bot_user_id, permissions, category, tags, icon_hash, install_count \
-                 FROM bot_applications WHERE public_listed = 1 AND (name LIKE $3 OR description LIKE $3) \
+                 FROM bot_applications WHERE public_listed = TRUE AND (name LIKE $3 OR description LIKE $3) \
                  ORDER BY install_count DESC, id ASC LIMIT $1 OFFSET $2",
             )
             .bind(limit)
@@ -447,14 +451,14 @@ pub async fn list_store_bots(
         }
         (None, Some(cat)) => {
             let (total,) = sqlx::query_as::<_, (i64,)>(
-                "SELECT COUNT(*) FROM bot_applications WHERE public_listed = 1 AND category = $1",
+                "SELECT COUNT(*) FROM bot_applications WHERE public_listed = TRUE AND category = $1",
             )
             .bind(cat)
             .fetch_one(pool)
             .await?;
             let rows = sqlx::query_as::<_, BotStoreRow>(
                 "SELECT id, name, description, bot_user_id, permissions, category, tags, icon_hash, install_count \
-                 FROM bot_applications WHERE public_listed = 1 AND category = $3 \
+                 FROM bot_applications WHERE public_listed = TRUE AND category = $3 \
                  ORDER BY install_count DESC, id ASC LIMIT $1 OFFSET $2",
             )
             .bind(limit)
@@ -468,7 +472,7 @@ pub async fn list_store_bots(
             let pattern = format!("%{q}%");
             let (total,) = sqlx::query_as::<_, (i64,)>(
                 "SELECT COUNT(*) FROM bot_applications \
-                 WHERE public_listed = 1 AND (name LIKE $1 OR description LIKE $1) AND category = $2",
+                 WHERE public_listed = TRUE AND (name LIKE $1 OR description LIKE $1) AND category = $2",
             )
             .bind(&pattern)
             .bind(cat)
@@ -476,7 +480,7 @@ pub async fn list_store_bots(
             .await?;
             let rows = sqlx::query_as::<_, BotStoreRow>(
                 "SELECT id, name, description, bot_user_id, permissions, category, tags, icon_hash, install_count \
-                 FROM bot_applications WHERE public_listed = 1 \
+                 FROM bot_applications WHERE public_listed = TRUE \
                  AND (name LIKE $3 OR description LIKE $3) AND category = $4 \
                  ORDER BY install_count DESC, id ASC LIMIT $1 OFFSET $2",
             )
@@ -495,7 +499,7 @@ pub async fn list_store_bots(
 pub async fn list_featured_bots(pool: &DbPool, limit: i64) -> Result<Vec<BotStoreRow>, DbError> {
     let rows = sqlx::query_as::<_, BotStoreRow>(
         "SELECT id, name, description, bot_user_id, permissions, category, tags, icon_hash, install_count \
-         FROM bot_applications WHERE public_listed = 1 \
+         FROM bot_applications WHERE public_listed = TRUE \
          ORDER BY install_count DESC, id ASC \
          LIMIT $1",
     )
@@ -509,7 +513,7 @@ pub async fn list_featured_bots(pool: &DbPool, limit: i64) -> Result<Vec<BotStor
 pub async fn list_store_categories(pool: &DbPool) -> Result<Vec<String>, DbError> {
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT category FROM bot_applications \
-         WHERE public_listed = 1 AND category IS NOT NULL AND category != '' \
+         WHERE public_listed = TRUE AND category IS NOT NULL AND category != '' \
          ORDER BY category ASC",
     )
     .fetch_all(pool)

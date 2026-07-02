@@ -1,10 +1,14 @@
 #![allow(dead_code)]
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use axum::{
     body::{to_bytes, Body},
+    extract::ConnectInfo,
     http::{header, Method, Request, StatusCode},
+    middleware::{from_fn, Next},
     Router,
 };
 use chrono::{Duration, Utc};
@@ -165,7 +169,30 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
             .build(),
     };
 
-    let app = paracord_api::build_router().with_state(state);
+    // The HTTP rate limiter is a process-global keyed on the peer IP. Test
+    // requests carry no `ConnectInfo`, so without this every test app would
+    // share the "unknown" bucket and collectively trip the global limit when
+    // the suite runs in parallel. Stamp each app with a distinct client IP so
+    // its rate-limit buckets are isolated (mirroring distinct real clients). A
+    // request that already carries an explicit `ConnectInfo` (e.g. a test that
+    // pins a specific peer address) is left untouched.
+    static TEST_CLIENT_SEQ: AtomicU32 = AtomicU32::new(1);
+    let client_addr = SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::from(
+            0x0a00_0000 | (TEST_CLIENT_SEQ.fetch_add(1, Ordering::Relaxed) & 0x00ff_ffff),
+        )),
+        0,
+    );
+    let app = paracord_api::build_router()
+        .with_state(state)
+        .layer(from_fn(
+            move |mut req: Request<Body>, next: Next| async move {
+                if req.extensions().get::<ConnectInfo<SocketAddr>>().is_none() {
+                    req.extensions_mut().insert(ConnectInfo(client_addr));
+                }
+                next.run(req).await
+            },
+        ));
     Ok(TestApp {
         app,
         db,

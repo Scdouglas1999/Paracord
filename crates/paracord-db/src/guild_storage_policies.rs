@@ -1,4 +1,5 @@
-use crate::{DbError, DbPool};
+use crate::{datetime_to_db_text, DbError, DbPool};
+use chrono::Utc;
 use sqlx::Row;
 
 #[derive(Debug, Clone)]
@@ -54,14 +55,14 @@ pub async fn upsert_guild_storage_policy(
     let row = sqlx::query_as::<_, GuildStoragePolicyRow>(
         "INSERT INTO guild_storage_policies
             (guild_id, max_file_size, storage_quota, retention_days, allowed_types, blocked_types, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, datetime('now'))
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT(guild_id) DO UPDATE SET
             max_file_size = excluded.max_file_size,
             storage_quota = excluded.storage_quota,
             retention_days = excluded.retention_days,
             allowed_types = excluded.allowed_types,
             blocked_types = excluded.blocked_types,
-            updated_at = datetime('now')
+            updated_at = $7
          RETURNING guild_id, max_file_size, storage_quota, retention_days,
                    allowed_types, blocked_types, updated_at",
     )
@@ -71,6 +72,7 @@ pub async fn upsert_guild_storage_policy(
     .bind(retention_days)
     .bind(allowed_types)
     .bind(blocked_types)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)

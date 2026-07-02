@@ -97,14 +97,18 @@ pub async fn get_webhook_by_id_and_token(
     id: i64,
     token: &str,
 ) -> Result<Option<WebhookRow>, DbError> {
+    // `create_webhook` persists only the SHA-256 hash of the token, never the
+    // raw value, so authentication compares against the normalized hash alone.
+    // Any legacy rows that stored a plaintext token would need a one-off
+    // migration to re-hash them; we do not fall back to a raw-token comparison
+    // because that would let a stolen ciphertext-equal-to-plaintext row through.
     let token_hash = normalize_token_hash(token);
     let row = sqlx::query_as::<_, WebhookRow>(
         "SELECT id, space_id, channel_id, creator_id, name, token, github_secret, created_at
-         FROM webhooks WHERE id = $1 AND (token = $2 OR token = $3)",
+         FROM webhooks WHERE id = $1 AND token = $2",
     )
     .bind(id)
     .bind(token_hash)
-    .bind(token)
     .fetch_optional(pool)
     .await?;
     Ok(row)

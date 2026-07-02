@@ -44,6 +44,10 @@ const mockAccountSession = vi.hoisted(() => ({
   withUnlockedPrivateKey: vi.fn(),
 }));
 
+const mockAuthUser = vi.hoisted((): { value: { id: string } | null } => ({
+  value: { id: 'u1' },
+}));
+
 vi.mock('./toastStore', () => ({ toast: mockToast }));
 
 vi.mock('./pollStore', () => ({
@@ -66,6 +70,12 @@ vi.mock('./channelStore', () => ({
 vi.mock('../lib/dmE2ee', () => mockDmE2ee);
 
 vi.mock('../lib/accountSession', () => mockAccountSession);
+
+vi.mock('./authStore', () => ({
+  useAuthStore: {
+    getState: () => ({ user: mockAuthUser.value }),
+  },
+}));
 
 vi.mock('../api/channels', () => ({ channelApi: mockChannelApi }));
 
@@ -124,10 +134,12 @@ describe('messageStore', () => {
     vi.mocked(hasUnlockedPrivateKey).mockReturnValue(false);
     vi.mocked(withUnlockedPrivateKey).mockReset();
     vi.mocked(encryptDmMessageV2).mockReset();
+    mockAuthUser.value = { id: 'u1' };
     useMessageStore.setState({
       messages: {},
       hasMore: {},
       loading: {},
+      messageErrors: {},
       pins: {},
       decryptingIds: new Set<string>(),
     });
@@ -438,6 +450,79 @@ describe('messageStore', () => {
       useMessageStore.getState().handleReactionRemove('ch1', 'm1', '👍', 'u2', 'u1');
       const reactions = useMessageStore.getState().messages['ch1'][0].reactions;
       expect(reactions).toHaveLength(0);
+    });
+  });
+
+  describe('reaction double-count reconciliation', () => {
+    it('does not double-count the actor own reaction on gateway echo', async () => {
+      const msg = makeMessage({ id: 'm1', reactions: [] });
+      useMessageStore.setState({ messages: { ch1: [msg] } });
+      mockChannelApi.addReaction.mockResolvedValue({});
+
+      // Optimistic add by the current user (u1).
+      await useMessageStore.getState().addReaction('ch1', 'm1', '👍');
+      // Gateway echoes the actor's own MESSAGE_REACTION_ADD.
+      useMessageStore.getState().handleReactionAdd('ch1', 'm1', '👍', 'u1', 'u1');
+
+      const reactions = useMessageStore.getState().messages['ch1'][0].reactions as Array<{
+        emoji: string;
+        count: number;
+        me: boolean;
+      }>;
+      expect(reactions).toHaveLength(1);
+      expect(reactions[0].count).toBe(1);
+      expect(reactions[0].me).toBe(true);
+    });
+
+    it('does not under-count the actor own reaction removal on gateway echo', async () => {
+      const msg = makeMessage({
+        id: 'm1',
+        reactions: [{ emoji: '👍', count: 1, me: true }],
+      });
+      useMessageStore.setState({ messages: { ch1: [msg] } });
+      mockChannelApi.removeReaction.mockResolvedValue({});
+
+      // Optimistic remove by the current user (u1) — count 1 -> reaction gone.
+      await useMessageStore.getState().removeReaction('ch1', 'm1', '👍');
+      // Gateway echoes the actor's own MESSAGE_REACTION_REMOVE.
+      useMessageStore.getState().handleReactionRemove('ch1', 'm1', '👍', 'u1', 'u1');
+
+      const reactions = useMessageStore.getState().messages['ch1'][0].reactions as Array<unknown>;
+      expect(reactions).toHaveLength(0);
+    });
+
+    it('increments to 2 when a different user reacts after the actor', async () => {
+      const msg = makeMessage({ id: 'm1', reactions: [] });
+      useMessageStore.setState({ messages: { ch1: [msg] } });
+      mockChannelApi.addReaction.mockResolvedValue({});
+
+      await useMessageStore.getState().addReaction('ch1', 'm1', '👍');
+      // Actor's own echo is reconciled (no double count)...
+      useMessageStore.getState().handleReactionAdd('ch1', 'm1', '👍', 'u1', 'u1');
+      // ...but a different user's reaction still increments.
+      useMessageStore.getState().handleReactionAdd('ch1', 'm1', '👍', 'u2', 'u1');
+
+      const reactions = useMessageStore.getState().messages['ch1'][0].reactions as Array<{
+        emoji: string;
+        count: number;
+        me: boolean;
+      }>;
+      expect(reactions).toHaveLength(1);
+      expect(reactions[0].count).toBe(2);
+      expect(reactions[0].me).toBe(true);
+    });
+  });
+
+  describe('messageErrors map', () => {
+    it('sets messageErrors on fetch failure and clears it on a successful retry', async () => {
+      mockChannelApi.getMessages.mockRejectedValue(new Error('boom'));
+
+      await useMessageStore.getState().fetchMessages('ch1');
+      expect(useMessageStore.getState().messageErrors['ch1']).toBe('boom');
+
+      mockChannelApi.getMessages.mockResolvedValue({ data: [makeMessage()] });
+      await useMessageStore.getState().fetchMessages('ch1');
+      expect(useMessageStore.getState().messageErrors['ch1']).toBeNull();
     });
   });
 

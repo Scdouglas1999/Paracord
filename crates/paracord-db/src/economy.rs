@@ -152,6 +152,14 @@ pub async fn add_xp(
 
     let now = datetime_to_db_text(Utc::now());
 
+    // Accumulate XP and derive the level in one transaction so concurrent
+    // callers cannot read a stale `level` and regress it with a later write.
+    // The `sqrt`-based level formula is computed in Rust (not portably
+    // expressible across SQLite/PostgreSQL), so the read of the accumulated XP
+    // and the level write must be serialized against each other; a transaction
+    // provides that isolation.
+    let mut tx = pool.begin().await?;
+
     let last_xp_at_param = user_xp_timestamp_parameter(4);
     let sql = format!(
         "INSERT INTO user_xp (user_id, guild_id, xp, level, last_xp_at)
@@ -166,7 +174,7 @@ pub async fn add_xp(
         .bind(guild_id)
         .bind(amount)
         .bind(&now)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
 
     let new_level = level_for_xp(row.xp);
@@ -177,9 +185,11 @@ pub async fn add_xp(
             .bind(user_id)
             .bind(guild_id)
             .bind(new_level)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
     }
+
+    tx.commit().await?;
 
     let final_row = UserXpRow {
         level: new_level,
@@ -431,4 +441,71 @@ pub async fn grant_achievement_if_missing(
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{add_xp, get_user_xp, level_for_xp};
+    use crate::{create_pool, run_migrations, DbPool};
+
+    async fn setup() -> DbPool {
+        let pool = create_pool("sqlite::memory:", 1).await.expect("pool");
+        run_migrations(&pool).await.expect("migrations");
+        crate::users::create_user(&pool, 1, "u", 1, "u@example.com", "hash")
+            .await
+            .expect("create user");
+        crate::guilds::create_guild(&pool, 2, "guild", 1, None)
+            .await
+            .expect("create guild");
+        pool
+    }
+
+    #[tokio::test]
+    async fn add_xp_never_regresses_level() {
+        let pool = setup().await;
+
+        // Accumulate XP in many small increments; the stored level must be
+        // monotonic and always match the level derived from the accumulated XP.
+        let mut previous_level = 0;
+        let mut total = 0i64;
+        for _ in 0..200 {
+            let amount = 7;
+            total += amount;
+            let (row, leveled_up) = add_xp(&pool, 1, 2, amount).await.expect("add xp");
+
+            assert_eq!(row.xp, total, "xp must accumulate exactly");
+            assert_eq!(
+                row.level,
+                level_for_xp(total),
+                "returned level must match the level for accumulated xp"
+            );
+            assert!(
+                row.level >= previous_level,
+                "level must never regress: {} -> {}",
+                previous_level,
+                row.level
+            );
+            assert_eq!(leveled_up, row.level > previous_level);
+
+            // The persisted level must equal the returned level.
+            let stored = get_user_xp(&pool, 1, 2)
+                .await
+                .expect("get xp")
+                .expect("row exists");
+            assert_eq!(stored.level, row.level);
+            assert_eq!(stored.xp, total);
+
+            previous_level = row.level;
+        }
+
+        // Sanity: with 1400 total XP the level is floor(sqrt(1400/100)) = 3.
+        assert_eq!(previous_level, level_for_xp(1400));
+    }
+
+    #[tokio::test]
+    async fn add_xp_rejects_negative_amount() {
+        let pool = setup().await;
+        let err = add_xp(&pool, 1, 2, -1).await.expect_err("must reject");
+        assert!(matches!(err, crate::DbError::Sqlx(_)));
+    }
 }

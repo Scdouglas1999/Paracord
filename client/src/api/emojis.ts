@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import type { GuildEmoji } from '../types';
 import { buildGuildEmojiImageUrl } from '../lib/customEmoji';
 
@@ -29,7 +29,7 @@ function assertValidEmojiFile(file: File): void {
 }
 
 export const emojiApi = {
-  listGuild: (guildId: string) => apiClient.get<GuildEmoji[]>(`/guilds/${guildId}/emojis`),
+  listGuild: (guildId: string) => getApi().get<GuildEmoji[]>(`/guilds/${guildId}/emojis`),
 
   create: (guildId: string, data: CreateEmojiRequest) => {
     const name = assertValidEmojiName(data.name);
@@ -37,16 +37,16 @@ export const emojiApi = {
     const formData = new FormData();
     formData.append('name', name);
     formData.append('image', data.file);
-    return apiClient.post<GuildEmoji>(`/guilds/${guildId}/emojis`, formData);
+    return getApi().post<GuildEmoji>(`/guilds/${guildId}/emojis`, formData);
   },
 
   update: (guildId: string, emojiId: string, name: string) =>
-    apiClient.patch<GuildEmoji>(`/guilds/${guildId}/emojis/${emojiId}`, {
+    getApi().patch<GuildEmoji>(`/guilds/${guildId}/emojis/${emojiId}`, {
       name: assertValidEmojiName(name),
     }),
 
   delete: (guildId: string, emojiId: string) =>
-    apiClient.delete(`/guilds/${guildId}/emojis/${emojiId}`),
+    getApi().delete(`/guilds/${guildId}/emojis/${emojiId}`),
 
   imageUrl: (guildId: string, emojiId: string) =>
     buildGuildEmojiImageUrl(guildId, emojiId),

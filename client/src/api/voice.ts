@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 
 export interface VoiceJoinResponse {
   token: string;
@@ -24,7 +24,7 @@ export interface VoiceJoinResponse {
 
 function resolveV2VoiceUrl(path: string): string {
   const normalized = path.startsWith('/') ? path : `/${path}`;
-  const baseURL = apiClient.defaults.baseURL;
+  const baseURL = getApi().defaults.baseURL;
 
   if (typeof baseURL === 'string' && /^https?:\/\//i.test(baseURL)) {
     return new URL(normalized, baseURL).toString();
@@ -39,7 +39,7 @@ function resolveV2VoiceUrl(path: string): string {
 
 export const voiceApi = {
   joinChannel: (channelId: string, options?: { fallback?: 'livekit' }) =>
-    apiClient.post<VoiceJoinResponse>(
+    getApi().post<VoiceJoinResponse>(
       resolveV2VoiceUrl(`/api/v2/voice/${channelId}/join${options?.fallback ? '?fallback=livekit' : ''}`),
       undefined,
       {
@@ -50,13 +50,13 @@ export const voiceApi = {
       },
     ),
   joinDmChannel: (channelId: string, options?: { fallback?: 'livekit' }) =>
-    apiClient.post<VoiceJoinResponse>(
+    getApi().post<VoiceJoinResponse>(
       `/api/v1/dms/${channelId}/voice/join${options?.fallback ? '?fallback=livekit' : ''}`,
       undefined,
       { timeout: 30_000 },
     ),
   leaveDmChannel: (channelId: string) =>
-    apiClient.post(`/api/v1/dms/${channelId}/voice/leave`, undefined, { timeout: 10_000 }),
+    getApi().post(`/api/v1/dms/${channelId}/voice/leave`, undefined, { timeout: 10_000 }),
   leaveChannel: (
     channelId: string,
     options?: {
@@ -67,7 +67,7 @@ export const voiceApi = {
     const qs = options?.sessionId
       ? `?session_id=${encodeURIComponent(options.sessionId)}`
       : '';
-    return apiClient.post(resolveV2VoiceUrl(`/api/v2/voice/${channelId}/leave${qs}`), undefined, {
+    return getApi().post(resolveV2VoiceUrl(`/api/v2/voice/${channelId}/leave${qs}`), undefined, {
       timeout: options?.timeoutMs ?? 10_000,
     });
   },
@@ -77,14 +77,14 @@ export const voiceApi = {
   ) => {
     const qs = options?.fallback ? '?fallback=livekit' : '';
     const { fallback: _fb, ...body } = options ?? {};
-    return apiClient.post<VoiceJoinResponse>(
+    return getApi().post<VoiceJoinResponse>(
       `/voice/${channelId}/stream${qs}`,
       Object.keys(body).length > 0 ? body : undefined,
       { timeout: 45_000 }
     );
   },
   stopStream: (channelId: string) =>
-    apiClient.post(`/voice/${channelId}/stream/stop`, undefined, {
+    getApi().post(`/voice/${channelId}/stream/stop`, undefined, {
       // Short timeout — the server also detects stream end from the voice
       // leave / disconnect, so this is best-effort. Don't block the user.
       timeout: 5_000,

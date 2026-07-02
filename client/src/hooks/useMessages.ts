@@ -14,6 +14,9 @@ export function useMessages(channelId: string | null) {
   const isLoading = useMessageStore((s) =>
     channelId ? !!s.loading[channelId] : false
   );
+  const error = useMessageStore((s) =>
+    channelId ? (s.messageErrors[channelId] ?? null) : null
+  );
   const fetchMessages = useMessageStore((s) => s.fetchMessages);
   const sendMessage = useMessageStore((s) => s.sendMessage);
 
@@ -34,5 +37,5 @@ export function useMessages(channelId: string | null) {
     [channelId, sendMessage]
   );
 
-  return { messages, hasMore, isLoading, loadMore, sendMessage: send };
+  return { messages, hasMore, isLoading, error, loadMore, sendMessage: send };
 }

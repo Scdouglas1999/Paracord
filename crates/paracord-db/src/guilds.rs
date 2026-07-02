@@ -1,4 +1,4 @@
-use crate::{datetime_from_db_text, DbError, DbPool};
+use crate::{datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use paracord_models::id::{GuildId, RoleId, UserId};
 use sqlx::Row;
@@ -133,7 +133,7 @@ pub async fn update_space(
              icon_hash = COALESCE($4, icon_hash),
              hub_settings = COALESCE($5, hub_settings),
              bot_settings = COALESCE($6, bot_settings),
-             updated_at = datetime('now')
+             updated_at = $7
          WHERE id = $1
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
     )
@@ -143,6 +143,7 @@ pub async fn update_space(
     .bind(icon_hash)
     .bind(hub_settings)
     .bind(bot_settings)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -181,13 +182,14 @@ pub async fn update_space_visibility(
         "UPDATE spaces
          SET visibility = $2,
              allowed_roles = $3,
-             updated_at = datetime('now')
+             updated_at = $4
          WHERE id = $1
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
     )
     .bind(id)
     .bind(visibility)
     .bind(allowed_roles)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -296,12 +298,13 @@ pub async fn update_vanity_url(
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
         "UPDATE spaces
-         SET vanity_url_code = $2, updated_at = datetime('now')
+         SET vanity_url_code = $2, updated_at = $3
          WHERE id = $1
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
     )
     .bind(guild_id)
     .bind(code)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -344,12 +347,13 @@ pub async fn transfer_ownership(
     new_owner_id: UserId,
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
-        "UPDATE spaces SET owner_id = $2, updated_at = datetime('now')
+        "UPDATE spaces SET owner_id = $2, updated_at = $3
          WHERE id = $1
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
     )
     .bind(space_id)
     .bind(new_owner_id)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)

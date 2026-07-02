@@ -1,5 +1,5 @@
 import type { AxiosRequestConfig } from 'axios';
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import type {
   Guild,
   Channel,
@@ -57,60 +57,60 @@ export interface Sticker {
 }
 
 export const guildApi = {
-  getAll: () => apiClient.get<Guild[]>('/users/@me/guilds'),
-  create: (data: CreateGuildRequest) => apiClient.post<Guild>('/guilds', data),
-  get: (id: string) => apiClient.get<Guild>(`/guilds/${id}`),
-  update: (id: string, data: Partial<Guild>) => apiClient.patch<Guild>(`/guilds/${id}`, data),
-  delete: (id: string) => apiClient.delete(`/guilds/${id}`),
+  getAll: () => getApi().get<Guild[]>('/users/@me/guilds'),
+  create: (data: CreateGuildRequest) => getApi().post<Guild>('/guilds', data),
+  get: (id: string) => getApi().get<Guild>(`/guilds/${id}`),
+  update: (id: string, data: Partial<Guild>) => getApi().patch<Guild>(`/guilds/${id}`, data),
+  delete: (id: string) => getApi().delete(`/guilds/${id}`),
   transferOwnership: (id: string, newOwnerId: string) =>
-    apiClient.post(`/guilds/${id}/owner`, { new_owner_id: newOwnerId }),
+    getApi().post(`/guilds/${id}/owner`, { new_owner_id: newOwnerId }),
 
   getChannels: (id: string, config?: AxiosRequestConfig) =>
-    apiClient.get<Channel[]>(`/guilds/${id}/channels`, config),
+    getApi().get<Channel[]>(`/guilds/${id}/channels`, config),
   createChannel: (id: string, data: CreateChannelRequest) =>
-    apiClient.post<Channel>(`/guilds/${id}/channels`, data),
+    getApi().post<Channel>(`/guilds/${id}/channels`, data),
 
-  getMembers: (id: string) => apiClient.get<Member[]>(`/guilds/${id}/members`),
+  getMembers: (id: string) => getApi().get<Member[]>(`/guilds/${id}/members`),
   updateMember: (guildId: string, userId: string, data: UpdateMemberRequest) =>
-    apiClient.patch<Member>(`/guilds/${guildId}/members/${userId}`, data),
+    getApi().patch<Member>(`/guilds/${guildId}/members/${userId}`, data),
   kickMember: (guildId: string, userId: string) =>
-    apiClient.delete(`/guilds/${guildId}/members/${userId}`),
-  leaveGuild: (id: string) => apiClient.delete(`/guilds/${id}/members/@me`),
+    getApi().delete(`/guilds/${guildId}/members/${userId}`),
+  leaveGuild: (id: string) => getApi().delete(`/guilds/${id}/members/@me`),
 
-  getRoles: (id: string) => apiClient.get<Role[]>(`/guilds/${id}/roles`),
+  getRoles: (id: string) => getApi().get<Role[]>(`/guilds/${id}/roles`),
   createRole: (id: string, data: CreateRoleRequest) =>
-    apiClient.post<Role>(`/guilds/${id}/roles`, data),
+    getApi().post<Role>(`/guilds/${id}/roles`, data),
   updateRole: (guildId: string, roleId: string, data: Partial<Role>) =>
-    apiClient.patch<Role>(`/guilds/${guildId}/roles/${roleId}`, data),
+    getApi().patch<Role>(`/guilds/${guildId}/roles/${roleId}`, data),
   deleteRole: (guildId: string, roleId: string) =>
-    apiClient.delete(`/guilds/${guildId}/roles/${roleId}`),
+    getApi().delete(`/guilds/${guildId}/roles/${roleId}`),
 
-  getBans: (id: string) => apiClient.get<Ban[]>(`/guilds/${id}/bans`),
+  getBans: (id: string) => getApi().get<Ban[]>(`/guilds/${id}/bans`),
   banMember: (guildId: string, userId: string, reason?: string) =>
-    apiClient.put(`/guilds/${guildId}/bans/${userId}`, { reason }),
+    getApi().put(`/guilds/${guildId}/bans/${userId}`, { reason }),
   unbanMember: (guildId: string, userId: string) =>
-    apiClient.delete(`/guilds/${guildId}/bans/${userId}`),
+    getApi().delete(`/guilds/${guildId}/bans/${userId}`),
 
-  getInvites: (id: string) => apiClient.get<Invite[]>(`/guilds/${id}/invites`),
+  getInvites: (id: string) => getApi().get<Invite[]>(`/guilds/${id}/invites`),
   createInvite: (channelId: string, data?: CreateInviteRequest) =>
-    apiClient.post<Invite>(`/channels/${channelId}/invites`, data),
+    getApi().post<Invite>(`/channels/${channelId}/invites`, data),
 
   getAuditLog: (id: string, params?: Record<string, string>) =>
-    apiClient.get<{ audit_log_entries: AuditLogEntry[] }>(`/guilds/${id}/audit-logs`, { params }),
+    getApi().get<{ audit_log_entries: AuditLogEntry[] }>(`/guilds/${id}/audit-logs`, { params }),
   createReport: (guildId: string, data: CreateReportRequest) =>
-    apiClient.post<ModerationReport>(`/guilds/${guildId}/reports`, data),
+    getApi().post<ModerationReport>(`/guilds/${guildId}/reports`, data),
   getReports: (guildId: string, params?: { status?: string }) =>
-    apiClient.get<{ reports: ModerationReport[] }>(`/guilds/${guildId}/reports`, { params }),
+    getApi().get<{ reports: ModerationReport[] }>(`/guilds/${guildId}/reports`, { params }),
   resolveReport: (guildId: string, reportId: string, data: ResolveReportRequest) =>
-    apiClient.patch<ModerationReport>(`/guilds/${guildId}/reports/${reportId}`, data),
+    getApi().patch<ModerationReport>(`/guilds/${guildId}/reports/${reportId}`, data),
 
   getVanityUrl: (id: string) =>
-    apiClient.get<{ vanity_url_code: string | null }>(`/guilds/${id}/vanity-url`),
+    getApi().get<{ vanity_url_code: string | null }>(`/guilds/${id}/vanity-url`),
   updateVanityUrl: (id: string, code: string | null) =>
-    apiClient.patch<{ vanity_url_code: string | null }>(`/guilds/${id}/vanity-url`, { code }),
+    getApi().patch<{ vanity_url_code: string | null }>(`/guilds/${id}/vanity-url`, { code }),
 
   getOnboarding: (guildId: string) =>
-    apiClient.get<GuildOnboardingSettings>(`/guilds/${guildId}/onboarding`),
+    getApi().get<GuildOnboardingSettings>(`/guilds/${guildId}/onboarding`),
   updateOnboarding: (
     guildId: string,
     payload: Omit<Partial<GuildOnboardingSettings>, 'role_options'> & {
@@ -121,9 +121,9 @@ export const guildApi = {
         position?: number;
       }>;
     },
-  ) => apiClient.patch<GuildOnboardingSettings>(`/guilds/${guildId}/onboarding`, payload),
+  ) => getApi().patch<GuildOnboardingSettings>(`/guilds/${guildId}/onboarding`, payload),
   getMyOnboardingState: (guildId: string) =>
-    apiClient.get<{ settings: GuildOnboardingSettings; member_state: GuildOnboardingMemberState }>(
+    getApi().get<{ settings: GuildOnboardingSettings; member_state: GuildOnboardingMemberState }>(
       `/guilds/${guildId}/onboarding/me`,
     ),
   updateMyOnboardingState: (
@@ -134,9 +134,9 @@ export const guildApi = {
       completed?: boolean;
     },
   ) =>
-    apiClient.put<GuildOnboardingMemberState>(`/guilds/${guildId}/onboarding/me`, payload),
+    getApi().put<GuildOnboardingMemberState>(`/guilds/${guildId}/onboarding/me`, payload),
 
-  listStickers: (guildId: string) => apiClient.get<Sticker[]>(`/guilds/${guildId}/stickers`),
+  listStickers: (guildId: string) => getApi().get<Sticker[]>(`/guilds/${guildId}/stickers`),
   createSticker: (
     guildId: string,
     payload: { name: string; description?: string; file: File },
@@ -145,8 +145,8 @@ export const guildApi = {
     formData.append('name', payload.name);
     if (payload.description) formData.append('description', payload.description);
     formData.append('image', payload.file);
-    return apiClient.post<Sticker>(`/guilds/${guildId}/stickers`, formData);
+    return getApi().post<Sticker>(`/guilds/${guildId}/stickers`, formData);
   },
   deleteSticker: (guildId: string, stickerId: string) =>
-    apiClient.delete(`/guilds/${guildId}/stickers/${stickerId}`),
+    getApi().delete(`/guilds/${guildId}/stickers/${stickerId}`),
 };

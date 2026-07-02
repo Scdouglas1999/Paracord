@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { getApi } from './activeClient';
 import type { AxiosRequestConfig } from 'axios';
 import type {
   Channel,
@@ -96,19 +96,19 @@ export interface GroupSenderKeyRecord {
 }
 
 export const channelApi = {
-  get: (id: string) => apiClient.get<Channel>(`/channels/${id}`),
-  update: (id: string, data: Partial<Channel>) => apiClient.patch<Channel>(`/channels/${id}`, data),
-  delete: (id: string) => apiClient.delete(`/channels/${id}`),
+  get: (id: string) => getApi().get<Channel>(`/channels/${id}`),
+  update: (id: string, data: Partial<Channel>) => getApi().patch<Channel>(`/channels/${id}`, data),
+  delete: (id: string) => getApi().delete(`/channels/${id}`),
 
   getMessages: (id: string, params?: PaginationParams, config?: AxiosRequestConfig) =>
-    apiClient.get<Message[]>(`/channels/${id}/messages`, { params, ...(config || {}) }),
+    getApi().get<Message[]>(`/channels/${id}/messages`, { params, ...(config || {}) }),
   searchMessages: (
     id: string,
     q: string,
     limit = 20,
     filters?: MessageSearchFilters,
   ) =>
-    apiClient.get<Message[]>(`/channels/${id}/messages/search`, {
+    getApi().get<Message[]>(`/channels/${id}/messages/search`, {
       params: {
         q,
         limit,
@@ -116,23 +116,23 @@ export const channelApi = {
       },
     }),
   summarizeChannel: (id: string, limit = 150) =>
-    apiClient.get<ChannelSummaryResponse>(`/channels/${id}/summary`, {
+    getApi().get<ChannelSummaryResponse>(`/channels/${id}/summary`, {
       params: { limit },
     }),
   getFeatureSettings: (id: string) =>
-    apiClient.get<ChannelFeatureSettings>(`/channels/${id}/features`),
+    getApi().get<ChannelFeatureSettings>(`/channels/${id}/features`),
   updateFeatureSettings: (id: string, patch: Partial<ChannelFeatureSettings>) =>
-    apiClient.patch<ChannelFeatureSettings>(`/channels/${id}/features`, patch),
+    getApi().patch<ChannelFeatureSettings>(`/channels/${id}/features`, patch),
   createScheduledMessage: (
     id: string,
     payload: { content?: string; e2ee?: unknown; nonce?: string; send_at: string },
-  ) => apiClient.post<ScheduledMessage>(`/channels/${id}/scheduled-messages`, payload),
+  ) => getApi().post<ScheduledMessage>(`/channels/${id}/scheduled-messages`, payload),
   listScheduledMessages: (id: string) =>
-    apiClient.get<ScheduledMessage[]>(`/channels/${id}/scheduled-messages`),
+    getApi().get<ScheduledMessage[]>(`/channels/${id}/scheduled-messages`),
   deleteScheduledMessage: (id: string, scheduledMessageId: string) =>
-    apiClient.delete(`/channels/${id}/scheduled-messages/${scheduledMessageId}`),
+    getApi().delete(`/channels/${id}/scheduled-messages/${scheduledMessageId}`),
   deanonymizeMessage: (id: string, messageId: string) =>
-    apiClient.get<{
+    getApi().get<{
       message_id: string;
       channel_id: string;
       user_id: string;
@@ -140,101 +140,101 @@ export const channelApi = {
       user?: { id: string; username: string; discriminator: string | number; avatar_hash?: string | null };
     }>(`/channels/${id}/anonymous/deanonymize/${messageId}`),
   postGroupSenderKeys: (id: string, epoch: number, envelopes: GroupSenderKeyEnvelope[]) =>
-    apiClient.post(`/channels/${id}/e2ee/sender-keys`, { epoch, envelopes }),
+    getApi().post(`/channels/${id}/e2ee/sender-keys`, { epoch, envelopes }),
   getGroupSenderKeys: (id: string, sinceEpoch?: number) =>
-    apiClient.get<{ sender_keys: GroupSenderKeyRecord[] }>(`/channels/${id}/e2ee/sender-keys`, {
+    getApi().get<{ sender_keys: GroupSenderKeyRecord[] }>(`/channels/${id}/e2ee/sender-keys`, {
       params: sinceEpoch == null ? undefined : { since_epoch: sinceEpoch },
     }),
   ackGroupSenderKeys: (
     id: string,
     payload: { sender_id?: string; up_to_epoch?: number },
-  ) => apiClient.post<{ acknowledged: number }>(`/channels/${id}/e2ee/sender-keys/ack`, payload),
+  ) => getApi().post<{ acknowledged: number }>(`/channels/${id}/e2ee/sender-keys/ack`, payload),
   bulkDeleteMessages: (id: string, messageIds: string[]) =>
-    apiClient.post<{ deleted: number }>(`/channels/${id}/messages/bulk-delete`, { message_ids: messageIds }),
+    getApi().post<{ deleted: number }>(`/channels/${id}/messages/bulk-delete`, { message_ids: messageIds }),
   sendMessage: (id: string, data: SendMessageRequest) =>
-    apiClient.post<Message>(`/channels/${id}/messages`, data),
+    getApi().post<Message>(`/channels/${id}/messages`, data),
   editMessage: (channelId: string, messageId: string, data: EditMessageRequest) =>
-    apiClient.patch<Message>(`/channels/${channelId}/messages/${messageId}`, data),
+    getApi().patch<Message>(`/channels/${channelId}/messages/${messageId}`, data),
   deleteMessage: (channelId: string, messageId: string) =>
-    apiClient.delete(`/channels/${channelId}/messages/${messageId}`),
+    getApi().delete(`/channels/${channelId}/messages/${messageId}`),
   getEditHistory: (channelId: string, messageId: string) =>
-    apiClient.get<{ id: string; message_id: string; content: string; edited_at: string }[]>(
+    getApi().get<{ id: string; message_id: string; content: string; edited_at: string }[]>(
       `/channels/${channelId}/messages/${messageId}/edits`
     ),
 
-  getPins: (id: string) => apiClient.get<Message[]>(`/channels/${id}/pins`),
+  getPins: (id: string) => getApi().get<Message[]>(`/channels/${id}/pins`),
   pinMessage: (channelId: string, messageId: string) =>
-    apiClient.put(`/channels/${channelId}/pins/${messageId}`),
+    getApi().put(`/channels/${channelId}/pins/${messageId}`),
   unpinMessage: (channelId: string, messageId: string) =>
-    apiClient.delete(`/channels/${channelId}/pins/${messageId}`),
+    getApi().delete(`/channels/${channelId}/pins/${messageId}`),
 
   addReaction: (channelId: string, messageId: string, emoji: string) =>
-    apiClient.put(
+    getApi().put(
       `/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`
     ),
   removeReaction: (channelId: string, messageId: string, emoji: string) =>
-    apiClient.delete(
+    getApi().delete(
       `/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`
     ),
 
-  triggerTyping: (id: string) => apiClient.post(`/channels/${id}/typing`),
+  triggerTyping: (id: string) => getApi().post(`/channels/${id}/typing`),
   updateReadState: (id: string, lastMessageId?: string) =>
-    apiClient.put(`/channels/${id}/read`, { last_message_id: lastMessageId }),
+    getApi().put(`/channels/${id}/read`, { last_message_id: lastMessageId }),
 
   updatePositions: (guildId: string, positions: { id: string; position: number; parent_id?: string | null }[]) =>
-    apiClient.patch<{ updated: number }>(`/guilds/${guildId}/channels`, positions),
+    getApi().patch<{ updated: number }>(`/guilds/${guildId}/channels`, positions),
 
   createThread: (channelId: string, data: CreateThreadRequest) =>
-    apiClient.post<Channel>(`/channels/${channelId}/threads`, data),
+    getApi().post<Channel>(`/channels/${channelId}/threads`, data),
   getThreads: (channelId: string) =>
-    apiClient.get<Channel[]>(`/channels/${channelId}/threads`),
+    getApi().get<Channel[]>(`/channels/${channelId}/threads`),
   getArchivedThreads: (channelId: string) =>
-    apiClient.get<Channel[]>(`/channels/${channelId}/threads/archived`),
+    getApi().get<Channel[]>(`/channels/${channelId}/threads/archived`),
   updateThread: (channelId: string, threadId: string, data: UpdateThreadRequest) =>
-    apiClient.patch<Channel>(`/channels/${channelId}/threads/${threadId}`, data),
+    getApi().patch<Channel>(`/channels/${channelId}/threads/${threadId}`, data),
   deleteThread: (channelId: string, threadId: string) =>
-    apiClient.delete(`/channels/${channelId}/threads/${threadId}`),
+    getApi().delete(`/channels/${channelId}/threads/${threadId}`),
 
   createPoll: (channelId: string, data: CreatePollRequest) =>
-    apiClient.post<Message>(`/channels/${channelId}/polls`, data),
+    getApi().post<Message>(`/channels/${channelId}/polls`, data),
   getPoll: (channelId: string, pollId: string) =>
-    apiClient.get<Poll>(`/channels/${channelId}/polls/${pollId}`),
+    getApi().get<Poll>(`/channels/${channelId}/polls/${pollId}`),
   addPollVote: (channelId: string, pollId: string, optionId: string) =>
-    apiClient.put<Poll>(`/channels/${channelId}/polls/${pollId}/votes/${optionId}`),
+    getApi().put<Poll>(`/channels/${channelId}/polls/${pollId}/votes/${optionId}`),
   removePollVote: (channelId: string, pollId: string, optionId: string) =>
-    apiClient.delete<Poll>(`/channels/${channelId}/polls/${pollId}/votes/${optionId}`),
+    getApi().delete<Poll>(`/channels/${channelId}/polls/${pollId}/votes/${optionId}`),
 
   // Forum
   getForumPosts: (channelId: string, params?: { sort_order?: number; include_archived?: boolean }) =>
-    apiClient.get<ForumPostsResponse>(`/channels/${channelId}/forum/posts`, { params }),
+    getApi().get<ForumPostsResponse>(`/channels/${channelId}/forum/posts`, { params }),
   createForumPost: (channelId: string, data: { name: string; content?: string; applied_tag_ids?: string[] }) =>
-    apiClient.post<Channel>(`/channels/${channelId}/forum/posts`, data),
+    getApi().post<Channel>(`/channels/${channelId}/forum/posts`, data),
   getForumTags: (channelId: string) =>
-    apiClient.get<ForumTag[]>(`/channels/${channelId}/forum/tags`),
+    getApi().get<ForumTag[]>(`/channels/${channelId}/forum/tags`),
   createForumTag: (channelId: string, data: { name: string; emoji?: string; moderated?: boolean }) =>
-    apiClient.post<ForumTag>(`/channels/${channelId}/forum/tags`, data),
+    getApi().post<ForumTag>(`/channels/${channelId}/forum/tags`, data),
   deleteForumTag: (channelId: string, tagId: string) =>
-    apiClient.delete(`/channels/${channelId}/forum/tags/${tagId}`),
+    getApi().delete(`/channels/${channelId}/forum/tags/${tagId}`),
   updateForumSortOrder: (channelId: string, sortOrder: number) =>
-    apiClient.patch(`/channels/${channelId}/forum/sort`, { sort_order: sortOrder }),
+    getApi().patch(`/channels/${channelId}/forum/sort`, { sort_order: sortOrder }),
 
   // Channel follows (announcement channels)
   getFollowers: (channelId: string) =>
-    apiClient.get<{ id: string; source_channel_id: string; target_channel_id: string; target_guild_id: string; created_at: string }[]>(`/channels/${channelId}/followers`),
+    getApi().get<{ id: string; source_channel_id: string; target_channel_id: string; target_guild_id: string; created_at: string }[]>(`/channels/${channelId}/followers`),
   addFollower: (channelId: string, targetChannelId: string, targetGuildId: string) =>
-    apiClient.post(`/channels/${channelId}/followers`, { target_channel_id: targetChannelId, target_guild_id: targetGuildId }),
+    getApi().post(`/channels/${channelId}/followers`, { target_channel_id: targetChannelId, target_guild_id: targetGuildId }),
   removeFollower: (channelId: string, targetChannelId: string) =>
-    apiClient.delete(`/channels/${channelId}/followers/${targetChannelId}`),
+    getApi().delete(`/channels/${channelId}/followers/${targetChannelId}`),
 
   // Visibility
   getVisibleChannels: (guildId: string) =>
-    apiClient.get<{ channel_ids: string[] }>(`/guilds/${guildId}/channels/visible`),
+    getApi().get<{ channel_ids: string[] }>(`/guilds/${guildId}/channels/visible`),
 
   // Permission overwrites
   getOverwrites: (channelId: string) =>
-    apiClient.get<ChannelOverwrite[]>(`/channels/${channelId}/overwrites`),
+    getApi().get<ChannelOverwrite[]>(`/channels/${channelId}/overwrites`),
   upsertOverwrite: (channelId: string, targetId: string, data: UpsertChannelOverwriteRequest) =>
-    apiClient.put(`/channels/${channelId}/overwrites/${targetId}`, data),
+    getApi().put(`/channels/${channelId}/overwrites/${targetId}`, data),
   deleteOverwrite: (channelId: string, targetId: string) =>
-    apiClient.delete(`/channels/${channelId}/overwrites/${targetId}`),
+    getApi().delete(`/channels/${channelId}/overwrites/${targetId}`),
 };

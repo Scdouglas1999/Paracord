@@ -8,6 +8,7 @@ export interface ServerEntry {
   name: string;         // server display name
   iconUrl?: string;     // server icon
   token: string | null; // JWT token for this server
+  refreshToken?: string | null; // Rotating refresh token for cross-origin refresh
   connected: boolean;   // WebSocket connected
   apiReachable?: boolean; // Last known HTTP/API reachability
   userId?: string;      // user ID on this server (different per server since it's a snowflake)
@@ -24,6 +25,7 @@ interface ServerListState {
   removeServer: (id: string) => void;
   setActive: (id: string | null) => void;
   updateToken: (id: string, token: string) => void;
+  updateRefreshToken: (id: string, refreshToken: string | null) => void;
   updateServerInfo: (id: string, data: Partial<ServerEntry>) => void;
   setConnected: (id: string, connected: boolean) => void;
   setApiReachable: (id: string, apiReachable: boolean) => void;
@@ -69,12 +71,24 @@ function tokenStorageKey(serverId: string): string {
   return `paracord:server-token:${serverId}`;
 }
 
+function refreshTokenStorageKey(serverId: string): string {
+  return `paracord:server-refresh-token:${serverId}`;
+}
+
 async function saveServerToken(serverId: string, token: string | null): Promise<void> {
   if (!token) {
     await secureDelete(tokenStorageKey(serverId));
     return;
   }
   await secureSet(tokenStorageKey(serverId), token);
+}
+
+async function saveServerRefreshToken(serverId: string, token: string | null): Promise<void> {
+  if (!token) {
+    await secureDelete(refreshTokenStorageKey(serverId));
+    return;
+  }
+  await secureSet(refreshTokenStorageKey(serverId), token);
 }
 
 export const useServerListStore = create<ServerListState>()(
@@ -132,6 +146,7 @@ export const useServerListStore = create<ServerListState>()(
 
       removeServer: (id) => {
         void saveServerToken(id, null);
+        void saveServerRefreshToken(id, null);
         set((state) => ({
           servers: state.servers.filter((s) => s.id !== id),
           activeServerId: state.activeServerId === id
@@ -147,6 +162,15 @@ export const useServerListStore = create<ServerListState>()(
         set((state) => ({
           servers: state.servers.map((s) =>
             s.id === id ? { ...s, token } : s
+          ),
+        }));
+      },
+
+      updateRefreshToken: (id, refreshToken) => {
+        void saveServerRefreshToken(id, refreshToken);
+        set((state) => ({
+          servers: state.servers.map((s) =>
+            s.id === id ? { ...s, refreshToken } : s
           ),
         }));
       },
@@ -182,13 +206,18 @@ export const useServerListStore = create<ServerListState>()(
             servers.map(async (server) => ({
               id: server.id,
               token: await secureGet(tokenStorageKey(server.id)),
+              refreshToken: await secureGet(refreshTokenStorageKey(server.id)),
             }))
           );
           const tokenById = new Map(loaded.map((entry) => [entry.id, entry.token]));
+          const refreshTokenById = new Map(
+            loaded.map((entry) => [entry.id, entry.refreshToken]),
+          );
           set((state) => ({
             servers: state.servers.map((server) => ({
               ...server,
               token: tokenById.get(server.id) ?? null,
+              refreshToken: refreshTokenById.get(server.id) ?? null,
             })),
           }));
         } finally {
@@ -215,6 +244,7 @@ export const useServerListStore = create<ServerListState>()(
         servers: state.servers.map((s) => ({
           ...s,
           token: null,
+          refreshToken: null,
           connected: false,
           apiReachable: s.apiReachable ?? false,
         })),

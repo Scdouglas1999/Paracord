@@ -4,6 +4,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes, randomBytes } from '@noble/hashes/utils.js';
 import { wordlist } from './bip39-wordlist';
 import { secureDelete, secureGet, secureSet } from './secureStorage';
+import { toArrayBuffer, toBase64, fromBase64 } from './crypto/util';
 
 export interface AccountKeystore {
   version: 1;
@@ -30,29 +31,6 @@ const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_DKLEN = 32;
 const AES_IV_BYTES = 12;
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer instanceof ArrayBuffer
-    ? bytes.buffer
-    : new Uint8Array(bytes).buffer as ArrayBuffer;
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-function fromBase64(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
 
 async function deriveAesKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
   const keyBytes = await scryptAsync(utf8ToBytes(password), salt, {

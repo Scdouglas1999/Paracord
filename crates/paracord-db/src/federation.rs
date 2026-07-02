@@ -1,4 +1,5 @@
-use crate::{bool_from_any_row, json_from_db_text, DbPool};
+use crate::{bool_from_any_row, datetime_to_db_text, json_from_db_text, DbPool};
+use chrono::Utc;
 use serde_json::Value;
 use sqlx::Row;
 
@@ -239,12 +240,11 @@ pub async fn delete_federated_server(
 
 /// Update the last_seen_at timestamp for a federated server.
 pub async fn touch_federated_server(pool: &DbPool, server_name: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE federated_servers SET last_seen_at = datetime('now') WHERE server_name = $1",
-    )
-    .bind(server_name)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE federated_servers SET last_seen_at = $2 WHERE server_name = $1")
+        .bind(server_name)
+        .bind(datetime_to_db_text(Utc::now()))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -696,15 +696,18 @@ pub async fn get_local_message_id_by_remote(
 
 pub async fn get_local_message_id_by_event(
     pool: &DbPool,
+    origin_server: &str,
     event_id: &str,
 ) -> Result<Option<i64>, sqlx::Error> {
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT local_message_id
          FROM federation_message_map
          WHERE event_id = $1
+           AND origin_server = $2
          LIMIT 1",
     )
     .bind(event_id)
+    .bind(origin_server)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(id,)| id))
@@ -817,66 +820,6 @@ pub async fn list_room_member_servers(
     servers.sort();
     servers.dedup();
     Ok(servers)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    async fn test_pool() -> DbPool {
-        let pool = crate::create_pool("sqlite::memory:", 1).await.unwrap();
-        crate::run_migrations(&pool).await.unwrap();
-        pool
-    }
-
-    #[tokio::test]
-    async fn list_room_member_servers_includes_peers_that_accepted_membership_events() {
-        let pool = test_pool().await;
-        let room_id = "!guild:node-a.test";
-        let event_id = "$join-1:node-a.test";
-
-        crate::users::create_user(
-            &pool,
-            1001,
-            "remote_guest",
-            1,
-            "remote@example.test",
-            "hash",
-        )
-        .await
-        .unwrap();
-        crate::guilds::create_guild(&pool, 2001, "Remote Guild", 1001, None)
-            .await
-            .unwrap();
-        upsert_room_membership(&pool, room_id, "@guest_one:node-a.test", 1001, 2001)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO federation_events
-                (event_id, room_id, event_type, sender, origin_server, origin_ts, content, depth, state_key, signatures)
-             VALUES ($1, $2, 'm.member.join', '@guest_one:node-a.test', 'node-a.test', 1, '{}', 1, NULL, '{}')",
-        )
-        .bind(event_id)
-        .bind(room_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        record_delivery_attempt(
-            &pool,
-            "node-c.test",
-            event_id,
-            true,
-            Some(202),
-            None,
-            Some(5),
-            10,
-        )
-        .await
-        .unwrap();
-
-        let servers = list_room_member_servers(&pool, room_id).await.unwrap();
-        assert_eq!(servers, vec!["node-a.test", "node-c.test"]);
-    }
 }
 
 pub async fn upsert_space_mapping(
@@ -1097,4 +1040,64 @@ pub async fn get_server_keypair(pool: &DbPool) -> Result<Option<ServerKeypairRow
     )
     .fetch_optional(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_pool() -> DbPool {
+        let pool = crate::create_pool("sqlite::memory:", 1).await.unwrap();
+        crate::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn list_room_member_servers_includes_peers_that_accepted_membership_events() {
+        let pool = test_pool().await;
+        let room_id = "!guild:node-a.test";
+        let event_id = "$join-1:node-a.test";
+
+        crate::users::create_user(
+            &pool,
+            1001,
+            "remote_guest",
+            1,
+            "remote@example.test",
+            "hash",
+        )
+        .await
+        .unwrap();
+        crate::guilds::create_guild(&pool, 2001, "Remote Guild", 1001, None)
+            .await
+            .unwrap();
+        upsert_room_membership(&pool, room_id, "@guest_one:node-a.test", 1001, 2001)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO federation_events
+                (event_id, room_id, event_type, sender, origin_server, origin_ts, content, depth, state_key, signatures)
+             VALUES ($1, $2, 'm.member.join', '@guest_one:node-a.test', 'node-a.test', 1, '{}', 1, NULL, '{}')",
+        )
+        .bind(event_id)
+        .bind(room_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        record_delivery_attempt(
+            &pool,
+            "node-c.test",
+            event_id,
+            true,
+            Some(202),
+            None,
+            Some(5),
+            10,
+        )
+        .await
+        .unwrap();
+
+        let servers = list_room_member_servers(&pool, room_id).await.unwrap();
+        assert_eq!(servers, vec!["node-a.test", "node-c.test"]);
+    }
 }

@@ -722,6 +722,81 @@ fn sha256_hex(value: &str) -> String {
     out
 }
 
+/// Generate an email-verification token, persist it, and email the recipient a
+/// fresh verification link (mirrors the registration flow). Failures to persist
+/// the token or deliver the message are logged and swallowed so they never block
+/// the surrounding account operation.
+pub(crate) async fn dispatch_email_verification(
+    state: &AppState,
+    user_id: i64,
+    username: &str,
+    recipient_email: &str,
+    headers: &HeaderMap,
+    peer_ip: Option<&str>,
+) {
+    let verify_token = random_token_hex(32);
+    let verify_token_hash = sha256_hex(&verify_token);
+    let verify_expires = Utc::now() + Duration::hours(EMAIL_VERIFY_TOKEN_TTL_HOURS);
+    if let Err(err) = paracord_db::users::create_email_verification_token(
+        &state.db,
+        user_id,
+        &verify_token_hash,
+        verify_expires,
+    )
+    .await
+    {
+        tracing::error!(
+            target: "paracord::email_verification",
+            user_id,
+            error = %err,
+            "Failed to persist email verification token"
+        );
+        return;
+    }
+
+    let server_origin = resolve_server_origin(state.config.public_url.as_deref(), headers, peer_ip);
+    let verify_url = format!(
+        "{}/api/v1/auth/verify-email?token={}",
+        server_origin, verify_token
+    );
+    let subject = "Verify your Paracord email";
+    let body = format!(
+        "Hi {},\n\nVerify your email by opening this link:\n{}\n\nThis link expires in {} hours.\n\nIf you did not request this change, ignore this message.",
+        username, verify_url, EMAIL_VERIFY_TOKEN_TTL_HOURS
+    );
+    match send_transactional_email(recipient_email, subject, &body).await {
+        Ok(true) => {
+            tracing::info!(
+                target: "paracord::email_verification",
+                user_id,
+                username = %username,
+                email = %recipient_email,
+                "Sent email verification message"
+            );
+        }
+        Ok(false) => {
+            tracing::warn!(
+                target: "paracord::email_verification",
+                user_id,
+                username = %username,
+                email = %recipient_email,
+                url = %verify_url,
+                "Email verification SMTP delivery skipped (recipient or SMTP config unavailable)"
+            );
+        }
+        Err(err) => {
+            tracing::error!(
+                target: "paracord::email_verification",
+                user_id,
+                username = %username,
+                email = %recipient_email,
+                error = %err,
+                "Failed to send email verification message"
+            );
+        }
+    }
+}
+
 fn header_value(value: &str) -> Result<HeaderValue, ApiError> {
     HeaderValue::from_str(value)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid header value: {}", e)))

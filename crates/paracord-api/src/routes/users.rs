@@ -656,6 +656,40 @@ pub async fn get_user_profile(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+
+    // If the target has blocked the caller, do not leak profile extras
+    // (bio, pronouns, linked accounts, roles, mutual guilds/friends). Return a
+    // minimal identity card only.
+    if user_id != auth.user_id {
+        let target_block =
+            paracord_db::relationships::get_relationship(&state.db, user_id, auth.user_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if target_block.map(|r| r.rel_type) == Some(2) {
+            return Ok(Json(json!({
+                "user": {
+                    "id": user.id.to_string(),
+                    "username": user.username,
+                    "discriminator": user.discriminator,
+                    "display_name": user.display_name,
+                    "avatar_hash": user.avatar_hash,
+                    "banner_hash": null,
+                    "bio": null,
+                    "flags": user.flags,
+                    "bot": paracord_core::is_bot(user.flags),
+                    "system": false,
+                    "pronouns": null,
+                    "linked_accounts": [],
+                    "created_at": user.created_at.to_rfc3339(),
+                },
+                "roles": [],
+                "mutual_guilds": [],
+                "mutual_friends": [],
+                "created_at": user.created_at.to_rfc3339(),
+            })));
+        }
+    }
+
     let target_settings = paracord_db::users::get_user_settings(&state.db, user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -864,9 +898,31 @@ pub async fn change_email(
         }
     }
 
-    paracord_db::users::update_user_email(&state.db, auth.user_id, &normalized_email)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    // Changing the email invalidates any prior verification: the new address has
+    // not been proven to belong to this account, so email_verified is reset.
+    let updated = paracord_db::users::update_user_email_unverified(
+        &state.db,
+        auth.user_id,
+        &normalized_email,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    // Invalidate any outstanding verification tokens issued for the old address,
+    // then kick off a fresh verification email when the server requires it.
+    let _ = paracord_db::users::delete_email_verification_tokens_for_user(&state.db, auth.user_id)
+        .await;
+    if state.config.require_email_verification {
+        crate::routes::auth::dispatch_email_verification(
+            &state,
+            auth.user_id,
+            &updated.username,
+            &normalized_email,
+            &headers,
+            None,
+        )
+        .await;
+    }
 
     let now = chrono::Utc::now();
     let _ = paracord_db::sessions::revoke_all_user_sessions_except(

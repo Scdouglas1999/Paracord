@@ -15,6 +15,12 @@ const MAX_RETRIES: u32 = 3;
 const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 const MAX_DOWNLOAD_REDIRECTS: usize = 3;
 
+/// Hard upper bound on a federated file download when the caller does not
+/// supply an explicit limit. 1 GiB matches the default
+/// `federation_file_cache_max_size`; callers that know the operator-configured
+/// limit should pass it via [`FederationClient::download_federated_file_with_limit`].
+const DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 struct TransportSigner {
     origin: String,
@@ -256,9 +262,27 @@ impl FederationClient {
             .map_err(|e| FederationError::RemoteError(format!("invalid file token response: {e}")))
     }
 
+    /// Download a federated file, rejecting responses larger than the default
+    /// cap ([`DEFAULT_MAX_DOWNLOAD_BYTES`]). Prefer
+    /// [`Self::download_federated_file_with_limit`] to enforce the
+    /// operator-configured limit.
     pub async fn download_federated_file(
         &self,
         download_url: &str,
+    ) -> Result<(Vec<u8>, Option<String>, Option<String>), FederationError> {
+        self.download_federated_file_with_limit(download_url, DEFAULT_MAX_DOWNLOAD_BYTES)
+            .await
+    }
+
+    /// Download a federated file, aborting if the response body exceeds
+    /// `max_size` bytes. The `Content-Length` header is checked up front to
+    /// reject oversized responses before any body is read, and the body is
+    /// streamed in chunks with a running byte counter so that responses that
+    /// omit or lie about `Content-Length` still cannot exhaust memory.
+    pub async fn download_federated_file_with_limit(
+        &self,
+        download_url: &str,
+        max_size: u64,
     ) -> Result<(Vec<u8>, Option<String>, Option<String>), FederationError> {
         // Manual redirects allow every hop to receive the same async DNS
         // validation before reqwest opens a connection.
@@ -321,6 +345,16 @@ impl FederationClient {
                 resp.status()
             )));
         }
+
+        // Reject oversized responses up front when the server advertises a
+        // Content-Length. This avoids opening the body stream at all for the
+        // common well-behaved case.
+        if let Some(len) = resp.content_length() {
+            if len > max_size {
+                return Err(FederationError::FileTooLarge { max: max_size });
+            }
+        }
+
         let content_type = resp
             .headers()
             .get("content-type")
@@ -336,11 +370,26 @@ impl FederationClient {
                     .and_then(|s| s.strip_suffix('"'))
                     .map(str::to_string)
             });
-        let bytes = resp
-            .bytes()
+
+        // Stream the body in chunks with a running byte counter so a response
+        // that omits or understates Content-Length still cannot exhaust memory.
+        let capacity = resp
+            .content_length()
+            .map(|len| len.min(max_size) as usize)
+            .unwrap_or(0);
+        let mut body = Vec::with_capacity(capacity);
+        let mut resp = resp;
+        while let Some(chunk) = resp
+            .chunk()
             .await
-            .map_err(|e| FederationError::Http(e.to_string()))?;
-        Ok((bytes.to_vec(), content_type, filename))
+            .map_err(|e| FederationError::Http(e.to_string()))?
+        {
+            if body.len() as u64 + chunk.len() as u64 > max_size {
+                return Err(FederationError::FileTooLarge { max: max_size });
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok((body, content_type, filename))
     }
 
     /// GET request with exponential backoff retry.

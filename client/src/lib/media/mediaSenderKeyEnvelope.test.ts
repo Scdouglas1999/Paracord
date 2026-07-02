@@ -143,10 +143,14 @@ describe('mediaSenderKeyEnvelope', () => {
     expect(Array.from(unwrapped.rawKey)).toEqual(Array.from(senderKey));
   });
 
-  it('accepts legacy raw 16-byte media keys unchanged', async () => {
+  it('rejects a raw 16-byte payload instead of trusting it as an unauthenticated key', async () => {
+    // A bare 16-byte payload is never a legitimate delivered key: real keys are
+    // wrapped in an authenticated envelope. Accepting it would let a malicious
+    // relay force participants onto an attacker-known key. The old fast path
+    // (epoch 0, no decryption) has been removed; this must now fail.
     const rawKey = Uint8Array.from({ length: 16 }, (_, index) => 255 - index);
-    const unwrapped = await unwrapDeliveredMediaSenderKey('room:test:audio', '123', rawKey);
-    expect(unwrapped.epoch).toBe(0);
-    expect(Array.from(unwrapped.rawKey)).toEqual(Array.from(rawKey));
+    await expect(
+      unwrapDeliveredMediaSenderKey('room:test:audio', '123', rawKey),
+    ).rejects.toThrow();
   });
 });

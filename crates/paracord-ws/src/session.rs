@@ -53,3 +53,39 @@ impl Session {
         self.guild_owner_ids.remove(&guild_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for the READY/first-event sequence collision: READY must
+    /// consume its own sequence number so the first dispatched event gets a
+    /// distinct, strictly increasing sequence. If READY reused the same number
+    /// as the first event, the first event would be silently skipped on resume
+    /// (the server only replays events with sequence > the client's stored seq).
+    #[test]
+    fn ready_and_first_event_have_distinct_increasing_sequences() {
+        let mut session = Session::new(1, Vec::new(), HashMap::new());
+        assert_eq!(session.sequence, 0, "sessions start at sequence 0");
+
+        // READY consumes a sequence.
+        let ready_seq = session.next_sequence();
+        // The first real dispatched event consumes the next.
+        let first_event_seq = session.next_sequence();
+
+        assert_eq!(ready_seq, 1, "READY should be sequence 1");
+        assert_eq!(first_event_seq, 2, "first event should be sequence 2");
+        assert_ne!(
+            ready_seq, first_event_seq,
+            "READY and the first event must not collide"
+        );
+        assert!(
+            first_event_seq > ready_seq,
+            "sequences must be strictly increasing"
+        );
+        assert_eq!(
+            session.sequence, first_event_seq,
+            "session.sequence must equal the last value handed out"
+        );
+    }
+}

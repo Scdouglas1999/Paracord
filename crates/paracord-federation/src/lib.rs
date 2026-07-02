@@ -42,6 +42,8 @@ pub enum FederationError {
     RemoteError(String),
     #[error("unknown server: {0}")]
     UnknownServer(String),
+    #[error("federated file exceeds maximum allowed size of {max} bytes")]
+    FileTooLarge { max: u64 },
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +175,36 @@ impl FederationService {
         if !self.config.enabled {
             return Err(FederationError::Disabled);
         }
+
+        // Dedup is scoped by (event_id, origin_server). The `event_id` is
+        // sender-chosen (`${message_id}:{domain}`), so a malicious peer could
+        // otherwise squat another peer's event_id and cause a later authentic
+        // copy to be silently dropped by a bare `ON CONFLICT(event_id)`. We
+        // enforce origin scoping in application logic here because the table's
+        // primary key is `event_id` alone and a schema/index change is out of
+        // scope for this crate. A future `UNIQUE(event_id, origin_server)`
+        // index (added via a dual-DB migration) would let the database enforce
+        // this directly and close the small check-then-insert race below.
+        let existing_origin: Option<String> =
+            sqlx::query_scalar("SELECT origin_server FROM federation_events WHERE event_id = $1")
+                .bind(&envelope.event_id)
+                .fetch_optional(pool)
+                .await?;
+
+        if let Some(existing_origin) = existing_origin {
+            if existing_origin == envelope.origin_server {
+                // Genuine duplicate from the same origin: no-op, not an error.
+                return Ok(false);
+            }
+            // The event_id is already held by a different origin server. Reject
+            // the mismatched-origin event rather than dropping it silently or
+            // overwriting the incumbent record.
+            return Err(FederationError::RemoteError(format!(
+                "event_id '{}' already registered by origin '{}', refusing conflicting origin '{}'",
+                envelope.event_id, existing_origin, envelope.origin_server
+            )));
+        }
+
         let rows = sqlx::query(
             "INSERT INTO federation_events (event_id, room_id, event_type, sender, origin_server, origin_ts, content, depth, state_key, signatures)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -818,18 +850,35 @@ pub fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Decode a lowercase/uppercase ASCII-hex string into bytes.
+///
+/// Operates on raw bytes (never on `&str` slices) so that multi-byte UTF-8
+/// input can never trigger a "not a char boundary" panic. Any byte that is not
+/// an ASCII hex digit, or an odd-length input, yields `None`. This decoder is
+/// fed attacker-controlled signature/key hex from inbound federation
+/// envelopes, so it must reject malformed input without panicking.
 pub fn hex_decode(value: &str) -> Option<Vec<u8>> {
-    if !value.len().is_multiple_of(2) {
+    let bytes = value.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
-    let mut out = Vec::with_capacity(value.len() / 2);
-    let mut i = 0;
-    while i < value.len() {
-        let byte = u8::from_str_radix(&value[i..i + 2], 16).ok()?;
-        out.push(byte);
-        i += 2;
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let hi = hex_nibble(pair[0])?;
+        let lo = hex_nibble(pair[1])?;
+        out.push((hi << 4) | lo);
     }
     Some(out)
+}
+
+/// Convert a single ASCII hex digit byte into its 0-15 value, or `None`.
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -887,5 +936,142 @@ mod tests {
             .expect("custom envelope should build");
         assert_eq!(env.depth, ts);
         assert_eq!(env.room_id, "!42:chat.example");
+    }
+
+    #[test]
+    fn hex_decode_round_trips() {
+        let bytes = [0x00u8, 0x0f, 0xa5, 0xff];
+        let encoded = hex_encode(&bytes);
+        assert_eq!(encoded, "000fa5ff");
+        assert_eq!(hex_decode(&encoded), Some(bytes.to_vec()));
+        // Uppercase hex must decode identically.
+        assert_eq!(hex_decode("000FA5FF"), Some(bytes.to_vec()));
+    }
+
+    #[test]
+    fn hex_decode_rejects_odd_length() {
+        assert_eq!(hex_decode("abc"), None);
+        assert_eq!(hex_decode("f"), None);
+    }
+
+    #[test]
+    fn hex_decode_rejects_non_hex() {
+        assert_eq!(hex_decode("zz"), None);
+        assert_eq!(hex_decode("0g"), None);
+        assert_eq!(hex_decode("g0"), None);
+        // A space is even-length-safe but not a hex digit.
+        assert_eq!(hex_decode("  "), None);
+    }
+
+    #[test]
+    fn hex_decode_empty_is_empty_vec() {
+        assert_eq!(hex_decode(""), Some(Vec::new()));
+    }
+
+    #[test]
+    fn hex_decode_multibyte_even_length_returns_none_without_panic() {
+        // "é" is 2 bytes in UTF-8 (0xC3 0xA9); byte length 2 passes the
+        // even-length gate. A naive `&value[0..2]` slice would panic because
+        // there is no char boundary at index... but with a byte-wise decoder
+        // this must simply return None (0xC3/0xA9 are not ASCII hex digits).
+        assert_eq!(hex_decode("é"), None);
+        // Longer multi-byte strings whose byte length is even but whose char
+        // boundaries do not align to 2-byte windows.
+        assert_eq!(hex_decode("ééé"), None); // 6 bytes
+        assert_eq!(hex_decode("a😀"), None); // 1 + 4 = 5 bytes -> odd, None
+        assert_eq!(hex_decode("aé"), None); // 1 + 2 = 3 bytes -> odd, None
+        assert_eq!(hex_decode("ffé"), None); // 2 + 2 = 4 bytes, even, non-hex tail
+    }
+
+    #[test]
+    fn verify_payload_rejects_malformed_and_zero_key() {
+        let service = test_service();
+        let payload = b"payload";
+        let valid_sig = service.sign_payload(payload).expect("sign");
+        let valid_pk = service.signing_public_key().expect("pubkey");
+
+        // Baseline: a well-formed signature/key verifies.
+        assert!(service
+            .verify_payload(payload, &valid_sig, &valid_pk)
+            .is_ok());
+
+        // Wrong-length signature hex.
+        assert!(matches!(
+            service.verify_payload(payload, "abcd", &valid_pk),
+            Err(FederationError::InvalidSignature)
+        ));
+        // Non-hex signature.
+        assert!(matches!(
+            service.verify_payload(payload, "zz", &valid_pk),
+            Err(FederationError::InvalidSignature)
+        ));
+        // Empty signature.
+        assert!(matches!(
+            service.verify_payload(payload, "", &valid_pk),
+            Err(FederationError::InvalidSignature)
+        ));
+        // Multi-byte even-length signature hex must not panic.
+        assert!(matches!(
+            service.verify_payload(payload, "ffé", &valid_pk),
+            Err(FederationError::InvalidSignature)
+        ));
+        // All-zero public key (32 zero bytes) is a small-order / invalid key.
+        let zero_pk = hex_encode(&[0u8; 32]);
+        assert!(matches!(
+            service.verify_payload(payload, &valid_sig, &zero_pk),
+            Err(FederationError::InvalidSignature)
+        ));
+    }
+
+    fn test_envelope(event_id: &str, origin_server: &str) -> FederationEventEnvelope {
+        FederationEventEnvelope {
+            event_id: event_id.to_string(),
+            room_id: "!1:chat.example".to_string(),
+            event_type: "m.message".to_string(),
+            sender: "alice".to_string(),
+            origin_server: origin_server.to_string(),
+            origin_ts: 1_700_000_000_000,
+            content: serde_json::json!("hello"),
+            depth: 1,
+            state_key: None,
+            signatures: serde_json::json!({}),
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_event_dedups_same_origin_and_rejects_squatting() {
+        let pool = paracord_db::create_pool("sqlite::memory:", 1)
+            .await
+            .expect("pool");
+        paracord_db::run_migrations(&pool)
+            .await
+            .expect("migrations");
+        let service = test_service();
+
+        // First insert from origin A succeeds.
+        let env_a = test_envelope("msg-1:origin-a", "origin-a.example");
+        assert!(service
+            .persist_event(&pool, &env_a)
+            .await
+            .expect("insert a"));
+
+        // Genuine duplicate from the same origin is a no-op (Ok(false)).
+        assert!(!service.persist_event(&pool, &env_a).await.expect("dup a"));
+
+        // A different origin squatting the same event_id is rejected, and the
+        // incumbent record is preserved.
+        let env_b = test_envelope("msg-1:origin-a", "origin-b.example");
+        assert!(matches!(
+            service.persist_event(&pool, &env_b).await,
+            Err(FederationError::RemoteError(_))
+        ));
+
+        let stored: String =
+            sqlx::query_scalar("SELECT origin_server FROM federation_events WHERE event_id = $1")
+                .bind("msg-1:origin-a")
+                .fetch_one(&pool)
+                .await
+                .expect("fetch stored origin");
+        assert_eq!(stored, "origin-a.example");
     }
 }

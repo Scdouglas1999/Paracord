@@ -1,4 +1,4 @@
-use crate::{datetime_from_db_text, DbError, DbPool};
+use crate::{datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
@@ -35,13 +35,14 @@ pub async fn create_ban(
         "INSERT INTO bans (user_id, guild_id, reason, banned_by)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (user_id, guild_id)
-         DO UPDATE SET reason = $3, banned_by = $4, created_at = datetime('now')
+         DO UPDATE SET reason = $3, banned_by = $4, created_at = $5
          RETURNING user_id, guild_id, reason, banned_by, created_at",
     )
     .bind(user_id)
     .bind(guild_id)
     .bind(reason)
     .bind(banned_by)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)

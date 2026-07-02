@@ -81,23 +81,21 @@ pub async fn update_member(
         auth.user_id,
     );
 
+    // The actor must be a member of the guild, and the target must exist as a
+    // member (404 otherwise) — mutating a non-member would silently insert a
+    // row for a user who never joined.
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+    let target_member = paracord_db::members::get_member(&state.db, user_id, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
     if body.nick.is_some() && auth.user_id != user_id {
         paracord_core::permissions::require_permission(
             actor_perms,
             paracord_models::permissions::Permissions::MANAGE_NICKNAMES,
         )?;
     }
-
-    let updated = paracord_db::members::update_member(
-        &state.db,
-        user_id,
-        guild_id,
-        body.nick.as_deref(),
-        None,
-        None,
-    )
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     let mut role_ids: Vec<String> =
         paracord_db::roles::get_member_roles(&state.db, user_id, guild_id)
@@ -185,7 +183,7 @@ pub async fn update_member(
             .collect();
     }
 
-    let mut timed_out_until = updated.communication_disabled_until;
+    let mut timed_out_until = target_member.communication_disabled_until;
     let touched_timeout = body.communication_disabled_until.is_some();
     if let Some(raw_until) = body.communication_disabled_until {
         paracord_core::permissions::require_permission(actor_perms, Permissions::MUTE_MEMBERS)?;
@@ -219,6 +217,20 @@ pub async fn update_member(
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
         timed_out_until = member.communication_disabled_until;
     }
+
+    // Apply the nickname change only after every authorization branch above has
+    // passed, so a rejected role/timeout/nickname request never leaves a
+    // partially-applied nick mutation behind.
+    let updated = paracord_db::members::update_member(
+        &state.db,
+        user_id,
+        guild_id,
+        body.nick.as_deref(),
+        None,
+        None,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     let member_json = json!({
         "guild_id": guild_id.to_string(),
