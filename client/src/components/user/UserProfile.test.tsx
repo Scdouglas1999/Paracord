@@ -68,10 +68,15 @@ vi.mock('../../stores/presenceStore', () => ({
     selector({ getPresence: () => null }),
 }));
 
-vi.mock('../../stores/serverListStore', () => ({
-  useServerListStore: (selector: (state: { activeServerId: string }) => unknown) =>
-    selector({ activeServerId: 'server-1' }),
-}));
+vi.mock('../../stores/serverListStore', () => {
+  const useServerListStore = (selector: (state: { activeServerId: string }) => unknown) =>
+    selector({ activeServerId: 'server-1' });
+  // getApi() -> connectionManager.getActiveApiClient() reads getState(); with no
+  // registered connection it resolves to the LOCAL-fallback apiClient (mocked).
+  (useServerListStore as unknown as { getState: () => { activeServerId: string | null } }).getState =
+    () => ({ activeServerId: null });
+  return { useServerListStore };
+});
 
 vi.mock('../../stores/toastStore', () => ({
   toast: {

@@ -9,6 +9,7 @@ import { useUIStore } from '../stores/uiStore';
 import { useMessageStore } from '../stores/messageStore';
 import { usePollStore } from '../stores/pollStore';
 import { useAuthStore } from '../stores/authStore';
+import { useServerListStore } from '../stores/serverListStore';
 import { hasUnlockedPrivateKey } from '../lib/accountSession';
 import { ensurePrekeysUploaded } from '../lib/signalPrekeys';
 import { GatewayEvents } from './events';
@@ -317,7 +318,10 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         warnDispatchParseFailure('MESSAGE_REACTION_ADD', 'missing emoji');
         break;
       }
-      const currentUserId = useAuthStore.getState().user?.id || '';
+      const currentUserId =
+        useServerListStore.getState().getServer(serverId)?.userId ||
+        useAuthStore.getState().user?.id ||
+        '';
       useMessageStore.getState().handleReactionAdd(
         data.channel_id,
         data.message_id,
@@ -334,7 +338,10 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         warnDispatchParseFailure('MESSAGE_REACTION_REMOVE', 'missing emoji');
         break;
       }
-      const currentUserId2 = useAuthStore.getState().user?.id || '';
+      const currentUserId2 =
+        useServerListStore.getState().getServer(serverId)?.userId ||
+        useAuthStore.getState().user?.id ||
+        '';
       useMessageStore.getState().handleReactionRemove(
         data.channel_id,
         data.message_id,

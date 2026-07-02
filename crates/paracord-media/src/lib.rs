@@ -7,8 +7,7 @@ pub mod voice;
 pub use livekit::{AudioBitrate, LiveKitConfig, WebhookEvent};
 pub use s3::S3Config;
 pub use storage::{
-    LocalStorage, P2PTransferRequest, Storage, StorageBackend, StorageConfig, StorageError,
-    StorageManager, StoredFile,
+    LocalStorage, Storage, StorageBackend, StorageConfig, StorageError, StorageManager, StoredFile,
 };
 pub use streaming::{
     ScreenCaptureConfig, SimulcastLayer, StreamConfig, StreamMetadata, StreamQualityPreset,

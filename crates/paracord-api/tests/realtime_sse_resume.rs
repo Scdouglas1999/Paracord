@@ -88,6 +88,24 @@ fn frame_seq(frame: &Value) -> Option<u64> {
     frame.get("s").and_then(|v| v.as_u64())
 }
 
+fn frame_event_id(frame: &Value) -> Option<u64> {
+    frame.get("event_id").and_then(|v| v.as_u64())
+}
+
+async fn create_session_body(app: &Router, token: &str) -> Value {
+    let session_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v2/rt/session")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("session request");
+    let (status, body) = common::dispatch_json(app, session_req)
+        .await
+        .expect("create session");
+    assert!(status.is_success(), "create_session failed: {status}");
+    body
+}
+
 #[tokio::test]
 async fn sse_resume_replays_gap_events_in_order() {
     let app_ctx = build_test_app(TestAppOptions {
@@ -272,5 +290,118 @@ async fn sse_resume_after_partial_read_does_not_duplicate_or_drop() {
         second_events,
         vec!["c"],
         "reconnect must replay only the post-cursor event; got {second:?}",
+    );
+}
+
+/// A user must not be able to attach to another user's session channel by
+/// supplying the victim's `session_id`; doing so would replay/tail the victim's
+/// permission-filtered event stream (DMs, private channels).
+#[tokio::test]
+async fn sse_attach_with_foreign_session_id_is_rejected() {
+    let app_ctx = build_test_app(TestAppOptions {
+        jwt_secret: "sse-ownership-secret".to_string(),
+        ..Default::default()
+    })
+    .await
+    .expect("build test app");
+
+    let token_a = create_authenticated_user_token(
+        &app_ctx.db,
+        &app_ctx.jwt_secret,
+        "victim",
+        "hunter2hunter2",
+    )
+    .await
+    .expect("create user a token");
+    let token_b = create_authenticated_user_token(
+        &app_ctx.db,
+        &app_ctx.jwt_secret,
+        "attacker",
+        "hunter2hunter2",
+    )
+    .await
+    .expect("create user b token");
+
+    // Victim establishes their session channel.
+    let body_a = create_session_body(&app_ctx.app, &token_a).await;
+    let victim_session = body_a["session_id"].as_str().unwrap().to_string();
+
+    // Attacker (authenticated as themselves) tries to attach to the victim's
+    // session id. This must be refused rather than returning the victim's stream.
+    let uri = format!("/api/v2/rt/events?session_id={victim_session}&cursor=0");
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token_b}"))
+        .body(Body::empty())
+        .expect("build sse request");
+    let response = app_ctx
+        .app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("sse response");
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::FORBIDDEN,
+        "attaching to another user's session id must be forbidden",
+    );
+
+    // The legitimate owner can still attach to their own session.
+    let owner_frames = collect_gateway_frames(&app_ctx.app, &token_a, &victim_session, 0, 1).await;
+    assert_eq!(
+        owner_frames.first().and_then(frame_event_name),
+        Some("READY"),
+        "owner should still receive READY on their own session",
+    );
+}
+
+/// The READY frame must carry the connection's resume cursor as its `event_id`
+/// (not a hardcoded 1). A hardcoded 1 drives the client cursor backwards and,
+/// on a forced resync, wedges the client into a permanent op-9 loop.
+#[tokio::test]
+async fn sse_ready_event_id_tracks_resume_cursor() {
+    let app_ctx = build_test_app(TestAppOptions {
+        jwt_secret: "sse-ready-cursor-secret".to_string(),
+        ..Default::default()
+    })
+    .await
+    .expect("build test app");
+
+    let token = create_authenticated_user_token(
+        &app_ctx.db,
+        &app_ctx.jwt_secret,
+        "readyuser",
+        "hunter2hunter2",
+    )
+    .await
+    .expect("create user token");
+
+    let body = create_session_body(&app_ctx.app, &token).await;
+    let session_id = body["session_id"].as_str().unwrap().to_string();
+    let user_id: i64 = body["user_id"].as_str().unwrap().parse().unwrap();
+
+    // Buffer a few events so a mid-stream resume cursor (2) is valid.
+    for i in 1..=3 {
+        app_ctx.event_bus.dispatch_to_users(
+            "MESSAGE_CREATE",
+            json!({ "id": i.to_string(), "content": format!("m{i}") }),
+            vec![user_id],
+        );
+    }
+
+    // Resume from cursor 2 (healthy replay of seq 3). READY.event_id must equal
+    // the resume cursor, proving it is no longer hardcoded to 1.
+    let frames = collect_gateway_frames(&app_ctx.app, &token, &session_id, 2, 2).await;
+    let ready = frames.first().expect("at least the READY frame");
+    assert_eq!(
+        frame_event_name(ready),
+        Some("READY"),
+        "first frame is READY"
+    );
+    assert_eq!(
+        frame_event_id(ready),
+        Some(2),
+        "READY event_id must equal the resume cursor, got {ready:?}",
     );
 }

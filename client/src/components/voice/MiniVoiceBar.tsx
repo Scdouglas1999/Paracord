@@ -62,7 +62,11 @@ export function MiniVoiceBar() {
       {/* Quick controls */}
       <div className="flex items-center gap-1">
         <button
-          onClick={isPttMode ? undefined : handleToggleMute}
+          onClick={handleToggleMute}
+          // In push-to-talk mode this control is a live transmit/mute status
+          // indicator, not a toggle; mark it disabled so keyboard and AT users
+          // get an honest non-interactive control instead of a silent no-op.
+          disabled={isPttMode}
           className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
           aria-label={isPttMode ? (pttEngaged ? 'Transmitting (PTT)' : 'Push to Talk (muted)') : selfMute ? 'Unmute' : 'Mute'}
           title={isPttMode ? (pttEngaged ? 'Transmitting (PTT)' : 'Push to Talk (muted)') : undefined}

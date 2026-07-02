@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Calendar, Clock, MapPin, Users, Plus, X, Check, Sparkles, Download, Repeat } from 'lucide-react';
-import { apiClient, extractApiError } from '../../api/client';
+import { extractApiError } from '../../api/client';
+import { getApi } from '../../api/activeClient';
 import { useAuthStore } from '../../stores/authStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { Permissions, hasPermission } from '../../types';
@@ -139,8 +140,8 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
         reminder_minutes: reminderMinutes === 'none' ? (isEditing ? null : undefined) : Number(reminderMinutes),
       };
       const { data } = isEditing
-        ? await apiClient.patch(`/guilds/${guildId}/events/${event?.id}`, payload)
-        : await apiClient.post(`/guilds/${guildId}/events`, payload);
+        ? await getApi().patch(`/guilds/${guildId}/events/${event?.id}`, payload)
+        : await getApi().post(`/guilds/${guildId}/events`, payload);
       onSaved(data);
       onClose();
       toast.success(isEditing ? 'Event updated' : 'Event created!');
@@ -358,7 +359,7 @@ export function EventList({ guildId }: EventListProps) {
 
   const fetchEvents = useCallback(() => {
     setLoading(true);
-    apiClient
+    getApi()
       .get(`/guilds/${guildId}/events`)
       .then(({ data }) => {
         setEvents(data);
@@ -392,9 +393,9 @@ export function EventList({ guildId }: EventListProps) {
   const handleRsvp = async (eventId: string, hasRsvp: boolean) => {
     try {
       if (hasRsvp) {
-        await apiClient.delete(`/guilds/${guildId}/events/${eventId}/rsvp`);
+        await getApi().delete(`/guilds/${guildId}/events/${eventId}/rsvp`);
       } else {
-        await apiClient.put(`/guilds/${guildId}/events/${eventId}/rsvp`);
+        await getApi().put(`/guilds/${guildId}/events/${eventId}/rsvp`);
       }
       setEvents((prev) =>
         prev.map((e) =>
@@ -414,7 +415,7 @@ export function EventList({ guildId }: EventListProps) {
 
   const refreshEvent = async (eventId: string) => {
     try {
-      const { data } = await apiClient.get(`/guilds/${guildId}/events/${eventId}`);
+      const { data } = await getApi().get(`/guilds/${guildId}/events/${eventId}`);
       setEvents((prev) => prev.map((event) => (event.id === eventId ? data : event)));
     } catch (err: unknown) {
       toast.error(eventListError('Failed to refresh event details', err));
@@ -423,7 +424,7 @@ export function EventList({ guildId }: EventListProps) {
 
   const updateEventStatus = async (eventId: string, status: number) => {
     try {
-      const { data } = await apiClient.patch(`/guilds/${guildId}/events/${eventId}`, { status });
+      const { data } = await getApi().patch(`/guilds/${guildId}/events/${eventId}`, { status });
       setEvents((prev) => prev.map((event) => (event.id === eventId ? data : event)));
       toast.success('Event updated');
     } catch (err: unknown) {
@@ -434,7 +435,7 @@ export function EventList({ guildId }: EventListProps) {
   const deleteEvent = async (eventId: string) => {
     if (!(await confirm({ title: 'Delete this event?', confirmLabel: 'Delete', variant: 'danger' }))) return;
     try {
-      await apiClient.delete(`/guilds/${guildId}/events/${eventId}`);
+      await getApi().delete(`/guilds/${guildId}/events/${eventId}`);
       setEvents((prev) => prev.filter((event) => event.id !== eventId));
       toast.success('Event deleted');
     } catch (err: unknown) {
@@ -771,7 +772,7 @@ export function EventsIndicator({ guildId }: { guildId: string }) {
   const [count, setCount] = useState(0);
 
   const fetchCount = useCallback(() => {
-    apiClient
+    getApi()
       .get(`/guilds/${guildId}/events`)
       .then(({ data }) => {
         const upcoming = (data as ScheduledEvent[]).filter(

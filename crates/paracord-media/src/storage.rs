@@ -269,17 +269,6 @@ pub struct StoredFile {
     pub url: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct P2PTransferRequest {
-    pub transfer_id: String,
-    pub filename: String,
-    pub size: u64,
-    pub sender_id: i64,
-    pub recipient_ids: Vec<i64>,
-    pub chunks: u64,
-    pub chunk_size: u64,
-}
-
 impl StorageManager {
     pub fn new(config: StorageConfig) -> Self {
         Self { config }
@@ -400,54 +389,6 @@ impl StorageManager {
         }
 
         anyhow::bail!("File not found: {}", file_id)
-    }
-
-    /// Create a P2P transfer request for large files.
-    pub fn create_p2p_transfer(
-        &self,
-        filename: &str,
-        size: u64,
-        sender_id: i64,
-        recipient_ids: Vec<i64>,
-    ) -> P2PTransferRequest {
-        let chunk_size: u64 = 256 * 1024; // 256KB chunks
-        let chunks = size.div_ceil(chunk_size);
-
-        P2PTransferRequest {
-            transfer_id: Uuid::new_v4().to_string(),
-            filename: filename.to_string(),
-            size,
-            sender_id,
-            recipient_ids,
-            chunks,
-            chunk_size,
-        }
-    }
-
-    /// Get storage usage for a guild.
-    pub async fn get_guild_storage_usage(&self, guild_id: i64) -> Result<u64, anyhow::Error> {
-        let guild_dir = self.config.base_path.join(guild_id.to_string());
-        if !guild_dir.exists() {
-            return Ok(0);
-        }
-
-        let mut total: u64 = 0;
-        let mut stack = vec![guild_dir];
-
-        while let Some(dir) = stack.pop() {
-            if let Ok(mut entries) = fs::read_dir(&dir).await {
-                while let Some(entry) = entries.next_entry().await? {
-                    let metadata = entry.metadata().await?;
-                    if metadata.is_file() {
-                        total += metadata.len();
-                    } else if metadata.is_dir() {
-                        stack.push(entry.path());
-                    }
-                }
-            }
-        }
-
-        Ok(total)
     }
 }
 

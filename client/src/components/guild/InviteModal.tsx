@@ -191,13 +191,19 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                 value={loading ? 'Generating...' : portableLink}
                 readOnly
                 className="flex-1 bg-transparent px-4 py-3 text-[15px] outline-none"
-                style={{ color: 'var(--text-primary)' }}
+                style={{ color: 'var(--text-primary)', opacity: optionsDirty ? 0.5 : 1 }}
               />
               <button
                 onClick={handleCopyPortable}
-                disabled={loading || !portableLink}
-                aria-label={copiedPortable ? 'Portable invite link copied' : 'Copy portable invite link'}
-                className="inline-flex items-center justify-center px-4 py-3 text-sm font-semibold text-white transition-colors"
+                disabled={loading || !portableLink || optionsDirty}
+                aria-label={
+                  copiedPortable
+                    ? 'Portable invite link copied'
+                    : optionsDirty
+                      ? 'Copy portable invite link (apply changed options first)'
+                      : 'Copy portable invite link'
+                }
+                className="inline-flex items-center justify-center px-4 py-3 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                 style={{ backgroundColor: copiedPortable ? 'var(--accent-success)' : 'var(--accent-primary)' }}
               >
                 {copiedPortable ? (
@@ -223,13 +229,19 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                 value={loading ? 'Generating...' : inviteCode}
                 readOnly
                 className="flex-1 bg-transparent px-4 py-2.5 font-mono text-[14px] outline-none"
-                style={{ color: 'var(--text-muted)' }}
+                style={{ color: 'var(--text-muted)', opacity: optionsDirty ? 0.5 : 1 }}
               />
               <button
                 onClick={handleCopyCode}
-                disabled={loading || !inviteCode}
-                aria-label={copiedCode ? 'Invite code copied' : 'Copy invite code'}
-                className="inline-flex items-center justify-center px-3 py-2.5 text-xs font-semibold transition-colors"
+                disabled={loading || !inviteCode || optionsDirty}
+                aria-label={
+                  copiedCode
+                    ? 'Invite code copied'
+                    : optionsDirty
+                      ? 'Copy invite code (apply changed options first)'
+                      : 'Copy invite code'
+                }
+                className="inline-flex items-center justify-center px-3 py-2.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                 style={{ color: copiedCode ? 'var(--accent-success)' : 'var(--text-secondary)' }}
               >
                 {copiedCode ? (

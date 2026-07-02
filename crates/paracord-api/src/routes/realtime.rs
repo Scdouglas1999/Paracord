@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use chrono::Utc;
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use futures_util::stream;
 use paracord_core::AppState;
@@ -12,8 +13,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -71,11 +72,17 @@ fn parse_i64_id(raw: Option<&str>) -> Option<i64> {
 
 /// Max buffered events retained per session for replay.
 const MAX_REPLAY_EVENTS: usize = 512;
-/// Max age a session channel is kept alive with no fresh events before the
-/// background sweep tears it down (matches the WS replay window).
+/// Max age a session channel is kept alive with no fresh events *and* no
+/// attached connection before the background sweep tears it down (matches the WS
+/// replay window).
 const MAX_REPLAY_AGE: Duration = Duration::from_secs(300);
 /// How often the background sweep runs.
 const REPLAY_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
+/// Upper bound on concurrent session channels a single authenticated user may
+/// hold open at once. Reconnects reuse an existing channel (keyed by the JWT
+/// session id), so this only caps genuinely distinct sessions and prevents a
+/// single account from spawning unbounded pumps / event-bus registrations.
+const MAX_SESSION_CHANNELS_PER_USER: usize = 32;
 
 /// A fully-rendered gateway frame retained for replay. `data` is the exact SSE
 /// `data:` body (with `s`/`event_id` already embedded) so replayed and live
@@ -92,6 +99,14 @@ struct SessionChannel {
     /// Session id this channel serves, used to release the event-bus
     /// registration when the channel is reclaimed.
     session_id: String,
+    /// Authenticated user that created (owns) this channel. Every attach is
+    /// checked against this so a caller cannot bind to another user's session by
+    /// supplying their `session_id`.
+    owner_user_id: i64,
+    /// Number of SSE connections currently attached. The sweep never reclaims a
+    /// channel while a connection is attached (even an idle one that receives no
+    /// events), so a live-but-quiet stream is not torn out from under itself.
+    active_connections: AtomicUsize,
     /// Event bus handle so the channel can unregister its own session on Drop,
     /// keeping the pump, buffer, and event-bus registration reclaimed together.
     event_bus: paracord_core::events::EventBus,
@@ -168,12 +183,66 @@ impl Drop for SessionChannel {
     fn drop(&mut self) {
         // Release the event-bus registration (which also closes the pump's
         // receiver) and abort the pump task, so nothing leaks once the channel
-        // is reclaimed.
+        // is reclaimed. The pump only holds a `Weak` reference to this channel,
+        // so this Drop is reachable: once the map entry and every attached
+        // connection are gone, the last strong reference is dropped and cleanup
+        // runs here.
         self.event_bus.unregister_session(&self.session_id);
         if let Ok(mut pump) = self.pump.lock() {
             if let Some(handle) = pump.take() {
                 handle.abort();
             }
+        }
+        decrement_user_channel_count(self.owner_user_id);
+    }
+}
+
+/// RAII guard tying an attached SSE connection's lifetime to the session
+/// channel's `active_connections` counter. Held for the whole duration of a
+/// stream; on drop (client disconnect) the counter is decremented so the sweep
+/// can eventually reclaim the now-idle channel.
+struct ConnectionGuard {
+    channel: Arc<SessionChannel>,
+}
+
+impl ConnectionGuard {
+    fn new(channel: Arc<SessionChannel>) -> Self {
+        channel.active_connections.fetch_add(1, Ordering::SeqCst);
+        Self { channel }
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.channel
+            .active_connections
+            .fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Per-user count of live session channels, used to enforce
+/// `MAX_SESSION_CHANNELS_PER_USER`. Kept in lock-step with channel
+/// creation/reclamation (incremented when a channel is created, decremented in
+/// `SessionChannel::drop`).
+fn user_channel_counts() -> &'static DashMap<i64, usize> {
+    static USER_CHANNEL_COUNTS: OnceLock<DashMap<i64, usize>> = OnceLock::new();
+    USER_CHANNEL_COUNTS.get_or_init(DashMap::new)
+}
+
+fn user_channel_count(user_id: i64) -> usize {
+    user_channel_counts().get(&user_id).map(|v| *v).unwrap_or(0)
+}
+
+fn increment_user_channel_count(user_id: i64) {
+    *user_channel_counts().entry(user_id).or_insert(0) += 1;
+}
+
+fn decrement_user_channel_count(user_id: i64) {
+    if let Some(mut count) = user_channel_counts().get_mut(&user_id) {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            drop(count);
+            user_channel_counts().remove(&user_id);
         }
     }
 }
@@ -190,12 +259,18 @@ fn session_channels() -> &'static DashMap<String, Arc<SessionChannel>> {
                     let stale: Vec<String> = channels
                         .iter()
                         .filter(|entry| {
-                            entry
-                                .value()
-                                .last_active
-                                .lock()
-                                .map(|la| la.elapsed() > MAX_REPLAY_AGE)
-                                .unwrap_or(true)
+                            let channel = entry.value();
+                            // Never reclaim a channel that still has a connection
+                            // attached, even one that has been idle (no events)
+                            // past MAX_REPLAY_AGE — keep-alive frames do not flow
+                            // through the event pump, so idleness alone must not
+                            // tear a live stream's channel out of the map.
+                            channel.active_connections.load(Ordering::SeqCst) == 0
+                                && channel
+                                    .last_active
+                                    .lock()
+                                    .map(|la| la.elapsed() > MAX_REPLAY_AGE)
+                                    .unwrap_or(true)
                         })
                         .map(|entry| entry.key().clone())
                         .collect();
@@ -218,19 +293,38 @@ fn remove_session_channel(session_id: &str) {
 /// Get the existing channel for `session_id`, or create it and spawn the
 /// background pump that owns the event-bus receiver for the session lifetime.
 ///
-/// The event-bus registration and pump spawn happen inside the DashMap `entry`
-/// so that exactly one channel (and one registration) exists per session id
-/// even under concurrent connect races.
+/// The lookup/creation runs under the DashMap `entry` write lock so that exactly
+/// one channel (and one registration) exists per session id even under
+/// concurrent connect races. On the existing-channel path the caller's
+/// `user_id` is checked against the channel's owner and a mismatch is rejected,
+/// so a caller cannot attach to another user's session by guessing/replaying its
+/// `session_id`. Creation is capped per user to bound resource usage.
+///
+/// The spawned pump holds only a `Weak` reference to the channel, so the channel
+/// (and thus its Drop-based cleanup) is not kept alive by the pump.
 fn get_or_create_channel(
     state: &AppState,
     session_id: &str,
     user_id: i64,
     guild_ids: &[i64],
     guild_owner_ids: HashMap<i64, i64>,
-) -> Arc<SessionChannel> {
-    let entry = session_channels()
-        .entry(session_id.to_string())
-        .or_insert_with(|| {
+) -> Result<Arc<SessionChannel>, ApiError> {
+    match session_channels().entry(session_id.to_string()) {
+        Entry::Occupied(entry) => {
+            let channel = Arc::clone(entry.get());
+            drop(entry);
+            if channel.owner_user_id != user_id {
+                // Session id belongs to a different user; refuse to attach.
+                return Err(ApiError::Forbidden);
+            }
+            channel.touch();
+            Ok(channel)
+        }
+        Entry::Vacant(entry) => {
+            if user_channel_count(user_id) >= MAX_SESSION_CHANNELS_PER_USER {
+                return Err(ApiError::RateLimited(0));
+            }
+
             let receiver =
                 state
                     .event_bus
@@ -238,6 +332,8 @@ fn get_or_create_channel(
             let (live_tx, _) = broadcast::channel::<Arc<BufferedSseEvent>>(MAX_REPLAY_EVENTS);
             let channel = Arc::new(SessionChannel {
                 session_id: session_id.to_string(),
+                owner_user_id: user_id,
+                active_connections: AtomicUsize::new(0),
                 event_bus: state.event_bus.clone(),
                 next_sequence: AtomicU64::new(0),
                 buffer: Mutex::new(VecDeque::new()),
@@ -245,25 +341,25 @@ fn get_or_create_channel(
                 last_active: Mutex::new(Instant::now()),
                 pump: Mutex::new(None),
             });
+            increment_user_channel_count(user_id);
 
             let pump_handle = tokio::spawn(session_pump(
                 state.clone(),
                 session_id.to_string(),
                 user_id,
                 guild_owner_ids,
-                Arc::clone(&channel),
+                Arc::downgrade(&channel),
                 receiver,
             ));
             if let Ok(mut pump) = channel.pump.lock() {
                 *pump = Some(pump_handle);
             }
-            channel
-        });
 
-    let channel = Arc::clone(entry.value());
-    drop(entry);
-    channel.touch();
-    channel
+            entry.insert(Arc::clone(&channel));
+            channel.touch();
+            Ok(channel)
+        }
+    }
 }
 
 /// Background pump: owns the event-bus receiver for a session's whole lifetime,
@@ -274,12 +370,17 @@ async fn session_pump(
     session_id: String,
     user_id: i64,
     mut guild_owner_ids: HashMap<i64, i64>,
-    channel: Arc<SessionChannel>,
+    channel: Weak<SessionChannel>,
     mut receiver: broadcast::Receiver<paracord_core::events::ServerEvent>,
 ) {
     loop {
         match receiver.recv().await {
             Ok(event) => {
+                // The channel is only weakly held so this pump never keeps it
+                // alive; if it has been reclaimed there is nothing left to feed.
+                let Some(channel) = channel.upgrade() else {
+                    break;
+                };
                 // ── Channel permission filtering (mirrors WS handler) ──
                 if let Some(guild_id) = event.guild_id {
                     if let Some(channel_id) =
@@ -316,6 +417,9 @@ async fn session_pump(
                 });
             }
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                let Some(channel) = channel.upgrade() else {
+                    break;
+                };
                 // The event-bus channel overflowed for this session: we can no
                 // longer guarantee a gapless buffer. Record a reconnect frame
                 // so any attached/future connection learns replay is broken.
@@ -439,7 +543,12 @@ async fn apply_guild_scope_update(
     }
 }
 
-async fn build_ready_payload(state: &AppState, user_id: i64, session_id: &str) -> Value {
+async fn build_ready_payload(
+    state: &AppState,
+    user_id: i64,
+    session_id: &str,
+    ready_seq: u64,
+) -> Value {
     let user = paracord_db::users::get_user_by_id(&state.db, user_id)
         .await
         .ok()
@@ -504,10 +613,14 @@ async fn build_ready_payload(state: &AppState, user_id: i64, session_id: &str) -
     }
 
     json!({
-        "event_id": 1u64,
+        // Carry the connection's resume point so the client's cursor tracks the
+        // sequence it is actually caught up to. Hardcoding 1 here would drive the
+        // client cursor backwards on every reconnect and, combined with the op-9
+        // resync path, wedge a resuming client into a permanent resync loop.
+        "event_id": ready_seq,
         "op": 0,
         "t": "READY",
-        "s": 1u64,
+        "s": ready_seq,
         "d": {
             "user": user_json,
             "guilds": guilds_json,
@@ -524,6 +637,9 @@ struct RealtimeStreamState {
     /// Kept alive so the channel (and its event-bus registration) survives while
     /// a connection is attached; the sweep reclaims it once idle.
     channel: Arc<SessionChannel>,
+    /// Keeps `active_connections` incremented for this connection's lifetime so
+    /// the sweep does not reclaim the channel while the stream is attached.
+    _conn_guard: ConnectionGuard,
     /// READY payload sent once at the start of the connection.
     ready_payload: Option<String>,
     /// Buffered frames to replay (seq > cursor) before tailing live events.
@@ -611,7 +727,7 @@ pub async fn create_session(
         auth.user_id,
         &guild_ids,
         guild_owner_ids,
-    );
+    )?;
 
     Ok(Json(json!({
         "session_id": session_id,
@@ -647,7 +763,11 @@ pub async fn stream_events(
         auth.user_id,
         &guild_ids,
         guild_owner_ids,
-    );
+    )?;
+
+    // Count this connection against the channel for the whole stream lifetime so
+    // the sweep cannot reclaim the channel while we are attached (even if idle).
+    let conn_guard = ConnectionGuard::new(Arc::clone(&channel));
 
     // Subscribe to the live tail BEFORE snapshotting the replay window so no
     // event can slip between the two without appearing in one of them.
@@ -671,21 +791,36 @@ pub async fn stream_events(
         }
     }
 
-    // Snapshot the frames to replay in order. When a resync is required we skip
-    // replay entirely — the READY payload below is the authoritative full state.
-    let replay_queue: VecDeque<Arc<BufferedSseEvent>> = if resync_required {
-        VecDeque::new()
-    } else {
-        channel.replay_since(cursor).into_iter().collect()
-    };
-    let last_emitted = replay_queue.back().map(|e| e.sequence).unwrap_or(cursor);
+    // Snapshot the frames to replay in order, and decide the sequence the client
+    // should track after READY (`ready_seq`).
+    //
+    // - Healthy resume: replay `seq > cursor`; READY carries `cursor`, and the
+    //   replay frames then advance the client cursor up to the buffer head. If
+    //   the connection drops right after READY, the client resumes from the same
+    //   valid `cursor`.
+    // - Forced resync: skip replay (the READY payload is the authoritative full
+    //   state) and advertise the channel's current sequence so the client's
+    //   cursor jumps forward to "now". Without this the client would keep
+    //   resuming from a stale cursor that predates the buffer and loop on op-9
+    //   forever.
+    let (replay_queue, last_emitted, ready_seq): (VecDeque<Arc<BufferedSseEvent>>, u64, u64) =
+        if resync_required {
+            let current = channel.current_sequence();
+            (VecDeque::new(), current, current)
+        } else {
+            let queue: VecDeque<Arc<BufferedSseEvent>> =
+                channel.replay_since(cursor).into_iter().collect();
+            let last = queue.back().map(|e| e.sequence).unwrap_or(cursor);
+            (queue, last, cursor)
+        };
 
-    let ready_payload = build_ready_payload(&state, auth.user_id, &session_id)
+    let ready_payload = build_ready_payload(&state, auth.user_id, &session_id, ready_seq)
         .await
         .to_string();
 
     let stream_state = RealtimeStreamState {
         channel,
+        _conn_guard: conn_guard,
         ready_payload: Some(ready_payload),
         replay_queue,
         live_rx,

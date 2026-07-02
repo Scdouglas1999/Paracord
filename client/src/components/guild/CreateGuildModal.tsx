@@ -6,7 +6,8 @@ import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
 import { inviteApi } from '../../api/invites';
-import { apiClient, extractApiError } from '../../api/client';
+import { extractApiError } from '../../api/client';
+import { getApi } from '../../api/activeClient';
 import { useNavigate } from 'react-router-dom';
 import { isAllowedImageMimeType } from '../../lib/security';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
@@ -58,7 +59,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
   useEffect(() => {
     if (tab === 'template' && templates.length === 0 && !templatesLoading) {
       setTemplatesLoading(true);
-      apiClient
+      getApi()
         .get<GuildTemplate[]>('/templates')
         .then(res => setTemplates(res.data))
         .catch((err: unknown) => setError(`Failed to load templates: ${extractApiError(err)}`))
@@ -154,7 +155,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
     setError('');
     setLoading(true);
     try {
-      const { data: guild } = await apiClient.post(`/templates/${selectedTemplate.id}/apply`, {
+      const { data: guild } = await getApi().post(`/templates/${selectedTemplate.id}/apply`, {
         name: templateGuildName.trim(),
       });
       useGuildStore.getState().addGuild(guild);

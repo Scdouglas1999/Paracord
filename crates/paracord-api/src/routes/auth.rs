@@ -618,6 +618,52 @@ fn resolve_server_origin(
     format!("{scheme}://{host}")
 }
 
+/// Resolve an origin that is safe to embed in outbound messages (verification
+/// and password-reset emails) delivered to an account owner.
+///
+/// Unlike [`resolve_server_origin`], this NEVER falls back to a client-supplied
+/// `Host`/`X-Forwarded-Host` header from an untrusted peer: the resulting URL
+/// carries a bearer token and is sent to the victim, so a poisoned `Host`
+/// (classic host-header injection) would leak that token to an attacker's
+/// server. Only a configured `public_url`, or headers presented via a trusted
+/// proxy, are honored. Returns `None` when no trusted origin is available, in
+/// which case the caller must skip sending the link rather than emit an
+/// attacker-controlled URL.
+fn resolve_outbound_link_origin(
+    configured_public_url: Option<&str>,
+    headers: &HeaderMap,
+    peer_ip: Option<&str>,
+) -> Option<String> {
+    if let Some(origin) = configured_public_url.and_then(normalize_public_origin) {
+        return Some(origin);
+    }
+
+    // Without a configured public_url, only a trusted proxy may dictate the
+    // host/scheme for links we mail to users.
+    if !proxy_peer_is_trusted(peer_ip) {
+        return None;
+    }
+
+    let host = headers
+        .get("x-forwarded-host")
+        .and_then(|v| v.to_str().ok())
+        .and_then(normalize_host_header_value)
+        .or_else(|| {
+            headers
+                .get(header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .and_then(normalize_host_header_value)
+        })?;
+
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_forwarded_proto)
+        .unwrap_or_else(default_server_scheme_from_env);
+
+    Some(format!("{scheme}://{host}"))
+}
+
 fn build_refresh_cookie(token: &str, ttl_days: i64, secure: bool) -> String {
     let max_age = ttl_days.saturating_mul(24 * 60 * 60);
     let secure_attr = if secure { "; Secure" } else { "" };
@@ -754,7 +800,18 @@ pub(crate) async fn dispatch_email_verification(
         return;
     }
 
-    let server_origin = resolve_server_origin(state.config.public_url.as_deref(), headers, peer_ip);
+    let Some(server_origin) =
+        resolve_outbound_link_origin(state.config.public_url.as_deref(), headers, peer_ip)
+    else {
+        tracing::warn!(
+            target: "paracord::email_verification",
+            user_id,
+            username = %username,
+            email = %recipient_email,
+            "Email verification link skipped: no trusted public origin (set public_url or trust a proxy)"
+        );
+        return;
+    };
     let verify_url = format!(
         "{}/api/v1/auth/verify-email?token={}",
         server_origin, verify_token
@@ -780,7 +837,6 @@ pub(crate) async fn dispatch_email_verification(
                 user_id,
                 username = %username,
                 email = %recipient_email,
-                url = %verify_url,
                 "Email verification SMTP delivery skipped (recipient or SMTP config unavailable)"
             );
         }
@@ -1214,49 +1270,58 @@ pub async fn register(
             verify_expires,
         )
         .await;
-        let server_origin = resolve_server_origin(
+        let verify_url = resolve_outbound_link_origin(
             state.config.public_url.as_deref(),
             &headers,
             Some(peer_ip.as_str()),
-        );
-        let verify_url = format!(
-            "{}/api/v1/auth/verify-email?token={}",
-            server_origin, verify_token
-        );
-        let subject = "Verify your Paracord email";
-        let body = format!(
-            "Hi {},\n\nWelcome to Paracord. Verify your email by opening this link:\n{}\n\nThis link expires in {} hours.\n\nIf you did not create this account, ignore this message.",
-            user.username, verify_url, EMAIL_VERIFY_TOKEN_TTL_HOURS
-        );
-        match send_transactional_email(&resolved_email, subject, &body).await {
-            Ok(true) => {
-                tracing::info!(
-                    target: "paracord::email_verification",
-                    user_id = user.id,
-                    username = %user.username,
-                    email = %resolved_email,
-                    "Sent email verification message"
-                );
-            }
-            Ok(false) => {
+        )
+        .map(|origin| format!("{}/api/v1/auth/verify-email?token={}", origin, verify_token));
+        match verify_url {
+            None => {
                 tracing::warn!(
                     target: "paracord::email_verification",
                     user_id = user.id,
                     username = %user.username,
                     email = %resolved_email,
-                    url = %verify_url,
-                    "Email verification SMTP delivery skipped (recipient or SMTP config unavailable)"
+                    "Email verification link skipped: no trusted public origin (set public_url or trust a proxy)"
                 );
             }
-            Err(err) => {
-                tracing::error!(
-                    target: "paracord::email_verification",
-                    user_id = user.id,
-                    username = %user.username,
-                    email = %resolved_email,
-                    error = %err,
-                    "Failed to send email verification message"
+            Some(verify_url) => {
+                let subject = "Verify your Paracord email";
+                let body = format!(
+                    "Hi {},\n\nWelcome to Paracord. Verify your email by opening this link:\n{}\n\nThis link expires in {} hours.\n\nIf you did not create this account, ignore this message.",
+                    user.username, verify_url, EMAIL_VERIFY_TOKEN_TTL_HOURS
                 );
+                match send_transactional_email(&resolved_email, subject, &body).await {
+                    Ok(true) => {
+                        tracing::info!(
+                            target: "paracord::email_verification",
+                            user_id = user.id,
+                            username = %user.username,
+                            email = %resolved_email,
+                            "Sent email verification message"
+                        );
+                    }
+                    Ok(false) => {
+                        tracing::warn!(
+                            target: "paracord::email_verification",
+                            user_id = user.id,
+                            username = %user.username,
+                            email = %resolved_email,
+                            "Email verification SMTP delivery skipped (recipient or SMTP config unavailable)"
+                        );
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            target: "paracord::email_verification",
+                            user_id = user.id,
+                            username = %user.username,
+                            email = %resolved_email,
+                            error = %err,
+                            "Failed to send email verification message"
+                        );
+                    }
+                }
             }
         }
     }
@@ -1806,17 +1871,27 @@ pub async fn forgot_password(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let server_origin = resolve_server_origin(
+    // Only embed a clickable reset link when we can resolve a trusted origin;
+    // otherwise a poisoned Host header would point the link (carrying the reset
+    // token) at an attacker. The raw token is always included so the user can
+    // complete the reset manually even without a link.
+    let reset_url = resolve_outbound_link_origin(
         state.config.public_url.as_deref(),
         &headers,
         Some(peer_ip.as_str()),
-    );
-    let reset_url = format!("{}/login?reset_token={}", server_origin, raw_token);
+    )
+    .map(|origin| format!("{}/login?reset_token={}", origin, raw_token));
     let subject = "Paracord password reset";
-    let body = format!(
-        "Hi {},\n\nA password reset was requested for your Paracord account.\n\nReset link: {}\nReset token: {}\n\nThis token expires in {} minutes. If you did not request this, ignore this message.",
-        user.username, reset_url, raw_token, RESET_TOKEN_TTL_MINUTES
-    );
+    let body = match &reset_url {
+        Some(reset_url) => format!(
+            "Hi {},\n\nA password reset was requested for your Paracord account.\n\nReset link: {}\nReset token: {}\n\nThis token expires in {} minutes. If you did not request this, ignore this message.",
+            user.username, reset_url, raw_token, RESET_TOKEN_TTL_MINUTES
+        ),
+        None => format!(
+            "Hi {},\n\nA password reset was requested for your Paracord account.\n\nReset token: {}\n\nThis token expires in {} minutes. If you did not request this, ignore this message.",
+            user.username, raw_token, RESET_TOKEN_TTL_MINUTES
+        ),
+    };
     match send_transactional_email(&user.email, subject, &body).await {
         Ok(true) => {
             tracing::info!(
@@ -2641,8 +2716,8 @@ mod tests {
     use super::{
         auth_guard_keys, build_csrf_cookie, build_refresh_cookie, get_cookie_value,
         normalize_email_for_auth, parse_login_form_value, parse_login_json_value,
-        parse_login_request, parse_username_with_discriminator, resolve_server_origin,
-        should_use_secure_cookie_with_public_url, synthesized_local_email,
+        parse_login_request, parse_username_with_discriminator, resolve_outbound_link_origin,
+        resolve_server_origin, should_use_secure_cookie_with_public_url, synthesized_local_email,
         username_login_effective, HeaderMap, LoginRequest,
     };
     use axum::http::{header, HeaderValue};
@@ -2749,6 +2824,51 @@ mod tests {
         headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
         let origin = resolve_server_origin(None, &headers, Some("10.0.0.5"));
         assert_eq!(origin, "https://chat.example.com");
+        std::env::remove_var("PARACORD_TRUST_PROXY");
+        std::env::remove_var("PARACORD_TRUSTED_PROXY_IPS");
+    }
+
+    #[test]
+    fn outbound_link_origin_uses_configured_public_origin_and_ignores_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("attacker.example"));
+        let origin =
+            resolve_outbound_link_origin(Some("https://chat.example.com/app"), &headers, None);
+        assert_eq!(origin.as_deref(), Some("https://chat.example.com"));
+    }
+
+    #[test]
+    fn outbound_link_origin_refuses_untrusted_host_header() {
+        // No configured public_url and an untrusted peer: a poisoned Host must
+        // never become an outbound (email) link origin — return None so the
+        // caller skips the link instead of leaking the token to attacker.example.
+        let _guard = env_lock().lock().expect("env lock");
+        std::env::remove_var("PARACORD_TRUST_PROXY");
+        std::env::remove_var("PARACORD_TRUSTED_PROXY_IPS");
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("attacker.example"));
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("attacker.example"),
+        );
+        let origin = resolve_outbound_link_origin(None, &headers, Some("198.51.100.10"));
+        assert_eq!(origin, None);
+    }
+
+    #[test]
+    fn outbound_link_origin_honors_trusted_forwarded_host() {
+        let _guard = env_lock().lock().expect("env lock");
+        std::env::set_var("PARACORD_TRUST_PROXY", "true");
+        std::env::set_var("PARACORD_TRUSTED_PROXY_IPS", "10.0.0.5");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("chat.example.com"),
+        );
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
+        let origin = resolve_outbound_link_origin(None, &headers, Some("10.0.0.5"));
+        assert_eq!(origin.as_deref(), Some("https://chat.example.com"));
         std::env::remove_var("PARACORD_TRUST_PROXY");
         std::env::remove_var("PARACORD_TRUSTED_PROXY_IPS");
     }

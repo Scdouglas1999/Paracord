@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { ExternalLink, Hash, Volume2, User, Shield } from 'lucide-react';
 import { ComponentType, ButtonStyle, type Component } from '../../types/components';
 import { InteractionType } from '../../types/interactions';
-import { apiClient, extractApiError } from '../../api/client';
+import { extractApiError } from '../../api/client';
+import { getApi } from '../../api/activeClient';
 import { guildApi } from '../../api/guilds';
 import { useChannelStore } from '../../stores/channelStore';
 import { toast } from '../../stores/toastStore';
@@ -24,7 +25,7 @@ async function dispatchComponentInteraction(
   componentType: ComponentType,
   values?: string[],
 ): Promise<void> {
-  await apiClient.post('/interactions', {
+  await getApi().post('/interactions', {
     type: InteractionType.MessageComponent,
     channel_id: channelId,
     message_id: messageId,

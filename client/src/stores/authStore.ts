@@ -10,6 +10,7 @@ import {
   setRefreshToken,
 } from '../lib/authToken';
 import { toast } from './toastStore';
+import { useTypingStore } from './typingStore';
 
 interface AuthState {
   token: string | null;
@@ -36,6 +37,9 @@ function clearAuthState(set: (partial: Partial<AuthState>) => void): void {
   setAccessToken(null);
   setRefreshToken(null);
   clearLegacyPersistedAuth();
+  // Clear per-session transient state so stale typing indicators and their
+  // pending expiry timers don't leak into the next session.
+  useTypingStore.getState().reset();
   set({
     token: null,
     user: null,

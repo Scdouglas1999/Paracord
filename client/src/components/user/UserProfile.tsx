@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag } from 'lucide-react';
 import type { User } from '../../types/index';
-import { apiClient, extractApiError } from '../../api/client';
+import { extractApiError } from '../../api/client';
+import { getApi } from '../../api/activeClient';
 import { dmApi } from '../../api/dms';
 import { relationshipApi } from '../../api/relationships';
 import { keysApi } from '../../api/keys';
@@ -145,7 +146,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   // Fetch profile data from API
   useEffect(() => {
     let cancelled = false;
-    apiClient
+    getApi()
       .get<ProfileData>(`/users/${user.id}/profile`)
       .then(({ data }) => {
         if (!cancelled) setProfileData(data);

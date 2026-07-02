@@ -65,8 +65,8 @@ export const useTypingStore = create<TypingState>()((set) => ({
       };
     }),
 
-  // Clears all typing state and cancels every pending timer. Wire this into the
-  // auth logout flow alongside the other per-session store resets.
+  // Clears all typing state and cancels every pending timer. Called from the
+  // auth logout flow (clearAuthState) so typing state does not leak sessions.
   reset: () => {
     for (const timer of typingTimeouts.values()) {
       clearTimeout(timer);

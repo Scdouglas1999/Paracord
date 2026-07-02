@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState, useCallback, type MouseEvent } from 'react';
+import { useRef, useEffect, useMemo, useState, useCallback, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare } from 'lucide-react';
@@ -611,6 +611,75 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       return el.getBoundingClientRect().height;
     },
   });
+
+  // Roving-tabindex bookkeeping for the message feed. Only one message row is a
+  // tab stop at a time; ArrowUp/Down/Home/End move focus (and the tab stop)
+  // between rows so a keyboard user is not forced to tab through every loaded
+  // message to reach the composer.
+  const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  const messageRowNav = useMemo(() => {
+    const ids: string[] = [];
+    const rowIndexById = new Map<string, number>();
+    rows.forEach((r, idx) => {
+      if (r.type === 'message') {
+        ids.push(r.message.id);
+        rowIndexById.set(r.message.id, idx);
+      }
+    });
+    return { ids, rowIndexById };
+  }, [rows]);
+  // The row that currently owns the tab stop: the last one the user focused if
+  // it still exists, otherwise the most recent message.
+  const activeRowMessageId = useMemo(() => {
+    const { ids, rowIndexById } = messageRowNav;
+    if (ids.length === 0) return null;
+    if (activeRowId && rowIndexById.has(activeRowId)) return activeRowId;
+    return ids[ids.length - 1];
+  }, [activeRowId, messageRowNav]);
+  const focusMessageRow = useCallback(
+    (targetId: string) => {
+      const rowIndex = messageRowNav.rowIndexById.get(targetId);
+      if (rowIndex == null) return;
+      setActiveRowId(targetId);
+      virtualizer.scrollToIndex(rowIndex, { align: 'auto' });
+      // The target row may be off-screen and unmounted; focus it once the
+      // virtualizer has had a chance to render it into the DOM.
+      requestAnimationFrame(() => {
+        document.getElementById(`msg-${targetId}`)?.focus();
+      });
+    },
+    [messageRowNav, virtualizer]
+  );
+  const handleMessageRowKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>, msgId: string) => {
+      // Only handle navigation when focus is on the row itself, never when it
+      // bubbles up from an interior control (edit box, reaction, etc.).
+      if (e.target !== e.currentTarget) return;
+      const { ids } = messageRowNav;
+      const idx = ids.indexOf(msgId);
+      if (idx === -1) return;
+      let targetIdx: number;
+      switch (e.key) {
+        case 'ArrowDown':
+          targetIdx = Math.min(idx + 1, ids.length - 1);
+          break;
+        case 'ArrowUp':
+          targetIdx = Math.max(idx - 1, 0);
+          break;
+        case 'Home':
+          targetIdx = 0;
+          break;
+        case 'End':
+          targetIdx = ids.length - 1;
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+      if (targetIdx !== idx) focusMessageRow(ids[targetIdx]);
+    },
+    [messageRowNav, focusMessageRow]
+  );
 
   useEffect(() => {
     hasHydratedChannelRef.current = false;
@@ -1244,7 +1313,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         aria-label={`Message from ${msg.author.username}`}
         aria-posinset={row.messageIndex + 1}
         aria-setsize={messages.length}
-        tabIndex={0}
+        tabIndex={msg.id === activeRowMessageId ? 0 : -1}
         className="group relative -mx-1.5 flex gap-3.5 rounded-2xl px-2.5 py-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary/60 sm:-mx-2.5 sm:gap-4 sm:px-3"
         style={{
           marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '1.35rem',
@@ -1254,7 +1323,11 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         }}
         onMouseEnter={() => setHoveredMessageId(msg.id)}
         onMouseLeave={() => setHoveredMessageId(null)}
-        onFocus={() => setFocusedMessageId(msg.id)}
+        onKeyDown={(e) => handleMessageRowKeyDown(e, msg.id)}
+        onFocus={() => {
+          setFocusedMessageId(msg.id);
+          setActiveRowId(msg.id);
+        }}
         onBlur={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
             setFocusedMessageId((curr) => (curr === msg.id ? null : curr));

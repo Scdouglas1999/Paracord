@@ -11,7 +11,8 @@ import { APP_NAME } from '../../lib/constants';
 import { hasAccount as hasLocalCryptoAccount } from '../../lib/account';
 import { isAdmin } from '../../types';
 import { adminApi } from '../../api/admin';
-import { apiClient, extractApiError } from '../../api/client';
+import { extractApiError } from '../../api/client';
+import { getApi } from '../../api/activeClient';
 import { authApi, type AuthSession } from '../../api/auth';
 import { cn } from '../../lib/utils';
 import { confirm } from '../../stores/confirmStore';
@@ -671,7 +672,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     try {
       const params = new URLSearchParams();
       if (exportIncludeMessages) params.set('include_messages', 'true');
-      const res = await apiClient.post<Record<string, unknown>>(
+      const res = await getApi().post<Record<string, unknown>>(
         `/users/@me/export?${params.toString()}`
       );
       const bundle = res.data;
@@ -721,7 +722,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     setImporting(true);
     setIdentityStatus(null);
     try {
-      const res = await apiClient.post<Record<string, unknown>>(
+      const res = await getApi().post<Record<string, unknown>>(
         '/users/@me/import',
         importPreview,
       );
