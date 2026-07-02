@@ -566,7 +566,9 @@ mod vpx_impl {
                     &image,
                     pts,
                     1,
-                    flags as i32,
+                    // vpx_enc_frame_flags_t is C `long`: 32-bit on Windows, 64-bit on
+                    // Linux/macOS — cast must stay width-agnostic.
+                    flags as vpx_enc_frame_flags_t,
                     VPX_DL_REALTIME as _,
                 );
                 if ret != VPX_CODEC_OK {

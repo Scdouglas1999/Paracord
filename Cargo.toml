@@ -133,3 +133,12 @@ paracord-codec = { path = "crates/paracord-codec" }
 
 [patch.crates-io]
 scap = { path = "third_party/scap" }
+# Vendored with bindgen bumped 0.68.1 -> 0.72: the pinned 0.68.1 silently emits
+# opaque structs (`_address`-only) against libclang >= 19, which breaks the
+# `generate` feature on modern Linux toolchains (upstream 5.1.3 is unmaintained).
+env-libvpx-sys = { path = "vendor/env-libvpx-sys" }
+# Same bindgen-vs-modern-libclang fix (0.69 -> 0.72) for the PipeWire stack
+# used by scap's Linux screen capture. Upstream 0.8.x is superseded by 0.10
+# but scap is written against the 0.8 API.
+libspa-sys = { path = "vendor/libspa-sys" }
+pipewire-sys = { path = "vendor/pipewire-sys" }

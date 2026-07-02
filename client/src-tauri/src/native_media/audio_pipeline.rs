@@ -123,7 +123,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
 
                     // Encrypt
                     let encrypted = {
-                        let encryptor = match frame_encryptor.lock() {
+                        let mut encryptor = match frame_encryptor.lock() {
                             Ok(encryptor) => encryptor,
                             Err(_) => {
                                 tracing::warn!("audio send task: frame encryptor lock poisoned");
@@ -204,7 +204,7 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                         .expect("header is 16 bytes");
 
                     let decrypted = {
-                        let decryptor = match frame_decryptor.lock() {
+                        let mut decryptor = match frame_decryptor.lock() {
                             Ok(decryptor) => decryptor,
                             Err(_) => continue,
                         };

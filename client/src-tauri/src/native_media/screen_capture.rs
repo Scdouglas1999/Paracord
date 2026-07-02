@@ -781,6 +781,27 @@ fn convert_video_frame(video: scap::frame::VideoFrame) -> Option<(u32, u32, Vec<
             frame.height as u32,
             bgr0_to_bgra(frame.data),
         )),
+        // Formats produced by the Linux PipeWire engine.
+        scap::frame::VideoFrame::BGRx(frame) => Some((
+            frame.width as u32,
+            frame.height as u32,
+            bgr0_to_bgra(frame.data),
+        )),
+        scap::frame::VideoFrame::RGBx(frame) => Some((
+            frame.width as u32,
+            frame.height as u32,
+            rgbx_to_bgra(frame.data),
+        )),
+        scap::frame::VideoFrame::XBGR(frame) => Some((
+            frame.width as u32,
+            frame.height as u32,
+            xbgr_to_bgra(frame.data),
+        )),
+        scap::frame::VideoFrame::RGB(frame) => Some((
+            frame.width as u32,
+            frame.height as u32,
+            rgb_to_bgra(&frame.data),
+        )),
         _ => None,
     }
 }
@@ -789,6 +810,36 @@ fn bgr0_to_bgra(data: Vec<u8>) -> Vec<u8> {
     let mut out = data;
     for alpha in out.iter_mut().skip(3).step_by(4) {
         *alpha = 255;
+    }
+    out
+}
+
+fn rgbx_to_bgra(data: Vec<u8>) -> Vec<u8> {
+    let mut out = data;
+    for px in out.chunks_exact_mut(4) {
+        px.swap(0, 2);
+        px[3] = 255;
+    }
+    out
+}
+
+fn xbgr_to_bgra(data: Vec<u8>) -> Vec<u8> {
+    let mut out = data;
+    for px in out.chunks_exact_mut(4) {
+        // x,B,G,R -> B,G,R,A
+        px[0] = px[1];
+        px[1] = px[2];
+        let r = px[3];
+        px[2] = r;
+        px[3] = 255;
+    }
+    out
+}
+
+fn rgb_to_bgra(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() / 3 * 4);
+    for px in data.chunks_exact(3) {
+        out.extend_from_slice(&[px[2], px[1], px[0], 255]);
     }
     out
 }

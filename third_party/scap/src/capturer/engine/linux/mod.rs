@@ -5,7 +5,7 @@ use std::{
         mpsc::{self, sync_channel, SyncSender},
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use pipewire as pw;
@@ -22,7 +22,7 @@ use pw::{
         },
         pod::{Pod, Property},
         sys::{
-            spa_buffer, spa_meta_header, SPA_META_Header, SPA_PARAM_META_size, SPA_PARAM_META_type,
+            SPA_META_Header, SPA_PARAM_META_size, SPA_PARAM_META_type,
         },
         utils::{Direction, SpaTypes},
     },
@@ -31,7 +31,7 @@ use pw::{
 
 use crate::{
     capturer::Options,
-    frame::{BGRxFrame, Frame, RGBFrame, RGBxFrame, XBGRFrame},
+    frame::{BGRxFrame, Frame, RGBFrame, RGBxFrame, VideoFrame, XBGRFrame},
 };
 
 use self::{error::LinCapError, portal::ScreenCastPortal};
@@ -91,25 +91,6 @@ fn state_changed_callback(
     }
 }
 
-unsafe fn get_timestamp(buffer: *mut spa_buffer) -> i64 {
-    let n_metas = (*buffer).n_metas;
-    if n_metas > 0 {
-        let mut meta_ptr = (*buffer).metas;
-        let metas_end = (*buffer).metas.wrapping_add(n_metas as usize);
-        while meta_ptr != metas_end {
-            if (*meta_ptr).type_ == SPA_META_Header {
-                let meta_header: &mut spa_meta_header =
-                    &mut *((*meta_ptr).data as *mut spa_meta_header);
-                return meta_header.pts;
-            }
-            meta_ptr = meta_ptr.wrapping_add(1);
-        }
-        0
-    } else {
-        0
-    }
-}
-
 fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
     let buffer = unsafe { stream.dequeue_raw_buffer() };
     if !buffer.is_null() {
@@ -118,7 +99,10 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
             if buffer.is_null() {
                 break 'outside;
             }
-            let timestamp = unsafe { get_timestamp(buffer) };
+            // The SPA header pts is on an unspecified (usually monotonic) clock,
+            // so it can't be mapped to SystemTime; capture wall time on arrival
+            // like the win/mac engines' start-time-plus-elapsed approach.
+            let display_time = SystemTime::now();
 
             let n_datas = unsafe { (*buffer).n_datas };
             if n_datas < 1 {
@@ -134,31 +118,34 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
             };
 
             if let Err(e) = match user_data.format.format() {
-                VideoFormat::RGBx => user_data.tx.send(Frame::RGBx(RGBxFrame {
-                    display_time: timestamp as u64,
+                VideoFormat::RGBx => user_data.tx.send(Frame::Video(VideoFrame::RGBx(RGBxFrame {
+                    display_time,
                     width: frame_size.width as i32,
                     height: frame_size.height as i32,
                     data: frame_data,
-                })),
-                VideoFormat::RGB => user_data.tx.send(Frame::RGB(RGBFrame {
-                    display_time: timestamp as u64,
+                }))),
+                VideoFormat::RGB => user_data.tx.send(Frame::Video(VideoFrame::RGB(RGBFrame {
+                    display_time,
                     width: frame_size.width as i32,
                     height: frame_size.height as i32,
                     data: frame_data,
-                })),
-                VideoFormat::xBGR => user_data.tx.send(Frame::XBGR(XBGRFrame {
-                    display_time: timestamp as u64,
+                }))),
+                VideoFormat::xBGR => user_data.tx.send(Frame::Video(VideoFrame::XBGR(XBGRFrame {
+                    display_time,
                     width: frame_size.width as i32,
                     height: frame_size.height as i32,
                     data: frame_data,
-                })),
-                VideoFormat::BGRx => user_data.tx.send(Frame::BGRx(BGRxFrame {
-                    display_time: timestamp as u64,
+                }))),
+                VideoFormat::BGRx => user_data.tx.send(Frame::Video(VideoFrame::BGRx(BGRxFrame {
+                    display_time,
                     width: frame_size.width as i32,
                     height: frame_size.height as i32,
                     data: frame_data,
-                })),
-                _ => panic!("Unsupported frame format received"),
+                }))),
+                _ => {
+                    eprintln!("scap: unsupported pipewire frame format, dropping frame");
+                    Ok(())
+                }
             } {
                 eprintln!("{e}");
             }

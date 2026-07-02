@@ -1233,7 +1233,7 @@ fn send_encoded_video_frame(
             .expect("header is 16 bytes");
 
         let encrypted = {
-            let encryptor = frame_encryptor
+            let mut encryptor = frame_encryptor
                 .lock()
                 .map_err(|_| "video frame encryptor lock poisoned".to_string())?;
             encryptor
