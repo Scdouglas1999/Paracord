@@ -9,6 +9,24 @@ import {
 // ============ Date/Time Formatters ============
 
 /**
+ * Format a date/timestamp as the `YYYY-MM-DDThh:mm` string a native
+ * `datetime-local` input expects, in the user's LOCAL wall-clock time.
+ *
+ * `datetime-local` is timezone-naive, so a control's `value` and its `min`/`max`
+ * constraints must both be built this way. Using `toISOString()` (UTC) for `min`
+ * mis-constrains users west of UTC — the UTC min reads hours ahead of their
+ * local clock and the browser rejects legitimate near-future selections.
+ */
+export function toDatetimeLocalValue(input: string | number | Date): string {
+  const date = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`;
+}
+
+/**
  * Returns a relative time string like "2 hours ago", "just now", "5 minutes ago".
  */
 export function relativeTime(dateStr: string): string {

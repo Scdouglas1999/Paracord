@@ -5,7 +5,8 @@ import { useMessageStore } from '../../stores/messageStore';
 import { toast } from '../../stores/toastStore';
 import { confirm } from '../../stores/confirmStore';
 import { extractApiError } from '../../api/client';
-import { formatTimestamp } from '../../lib/formatters';
+import { formatTimestamp, toDatetimeLocalValue } from '../../lib/formatters';
+import { SCHEDULED_MESSAGE_MIN_LEAD_MS } from '../../lib/constants';
 import { Modal, ModalCloseButton } from '../ui/Modal';
 import { Skeleton } from '../ui/Skeleton';
 import { EmptyState, ErrorBanner } from '../ui/Feedback';
@@ -38,15 +39,6 @@ function statusLabel(status: number): string {
   }
 }
 
-/** Converts an ISO/RFC3339 instant into a `datetime-local` input value in local time. */
-function toDatetimeLocalValue(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}`;
-}
 
 export function ScheduledMessagesPanel({
   channelId,
@@ -120,8 +112,8 @@ export function ScheduledMessagesPanel({
       setEditError('Select a valid scheduled time.');
       return;
     }
-    if (parsed.getTime() <= Date.now()) {
-      setEditError('Choose a future time for scheduled messages.');
+    if (parsed.getTime() < Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS) {
+      setEditError('Choose a time at least 5 seconds in the future.');
       return;
     }
     setEditError(null);
@@ -178,7 +170,7 @@ export function ScheduledMessagesPanel({
     [items],
   );
 
-  const minSendAt = new Date(Date.now() + 5000).toISOString().slice(0, 16);
+  const minSendAt = toDatetimeLocalValue(Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS);
 
   return (
     <Modal

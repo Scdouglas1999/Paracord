@@ -1931,8 +1931,10 @@ interface VoiceStoreState {
   startStream: (qualityPreset?: string, sourceId?: string) => Promise<void>;
   stopStream: () => void;
   toggleVideo: () => void;
-  applyAudioInputDevice: (deviceId: string | null) => Promise<void>;
-  applyAudioOutputDevice: (deviceId: string | null) => Promise<void>;
+  /** Applies the audio input device; resolves to false when the switch failed. */
+  applyAudioInputDevice: (deviceId: string | null) => Promise<boolean>;
+  /** Applies the audio output device; resolves to false when the switch failed. */
+  applyAudioOutputDevice: (deviceId: string | null) => Promise<boolean>;
   /** Re-acquire the microphone with the latest noise suppression / echo
    *  cancellation settings from the auth store. Call after saving voice
    *  settings so changes take effect immediately without mute/unmute. */
@@ -3534,7 +3536,9 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   applyAudioInputDevice: async (deviceId) => {
     const state = get();
     const room = state.room;
-    if (!room) return;
+    // No active room: the selection is persisted and applied on next connect,
+    // so this is a success, not a swallowed failure.
+    if (!room) return true;
     let normalizedDeviceId = normalizeDeviceId(deviceId);
     if (normalizedDeviceId && invalidAudioInputDeviceIds.has(normalizedDeviceId)) {
       normalizedDeviceId = undefined;
@@ -3567,8 +3571,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           startLocalAudioUplinkMonitor(room);
         }
       }
+      return true;
     } catch (err) {
       console.warn('[voice] Failed to switch input device:', err);
+      return false;
     }
   },
   applyAudioOutputDevice: async (deviceId) => {
@@ -3576,20 +3582,28 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     const normalizedDeviceId = normalizeDeviceId(deviceId);
     selectedAudioOutputDeviceId = normalizedDeviceId;
     const room = state.room;
+    let ok = true;
     if (room) {
       try {
         await room.switchActiveDevice('audiooutput', normalizedDeviceId ?? 'default');
         await applyAttachedRemoteAudioOutput(normalizedDeviceId);
       } catch (err) {
         console.warn('[voice] Failed to switch output device:', err);
+        ok = false;
       }
     }
     // On the native (QUIC) path the WebView's setSinkId cannot reach cpal's
     // output device, so also route the OS output device through the native
     // media command. Degrades to a no-op on web / older desktop builds.
     if (isTauri() && state.mediaEngine != null) {
-      await switchNativeOutputDevice(normalizedDeviceId ?? null);
+      try {
+        await switchNativeOutputDevice(normalizedDeviceId ?? null);
+      } catch (err) {
+        console.warn('[voice] Failed to switch native output device:', err);
+        ok = false;
+      }
     }
+    return ok;
   },
   reapplyAudioConstraints: async () => {
     const state = get();

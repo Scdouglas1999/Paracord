@@ -1130,17 +1130,24 @@ pub async fn download_federated_file(
         )
     };
 
+    // Resolve cache settings before downloading so the operator-configured
+    // maximum bounds the streamed body: download_federated_file_with_limit
+    // rejects the transfer (up front via Content-Length and while streaming)
+    // once it exceeds max_size, instead of buffering up to the 1 GiB default
+    // into RAM before the post-download cache guard runs. Settings are read
+    // from server_settings at request time so admin edits apply without a
+    // restart.
+    let cache_settings = resolve_federation_cache_settings(&state).await;
+
     let (file_data, resp_content_type, resp_filename) = client
-        .download_federated_file(&full_download_url)
+        .download_federated_file_with_limit(&full_download_url, cache_settings.max_size)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("failed to download file: {}", e)))?;
 
     let content_type = resp_content_type.unwrap_or_else(|| "application/octet-stream".to_string());
     let filename = resp_filename.unwrap_or_else(|| format!("federated_{}", attachment_id));
 
-    // Optionally cache the file. Settings are read from server_settings at
-    // request time so admin edits apply without a restart.
-    let cache_settings = resolve_federation_cache_settings(&state).await;
+    // Optionally cache the file.
     if cache_settings.enabled {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();

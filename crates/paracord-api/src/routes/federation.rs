@@ -3175,13 +3175,18 @@ fn federation_file_hmac(key: &str, message: &str) -> Result<Vec<u8>, ApiError> {
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-fn mint_federation_file_token(
-    jwt_secret: &str,
-    attachment_id: i64,
-    requester_server: &str,
-) -> (String, i64) {
+/// Mint a short-lived (300s) HMAC-authenticated capability token for a single
+/// federated attachment download.
+///
+/// This is deliberately an **unbound bearer capability**: anyone who presents a
+/// valid, unexpired token can download the attachment. The token is *not*
+/// scoped to the requesting peer, because the download endpoint
+/// ([`file_download`]) is a plain, unsigned `GET` that has no verifiable caller
+/// identity to bind against. Mitigation is the short lifetime plus treating the
+/// download URL as a secret: never log, cache, or otherwise expose it.
+fn mint_federation_file_token(jwt_secret: &str, attachment_id: i64) -> (String, i64) {
     let exp = chrono::Utc::now().timestamp() + 300;
-    let payload = format!("{}:{}:{}", attachment_id, requester_server, exp);
+    let payload = format!("{}:{}", attachment_id, exp);
     let mac = federation_file_hmac(jwt_secret, &payload).unwrap_or_default();
     let mac = paracord_federation::hex_encode(&mac);
     let token = format!("{}.{}", payload, mac);
@@ -3193,7 +3198,7 @@ fn validate_federation_file_token(
     token: &str,
     expected_attachment_id: i64,
 ) -> Result<(), ApiError> {
-    let dot_pos = token.rfind('.').ok_or_else(|| ApiError::Unauthorized)?;
+    let dot_pos = token.rfind('.').ok_or(ApiError::Unauthorized)?;
     let payload = &token[..dot_pos];
     let mac = &token[dot_pos + 1..];
 
@@ -3210,15 +3215,12 @@ fn validate_federation_file_token(
             .map_err(|_| ApiError::Unauthorized)?;
     }
 
-    let parts: Vec<&str> = payload.splitn(3, ':').collect();
-    if parts.len() != 3 {
+    let parts: Vec<&str> = payload.splitn(2, ':').collect();
+    if parts.len() != 2 {
         return Err(ApiError::Unauthorized);
     }
     let attachment_id: i64 = parts[0].parse().map_err(|_| ApiError::Unauthorized)?;
-    if parts[1].trim().is_empty() {
-        return Err(ApiError::Unauthorized);
-    }
-    let exp: i64 = parts[2].parse().map_err(|_| ApiError::Unauthorized)?;
+    let exp: i64 = parts[1].parse().map_err(|_| ApiError::Unauthorized)?;
 
     if attachment_id != expected_attachment_id {
         return Err(ApiError::Unauthorized);
@@ -3250,7 +3252,7 @@ pub async fn file_token(
 
     let body: FederationFileTokenRequest = serde_json::from_slice(&raw_body)
         .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
-    let transport = verify_transport_request(
+    verify_transport_request(
         &state,
         &service,
         &headers,
@@ -3320,8 +3322,7 @@ pub async fn file_token(
     paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
     paracord_core::permissions::require_permission(perms, Permissions::READ_MESSAGE_HISTORY)?;
 
-    let (token, _exp) =
-        mint_federation_file_token(&state.config.jwt_secret, attachment_id, &transport.origin);
+    let (token, _exp) = mint_federation_file_token(&state.config.jwt_secret, attachment_id);
     let download_url = format!(
         "/_paracord/federation/v1/file/{}?token={}",
         attachment_id, token

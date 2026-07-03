@@ -543,7 +543,7 @@ export function VoiceStageChannel({
           {/* Video Area */}
           <div className="flex min-h-0 flex-1 flex-col relative bg-black/40 group/video">
             {!isStage && (watchedStreamerId || videoLayout === 'side') && (
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 rounded-xl bg-bg-primary/80 px-2 py-1.5 shadow-xl backdrop-blur-xl border border-white/5 opacity-0 group-hover/video:opacity-100 transition-opacity">
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 rounded-xl bg-bg-primary/80 px-2 py-1.5 shadow-xl backdrop-blur-xl border border-white/5 opacity-0 group-hover/video:opacity-100 group-focus-within/video:opacity-100 transition-opacity">
                 <span className="pl-1 text-xs font-semibold text-text-muted">View</span>
                 <div className="h-4 w-px bg-white/10 mx-1" />
                 {([

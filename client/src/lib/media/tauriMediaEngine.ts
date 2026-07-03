@@ -1107,6 +1107,16 @@ export class TauriMediaEngine implements MediaEngine {
             originalStop();
           };
         }
+        // The consumer may have unsubscribed while the async setup above was in
+        // flight (waitForPublishedVideoTrack can block up to 10s). The
+        // unsubscribe closure already ran and found no map entry to stop, so if
+        // we store this subscription now its renderer RAF / frame-poll loop
+        // would run forever against a detached canvas. Drop it instead.
+        if (disposed) {
+          subscription.stop();
+          subscription.renderer.destroy();
+          return;
+        }
         this.videoSubscriptions.set(userId, subscription);
       } catch (err) {
         logVoiceDiagnostic('[media] failed to start native remote video subscription', {

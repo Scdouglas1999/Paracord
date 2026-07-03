@@ -82,6 +82,7 @@ vi.mock('../ui/EmojiPicker', () => ({
 
 vi.mock('../../lib/constants', () => ({
   MAX_MESSAGE_LENGTH: 2000,
+  SCHEDULED_MESSAGE_MIN_LEAD_MS: 5000,
 }));
 
 function futureDatetimeLocal(daysFromNow = 30): string {
@@ -336,7 +337,7 @@ describe('MessageInput', () => {
     await user.type(screen.getByLabelText(/Send At/), pastScheduledAt);
     await user.click(screen.getByRole('button', { name: 'Schedule message' }));
 
-    expect(await screen.findByText('Choose a future time for scheduled messages.')).toBeInTheDocument();
+    expect(await screen.findByText('Choose a time at least 5 seconds in the future.')).toBeInTheDocument();
     expect(mockScheduleMessage).not.toHaveBeenCalled();
   });
 });

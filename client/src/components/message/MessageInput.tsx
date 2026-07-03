@@ -4,7 +4,7 @@ import { useMessageStore } from '../../stores/messageStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useTyping } from '../../hooks/useTyping';
-import { MAX_MESSAGE_LENGTH } from '../../lib/constants';
+import { MAX_MESSAGE_LENGTH, SCHEDULED_MESSAGE_MIN_LEAD_MS } from '../../lib/constants';
 import { EmojiPicker } from '../ui/EmojiPicker';
 import { channelApi } from '../../api/channels';
 import type { ChannelFeatureSettings } from '../../api/channels';
@@ -22,7 +22,7 @@ import {
   setVersionedStorageItem,
 } from '../../lib/versionedStorage';
 import { isAllowedImageMimeType } from '../../lib/security';
-import { formatFileSize } from '../../lib/formatters';
+import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 
@@ -142,6 +142,16 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
   // Draft persistence: save on content change (debounced), restore on channel switch
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cancel any pending debounced save. Must be called alongside an explicit
+  // saveDraft clear on send/schedule: the pending timer captured the old content
+  // in its closure and would otherwise re-persist that stale draft in the window
+  // before the content-change effect re-runs (or after an unmount that races it).
+  const clearDraftTimer = useCallback(() => {
+    if (draftTimerRef.current) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
+  }, []);
   useEffect(() => {
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(() => saveDraft(channelId, content), 500);
@@ -278,8 +288,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         setSubmitError('Select a valid scheduled time.');
         return;
       }
-      if (parsedSendAt.getTime() <= Date.now()) {
-        setSubmitError('Choose a future time for scheduled messages.');
+      if (parsedSendAt.getTime() < Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS) {
+        setSubmitError('Choose a time at least 5 seconds in the future.');
         return;
       }
       try {
@@ -293,6 +303,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           replyingTo?.id,
         );
         toast.success('Message scheduled.');
+        clearDraftTimer();
         setContent('');
         setScheduledAt('');
         setScheduledCount((prev) => prev + 1);
@@ -327,6 +338,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         replyingTo?.id,
         attachmentIds,
       );
+      clearDraftTimer();
       setContent('');
       saveDraft(channelId, '');
       setStagedFiles([]);
@@ -696,7 +708,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
               value={scheduledAt}
               onChange={(e) => setScheduledAt(e.target.value)}
               className="input-field mt-1.5"
-              min={new Date(Date.now() + 5000).toISOString().slice(0, 16)}
+              min={toDatetimeLocalValue(Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS)}
             />
           </label>
           <button

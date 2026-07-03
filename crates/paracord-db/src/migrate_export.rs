@@ -502,12 +502,14 @@ pub async fn migrate_sqlite_to_postgres(
 ) -> Result<MigrationReport, DbError> {
     if crate::detect_database_engine(source_url)? != DatabaseEngine::Sqlite {
         return Err(protocol_err(format!(
-            "--source must be a SQLite URL, got '{source_url}'"
+            "--source must be a SQLite URL, got '{}'",
+            paracord_util::redact::redact_db_url(source_url)
         )));
     }
     if crate::detect_database_engine(target_url)? != DatabaseEngine::Postgres {
         return Err(protocol_err(format!(
-            "--target must be a PostgreSQL URL, got '{target_url}'"
+            "--target must be a PostgreSQL URL, got '{}'",
+            paracord_util::redact::redact_db_url(target_url)
         )));
     }
     let batch_size = batch_size.max(1);

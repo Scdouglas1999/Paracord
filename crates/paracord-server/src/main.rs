@@ -320,7 +320,7 @@ async fn main() -> Result<()> {
                 "Failed to connect to PostgreSQL at '{}': {}. \
                  Check that the server is running, credentials are correct, \
                  and the database exists. For SSL connections, append ?sslmode=require to the URL.",
-                config.database.url,
+                paracord_util::redact::redact_db_url(&config.database.url),
                 e
             )
         } else {
@@ -2285,7 +2285,12 @@ fn print_startup_banner(
         println!("  ╚══════════════════════════════════════════════════╝");
     }
     println!();
-    println!("  Database:    {}", db_url);
+    // Redact any userinfo so a PostgreSQL password is never echoed to the
+    // terminal or captured in startup logs.
+    println!(
+        "  Database:    {}",
+        paracord_util::redact::redact_db_url(db_url)
+    );
     println!("  Voice:       {}", voice_status);
     println!("  LiveKit:     {}", livekit_status);
     println!("  Port Fwd:    {}", port_forwarding_status);

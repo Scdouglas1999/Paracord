@@ -57,10 +57,19 @@ function forgetChannel(channelId: string): void {
   _channelAccessOrder.delete(channelId);
 }
 
-/** Trim a channel's message list to the most-recent N, preserving order. */
-function capChannelMessages(messages: Message[]): Message[] {
+/**
+ * Trim a channel's message list to MAX_MESSAGES_PER_CHANNEL, preserving order.
+ * By default the newest N are kept (oldest trimmed) — correct for live appends.
+ * When `trimNewest` is set (backward pagination via `before`), the oldest N are
+ * kept instead, so a just-fetched older page is retained rather than sliced off
+ * the head — otherwise scroll-back would wall at the cap and refetch the same
+ * discarded page forever.
+ */
+function capChannelMessages(messages: Message[], trimNewest = false): Message[] {
   if (messages.length <= MAX_MESSAGES_PER_CHANNEL) return messages;
-  return messages.slice(messages.length - MAX_MESSAGES_PER_CHANNEL);
+  return trimNewest
+    ? messages.slice(0, MAX_MESSAGES_PER_CHANNEL)
+    : messages.slice(messages.length - MAX_MESSAGES_PER_CHANNEL);
 }
 
 function activeChannelId(): string | null {
@@ -579,7 +588,7 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
             const merged = params?.before ? [...sorted, ...existing] : sorted;
             const nextMessages = {
               ...state.messages,
-              [channelId]: capChannelMessages(merged),
+              [channelId]: capChannelMessages(merged, !!params?.before),
             };
             return applyEviction(state, {
               messages: nextMessages,

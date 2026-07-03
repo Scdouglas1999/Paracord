@@ -16,6 +16,7 @@ import { getApi } from '../../api/activeClient';
 import { authApi, type AuthSession } from '../../api/auth';
 import { cn } from '../../lib/utils';
 import { confirm } from '../../stores/confirmStore';
+import { toast } from '../../stores/toastStore';
 import { ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
 import {
@@ -1410,8 +1411,14 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     value={selectedAudioInput || ''}
                     onChange={(e) => {
                       const value = e.target.value;
+                      const previous = selectedAudioInput || '';
                       selectAudioInput(value);
-                      void applyAudioInputDevice(value || null);
+                      void applyAudioInputDevice(value || null).then((ok) => {
+                        if (!ok) {
+                          selectAudioInput(previous);
+                          toast.error('Could not switch microphone. It may be in use or unavailable.');
+                        }
+                      });
                     }}
                   >
                     <option value="">Default</option>
@@ -1429,8 +1436,14 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                     value={selectedAudioOutput || ''}
                     onChange={(e) => {
                       const value = e.target.value;
+                      const previous = selectedAudioOutput || '';
                       selectAudioOutput(value);
-                      void applyAudioOutputDevice(value || null);
+                      void applyAudioOutputDevice(value || null).then((ok) => {
+                        if (!ok) {
+                          selectAudioOutput(previous);
+                          toast.error('Could not switch speaker. It may be unavailable.');
+                        }
+                      });
                     }}
                   >
                     <option value="">Default</option>

@@ -178,17 +178,24 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       if (!data.channel_id || !data.id) break;
       useMessageStore.getState().addMessage(data.channel_id, data as Message);
       useChannelStore.getState().updateLastMessageId(data.channel_id, data.id);
-      // Keep the read-state cache live for mention badges: an @everyone message
-      // the user didn't author bumps the channel's unread mention count. The
-      // authoritative value is reconciled on the next READY/refresh.
-      if (data.mention_everyone) {
+      // Keep the read-state cache live for mention badges between authoritative
+      // refreshes: a message the user didn't author that mentions them — either
+      // directly (<@id> / <@!id> in the content) or via @everyone — bumps the
+      // channel's unread mention count. Reconciled on the next READY/refresh.
+      {
         const mentionAuthorId = data.author?.id ?? data.user_id;
         const selfUserId =
           useServerListStore.getState().getServer(serverId)?.userId ||
           useAuthStore.getState().user?.id ||
           '';
-        if (mentionAuthorId && mentionAuthorId !== selfUserId) {
-          useReadStateStore.getState().incrementMention(data.channel_id);
+        if (selfUserId && mentionAuthorId && mentionAuthorId !== selfUserId) {
+          const content = typeof data.content === 'string' ? data.content : '';
+          const mentionsSelf =
+            data.mention_everyone === true ||
+            new RegExp(`<@!?${selfUserId}>`).test(content);
+          if (mentionsSelf) {
+            useReadStateStore.getState().incrementMention(data.channel_id);
+          }
         }
       }
       // Desktop notification for messages not from self and not in focused channel
