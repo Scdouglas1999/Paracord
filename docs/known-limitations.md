@@ -5,9 +5,9 @@ This page documents support boundaries for the v0.9.0 release candidate. Items h
 ## Native Media
 
 - Native QUIC/WebTransport media is opt-in with `[voice] native_media = true`; LiveKit remains the default voice/video path.
-- Desktop native output device switching is not complete. Input device switching works, but output switching may return an error depending on platform/backend.
-- Desktop native video receive is incomplete. Frames can be transported/decrypted, but full per-stream decode/render routing is not release-complete.
-- Native media subscription negotiation is not complete; subscribe control messages are currently limited.
+- Desktop native input and output device switching both work at runtime; switching the speaker/output device rebinds the active playback sinks in place.
+- Native video receive routes each remote track to its own per-SSRC decoder. VP9 frames are decoded to raw I420 in the Tauri binary; codecs without a native backend (AV1/H.264) are passed through encoded for the frontend to decode.
+- Native media subscription negotiation is wired end-to-end: subscribe/unsubscribe control messages are honored by the relay, so a client only receives the tracks it asks for.
 - VP9 support depends on libvpx. Do not disable the `vpx` feature to work around build issues because that breaks video/screen-share behavior.
 
 ## Platform Capture Support
@@ -24,8 +24,7 @@ This page documents support boundaries for the v0.9.0 release candidate. Items h
 
 ## Scheduled Messages
 
-- Scheduled messages support create, list, cancel, background delivery, and delivery after server restart.
-- Editing or rescheduling an existing scheduled message is not currently exposed as a supported API flow. Cancel and recreate the scheduled message instead.
+- Scheduled messages support create, list, edit (content and delivery time), cancel, background delivery, and delivery after server restart. A `PATCH` on the scheduled-message resource updates a pending message before it fires; the desktop composer exposes an inline edit flow.
 
 ## Desktop Updater
 
@@ -40,6 +39,6 @@ This page documents support boundaries for the v0.9.0 release candidate. Items h
 ## Database And Upgrades
 
 - SQLite is supported for small/self-hosted instances. PostgreSQL is recommended for sustained multi-user production deployments.
-- There is no automatic SQLite-to-PostgreSQL migrator. Operators must plan and validate a maintenance-window export/import cutover.
+- The `paracord-server migrate-to-postgres` subcommand copies an existing SQLite database into a freshly migrated PostgreSQL database inside a single all-or-nothing transaction, verifying every table's row count against the source (with a `--dry-run` mode that validates column maps and counts without writing). It is an offline maintenance-window tool: stop the server and keep the SQLite file idle while it runs. It does not perform live/zero-downtime replication.
 - Schema rollback is not supported. Back up the database and media before applying migrations.
 - Current local upgrade evidence includes synthetic SQLite tag-schema validation from `v0.9.0`; a real released user database snapshot still needs to be validated before public release.

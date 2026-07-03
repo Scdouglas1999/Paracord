@@ -481,7 +481,17 @@ When running on PostgreSQL, Paracord's built-in backup system uses `pg_dump` and
 
 #### Migrating from SQLite to PostgreSQL
 
-There is no built-in migration tool to move data from an existing SQLite database to PostgreSQL. If you need to migrate, export your data manually (e.g. via SQL dump scripts) before switching the engine. For new deployments, just start with PostgreSQL from the beginning if you know you'll want it.
+Already running on SQLite and want to move to PostgreSQL? The server ships a built-in one-shot migrator. Stop the server first (the SQLite file must be idle), create an empty target database, then run:
+
+```bash
+paracord-server migrate-to-postgres \
+  --source "sqlite://./data/paracord.db" \
+  --target "postgresql://paracord:password@localhost:5432/paracord"
+```
+
+The migrator applies the PostgreSQL migration track to the target, then copies every table inside a single all-or-nothing transaction. Each table's row count is verified against the source; any mismatch rolls the entire transaction back and leaves the target untouched, so a failed run never produces a half-migrated database. Add `--dry-run` to validate column mappings and count rows without writing anything, and `--batch-size N` to tune how many rows are streamed per page (default 1000). When it finishes, point your `[database]` config at the PostgreSQL URL (see step 3 above) and start the server.
+
+This is an offline maintenance-window tool, not live replication. See [docs/sqlite-to-postgres-migration.md](docs/sqlite-to-postgres-migration.md) for the full runbook. For new deployments, just start with PostgreSQL from the beginning if you know you'll want it.
 
 </details>
 

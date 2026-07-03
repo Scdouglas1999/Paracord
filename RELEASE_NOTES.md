@@ -65,10 +65,10 @@ The Tauri binary includes a fully functional native audio pipeline:
 - E2EE sender key announcement over QUIC control stream
 - VP9 video encoding/decoding available when built with the `vpx` feature flag
 
-**What is not yet complete on the desktop path:**
-- Output device switching (returns an error; input device switching works)
-- Video subscription negotiation (subscribe control message is a no-op)
-- Video decode on receive (frames are decrypted but not yet routed to per-SSRC decoders)
+**Desktop native-path status (updated in the round-2 overhaul above):**
+- Output device switching now works at runtime, alongside input device switching.
+- Subscription negotiation is honored: subscribe/unsubscribe control messages route only the requested tracks.
+- Video decode on receive routes each remote track to its own per-SSRC decoder (VP9 decoded to I420 natively; AV1/H.264 passed through encoded for the frontend).
 
 **Server configuration:**
 ```toml
