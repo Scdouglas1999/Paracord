@@ -595,12 +595,49 @@ pub async fn get_pinned_messages(
     get_pinned_messages_typed(pool, ChannelId::new(channel_id)).await
 }
 
+/// Maximum number of messages that may be pinned in a single channel. Pinning
+/// beyond this returns [`DbError::LimitReached`], which the API layer maps to
+/// HTTP 409.
+pub const MAX_PINS_PER_CHANNEL: i64 = 50;
+
 /// Core implementation using newtype IDs.
+///
+/// Enforces [`MAX_PINS_PER_CHANNEL`]: if the channel already holds that many
+/// pinned messages and the target message is not itself already pinned, the pin
+/// is rejected with [`DbError::LimitReached`]. Returns `Ok(false)` when the
+/// message does not exist in the channel.
 pub async fn pin_message_typed(
     pool: &DbPool,
     id: MessageId,
     channel_id: ChannelId,
 ) -> Result<bool, DbError> {
+    // Re-pinning an already-pinned message is a no-op and must not count against
+    // the cap, so only enforce the limit when this message is not yet pinned.
+    let already_pinned: Option<i64> = sqlx::query_scalar(
+        "SELECT CASE WHEN pinned THEN 1 ELSE 0 END FROM messages WHERE id = $1 AND channel_id = $2",
+    )
+    .bind(id)
+    .bind(channel_id)
+    .fetch_optional(pool)
+    .await?;
+    match already_pinned {
+        None => return Ok(false),
+        Some(1) => return Ok(true),
+        _ => {}
+    }
+
+    let pinned_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE channel_id = $1 AND pinned = TRUE")
+            .bind(channel_id)
+            .fetch_one(pool)
+            .await?;
+    if pinned_count >= MAX_PINS_PER_CHANNEL {
+        return Err(DbError::LimitReached(format!(
+            "channel already has the maximum of {} pinned messages",
+            MAX_PINS_PER_CHANNEL
+        )));
+    }
+
     let result = sqlx::query("UPDATE messages SET pinned = TRUE WHERE id = $1 AND channel_id = $2")
         .bind(id)
         .bind(channel_id)
@@ -649,11 +686,10 @@ pub async fn bulk_delete_messages_typed(
             "too many message ids in bulk delete".to_string(),
         )));
     }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("${}", i)).collect();
     let channel_bind_index = ids.len() + 1;
     let sql = format!(
         "DELETE FROM messages WHERE id IN ({}) AND channel_id = ${}",
-        placeholders.join(", "),
+        build_placeholders(1, ids.len()),
         channel_bind_index
     );
     let mut query = sqlx::query(&sql);
@@ -815,6 +851,179 @@ pub async fn search_messages(
     search_messages_typed(
         pool,
         ChannelId::new(channel_id),
+        query,
+        limit,
+        author_id.map(UserId::new),
+        after,
+        before,
+    )
+    .await
+}
+
+/// Maximum number of channels a single forum-wide search may fan out over.
+/// Forum channels can accumulate many posts (each its own channel); this caps
+/// the IN-list so the query stays bounded. Callers should pre-truncate.
+const MAX_SEARCH_CHANNELS: usize = 500;
+
+/// Full-text search across a *set* of channels in a single ranked query. Used
+/// for forum-wide search, where each forum post is its own channel: instead of
+/// running one search per post, the caller passes every post channel id and
+/// gets back the top `limit` matches ranked by relevance. E2EE DM messages are
+/// excluded. Returns an empty vec when `channel_ids` is empty.
+///
+/// Bind layout: channel ids occupy `$1..=$n`; the remaining parameters follow.
+#[allow(clippy::too_many_arguments)]
+pub async fn search_messages_in_channels_typed(
+    pool: &DbPool,
+    channel_ids: &[ChannelId],
+    query: &str,
+    limit: i64,
+    author_id: Option<UserId>,
+    after: Option<DateTime<Utc>>,
+    before: Option<DateTime<Utc>>,
+) -> Result<Vec<MessageRow>, DbError> {
+    const MESSAGE_FLAG_DM_E2EE: i32 = 1 << 0;
+    if channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if channel_ids.len() > MAX_SEARCH_CHANNELS {
+        return Err(DbError::Sqlx(sqlx::Error::Protocol(
+            "too many channel ids in forum search".to_string(),
+        )));
+    }
+    let after_text = after.map(datetime_to_db_text);
+    let before_text = before.map(datetime_to_db_text);
+    let n = channel_ids.len();
+    let in_list = build_placeholders(1, n);
+    // Positional params trailing the channel-id IN-list. sqlx honours the
+    // explicit `$N` index, so text order need not match bind order.
+    let p_query = n + 1;
+    let p_author = n + 2;
+    let p_after = n + 3;
+    let p_before = n + 4;
+    let p_limit = n + 5;
+    let p_flag = n + 6;
+
+    match crate::active_database_engine() {
+        crate::DatabaseEngine::Postgres => {
+            let sql = format!(
+                "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
+                 FROM messages
+                 WHERE channel_id IN ({in_list})
+                   AND search_vector @@ plainto_tsquery('english', ${p_query})
+                   AND (${p_author} IS NULL OR author_id = ${p_author})
+                   AND (${p_after} IS NULL OR created_at >= ${p_after})
+                   AND (${p_before} IS NULL OR created_at <= ${p_before})
+                   AND (flags & ${p_flag}) = 0
+                 ORDER BY ts_rank(search_vector, plainto_tsquery('english', ${p_query})) DESC, id DESC
+                 LIMIT ${p_limit}"
+            );
+            let mut q = sqlx::query_as::<_, MessageRow>(&sql);
+            for cid in channel_ids {
+                q = q.bind(*cid);
+            }
+            let rows = q
+                .bind(query)
+                .bind(author_id)
+                .bind(after_text.as_deref())
+                .bind(before_text.as_deref())
+                .bind(limit)
+                .bind(MESSAGE_FLAG_DM_E2EE)
+                .fetch_all(pool)
+                .await?;
+            Ok(rows)
+        }
+        crate::DatabaseEngine::Sqlite => {
+            let fts_query = sanitize_fts5_query(query);
+            let sql = format!(
+                "SELECT m.id, m.channel_id, m.author_id, m.content, m.nonce, m.message_type, m.flags, m.edited_at, CASE WHEN m.pinned THEN 1 ELSE 0 END AS pinned, m.reference_id, m.e2ee_header, m.created_at, m.embeds, m.components
+                 FROM messages m
+                 JOIN messages_fts ON messages_fts.rowid = m.id
+                 WHERE messages_fts MATCH ${p_query}
+                   AND messages_fts.channel_id IN ({in_list})
+                   AND (${p_author} IS NULL OR m.author_id = ${p_author})
+                   AND (${p_after} IS NULL OR m.created_at >= ${p_after})
+                   AND (${p_before} IS NULL OR m.created_at <= ${p_before})
+                   AND (m.flags & ${p_flag}) = 0
+                 ORDER BY rank, m.id DESC
+                 LIMIT ${p_limit}"
+            );
+            let mut q = sqlx::query_as::<_, MessageRow>(&sql);
+            for cid in channel_ids {
+                q = q.bind(*cid);
+            }
+            let fts_result = q
+                .bind(&fts_query)
+                .bind(author_id)
+                .bind(after_text.as_deref())
+                .bind(before_text.as_deref())
+                .bind(limit)
+                .bind(MESSAGE_FLAG_DM_E2EE)
+                .fetch_all(pool)
+                .await;
+
+            match fts_result {
+                Ok(rows) => Ok(rows),
+                Err(err) if is_missing_fts_table(&err) => {
+                    // Same degradation as the single-channel search: if the FTS5
+                    // table is absent, fall back to a LIKE scan. Any other error
+                    // propagates so failures aren't masked.
+                    tracing::warn!(
+                        error = %err,
+                        "messages_fts unavailable; falling back to LIKE search"
+                    );
+                    let escaped = query
+                        .replace('\\', "\\\\")
+                        .replace('%', "\\%")
+                        .replace('_', "\\_");
+                    let pattern = format!("%{}%", escaped);
+                    let sql = format!(
+                        "SELECT id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components
+                         FROM messages
+                         WHERE channel_id IN ({in_list})
+                           AND content LIKE ${p_query} ESCAPE '\\'
+                           AND (${p_author} IS NULL OR author_id = ${p_author})
+                           AND (${p_after} IS NULL OR created_at >= ${p_after})
+                           AND (${p_before} IS NULL OR created_at <= ${p_before})
+                           AND (flags & ${p_flag}) = 0
+                         ORDER BY id DESC
+                         LIMIT ${p_limit}"
+                    );
+                    let mut q = sqlx::query_as::<_, MessageRow>(&sql);
+                    for cid in channel_ids {
+                        q = q.bind(*cid);
+                    }
+                    let rows = q
+                        .bind(pattern)
+                        .bind(author_id)
+                        .bind(after_text.as_deref())
+                        .bind(before_text.as_deref())
+                        .bind(limit)
+                        .bind(MESSAGE_FLAG_DM_E2EE)
+                        .fetch_all(pool)
+                        .await?;
+                    Ok(rows)
+                }
+                Err(err) => Err(DbError::from(err)),
+            }
+        }
+    }
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn search_messages_in_channels(
+    pool: &DbPool,
+    channel_ids: &[i64],
+    query: &str,
+    limit: i64,
+    author_id: Option<i64>,
+    after: Option<DateTime<Utc>>,
+    before: Option<DateTime<Utc>>,
+) -> Result<Vec<MessageRow>, DbError> {
+    let typed: Vec<ChannelId> = channel_ids.iter().map(|&id| ChannelId::new(id)).collect();
+    search_messages_in_channels_typed(
+        pool,
+        &typed,
         query,
         limit,
         author_id.map(UserId::new),
@@ -1066,10 +1275,9 @@ pub async fn delete_messages_by_ids(pool: &DbPool, ids: &[i64]) -> Result<u64, D
             "too many message ids for delete".to_string(),
         )));
     }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("${}", i)).collect();
     let sql = format!(
         "DELETE FROM messages WHERE id IN ({})",
-        placeholders.join(", ")
+        build_placeholders(1, ids.len())
     );
     let mut query = sqlx::query(&sql);
     for id in ids {
@@ -1219,8 +1427,12 @@ pub async fn get_message_with_embeds(
 /// helpers in this crate.
 const MAX_BATCH_MESSAGE_IDS: usize = 500;
 
-fn message_id_placeholders(count: usize) -> String {
-    (1..=count)
+/// Build a comma-separated run of positional bind placeholders
+/// (`$start, $start+1, …, $start+count-1`) for an `IN (…)` clause or similar.
+/// Shared by the batch-lookup helpers in this crate (messages, reactions,
+/// attachments) so every dynamically built IN-list is generated identically.
+pub fn build_placeholders(start: usize, count: usize) -> String {
+    (start..start + count)
         .map(|i| format!("${}", i))
         .collect::<Vec<_>>()
         .join(", ")
@@ -1244,7 +1456,7 @@ pub async fn get_authors_for_message_ids(
     let sql = format!(
         "SELECT id, username, discriminator, email, display_name, avatar_hash, banner_hash, bio, accent_color, flags, created_at, public_key, email_verified
          FROM users WHERE id IN ({})",
-        message_id_placeholders(author_ids.len()),
+        build_placeholders(1, author_ids.len()),
     );
     let mut query = sqlx::query_as::<_, crate::users::UserRow>(&sql);
     for author_id in author_ids {
@@ -1292,7 +1504,7 @@ pub async fn get_stickers_for_message_ids(
          INNER JOIN stickers s ON s.id = ms.sticker_id
          WHERE ms.message_id IN ({})
          ORDER BY ms.message_id, s.created_at ASC",
-        message_id_placeholders(message_ids.len()),
+        build_placeholders(1, message_ids.len()),
     );
     let mut query = sqlx::query_as::<_, BatchStickerRow>(&sql);
     for message_id in message_ids {
@@ -1320,7 +1532,7 @@ pub async fn get_anonymous_messages_for_message_ids(
         "SELECT message_id, channel_id, user_id, alias, created_at
          FROM anonymous_messages
          WHERE message_id IN ({})",
-        message_id_placeholders(message_ids.len()),
+        build_placeholders(1, message_ids.len()),
     );
     let mut query = sqlx::query_as::<_, crate::anonymous_messages::AnonymousMessageRow>(&sql);
     for message_id in message_ids {
@@ -1361,7 +1573,7 @@ pub async fn get_polls_for_message_ids(
     let sql = format!(
         "SELECT id, message_id, channel_id, question, allow_multiselect, expires_at, created_at
          FROM polls WHERE message_id IN ({})",
-        message_id_placeholders(message_ids.len()),
+        build_placeholders(1, message_ids.len()),
     );
     let mut query = sqlx::query_as::<_, crate::polls::PollRow>(&sql);
     for message_id in message_ids {
@@ -1373,7 +1585,7 @@ pub async fn get_polls_for_message_ids(
     }
 
     let poll_ids: Vec<i64> = polls.iter().map(|p| p.id).collect();
-    let poll_placeholders = message_id_placeholders(poll_ids.len());
+    let poll_placeholders = build_placeholders(1, poll_ids.len());
 
     // 2. Options for those polls.
     let options_sql = format!(
@@ -1771,6 +1983,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_search_messages_in_channels() {
+        let pool = test_pool().await;
+        let (user_id, guild_id, channel_a) = setup_channel(&pool).await;
+        let channel_b = 201;
+        let channel_c = 202;
+        let other_user = 2;
+        crate::users::create_user(&pool, other_user, "other", 1, "other@example.com", "hash")
+            .await
+            .unwrap();
+        crate::channels::create_channel(&pool, channel_b, guild_id, "b", 0, 0, None, None)
+            .await
+            .unwrap();
+        crate::channels::create_channel(&pool, channel_c, guild_id, "c", 0, 0, None, None)
+            .await
+            .unwrap();
+
+        // A hit in channel_a and channel_b; a distractor in the un-listed
+        // channel_c that must not appear.
+        create_message_typed(
+            &pool,
+            MessageId::new(9100),
+            ChannelId::new(channel_a),
+            UserId::new(user_id),
+            "shared keyword alpha",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(9101),
+            ChannelId::new(channel_b),
+            UserId::new(other_user),
+            "shared keyword beta",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        create_message_typed(
+            &pool,
+            MessageId::new(9102),
+            ChannelId::new(channel_c),
+            UserId::new(user_id),
+            "shared keyword gamma",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let channels = [ChannelId::new(channel_a), ChannelId::new(channel_b)];
+        let results =
+            search_messages_in_channels_typed(&pool, &channels, "keyword", 50, None, None, None)
+                .await
+                .unwrap();
+        let ids: Vec<i64> = results.iter().map(|m| m.id).collect();
+        assert_eq!(results.len(), 2);
+        assert!(ids.contains(&9100) && ids.contains(&9101));
+        assert!(!ids.contains(&9102));
+
+        // Author filter must apply across the whole set (validates trailing
+        // placeholder numbering after the IN-list).
+        let filtered = search_messages_in_channels_typed(
+            &pool,
+            &channels,
+            "keyword",
+            50,
+            Some(UserId::new(other_user)),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 9101);
+
+        // Empty channel set is a no-op.
+        let none = search_messages_in_channels_typed(&pool, &[], "keyword", 50, None, None, None)
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[tokio::test]
     async fn test_search_messages_no_results() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
@@ -1836,6 +2134,65 @@ mod tests {
             .await
             .unwrap();
         assert!(pinned_msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_pin_cap_boundary() {
+        let pool = test_pool().await;
+        let (user_id, _, channel_id) = setup_channel(&pool).await;
+
+        // Fill the channel exactly to the cap.
+        for i in 0..MAX_PINS_PER_CHANNEL {
+            let mid = 20000 + i;
+            create_message_typed(
+                &pool,
+                MessageId::new(mid),
+                ChannelId::new(channel_id),
+                UserId::new(user_id),
+                "pinme",
+                0,
+                None,
+            )
+            .await
+            .unwrap();
+            let ok = pin_message_typed(&pool, MessageId::new(mid), ChannelId::new(channel_id))
+                .await
+                .unwrap();
+            assert!(ok);
+        }
+
+        // One more message: pinning it must be rejected with LimitReached.
+        let over_id = 20000 + MAX_PINS_PER_CHANNEL;
+        create_message_typed(
+            &pool,
+            MessageId::new(over_id),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "over",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+        let err = pin_message_typed(&pool, MessageId::new(over_id), ChannelId::new(channel_id))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DbError::LimitReached(_)));
+
+        // Re-pinning an already-pinned message stays a no-op even at the cap.
+        let repin = pin_message_typed(&pool, MessageId::new(20000), ChannelId::new(channel_id))
+            .await
+            .unwrap();
+        assert!(repin);
+
+        // Freeing a slot lets a new pin succeed.
+        unpin_message_typed(&pool, MessageId::new(20000), ChannelId::new(channel_id))
+            .await
+            .unwrap();
+        let ok = pin_message_typed(&pool, MessageId::new(over_id), ChannelId::new(channel_id))
+            .await
+            .unwrap();
+        assert!(ok);
     }
 
     #[tokio::test]

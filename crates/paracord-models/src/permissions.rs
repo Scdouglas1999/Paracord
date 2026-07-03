@@ -23,6 +23,12 @@ bitflags! {
         const READ_MESSAGE_HISTORY = 1 << 16;
         const MENTION_EVERYONE     = 1 << 17;
         const USE_EXTERNAL_EMOJIS  = 1 << 18;
+        // Bit 19 is intentionally reserved and left unassigned: it mirrors
+        // Discord's historical VIEW_GUILD_INSIGHTS slot, which Paracord does not
+        // implement. Leaving the gap keeps every other flag bit-compatible with
+        // Discord's numbering. Do not reuse bit 19 for an unrelated permission
+        // without bumping the wire format, or existing stored bitmasks would be
+        // reinterpreted. `Permissions::all()` therefore excludes bit 19.
         const CONNECT              = 1 << 20;
         const SPEAK                = 1 << 21;
         const MUTE_MEMBERS         = 1 << 22;
@@ -61,5 +67,28 @@ impl Default for Permissions {
             | Self::STREAM
             | Self::USE_VAD
             | Self::CHANGE_NICKNAME
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Permissions;
+
+    #[test]
+    fn all_bitmask_is_contiguous_except_reserved_bit_19() {
+        // Highest defined flag is MANAGE_EMOJIS (bit 30), so every bit 0..=30 is
+        // set except bit 19, which is intentionally reserved (see the flag
+        // definitions). This guards against accidentally filling the gap or
+        // shifting a flag, which would silently reinterpret stored bitmasks.
+        let expected = ((1_i64 << 31) - 1) & !(1_i64 << 19);
+        assert_eq!(Permissions::all().bits(), expected);
+        assert_eq!(Permissions::all().bits(), 0x7FF7_FFFF);
+        // The reserved bit must never be part of `all()`.
+        assert_eq!(Permissions::all().bits() & (1_i64 << 19), 0);
+        // `from_bits_truncate` must drop the reserved bit rather than surface it.
+        assert_eq!(
+            Permissions::from_bits_truncate(1_i64 << 19),
+            Permissions::empty()
+        );
     }
 }

@@ -1,10 +1,16 @@
-use crate::{
-    active_database_engine, datetime_from_db_text, datetime_to_db_text, DatabaseEngine, DbError,
-    DbPool,
-};
+//! Economy / XP storage.
+//!
+//! Datetime convention: `user_xp.last_xp_at` is stored as epoch milliseconds in
+//! an INTEGER (SQLite) / BIGINT (PostgreSQL) column, mirroring the i64 timestamp
+//! style used across the schema, so it needs no per-engine casts on read or
+//! write. Other timestamp columns in this module (streak/achievement bookkeeping)
+//! remain DB-native timestamp text.
+use crate::{datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use sqlx::Row;
 use std::collections::HashSet;
+
+const USER_XP_SELECT: &str = "user_id, guild_id, xp, level, last_xp_at";
 
 #[derive(Debug, Clone)]
 pub struct UserXpRow {
@@ -17,13 +23,15 @@ pub struct UserXpRow {
 
 impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for UserXpRow {
     fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
-        let last_xp_at_raw: String = row.try_get("last_xp_at")?;
+        let last_xp_at_ms: i64 = row.try_get("last_xp_at")?;
         Ok(Self {
             user_id: row.try_get("user_id")?,
             guild_id: row.try_get("guild_id")?,
             xp: row.try_get("xp")?,
             level: row.try_get("level")?,
-            last_xp_at: datetime_from_db_text(&last_xp_at_raw)?,
+            last_xp_at: DateTime::from_timestamp_millis(last_xp_at_ms).ok_or_else(|| {
+                sqlx::Error::Protocol(format!("invalid last_xp_at epoch millis {last_xp_at_ms}"))
+            })?,
         })
     }
 }
@@ -103,22 +111,6 @@ pub fn level_for_xp(xp: i64) -> i32 {
     ((xp as f64 / 100.0).sqrt()).floor() as i32
 }
 
-fn user_xp_projection() -> &'static str {
-    match active_database_engine() {
-        DatabaseEngine::Postgres => {
-            "user_id, guild_id, xp, level, to_char(last_xp_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS last_xp_at"
-        }
-        DatabaseEngine::Sqlite => "user_id, guild_id, xp, level, last_xp_at",
-    }
-}
-
-fn user_xp_timestamp_parameter(position: usize) -> String {
-    match active_database_engine() {
-        DatabaseEngine::Postgres => format!("${position}::timestamptz"),
-        DatabaseEngine::Sqlite => format!("${position}"),
-    }
-}
-
 /// Get a user's XP record in a guild.
 pub async fn get_user_xp(
     pool: &DbPool,
@@ -127,7 +119,7 @@ pub async fn get_user_xp(
 ) -> Result<Option<UserXpRow>, DbError> {
     let sql = format!(
         "SELECT {} FROM user_xp WHERE user_id = $1 AND guild_id = $2",
-        user_xp_projection()
+        USER_XP_SELECT
     );
     let row = sqlx::query_as::<_, UserXpRow>(&sql)
         .bind(user_id)
@@ -150,7 +142,7 @@ pub async fn add_xp(
         )));
     }
 
-    let now = datetime_to_db_text(Utc::now());
+    let now = Utc::now().timestamp_millis();
 
     // Accumulate XP and derive the level in one transaction so concurrent
     // callers cannot read a stale `level` and regress it with a later write.
@@ -160,20 +152,19 @@ pub async fn add_xp(
     // provides that isolation.
     let mut tx = pool.begin().await?;
 
-    let last_xp_at_param = user_xp_timestamp_parameter(4);
     let sql = format!(
         "INSERT INTO user_xp (user_id, guild_id, xp, level, last_xp_at)
-         VALUES ($1, $2, $3, 0, {last_xp_at_param})
+         VALUES ($1, $2, $3, 0, $4)
          ON CONFLICT (user_id, guild_id)
-         DO UPDATE SET xp = user_xp.xp + $3, last_xp_at = {last_xp_at_param}
+         DO UPDATE SET xp = user_xp.xp + $3, last_xp_at = $4
          RETURNING {}",
-        user_xp_projection()
+        USER_XP_SELECT
     );
     let row = sqlx::query_as::<_, UserXpRow>(&sql)
         .bind(user_id)
         .bind(guild_id)
         .bind(amount)
-        .bind(&now)
+        .bind(now)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -210,7 +201,7 @@ pub async fn get_leaderboard(
          WHERE guild_id = $1
          ORDER BY xp DESC, user_id ASC
          LIMIT $2",
-        user_xp_projection()
+        USER_XP_SELECT
     );
     let rows = sqlx::query_as::<_, UserXpRow>(&sql)
         .bind(guild_id)

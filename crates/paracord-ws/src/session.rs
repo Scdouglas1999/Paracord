@@ -6,6 +6,10 @@ pub struct Session {
     pub guild_owner_ids: HashMap<i64, i64>,
     pub session_id: String,
     pub sequence: u64,
+    /// Cached friend user ids for presence fan-out, loaded lazily on the first
+    /// presence transition and invalidated when a relationship-change event is
+    /// delivered to this session. Avoids a DB query on every presence update.
+    pub friend_ids: Option<Vec<i64>>,
 }
 
 impl Session {
@@ -16,6 +20,7 @@ impl Session {
             guild_owner_ids,
             session_id: uuid::Uuid::new_v4().to_string(),
             sequence: 0,
+            friend_ids: None,
         }
     }
 

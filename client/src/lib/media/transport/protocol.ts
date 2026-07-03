@@ -21,6 +21,27 @@ export interface MediaHeader {
   codec: number;
 }
 
+/**
+ * A video frame pulled from the native media engine over Tauri IPC.
+ *
+ * `format` discriminates the payload: when it is `'i420'` the `dataBase64`
+ * holds raw planar I420 pixels (natively decoded on the Rust side) and
+ * `width`/`height` give the frame dimensions for direct canvas rendering.
+ * Otherwise the payload is an encoded bitstream to hand to WebCodecs, and
+ * `format` (when present) matches `codec`. Absent `format` means encoded — the
+ * historical behavior — so builds without native I420 support stay correct.
+ */
+export interface PulledFrame {
+  timestampUs: number;
+  sequence: number;
+  isKeyframe: boolean;
+  codec: 'vp9' | 'av1' | 'h264' | string;
+  dataBase64: string;
+  format?: 'i420' | 'vp9' | 'h264';
+  width?: number;
+  height?: number;
+}
+
 export interface VideoFrameMetadata {
   streamId: string;
   trackId: string;

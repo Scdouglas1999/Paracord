@@ -120,14 +120,14 @@ pub async fn get_reactions_for_message_ids(
         )));
     }
 
-    let placeholders: Vec<String> = (1..=message_ids.len()).map(|i| format!("${}", i)).collect();
+    let placeholders = crate::messages::build_placeholders(1, message_ids.len());
     let sql = format!(
         "SELECT message_id, emoji_name, emoji_id, COUNT(*) as count
          FROM reactions
          WHERE message_id IN ({})
          GROUP BY message_id, emoji_name, emoji_id
          ORDER BY message_id, MIN(created_at)",
-        placeholders.join(", "),
+        placeholders,
     );
     let mut query = sqlx::query_as::<_, BatchReactionCountRow>(&sql);
     for message_id in message_ids {
@@ -154,14 +154,13 @@ pub async fn get_viewer_reactions_for_message_ids(
         )));
     }
 
-    let placeholders: Vec<String> = (1..=message_ids.len()).map(|i| format!("${}", i)).collect();
+    let placeholders = crate::messages::build_placeholders(1, message_ids.len());
     let viewer_bind_index = message_ids.len() + 1;
     let sql = format!(
         "SELECT message_id, emoji_name
          FROM reactions
          WHERE message_id IN ({}) AND user_id = ${}",
-        placeholders.join(", "),
-        viewer_bind_index,
+        placeholders, viewer_bind_index,
     );
     let mut query = sqlx::query_as::<_, ViewerReactionRow>(&sql);
     for message_id in message_ids {

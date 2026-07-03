@@ -76,6 +76,61 @@ export class CanvasRenderer {
   }
 
   /**
+   * Render a raw planar I420 (YUV 4:2:0) frame, as produced by the native
+   * desktop decoder. The frame is converted to RGBA (BT.601 limited-range) and
+   * scheduled through the same path as {@link renderImageData}, so aspect-ratio
+   * fitting and canvas resizing behave identically to WebCodecs frames.
+   *
+   * `data` must contain a full-size Y plane (width*height) followed by half-size
+   * U and V planes ((width/2)*(height/2) each). Malformed or truncated buffers
+   * are ignored.
+   */
+  drawI420(data: Uint8Array, width: number, height: number): void {
+    if (this.destroyed) {
+      return;
+    }
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    const chromaWidth = width >> 1;
+    const chromaHeight = height >> 1;
+    const ySize = width * height;
+    const chromaSize = chromaWidth * chromaHeight;
+    if (data.length < ySize + chromaSize * 2) {
+      return;
+    }
+
+    const uOffset = ySize;
+    const vOffset = ySize + chromaSize;
+    const rgba = new Uint8ClampedArray(width * height * 4);
+
+    for (let row = 0; row < height; row += 1) {
+      const yRow = row * width;
+      const chromaRow = (row >> 1) * chromaWidth;
+      for (let col = 0; col < width; col += 1) {
+        const y = data[yRow + col];
+        const chromaIndex = chromaRow + (col >> 1);
+        const u = data[uOffset + chromaIndex] - 128;
+        const v = data[vOffset + chromaIndex] - 128;
+
+        // BT.601 limited-range YUV -> RGB.
+        const c = (y - 16) * 1.164;
+        const r = c + 1.596 * v;
+        const g = c - 0.391 * u - 0.813 * v;
+        const b = c + 2.018 * u;
+
+        const outIndex = (yRow + col) * 4;
+        rgba[outIndex] = r;
+        rgba[outIndex + 1] = g;
+        rgba[outIndex + 2] = b;
+        rgba[outIndex + 3] = 255;
+      }
+    }
+
+    this.pendingImageData = new ImageData(rgba, width, height);
+  }
+
+  /**
    * Clear the canvas to black and discard any pending frame.
    */
   clear(): void {

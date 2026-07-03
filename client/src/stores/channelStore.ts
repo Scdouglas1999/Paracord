@@ -19,14 +19,19 @@ function normalizeChannel(channel: Channel): Channel {
   };
 }
 
-function buildChannelIndex(channelsByGuild: Record<string, Channel[]>): Record<string, Channel> {
-  const index: Record<string, Channel> = {};
-  for (const channels of Object.values(channelsByGuild)) {
-    for (const channel of channels) {
-      index[channel.id] = channel;
-    }
-  }
-  return index;
+// channelsByGuild is the single source of truth; channelsById is a derived index
+// maintained incrementally. reindexGuild patches the index for one guild only:
+// it drops the guild's previous channel ids and inserts the new list, leaving
+// every other guild's entries untouched (and identity-stable).
+function reindexGuild(
+  prevById: Record<string, Channel>,
+  oldChannels: Channel[],
+  newChannels: Channel[],
+): Record<string, Channel> {
+  const byId = { ...prevById };
+  for (const c of oldChannels) delete byId[c.id];
+  for (const c of newChannels) byId[c.id] = c;
+  return byId;
 }
 
 interface ChannelState {
@@ -111,8 +116,12 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
         });
         const sorted = data.map(normalizeChannel).sort((a, b) => a.position - b.position);
         set((state) => {
+          const channelsById = reindexGuild(
+            state.channelsById,
+            state.channelsByGuild[guildId] || [],
+            sorted,
+          );
           const channelsByGuild = { ...state.channelsByGuild, [guildId]: sorted };
-          const channelsById = buildChannelIndex(channelsByGuild);
           const channels = state.selectedGuildId === guildId ? sorted : state.channels;
           const guildChannelsLoaded = { ...state.guildChannelsLoaded, [guildId]: true };
           return { channelsByGuild, channelsById, channels, isLoading: false, guildChannelsLoaded };
@@ -143,21 +152,43 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
       channels: guildId ? state.channelsByGuild[guildId] || [] : [],
     })),
 
-  setChannels: (channels) => set({ channels }),
+  setChannels: (channels) =>
+    set((state) => {
+      const normalized = channels.map(normalizeChannel);
+      // Group by guild so channelsByGuild stays the source of truth, then patch
+      // the derived index for each touched guild.
+      const groups: Record<string, Channel[]> = {};
+      for (const c of normalized) {
+        const gid = c.guild_id || '';
+        (groups[gid] ??= []).push(c);
+      }
+      const channelsByGuild = { ...state.channelsByGuild };
+      let channelsById = state.channelsById;
+      for (const [gid, list] of Object.entries(groups)) {
+        const sorted = [...list].sort((a, b) => a.position - b.position);
+        channelsById = reindexGuild(channelsById, channelsByGuild[gid] || [], sorted);
+        channelsByGuild[gid] = sorted;
+      }
+      return { channelsByGuild, channelsById, channels: normalized };
+    }),
   setDmChannels: (channels) =>
-    set((state) => ({
-      channelsByGuild: { ...state.channelsByGuild, '': channels.map(normalizeChannel) },
-      channelsById: buildChannelIndex({ ...state.channelsByGuild, '': channels.map(normalizeChannel) }),
-      channels: state.selectedGuildId ? state.channels : channels.map(normalizeChannel),
-    })),
+    set((state) => {
+      const normalized = channels.map(normalizeChannel);
+      const channelsById = reindexGuild(state.channelsById, state.channelsByGuild[''] || [], normalized);
+      return {
+        channelsByGuild: { ...state.channelsByGuild, '': normalized },
+        channelsById,
+        channels: state.selectedGuildId ? state.channels : normalized,
+      };
+    }),
 
   createChannel: async (guildId, channelData) => {
     const { data } = await guildApi.createChannel(guildId, channelData);
     set((state) => {
       const existing = state.channelsByGuild[guildId] || [];
       const updated = [...existing, normalizeChannel(data)].sort((a, b) => a.position - b.position);
+      const channelsById = reindexGuild(state.channelsById, existing, updated);
       const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
-      const channelsById = buildChannelIndex(channelsByGuild);
       const channels = state.selectedGuildId === guildId ? updated : state.channels;
       return { channelsByGuild, channelsById, channels };
     });
@@ -171,8 +202,8 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
       const guildId = normalized.guild_id || '';
       const existing = state.channelsByGuild[guildId] || [];
       const list = existing.map((c) => (c.id === channelId ? normalized : c));
+      const channelsById = reindexGuild(state.channelsById, existing, list);
       const channelsByGuild = { ...state.channelsByGuild, [guildId]: list };
-      const channelsById = buildChannelIndex(channelsByGuild);
       const channels = state.selectedGuildId === guildId ? list : state.channels;
       return { channelsByGuild, channelsById, channels };
     });
@@ -181,13 +212,17 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
   deleteChannel: async (channelId) => {
     await channelApi.delete(channelId);
     set((state) => {
-      const newByGuild: Record<string, Channel[]> = {};
-      for (const [gid, chs] of Object.entries(state.channelsByGuild)) {
-        newByGuild[gid] = chs.filter((c) => c.id !== channelId);
-      }
-      const channelsById = buildChannelIndex(newByGuild);
-      const channels = state.channels.filter((c) => c.id !== channelId);
-      return { channelsByGuild: newByGuild, channelsById, channels };
+      const existing = state.channelsById[channelId];
+      if (!existing) return state;
+      const gid = existing.guild_id || '';
+      const guildChannels = state.channelsByGuild[gid] || [];
+      const updated = guildChannels.filter((c) => c.id !== channelId);
+      const channelsById = reindexGuild(state.channelsById, guildChannels, updated);
+      const channelsByGuild = { ...state.channelsByGuild, [gid]: updated };
+      const channels = state.channels.some((c) => c.id === channelId)
+        ? state.channels.filter((c) => c.id !== channelId)
+        : state.channels;
+      return { channelsByGuild, channelsById, channels };
     });
   },
 
@@ -210,8 +245,8 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
           };
         })
         .sort((a, b) => a.position - b.position);
+      const channelsById = reindexGuild(state.channelsById, existing, updated);
       const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
-      const channelsById = buildChannelIndex(channelsByGuild);
       const channels = state.selectedGuildId === guildId ? updated : state.channels;
       return { channelsByGuild, channelsById, channels };
     });
@@ -221,8 +256,8 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
     } catch (err) {
       // Rollback on failure
       set((state) => {
+        const channelsById = reindexGuild(state.channelsById, state.channelsByGuild[guildId] || [], prev);
         const channelsByGuild = { ...state.channelsByGuild, [guildId]: prev };
-        const channelsById = buildChannelIndex(channelsByGuild);
         const channels = state.selectedGuildId === guildId ? prev : state.channels;
         return { channelsByGuild, channelsById, channels };
       });
@@ -237,8 +272,8 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
       const existing = state.channelsByGuild[guildId] || [];
       if (existing.some((c) => c.id === normalized.id)) return state;
       const updated = [...existing, normalized].sort((a, b) => a.position - b.position);
+      const channelsById = reindexGuild(state.channelsById, existing, updated);
       const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
-      const channelsById = buildChannelIndex(channelsByGuild);
       const channels = state.selectedGuildId === guildId ? updated : state.channels;
       return { channelsByGuild, channelsById, channels };
     }),
@@ -251,8 +286,8 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
       const updated = existing
         .map((c) => (c.id === normalized.id ? normalized : c))
         .sort((a, b) => a.position - b.position);
+      const channelsById = reindexGuild(state.channelsById, existing, updated);
       const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
-      const channelsById = buildChannelIndex(channelsByGuild);
       const channels = state.selectedGuildId === guildId ? updated : state.channels;
       return { channelsByGuild, channelsById, channels };
     }),
@@ -262,30 +297,28 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
       const gid = guildId || '';
       const existing = state.channelsByGuild[gid] || [];
       const updated = existing.filter((c) => c.id !== channelId);
+      const channelsById = reindexGuild(state.channelsById, existing, updated);
       const channelsByGuild = { ...state.channelsByGuild, [gid]: updated };
-      const channelsById = buildChannelIndex(channelsByGuild);
       const channels = state.selectedGuildId === gid ? updated : state.channels;
       return { channelsByGuild, channelsById, channels };
     }),
 
   updateLastMessageId: (channelId, messageId) =>
     set((state) => {
-      const newByGuild: Record<string, Channel[]> = {};
-      let found = false;
-      for (const [gid, chs] of Object.entries(state.channelsByGuild)) {
-        newByGuild[gid] = chs.map((c) => {
-          if (c.id === channelId) {
-            found = true;
-            return { ...c, last_message_id: messageId };
-          }
-          return c;
-        });
-      }
-      if (!found) return state;
-      const channels = state.selectedGuildId
-        ? newByGuild[state.selectedGuildId] || state.channels
+      // O(1): resolve the channel via the index, then patch only its guild
+      // bucket, its index entry, and (if visible) its flat-array slot. Every
+      // other guild's array and channel objects keep their identity.
+      const existing = state.channelsById[channelId];
+      if (!existing) return state;
+      const gid = existing.guild_id || '';
+      const patched = { ...existing, last_message_id: messageId };
+      const guildChannels = state.channelsByGuild[gid] || [];
+      const newGuildChannels = guildChannels.map((c) => (c.id === channelId ? patched : c));
+      const channelsByGuild = { ...state.channelsByGuild, [gid]: newGuildChannels };
+      const channelsById = { ...state.channelsById, [channelId]: patched };
+      const channels = state.channels.some((c) => c.id === channelId)
+        ? state.channels.map((c) => (c.id === channelId ? patched : c))
         : state.channels;
-      const channelsById = buildChannelIndex(newByGuild);
-      return { channelsByGuild: newByGuild, channelsById, channels };
+      return { channelsByGuild, channelsById, channels };
     }),
 }));

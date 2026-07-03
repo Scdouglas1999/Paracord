@@ -5438,6 +5438,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "governor",
+ "jsonwebtoken",
  "moka",
  "paracord-core",
  "paracord-db",

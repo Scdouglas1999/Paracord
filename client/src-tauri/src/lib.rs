@@ -15,8 +15,6 @@ use std::collections::HashSet;
 use std::sync::{LazyLock, RwLock};
 use std::time::Duration;
 
-use tauri::Manager;
-
 /// Origins that the user has explicitly configured as servers. Certificate
 /// errors for these origins (and localhost) are allowed through so that
 /// self-hosted servers with self-signed certificates continue to work.
@@ -79,6 +77,7 @@ fn health_url_for_server(server_url: &str) -> Result<String, String> {
 
 #[cfg(windows)]
 fn configure_webview2_overrides(app: &tauri::App) {
+    use tauri::Manager;
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         ICoreWebView2_14, ICoreWebView2_27,
         COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,

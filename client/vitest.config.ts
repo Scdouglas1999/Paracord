@@ -7,6 +7,13 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    // Heavy jsdom integration tests (e.g. EmojiPicker mounts ~1300 emoji
+    // buttons, ~1.6s even in isolation) run under ~8x CPU oversubscription in
+    // the full parallel suite, which starves their async waitFor/findBy polling.
+    // The 5s default per-test timeout is too tight for that contention; 20s
+    // keeps genuine hangs bounded while giving real work room to finish.
+    testTimeout: 20000,
+    hookTimeout: 20000,
     include: ['src/**/*.test.{ts,tsx}'],
     css: false,
     coverage: {

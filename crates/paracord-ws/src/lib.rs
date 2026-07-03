@@ -10,6 +10,17 @@ mod compression;
 mod handler;
 mod session;
 
+// Internal seams re-exported for the crate's integration tests (see `tests/`).
+// These are `#[doc(hidden)]` and not part of the supported public API.
+#[doc(hidden)]
+pub use compression::WsCompressor;
+#[doc(hidden)]
+pub use handler::{
+    run_session, test_insert_cached_session, test_push_buffered_event, wait_for_identify_or_resume,
+};
+#[doc(hidden)]
+pub use session::Session;
+
 use axum::{
     extract::{ws::WebSocketUpgrade, Query, State},
     http::{header, HeaderMap, StatusCode},
@@ -113,9 +124,20 @@ async fn ws_upgrade(
         .map(|v| v == "zlib-stream")
         .unwrap_or(false);
 
+    // Opt-in persistent zlib-stream context. Existing clients inflate each frame
+    // standalone and would misdecode a streamed window, so this stays off unless
+    // the client explicitly negotiates `zlib_context=stream`.
+    let stream_context = compress
+        && params
+            .get("zlib_context")
+            .map(|v| v == "stream")
+            .unwrap_or(false);
+
     ws.max_message_size(32 * 1024)
         .max_frame_size(32 * 1024)
-        .on_upgrade(move |socket| handler::handle_connection(socket, state, compress))
+        .on_upgrade(move |socket| {
+            handler::handle_connection(socket, state, compress, stream_context)
+        })
         .into_response()
 }
 

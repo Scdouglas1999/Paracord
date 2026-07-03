@@ -10,6 +10,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, info};
 
+/// Backstop for the decode-suppression window, in milliseconds.
+///
+/// A late joiner suppresses decrypt failures until it receives a key from each
+/// pending sender. This caps how long that suppression may last if a
+/// re-announcement never arrives (e.g. a sender that goes silent), so a
+/// genuinely broken stream eventually surfaces errors again.
+const DECODE_SUPPRESSION_BACKSTOP_MS: u64 = 5_000;
+
 /// Stored sender key state for one participant in a room.
 #[derive(Debug, Clone)]
 struct StoredSenderKey {
@@ -39,6 +47,51 @@ pub enum KeyRotationReason {
     ParticipantJoined,
     /// A participant left; remaining senders should rotate for forward secrecy.
     ParticipantLeft,
+}
+
+/// Signal handed to a joining participant so it can silence spurious decrypt
+/// failures during the join-to-decrypt window.
+///
+/// A late joiner may begin receiving encrypted media from senders whose current
+/// sender key was announced *before* the joiner arrived and was therefore not
+/// addressed to it. Until each such sender observes the broadcast
+/// [`KeyRotationNotification`] and re-announces a key addressed to the joiner,
+/// the joiner cannot decrypt that sender's frames. Without this signal the
+/// client would surface a burst of decrypt-failure errors for the duration of
+/// that window.
+///
+/// The client should suppress decrypt failures for every sender in
+/// `pending_senders` until it receives a key for that sender, or until
+/// `suppress_for_ms` elapses as a backstop — whichever comes first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecodeSuppressionNotice {
+    /// Senders whose current key has not yet been delivered to the joiner and
+    /// whose media will therefore be undecryptable until they re-announce.
+    pub pending_senders: Vec<i64>,
+    /// Upper bound, in milliseconds, on how long to keep suppressing decrypt
+    /// failures as a backstop against a re-announcement that never arrives.
+    pub suppress_for_ms: u64,
+}
+
+impl DecodeSuppressionNotice {
+    /// Whether any sender is pending; if not, the joiner has every current key
+    /// and need not suppress anything.
+    pub fn is_active(&self) -> bool {
+        !self.pending_senders.is_empty()
+    }
+}
+
+/// Outcome of a participant joining a room.
+///
+/// Bundles the rotation notice to broadcast to existing participants with the
+/// decode-suppression notice to hand to the joiner, so the caller can drive both
+/// halves of the join without a second pass over relay state.
+#[derive(Debug, Clone)]
+pub struct ParticipantJoinOutcome {
+    /// Rotation notice for existing participants (backward secrecy).
+    pub rotation: KeyRotationNotification,
+    /// Decode-suppression window for the joining participant.
+    pub decode_suppression: DecodeSuppressionNotice,
 }
 
 /// Server-side key distributor for an individual room.
@@ -114,23 +167,34 @@ impl KeyDistributor {
 
     /// Handle a new participant joining the room.
     ///
-    /// 1. Delivers all stored current sender keys to the new participant.
-    /// 2. Returns a rotation notification that should be broadcast to existing
-    ///    participants so they rotate their keys (backward secrecy).
-    pub fn handle_participant_join(&self, new_user_id: i64) -> KeyRotationNotification {
+    /// 1. Delivers every stored current sender key already addressed to the new
+    ///    participant so it can decrypt those senders immediately.
+    /// 2. Computes the join-to-decrypt window: senders whose stored key predates
+    ///    the joiner (and so is not addressed to it). The joiner may receive
+    ///    undecryptable media from these senders until they observe the
+    ///    broadcast rotation notice and re-announce keys addressed to the joiner.
+    /// 3. Returns both the rotation notice to broadcast to existing participants
+    ///    (backward secrecy) and a [`DecodeSuppressionNotice`] the caller hands
+    ///    to the joiner so it can silence decrypt failures for the pending
+    ///    senders until their keys arrive.
+    pub fn handle_participant_join(&self, new_user_id: i64) -> ParticipantJoinOutcome {
         info!(
             room = %self.room_id,
             user = new_user_id,
             "participant joined, delivering stored keys"
         );
 
-        // Deliver all stored sender keys to the new joiner.
-        // The sender keys are encrypted per-recipient, so we look for entries
-        // that include the new user. If no entry exists for the new user
-        // (keys were encrypted before they joined), senders will re-announce
-        // after receiving the rotation notification.
+        // Senders whose current key is not addressed to the joiner. The joiner
+        // must suppress decrypt failures for these until a re-announcement lands.
+        let mut pending_senders = Vec::new();
+
         for entry in self.sender_keys.iter() {
             let stored = entry.value();
+            // A participant never decrypts its own media, so its own stored key
+            // is neither delivered to it nor a source of decrypt failures.
+            if stored.sender_user_id == new_user_id {
+                continue;
+            }
             // Look for an encrypted key blob addressed to the new user.
             if let Some(ek) = stored
                 .encrypted_keys
@@ -150,12 +214,33 @@ impl KeyDistributor {
                     "delivering stored key to late joiner"
                 );
                 (self.deliver_fn)(new_user_id, deliver);
+            } else {
+                // No key addressed to the joiner yet: this sender opens a
+                // join-to-decrypt window until it re-announces.
+                pending_senders.push(stored.sender_user_id);
             }
         }
 
-        KeyRotationNotification {
-            reason: KeyRotationReason::ParticipantJoined,
-            user_id: new_user_id,
+        pending_senders.sort_unstable();
+
+        if !pending_senders.is_empty() {
+            debug!(
+                room = %self.room_id,
+                user = new_user_id,
+                pending = pending_senders.len(),
+                "late joiner has a decode-suppression window until keys re-announce"
+            );
+        }
+
+        ParticipantJoinOutcome {
+            rotation: KeyRotationNotification {
+                reason: KeyRotationReason::ParticipantJoined,
+                user_id: new_user_id,
+            },
+            decode_suppression: DecodeSuppressionNotice {
+                pending_senders,
+                suppress_for_ms: DECODE_SUPPRESSION_BACKSTOP_MS,
+            },
         }
     }
 
@@ -267,12 +352,15 @@ mod tests {
         delivered.lock().unwrap().clear();
 
         // User 400 joins late.
-        let notification = dist.handle_participant_join(400);
+        let outcome = dist.handle_participant_join(400);
         assert!(matches!(
-            notification.reason,
+            outcome.rotation.reason,
             KeyRotationReason::ParticipantJoined
         ));
-        assert_eq!(notification.user_id, 400);
+        assert_eq!(outcome.rotation.user_id, 400);
+        // Sender 100's key was already addressed to 400, so nothing is pending.
+        assert!(!outcome.decode_suppression.is_active());
+        assert!(outcome.decode_suppression.pending_senders.is_empty());
 
         let msgs = delivered.lock().unwrap();
         assert_eq!(msgs.len(), 1);
@@ -280,6 +368,58 @@ mod tests {
         assert_eq!(msgs[0].1.sender_user_id, 100);
         assert_eq!(msgs[0].1.epoch, 3);
         assert_eq!(msgs[0].1.ciphertext, vec![0x22]);
+    }
+
+    #[test]
+    fn late_joiner_without_addressed_key_gets_decode_suppression() {
+        let (deliver_fn, delivered) = mock_delivery();
+        let dist = KeyDistributor::new("room1".into(), deliver_fn);
+
+        // Senders 100 and 200 announce keys addressed only to each other,
+        // before user 900 joins. Sender 900 also has a stale self-key.
+        dist.handle_key_announce(MediaKeyAnnounce {
+            user_id: 100,
+            epoch: 2,
+            encrypted_keys: vec![EncryptedSenderKey {
+                recipient_user_id: 200,
+                ciphertext: vec![0x11],
+            }],
+        });
+        dist.handle_key_announce(MediaKeyAnnounce {
+            user_id: 200,
+            epoch: 2,
+            encrypted_keys: vec![EncryptedSenderKey {
+                recipient_user_id: 100,
+                ciphertext: vec![0x22],
+            }],
+        });
+        dist.handle_key_announce(MediaKeyAnnounce {
+            user_id: 900,
+            epoch: 1,
+            encrypted_keys: vec![EncryptedSenderKey {
+                recipient_user_id: 100,
+                ciphertext: vec![0x99],
+            }],
+        });
+        delivered.lock().unwrap().clear();
+
+        let outcome = dist.handle_participant_join(900);
+
+        // Nothing is delivered to 900: no stored key is addressed to it.
+        assert!(delivered.lock().unwrap().is_empty());
+
+        // The joiner must suppress decrypt failures for both foreign senders,
+        // but not for its own stale self-key.
+        assert!(outcome.decode_suppression.is_active());
+        assert_eq!(
+            outcome.decode_suppression.pending_senders,
+            vec![100, 200],
+            "pending senders are sorted and exclude the joiner itself"
+        );
+        assert_eq!(
+            outcome.decode_suppression.suppress_for_ms,
+            DECODE_SUPPRESSION_BACKSTOP_MS
+        );
     }
 
     #[test]

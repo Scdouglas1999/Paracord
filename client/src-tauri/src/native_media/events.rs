@@ -344,6 +344,23 @@ async fn handle_control_message(
             let mut registry = stream_registry.lock().await;
             registry.unsubscribe(&stream_id, &track_id);
         }
+        ControlMessage::SubscriptionAck {
+            stream_id,
+            track_id,
+            layer_id,
+            active,
+        } => {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "media_subscription_ack",
+                serde_json::json!({
+                    "streamId": stream_id.0,
+                    "trackId": track_id.0,
+                    "layerId": layer_id,
+                    "active": active,
+                }),
+            );
+        }
         ControlMessage::RequestKeyframe {
             stream_id,
             track_id,

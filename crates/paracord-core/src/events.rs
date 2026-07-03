@@ -138,29 +138,62 @@ impl EventBus {
     }
 
     pub fn publish(&self, event: ServerEvent) {
-        // Collect matching session IDs
-        let session_ids: Vec<String> = if let Some(ref targets) = event.target_user_ids {
-            // User-targeted events: look up each target user's sessions
-            let mut ids = Vec::new();
+        // Send to native bot system listener
+        let _ = self.system_sender.send(event.clone());
+
+        // Sessions whose per-session channel has no live receiver (send returns
+        // Err). These are zombies left by a gateway loop that exited without (or
+        // just before) calling unregister_session. Reaping them after dispatch
+        // stops global fan-out from repeatedly looking them up and keeps the
+        // guild/user indexes from permanently desyncing. Lagged-but-live
+        // receivers are handled by the gateway itself (RecvError::Lagged forces
+        // the client to reconnect and re-fetch), so they never surface here.
+        let mut stale: Vec<String> = Vec::new();
+        let mut delivered = 0usize;
+
+        if let Some(ref targets) = event.target_user_ids {
+            // User-targeted events: fan out to each target user's live sessions.
             for &uid in targets {
                 if let Some(user_sids) = self.user_sessions.get(&uid) {
-                    ids.extend(user_sids.iter().cloned());
+                    for sid in user_sids.iter() {
+                        // A missing session entry means a concurrent
+                        // unregister_session is mid-flight (it removes the
+                        // session record before the index entry); it will clean
+                        // the index itself, so skip rather than reap here.
+                        if let Some(sub) = self.sessions.get(sid) {
+                            if sub.sender.send(event.clone()).is_err() {
+                                stale.push(sid.clone());
+                            } else {
+                                delivered += 1;
+                            }
+                        }
+                    }
                 }
             }
-            ids
         } else if let Some(guild_id) = event.guild_id {
-            // Guild-scoped events: look up guild's sessions
-            self.guild_sessions
-                .get(&guild_id)
-                .map(|sids| sids.iter().cloned().collect())
-                .unwrap_or_default()
+            // Guild-scoped events: fan out to the guild's live sessions.
+            if let Some(sids) = self.guild_sessions.get(&guild_id) {
+                for sid in sids.iter() {
+                    if let Some(sub) = self.sessions.get(sid) {
+                        if sub.sender.send(event.clone()).is_err() {
+                            stale.push(sid.clone());
+                        } else {
+                            delivered += 1;
+                        }
+                    }
+                }
+            }
         } else {
-            // Global events: all sessions
-            self.sessions
-                .iter()
-                .map(|entry| entry.key().clone())
-                .collect()
-        };
+            // Global events: single pass over the session map, sending directly
+            // instead of collecting every key into a Vec and re-looking each up.
+            for entry in self.sessions.iter() {
+                if entry.value().sender.send(event.clone()).is_err() {
+                    stale.push(entry.key().clone());
+                } else {
+                    delivered += 1;
+                }
+            }
+        }
 
         if observability::wire_trace_enabled() {
             let payload_bytes = event
@@ -186,20 +219,34 @@ impl EventBus {
                 scope,
                 guild_id = ?event.guild_id,
                 target_user_count = event.target_user_ids.as_ref().map(|users| users.len()),
-                session_count = session_ids.len(),
+                session_count = delivered + stale.len(),
                 payload_bytes,
                 "server_out"
             );
         }
 
-        // Send to native bot system listener
-        let _ = self.system_sender.send(event.clone());
-
-        // Send to matching sessions
-        for sid in session_ids {
-            if let Some(sub) = self.sessions.get(&sid) {
-                let _ = sub.sender.send(event.clone());
+        if !stale.is_empty() {
+            for sid in &stale {
+                self.reap_stale_session(sid);
             }
+            tracing::debug!(
+                reaped = stale.len(),
+                event_type = %event.event_type,
+                "reaped stale gateway sessions during dispatch"
+            );
+        }
+    }
+
+    /// Drop a session whose channel has no receiver, provided it is still dead.
+    /// The receiver-count re-check avoids reaping a session that resumed (and so
+    /// re-registered a fresh receiver) in the window since the failed send.
+    fn reap_stale_session(&self, session_id: &str) {
+        let dead = match self.sessions.get(session_id) {
+            Some(sub) => sub.sender.receiver_count() == 0,
+            None => false,
+        };
+        if dead {
+            self.unregister_session(session_id);
         }
     }
 
@@ -338,6 +385,38 @@ mod tests {
             rx_b.try_recv().is_err(),
             "non-targeted user should not receive event"
         );
+    }
+
+    #[test]
+    fn publish_reaps_session_whose_receiver_is_gone() {
+        let bus = EventBus::new(16);
+        let rx = bus.register_session("dead", 7, &[9]);
+
+        // Gateway loop exited: the receiver is dropped but unregister has not
+        // (yet) run. A publish must self-heal the leaked indexes.
+        drop(rx);
+        assert_eq!(bus.sessions.len(), 1);
+
+        bus.publish(test_event(Some(9), None));
+
+        assert!(bus.sessions.get("dead").is_none());
+        assert!(bus.guild_sessions.get(&9).is_none());
+        assert!(bus.user_sessions.get(&7).is_none());
+    }
+
+    #[test]
+    fn global_publish_reaps_dead_sessions() {
+        let bus = EventBus::new(16);
+        let mut rx_live = bus.register_session("live", 1, &[]);
+        let rx_dead = bus.register_session("dead", 2, &[]);
+        drop(rx_dead);
+
+        bus.publish(test_event(None, None));
+
+        assert!(rx_live.try_recv().is_ok(), "live session should receive");
+        assert!(bus.sessions.get("dead").is_none());
+        assert!(bus.user_sessions.get(&2).is_none());
+        assert!(bus.sessions.get("live").is_some());
     }
 
     #[test]

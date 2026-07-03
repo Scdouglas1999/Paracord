@@ -251,6 +251,46 @@ impl MediaRoomManager {
         Ok(())
     }
 
+    /// Subscribe a participant to another user's media at the participant
+    /// (audio) level. This drives the audio fan-out fallback used when no
+    /// explicit per-track subscription exists.
+    pub fn subscribe_participant(
+        &self,
+        room_id: &str,
+        user_id: i64,
+        target_user_id: i64,
+    ) -> Result<(), RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(room_id)
+            .ok_or_else(|| RoomError::NotFound(room_id.to_string()))?;
+        let participant = room
+            .participants
+            .get_mut(&user_id)
+            .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
+        participant.subscribe(target_user_id);
+        Ok(())
+    }
+
+    /// Remove a participant-level (audio) subscription to another user.
+    pub fn unsubscribe_participant(
+        &self,
+        room_id: &str,
+        user_id: i64,
+        target_user_id: i64,
+    ) -> Result<(), RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(room_id)
+            .ok_or_else(|| RoomError::NotFound(room_id.to_string()))?;
+        let participant = room
+            .participants
+            .get_mut(&user_id)
+            .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
+        participant.unsubscribe(target_user_id);
+        Ok(())
+    }
+
     /// Subscribe a participant to a specific published track.
     pub fn subscribe_track(
         &self,

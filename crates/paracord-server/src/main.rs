@@ -644,6 +644,7 @@ async fn main() -> Result<()> {
     spawn_scheduled_message_worker(state.clone(), shutdown_notify.clone());
     spawn_disappearing_message_worker(state.clone(), shutdown_notify.clone());
     spawn_scheduled_event_worker(state.clone(), shutdown_notify.clone());
+    spawn_member_index_reconcile_worker(state.clone(), shutdown_notify.clone());
     bots::spawn_bot_manager(state.clone(), shutdown_notify.clone());
 
     let router = paracord_api::build_router()
@@ -1292,6 +1293,35 @@ fn spawn_federation_delivery_worker(
                         .await;
                     let cutoff = chrono::Utc::now().timestamp_millis() - 86_400_000;
                     let _ = paracord_db::federation::prune_transport_replay_cache(&state.db, cutoff).await;
+                }
+            }
+        }
+    });
+}
+
+/// Periodically reload the guild membership index from the database so it
+/// self-heals any drift left by missed GUILD_MEMBER_ADD/REMOVE events. The index
+/// is built once at startup; between reloads the event-driven mutators keep it
+/// hot, and this reconcile pass is the backstop against permanent desync.
+fn spawn_member_index_reconcile_worker(
+    state: paracord_core::AppState,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Consume the immediate first tick: the index was just loaded at startup.
+        interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                _ = interval.tick() => {
+                    match paracord_db::members::get_all_memberships(&state.db).await {
+                        Ok(rows) => state.member_index.reconcile(rows),
+                        Err(err) => tracing::warn!(
+                            "member index reconcile skipped: failed to load memberships: {err}"
+                        ),
+                    }
                 }
             }
         }

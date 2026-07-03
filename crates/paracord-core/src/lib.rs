@@ -21,7 +21,6 @@ use dashmap::{DashMap, DashSet};
 use paracord_db::DbPool;
 use paracord_federation::FederationService;
 use paracord_media::{Storage, StorageManager, VoiceManager};
-use paracord_models::permissions::Permissions;
 #[cfg(feature = "native-media")]
 use paracord_relay::relay::RelayForwarder;
 #[cfg(feature = "native-media")]
@@ -75,18 +74,13 @@ pub type PermissionCacheKey = (i64, i64);
 pub const DEFAULT_PERMISSION_CACHE_MAX_ENTRIES: u64 = 10_000;
 
 /// Build the permission cache with a 5-minute TTL and configurable max entries.
-pub fn build_permission_cache(
-    max_entries: u64,
-) -> moka::future::Cache<PermissionCacheKey, Permissions> {
+pub fn build_permission_cache(max_entries: u64) -> permissions::PermissionCache {
     let capacity = if max_entries == 0 {
         DEFAULT_PERMISSION_CACHE_MAX_ENTRIES
     } else {
         max_entries
     };
-    moka::future::Cache::builder()
-        .max_capacity(capacity)
-        .time_to_live(std::time::Duration::from_secs(300))
-        .build()
+    permissions::PermissionCache::new(capacity)
 }
 
 #[derive(Clone)]
@@ -104,8 +98,9 @@ pub struct AppState {
     pub online_users: Arc<DashSet<i64>>,
     /// Live presence payloads keyed by user ID.
     pub user_presences: Arc<DashMap<i64, serde_json::Value>>,
-    /// Cached computed channel permissions: (user_id, channel_id) -> Permissions.
-    pub permission_cache: moka::future::Cache<PermissionCacheKey, Permissions>,
+    /// Cached computed channel permissions: (user_id, channel_id) -> Permissions,
+    /// with reverse indexes for targeted invalidation.
+    pub permission_cache: permissions::PermissionCache,
     /// Pre-built federation service (avoids re-parsing env vars on every request).
     pub federation_service: Option<FederationService>,
     /// In-memory guild->members index for zero-query presence dispatch.

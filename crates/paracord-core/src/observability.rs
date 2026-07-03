@@ -145,8 +145,21 @@ fn reset_for_tests() {
 mod tests {
     use super::*;
 
+    // These tests mutate process-global metric counters via `reset_for_tests`,
+    // so they must not run concurrently or one test's reset clobbers another's
+    // in-flight assertions. Serialize them behind a shared lock.
+    static METRICS_TEST_GUARD: Mutex<()> = Mutex::new(());
+
+    fn lock_metrics_tests() -> std::sync::MutexGuard<'static, ()> {
+        match METRICS_TEST_GUARD.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
     #[test]
     fn ws_connection_close_is_saturating() {
+        let _guard = lock_metrics_tests();
         reset_for_tests();
         ws_connection_close();
         assert_eq!(ws_metrics_snapshot().active_connections, 0);
@@ -154,6 +167,7 @@ mod tests {
 
     #[test]
     fn ws_event_type_is_normalized_and_cardinality_is_bounded() {
+        let _guard = lock_metrics_tests();
         reset_for_tests();
 
         ws_event_dispatched("MESSAGE_CREATE");

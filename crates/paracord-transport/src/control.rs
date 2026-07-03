@@ -100,6 +100,18 @@ pub enum ControlMessage {
         track_id: TrackId,
     },
 
+    /// Server confirmation that a viewer's subscription to a track changed.
+    /// `active` is `true` after a successful subscribe, `false` after an
+    /// unsubscribe. `layer_id` reports the simulcast layer the relay will
+    /// forward (when known) and is absent for audio-only or unsubscribe acks.
+    SubscriptionAck {
+        stream_id: StreamId,
+        track_id: TrackId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        layer_id: Option<u8>,
+        active: bool,
+    },
+
     /// Publisher refreshes layer state without fully unpublishing the track.
     TrackLayers {
         stream_id: StreamId,
@@ -655,6 +667,21 @@ mod tests {
         let encoded = msg.encode().unwrap();
         let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn subscription_ack_round_trip() {
+        for (layer_id, active) in [(Some(2u8), true), (None, false)] {
+            let msg = ControlMessage::SubscriptionAck {
+                stream_id: StreamId::new("stream-1"),
+                track_id: TrackId::new("screen"),
+                layer_id,
+                active,
+            };
+            let encoded = msg.encode().unwrap();
+            let (decoded, _) = ControlMessage::decode(&encoded).unwrap().unwrap();
+            assert_eq!(msg, decoded);
+        }
     }
 
     #[test]

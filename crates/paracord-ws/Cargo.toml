@@ -18,6 +18,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+jsonwebtoken = { workspace = true }
 futures-util = "0.3"
 moka = { workspace = true }
 dashmap = { workspace = true }

@@ -1,4 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
+import { isTauri } from '../lib/tauriEnv';
+import {
+  listNativeInputDevices,
+  listNativeOutputDevices,
+  type AudioDeviceInfo,
+} from '../stores/voice/nativeMediaController';
 
 interface MediaDeviceState {
   audioInputDevices: MediaDeviceInfo[];
@@ -7,6 +13,28 @@ interface MediaDeviceState {
   selectedAudioInput: string | null;
   selectedAudioOutput: string | null;
   selectedVideoInput: string | null;
+}
+
+/**
+ * Adapt a native cpal device into the browser-facing `MediaDeviceInfo` shape.
+ * The cpal host index becomes the `deviceId` so selection callbacks can hand it
+ * straight back to the native switch commands, while the real OS name (which
+ * the WebView often hides for `navigator.mediaDevices`) surfaces as the label.
+ */
+function nativeToMediaDeviceInfo(
+  device: AudioDeviceInfo,
+  kind: MediaDeviceKind
+): MediaDeviceInfo {
+  const deviceId = String(device.index);
+  return {
+    deviceId,
+    kind,
+    label: device.name,
+    groupId: '',
+    toJSON() {
+      return { deviceId, kind, label: device.name, groupId: '' };
+    },
+  };
 }
 
 export function useMediaDevices() {
@@ -20,6 +48,35 @@ export function useMediaDevices() {
   });
 
   const enumerate = useCallback(async () => {
+    // On the desktop client the WebView frequently returns only a single
+    // unlabeled "default" audio device, so prefer the native cpal enumeration
+    // for real device names. Video and the web build keep using the browser
+    // enumeration path.
+    if (isTauri()) {
+      const [nativeInputs, nativeOutputs] = await Promise.all([
+        listNativeInputDevices(),
+        listNativeOutputDevices(),
+      ]);
+      if (nativeInputs.length > 0 || nativeOutputs.length > 0) {
+        let videoInputDevices: MediaDeviceInfo[] = [];
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          videoInputDevices = devices.filter((d) => d.kind === 'videoinput');
+        } catch {
+          /* video enumeration unavailable — leave empty */
+        }
+        setState((s) => ({
+          ...s,
+          audioInputDevices: nativeInputs.map((d) => nativeToMediaDeviceInfo(d, 'audioinput')),
+          audioOutputDevices: nativeOutputs.map((d) => nativeToMediaDeviceInfo(d, 'audiooutput')),
+          videoInputDevices,
+        }));
+        return;
+      }
+      // Native commands unavailable (older desktop build) — fall through to
+      // browser enumeration so device selection still works.
+    }
+
     try {
       // On non-secure origins (plain HTTP), browsers hide device labels
       // and may only return "default" until mic permission is granted.

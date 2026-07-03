@@ -35,6 +35,13 @@ const CSRF_COOKIE_NAME: &str = "paracord_csrf";
 const CSRF_COOKIE_PATH: &str = "/";
 const CHALLENGE_STORE_MAX_ENTRIES: usize = 10_000;
 const CHALLENGE_STORE_TTL_SECONDS: u64 = 120;
+// Maximum age of a challenge, measured from the trusted server-issued timestamp.
+// Enforced independently of the cache TTL (which is deliberately longer to bound
+// memory) so a nonce that lingers in the cache still expires as a credential.
+const CHALLENGE_MAX_AGE_SECONDS: i64 = 60;
+// Acceptable skew between the client-echoed timestamp and the server-issued one.
+// The client echoes the exact issued timestamp, so a tight bound is safe.
+const CHALLENGE_SKEW_SECONDS: i64 = 5;
 const MAX_DISPLAY_NAME_LEN: usize = 64;
 const AUTH_GUARD_TTL_SECONDS: i64 = 3600;
 const AUTH_GUARD_CLEANUP_LIMIT: i64 = 512;
@@ -2376,15 +2383,26 @@ pub async fn mfa_login(
 ) -> Result<impl IntoResponse, ApiError> {
     let peer_ip = addr.ip().to_string();
 
-    // Rate-limit MFA login attempts (IP-level + ticket-level)
-    auth_guard_enforce(&state, &headers, Some(peer_ip.as_str()), Some(&body.ticket)).await?;
-
-    // Look up the MFA ticket
+    // Resolve the ticket to a user FIRST so all rate-limiting is keyed on the
+    // resolved account, never on the attacker-supplied ticket. Keying on the
+    // ticket would let an attacker who knows a victim's ticket drive the failure
+    // counter and trip the lockout that invalidates that ticket.
     let user_id = state
         .mfa_tickets
         .get(&body.ticket)
         .await
         .ok_or(ApiError::BadRequest("Invalid or expired MFA ticket".into()))?;
+
+    let account_hint = user_id.to_string();
+
+    // Rate-limit MFA login attempts (IP-level + per-account).
+    auth_guard_enforce(
+        &state,
+        &headers,
+        Some(peer_ip.as_str()),
+        Some(&account_hint),
+    )
+    .await?;
 
     let user = paracord_db::users::get_user_by_id(&state.db, user_id)
         .await
@@ -2412,12 +2430,18 @@ pub async fn mfa_login(
                 .await
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
         if !used {
-            // Record failure for rate limiting (uses ticket as account hint for per-ticket tracking)
-            auth_guard_record_failure(&state, &headers, Some(peer_ip.as_str()), Some(&body.ticket))
-                .await;
+            // Record failure for rate limiting, keyed on the resolved account.
+            auth_guard_record_failure(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                Some(&account_hint),
+            )
+            .await;
 
-            // Check if this ticket has accumulated too many failures (5+) and invalidate it
-            let guard_keys = auth_guard_keys(&headers, Some(peer_ip.as_str()), Some(&body.ticket));
+            // Check if this account has accumulated too many failures (5+) and
+            // invalidate the ticket.
+            let guard_keys = auth_guard_keys(&headers, Some(peer_ip.as_str()), Some(&account_hint));
             let rows = paracord_db::rate_limits::get_auth_guard_states(&state.db, &guard_keys)
                 .await
                 .unwrap_or_default();
@@ -2426,7 +2450,7 @@ pub async fn mfa_login(
                 state.mfa_tickets.remove(&body.ticket).await;
                 tracing::warn!(
                     target: "paracord::mfa",
-                    ticket = %body.ticket,
+                    user_id = %user_id,
                     "MFA ticket invalidated after too many failed attempts"
                 );
             }
@@ -2437,7 +2461,13 @@ pub async fn mfa_login(
 
     // Success: remove the ticket (single-use on success) and clear rate-limit state
     state.mfa_tickets.remove(&body.ticket).await;
-    auth_guard_record_success(&state, &headers, Some(peer_ip.as_str()), Some(&body.ticket)).await;
+    auth_guard_record_success(
+        &state,
+        &headers,
+        Some(peer_ip.as_str()),
+        Some(&account_hint),
+    )
+    .await;
 
     let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_refresh) =
         issue_auth_session(
@@ -2581,8 +2611,8 @@ pub async fn verify(
         None => None,
     };
 
-    // Validate public key format (64 hex chars = 32 bytes).
-    if body.public_key.len() != 64 {
+    // Validate public key format (64 hex chars = 32 bytes Ed25519 public key).
+    if body.public_key.len() != 64 || !body.public_key.chars().all(|c| c.is_ascii_hexdigit()) {
         auth_guard_record_failure(
             &state,
             &headers,
@@ -2593,9 +2623,30 @@ pub async fn verify(
         return Err(ApiError::BadRequest("Invalid public key".into()));
     }
 
-    // Consume the nonce (one-time use).
-    let nonce_consumed = challenge_store().remove(&body.nonce).is_some();
-    if !nonce_consumed {
+    // Consume the nonce (one-time use) and recover its server-issued timestamp.
+    let issued_at = match challenge_store().remove(&body.nonce) {
+        Some(issued_at) => issued_at,
+        None => {
+            auth_guard_record_failure(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                Some(&body.public_key),
+            )
+            .await;
+            return Err(ApiError::Unauthorized);
+        }
+    };
+
+    // Reject stale challenges using the trusted server-issued timestamp, and
+    // require the client to echo that timestamp within acceptable skew before we
+    // re-sign it into the verification message below. This is independent of the
+    // cache TTL: a nonce that outlives the challenge window is no longer valid
+    // even if it is still present in the cache.
+    let now = Utc::now().timestamp();
+    if now - issued_at > CHALLENGE_MAX_AGE_SECONDS
+        || (body.timestamp - issued_at).abs() > CHALLENGE_SKEW_SECONDS
+    {
         auth_guard_record_failure(
             &state,
             &headers,

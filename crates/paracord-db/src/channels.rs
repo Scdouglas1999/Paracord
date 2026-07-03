@@ -499,38 +499,61 @@ pub async fn get_channel_threads(
     get_channel_threads_typed(pool, ChannelId::new(parent_channel_id)).await
 }
 
-/// Get archived threads under a parent channel.
+/// Get archived threads under a parent channel, newest first.
+///
+/// Paginated by an `id` cursor: pass `before = Some(id)` to fetch threads whose
+/// id is strictly less than the cursor (i.e. older). `limit` bounds the page.
+/// Ordering is by `id DESC`, which is stable and monotonic with the snowflake
+/// timestamp, so the cursor is unambiguous across pages.
 pub async fn get_archived_threads_typed(
     pool: &DbPool,
     parent_channel_id: ChannelId,
+    before: Option<ChannelId>,
+    limit: i64,
 ) -> Result<Vec<ChannelRow>, DbError> {
-    let rows = match crate::active_database_engine() {
+    let archived_predicate = match crate::active_database_engine() {
         crate::DatabaseEngine::Postgres => {
-            sqlx::query_as::<_, ChannelRow>(
-                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
-                 FROM channels
-                 WHERE parent_id = $1
-                   AND channel_type = 6
-                   AND COALESCE((thread_metadata::jsonb ->> 'archived')::boolean, FALSE) = TRUE
-                 ORDER BY created_at DESC",
-            )
-            .bind(parent_channel_id)
-            .fetch_all(pool)
-            .await?
+            "COALESCE((thread_metadata::jsonb ->> 'archived')::boolean, FALSE) = TRUE"
         }
         crate::DatabaseEngine::Sqlite => {
-            sqlx::query_as::<_, ChannelRow>(
-                "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
-                 FROM channels
-                 WHERE parent_id = $1
-                   AND channel_type = 6
-                   AND COALESCE(json_extract(thread_metadata, '$.archived'), 0) = 1
-                 ORDER BY created_at DESC",
-            )
+            "COALESCE(json_extract(thread_metadata, '$.archived'), 0) = 1"
+        }
+    };
+
+    const COLUMNS: &str = "id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at";
+
+    let rows = if let Some(before_id) = before {
+        let sql = format!(
+            "SELECT {COLUMNS}
+             FROM channels
+             WHERE parent_id = $1
+               AND channel_type = 6
+               AND {archived_predicate}
+               AND id < $2
+             ORDER BY id DESC
+             LIMIT $3"
+        );
+        sqlx::query_as::<_, ChannelRow>(&sql)
             .bind(parent_channel_id)
+            .bind(before_id)
+            .bind(limit)
             .fetch_all(pool)
             .await?
-        }
+    } else {
+        let sql = format!(
+            "SELECT {COLUMNS}
+             FROM channels
+             WHERE parent_id = $1
+               AND channel_type = 6
+               AND {archived_predicate}
+             ORDER BY id DESC
+             LIMIT $2"
+        );
+        sqlx::query_as::<_, ChannelRow>(&sql)
+            .bind(parent_channel_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
     };
 
     Ok(rows)
@@ -540,8 +563,16 @@ pub async fn get_archived_threads_typed(
 pub async fn get_archived_threads(
     pool: &DbPool,
     parent_channel_id: i64,
+    before: Option<i64>,
+    limit: i64,
 ) -> Result<Vec<ChannelRow>, DbError> {
-    get_archived_threads_typed(pool, ChannelId::new(parent_channel_id)).await
+    get_archived_threads_typed(
+        pool,
+        ChannelId::new(parent_channel_id),
+        before.map(ChannelId::new),
+        limit,
+    )
+    .await
 }
 
 /// Update thread archived/locked state and optionally rename. Core implementation.

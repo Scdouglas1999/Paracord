@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use tokio::sync::{mpsc, Mutex, Notify};
 use tracing::{debug, info, warn};
 
-use paracord_transport::control::{ControlMessage, SessionParticipant};
+use paracord_transport::control::{ControlMessage, SessionParticipant, TrackKind};
 use paracord_transport::protocol::{MediaHeader, HEADER_SIZE};
 use paracord_transport::stream::{PublishedTrack, StreamId, TrackId, VideoCodecCapability};
 
@@ -461,23 +461,7 @@ impl RelayForwarder {
         // Find all participants subscribed to this sender
         let mut forward_count = 0u32;
         for participant in room.participants.values() {
-            if participant.user_id == sender_id
-                && matches!(
-                    header.track_type,
-                    paracord_transport::protocol::TrackType::Audio
-                )
-            {
-                continue;
-            }
-            if participant.deafened {
-                continue;
-            }
-            if !should_forward_to_participant(
-                participant,
-                sender_id,
-                header,
-                published_track.as_ref(),
-            ) {
+            if !should_relay_packet_to(participant, sender_id, header, published_track.as_ref()) {
                 continue;
             }
 
@@ -502,6 +486,33 @@ impl RelayForwarder {
                 "relay: forwarded datagram"
             );
         }
+    }
+
+    /// Compute the set of recipients a packet from `sender_id` in `room_id`
+    /// would be forwarded to, applying the same decision as the fan-out hot path
+    /// without touching any connection. Used by routing tests to assert
+    /// subscription, self-echo, deafen, and cross-room-isolation behaviour.
+    #[cfg(test)]
+    fn compute_forward_recipients(
+        &self,
+        sender_id: i64,
+        room_id: &str,
+        header: &MediaHeader,
+    ) -> Vec<i64> {
+        let Some(room) = self.room_manager.get_room(room_id) else {
+            return Vec::new();
+        };
+        let published_track = resolve_published_track_for_ssrc(&room, sender_id, header.ssrc);
+        let mut recipients: Vec<i64> = room
+            .participants
+            .values()
+            .filter(|participant| {
+                should_relay_packet_to(participant, sender_id, header, published_track.as_ref())
+            })
+            .map(|participant| participant.user_id)
+            .collect();
+        recipients.sort_unstable();
+        recipients
     }
 
     /// Signal shutdown to all forwarding tasks.
@@ -674,11 +685,22 @@ impl RelayForwarder {
                     warn!(user_id, room_id = %room_id, error = %err, "relay: failed to register track subscription");
                     return;
                 }
-                if let Some(track) = self.resolve_any_published_track(
+                let resolved_track = self.resolve_any_published_track(
                     room_id,
                     &subscription.stream_id,
                     &subscription.track_id,
-                ) {
+                );
+                self.send_control_to_user(
+                    user_id,
+                    &ControlMessage::SubscriptionAck {
+                        stream_id: subscription.stream_id.clone(),
+                        track_id: subscription.track_id.clone(),
+                        layer_id: resolved_ack_layer(resolved_track.as_ref(), &subscription),
+                        active: true,
+                    },
+                )
+                .await;
+                if let Some(track) = resolved_track {
                     if let Some((epoch, ciphertext)) = self.latest_track_key_delivery(
                         room_id,
                         &track,
@@ -728,7 +750,18 @@ impl RelayForwarder {
                     .unsubscribe_track(room_id, user_id, &stream_id, &track_id)
                 {
                     warn!(user_id, room_id = %room_id, error = %err, "relay: failed to unregister track subscription");
+                    return;
                 }
+                self.send_control_to_user(
+                    user_id,
+                    &ControlMessage::SubscriptionAck {
+                        stream_id,
+                        track_id,
+                        layer_id: None,
+                        active: false,
+                    },
+                )
+                .await;
             }
             ControlMessage::RequestKeyframe {
                 stream_id,
@@ -855,12 +888,39 @@ impl RelayForwarder {
                     .await;
                 }
             }
+            ControlMessage::Subscribe {
+                user_id: target_user_id,
+                track_type,
+            } => {
+                // Audio fan-out is gated by the participant-level subscription
+                // set; video is negotiated per-track via SubscribeStream.
+                if matches!(track_type, TrackKind::Audio) {
+                    if let Err(err) =
+                        self.room_manager
+                            .subscribe_participant(room_id, user_id, target_user_id)
+                    {
+                        warn!(user_id, target_user_id, room_id = %room_id, error = %err, "relay: failed to register audio subscription");
+                    }
+                }
+            }
+            ControlMessage::Unsubscribe {
+                user_id: target_user_id,
+                track_type,
+            } => {
+                if matches!(track_type, TrackKind::Audio) {
+                    if let Err(err) =
+                        self.room_manager
+                            .unsubscribe_participant(room_id, user_id, target_user_id)
+                    {
+                        warn!(user_id, target_user_id, room_id = %room_id, error = %err, "relay: failed to unregister audio subscription");
+                    }
+                }
+            }
             ControlMessage::SessionState { .. }
             | ControlMessage::SessionParticipantJoin { .. }
             | ControlMessage::SessionParticipantLeave { .. }
             | ControlMessage::Auth { .. }
-            | ControlMessage::Subscribe { .. }
-            | ControlMessage::Unsubscribe { .. }
+            | ControlMessage::SubscriptionAck { .. }
             | ControlMessage::KeyDeliver { .. }
             | ControlMessage::StreamKeyDeliver { .. }
             | ControlMessage::RequestStreamKey { .. }
@@ -1029,6 +1089,22 @@ impl RelayForwarder {
     }
 }
 
+/// Resolve the simulcast layer id to report back in a [`ControlMessage::SubscriptionAck`].
+///
+/// When the target track is currently published, the relay resolves the layer
+/// it will actually forward (honoring viewport / requested-layer hints);
+/// otherwise it echoes the viewer's requested layer so the client still learns
+/// its subscription intent was accepted.
+fn resolved_ack_layer(
+    track: Option<&PublishedTrack>,
+    subscription: &paracord_transport::stream::TrackSubscription,
+) -> Option<u8> {
+    track
+        .and_then(|track| subscription.resolved_layer_id(track))
+        .or(subscription.active_layer)
+        .or(subscription.requested_layer)
+}
+
 fn resolve_published_track_for_ssrc(
     room: &crate::room::MediaRoom,
     sender_id: i64,
@@ -1040,6 +1116,39 @@ fn resolve_published_track_for_ssrc(
         .values()
         .find(|track| track.layers.iter().any(|layer| layer.ssrc == ssrc))
         .cloned()
+}
+
+/// Full relay-forwarding decision for one candidate recipient.
+///
+/// Layers the room-wide invariants on top of the per-subscription
+/// [`should_forward_to_participant`] check:
+/// - a sender never receives their own audio echoed back;
+/// - a deafened participant receives no media at all;
+/// - everything else is gated by the participant's subscriptions.
+///
+/// Cross-room isolation is enforced by the caller: fan-out only iterates the
+/// participants of the sender's own room, so a packet can never reach a
+/// participant in a different room.
+fn should_relay_packet_to(
+    participant: &crate::participant::MediaParticipant,
+    sender_id: i64,
+    header: &MediaHeader,
+    published_track: Option<&PublishedTrack>,
+) -> bool {
+    // Never echo a sender's own audio back to themselves.
+    if participant.user_id == sender_id
+        && matches!(
+            header.track_type,
+            paracord_transport::protocol::TrackType::Audio
+        )
+    {
+        return false;
+    }
+    // Deafened participants receive no media.
+    if participant.deafened {
+        return false;
+    }
+    should_forward_to_participant(participant, sender_id, header, published_track)
 }
 
 fn should_forward_to_participant(
@@ -1248,5 +1357,212 @@ mod tests {
             &header,
             None
         ));
+    }
+
+    fn audio_header(ssrc: u32) -> MediaHeader {
+        MediaHeader {
+            version: 1,
+            track_type: paracord_transport::protocol::TrackType::Audio,
+            simulcast_layer: 0,
+            sequence: 1,
+            timestamp: 123,
+            ssrc,
+            audio_level: 100,
+            key_epoch: 1,
+            payload_length: 0,
+            codec: 0,
+        }
+    }
+
+    #[test]
+    fn audio_forwarded_only_to_subscribed_senders() {
+        // Viewer 3 subscribes to speaker A (1) but not speaker B (2).
+        let mut viewer = crate::participant::MediaParticipant::new(3, "sess-3".to_string());
+        viewer.subscribe(1);
+
+        // A's audio is forwarded; B's audio is dropped.
+        assert!(should_forward_to_participant(
+            &viewer,
+            1,
+            &audio_header(11),
+            None
+        ));
+        assert!(!should_forward_to_participant(
+            &viewer,
+            2,
+            &audio_header(22),
+            None
+        ));
+    }
+
+    #[test]
+    fn subscribe_participant_toggles_audio_forwarding() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "s1".into()),
+        )
+        .unwrap();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(2, "s2".into()),
+        )
+        .unwrap();
+        let room_id = mgr.get_or_create_room(1, 100);
+
+        // Join auto-subscribes; a client can then drop a specific speaker's audio.
+        mgr.unsubscribe_participant(&room_id, 2, 1).unwrap();
+        let room = mgr.get_room(&room_id).unwrap();
+        let viewer = room.participants.get(&2).unwrap();
+        assert!(!should_forward_to_participant(
+            viewer,
+            1,
+            &audio_header(11),
+            None
+        ));
+
+        // Re-subscribing restores forwarding.
+        mgr.subscribe_participant(&room_id, 2, 1).unwrap();
+        let room = mgr.get_room(&room_id).unwrap();
+        let viewer = room.participants.get(&2).unwrap();
+        assert!(should_forward_to_participant(
+            viewer,
+            1,
+            &audio_header(11),
+            None
+        ));
+    }
+
+    #[test]
+    fn subscription_ack_layer_prefers_resolved_then_requested() {
+        let track = PublishedTrack {
+            stream_id: StreamId::new("stream-1"),
+            track_id: TrackId::new("screen"),
+            publisher_user_id: 1,
+            kind: TrackKind::Video,
+            codec: Some(VideoCodec::H264),
+            layers: vec![
+                PublishedLayer {
+                    layer_id: 0,
+                    ssrc: 100,
+                    width: Some(640),
+                    height: Some(360),
+                    max_bitrate_kbps: Some(800),
+                    active: true,
+                },
+                PublishedLayer {
+                    layer_id: 1,
+                    ssrc: 101,
+                    width: Some(1280),
+                    height: Some(720),
+                    max_bitrate_kbps: Some(2500),
+                    active: true,
+                },
+            ],
+        };
+        let subscription = TrackSubscription {
+            stream_id: track.stream_id.clone(),
+            track_id: track.track_id.clone(),
+            requested_layer: Some(1),
+            active_layer: None,
+            viewport: None,
+        };
+
+        // With the track published, the relay reports the layer it will forward.
+        assert_eq!(resolved_ack_layer(Some(&track), &subscription), Some(1));
+        // Without a resolved track, it echoes the viewer's requested layer.
+        assert_eq!(resolved_ack_layer(None, &subscription), Some(1));
+    }
+
+    #[test]
+    fn deafened_participant_receives_no_media() {
+        // A deafened viewer subscribed to a speaker still must not be forwarded to.
+        let mut viewer = crate::participant::MediaParticipant::new(3, "sess-3".to_string());
+        viewer.subscribe(1);
+        assert!(should_relay_packet_to(&viewer, 1, &audio_header(11), None));
+
+        viewer.deafened = true;
+        assert!(!should_relay_packet_to(&viewer, 1, &audio_header(11), None));
+    }
+
+    #[test]
+    fn sender_audio_is_not_echoed_to_self() {
+        // A speaker subscribed to their own id (as join auto-subscription does)
+        // must never receive their own audio back.
+        let mut speaker = crate::participant::MediaParticipant::new(1, "sess-1".to_string());
+        speaker.subscribe(1);
+        assert!(!should_relay_packet_to(
+            &speaker,
+            1,
+            &audio_header(11),
+            None
+        ));
+
+        // But another subscribed participant still receives that audio.
+        let mut viewer = crate::participant::MediaParticipant::new(2, "sess-2".to_string());
+        viewer.subscribe(1);
+        assert!(should_relay_packet_to(&viewer, 1, &audio_header(11), None));
+    }
+
+    #[test]
+    fn media_never_crosses_room_boundaries() {
+        let mgr = MediaRoomManager::new();
+        // Room A (guild 1, channel 100): sender 1 and viewer 2.
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "a1".into()),
+        )
+        .unwrap();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(2, "a2".into()),
+        )
+        .unwrap();
+        // Room B (guild 1, channel 200): user 3.
+        mgr.join_room(
+            1,
+            200,
+            crate::participant::MediaParticipant::new(3, "b3".into()),
+        )
+        .unwrap();
+
+        let room_a = mgr.get_or_create_room(1, 100);
+        let room_b = mgr.get_or_create_room(1, 200);
+        let forwarder = RelayForwarder::new(Arc::new(mgr), Arc::new(SpeakerDetector::new()));
+
+        // Sender 1's audio in room A reaches viewer 2 but never room-B user 3.
+        let recipients = forwarder.compute_forward_recipients(1, &room_a, &audio_header(11));
+        assert_eq!(recipients, vec![2]);
+        assert!(!recipients.contains(&3));
+
+        // A sender that is not a member of room B produces no recipients there.
+        let cross = forwarder.compute_forward_recipients(1, &room_b, &audio_header(11));
+        assert!(cross.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_join_with_mismatched_room_is_rejected() {
+        let mgr = MediaRoomManager::new();
+        let forwarder = RelayForwarder::new(Arc::new(mgr), Arc::new(SpeakerDetector::new()));
+
+        // The control task is bound to "room-a"; a join claiming "room-b" must
+        // be dropped without registering an active session.
+        forwarder
+            .handle_control_message(
+                42,
+                "room-a",
+                ControlMessage::SessionJoin {
+                    room_id: "room-b".to_string(),
+                    session_id: "sess".to_string(),
+                    video_capabilities: vec![],
+                },
+            )
+            .await;
+
+        assert!(forwarder.active_sessions.is_empty());
     }
 }

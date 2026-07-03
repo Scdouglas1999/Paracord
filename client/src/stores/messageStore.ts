@@ -37,6 +37,94 @@ const OFFLINE_QUEUE_STORAGE_KEY = 'offline-message-queue';
 const _messageFetchControllers = new Map<string, AbortController>();
 
 /**
+ * Memory bounds for the in-store message cache. A channel keeps at most
+ * MAX_MESSAGES_PER_CHANNEL messages (oldest trimmed, newest kept at the tail),
+ * and at most MAX_CACHED_CHANNELS channels are retained — least-recently-used
+ * channels are evicted first, but never the channel the user is viewing.
+ */
+export const MAX_MESSAGES_PER_CHANNEL = 500;
+export const MAX_CACHED_CHANNELS = 25;
+
+// Channel access recency for LRU eviction; iteration order is oldest-first.
+const _channelAccessOrder = new Set<string>();
+
+function touchChannel(channelId: string): void {
+  _channelAccessOrder.delete(channelId);
+  _channelAccessOrder.add(channelId);
+}
+
+function forgetChannel(channelId: string): void {
+  _channelAccessOrder.delete(channelId);
+}
+
+/** Trim a channel's message list to the most-recent N, preserving order. */
+function capChannelMessages(messages: Message[]): Message[] {
+  if (messages.length <= MAX_MESSAGES_PER_CHANNEL) return messages;
+  return messages.slice(messages.length - MAX_MESSAGES_PER_CHANNEL);
+}
+
+function activeChannelId(): string | null {
+  try {
+    return useChannelStore.getState().selectedChannelId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * When more than MAX_CACHED_CHANNELS channels are cached, drop the
+ * least-recently-used channels (never the active one) and clear every
+ * channel-keyed map plus module-level bookkeeping (pending reaction keys,
+ * in-flight fetches) for the dropped channels. Returns the pruned maps to
+ * merge into state, or null when nothing needs eviction.
+ */
+function evictChannels(state: MessageState): Partial<MessageState> | null {
+  const cached = Object.keys(state.messages);
+  const overflow = cached.length - MAX_CACHED_CHANNELS;
+  if (overflow <= 0) return null;
+
+  const active = activeChannelId();
+  const rank = new Map<string, number>();
+  let order = 1;
+  for (const id of _channelAccessOrder) rank.set(id, order++);
+  // Oldest access (or never-touched channels, rank 0) evicted first.
+  const victims = cached
+    .filter((id) => id !== active)
+    .sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0))
+    .slice(0, overflow);
+  if (victims.length === 0) return null;
+
+  const messages = { ...state.messages };
+  const hasMore = { ...state.hasMore };
+  const loading = { ...state.loading };
+  const messageErrors = { ...state.messageErrors };
+  const pins = { ...state.pins };
+  for (const channelId of victims) {
+    for (const message of messages[channelId] ?? []) {
+      _pendingReactionKeys.delete(message.id);
+    }
+    cancelMessageFetch(channelId);
+    forgetChannel(channelId);
+    delete messages[channelId];
+    delete hasMore[channelId];
+    delete loading[channelId];
+    delete messageErrors[channelId];
+    delete pins[channelId];
+  }
+  return { messages, hasMore, loading, messageErrors, pins };
+}
+
+/**
+ * Merge a state patch and then run LRU channel eviction against the resulting
+ * state, folding any pruned maps back into the patch. Use at every site that
+ * may introduce or grow a channel's message list.
+ */
+function applyEviction(state: MessageState, patch: Partial<MessageState>): Partial<MessageState> {
+  const eviction = evictChannels({ ...state, ...patch });
+  return eviction ? { ...patch, ...eviction } : patch;
+}
+
+/**
  * Normalize an emoji value (either a plain unicode/string key or a partial
  * emoji object carrying `{ id, name }`) into a stable comparison key. Matches
  * the semantics of the gateway-consolidation `resolveEmojiKey` helper: prefer a
@@ -482,20 +570,25 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
               usePollStore.getState().upsertPoll(message.poll);
             }
           }
+          touchChannel(channelId);
           set((state) => {
             const existing = params?.before ? state.messages[channelId] || [] : [];
             // API returns newest first (ORDER BY id DESC); reverse to
             // chronological order (oldest at top, newest at bottom).
             const sorted = [...decrypted].reverse();
             const merged = params?.before ? [...sorted, ...existing] : sorted;
-            return {
-              messages: { ...state.messages, [channelId]: merged },
+            const nextMessages = {
+              ...state.messages,
+              [channelId]: capChannelMessages(merged),
+            };
+            return applyEviction(state, {
+              messages: nextMessages,
               hasMore: {
                 ...state.hasMore,
                 [channelId]: decrypted.length >= DEFAULT_MESSAGE_FETCH_LIMIT,
               },
               messageErrors: { ...state.messageErrors, [channelId]: null },
-            };
+            });
           });
           return;
         } catch (err) {
@@ -533,10 +626,13 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
         usePollStore.getState().upsertPoll(decrypted.poll);
       }
       // Optimistic: the gateway will also deliver MESSAGE_CREATE, addMessage dedupes
+      touchChannel(channelId);
       set((state) => {
         const existing = state.messages[channelId] || [];
         if (existing.some((m) => m.id === decrypted.id)) return state;
-        return { messages: { ...state.messages, [channelId]: [...existing, decrypted] } };
+        return applyEviction(state, {
+          messages: { ...state.messages, [channelId]: capChannelMessages([...existing, decrypted]) },
+        });
       });
     } catch (err) {
       const networkQueueable = shouldQueueMessageError(err);
@@ -604,6 +700,7 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
         if (decrypted.poll) {
           usePollStore.getState().upsertPoll(decrypted.poll);
         }
+        touchChannel(queued.channelId);
         set((state) => {
           const existing = state.messages[queued.channelId] || [];
           const nextQueue = state.offlineQueue.filter((item) => item.id !== queued.id);
@@ -611,13 +708,13 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
           if (existing.some((m) => m.id === decrypted.id)) {
             return { offlineQueue: nextQueue };
           }
-          return {
+          return applyEviction(state, {
             offlineQueue: nextQueue,
             messages: {
               ...state.messages,
-              [queued.channelId]: [...existing, decrypted],
+              [queued.channelId]: capChannelMessages([...existing, decrypted]),
             },
-          };
+          });
         });
       } catch (err) {
         if (shouldQueueMessageError(err)) {
@@ -662,8 +759,14 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
     });
   },
 
-  setMessages: (channelId, messages) =>
-    set((state) => ({ messages: { ...state.messages, [channelId]: messages } })),
+  setMessages: (channelId, messages) => {
+    touchChannel(channelId);
+    set((state) =>
+      applyEviction(state, {
+        messages: { ...state.messages, [channelId]: capChannelMessages(messages) },
+      }),
+    );
+  },
 
   fetchPins: async (channelId) => {
     try {
@@ -917,14 +1020,15 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
     if (baseMessage.poll) {
       usePollStore.getState().upsertPoll(baseMessage.poll);
     }
+    touchChannel(channelId);
     set((state) => {
       const existing = state.messages[channelId] || [];
       if (existing.some((m) => m.id === message.id)) return state;
       const nextDecrypting = isE2ee ? new Set(state.decryptingIds).add(message.id) : state.decryptingIds;
-      return {
-        messages: { ...state.messages, [channelId]: [...existing, baseMessage] },
+      return applyEviction(state, {
+        messages: { ...state.messages, [channelId]: capChannelMessages([...existing, baseMessage]) },
         decryptingIds: nextDecrypting,
-      };
+      });
     });
     if (isE2ee) {
       void decryptMessageForChannel(channelId, { ...message }).then((decrypted) => {

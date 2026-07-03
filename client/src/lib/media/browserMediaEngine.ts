@@ -18,7 +18,6 @@ import {
   PROTOCOL_VERSION,
   HEADER_SIZE,
   createPacket,
-  decodeVideoFrameMetadata,
   encodeVideoFrameMetadata,
   parsePacket,
 } from './transport/protocol';
@@ -32,10 +31,16 @@ import {
 } from './video/videoEncoder';
 import { MediaVideoDecoder } from './video/videoDecoder';
 import { CanvasRenderer } from './video/canvasRenderer';
+import { unwrapDeliveredMediaSenderKey } from './mediaSenderKeyEnvelope';
 import {
-  unwrapDeliveredMediaSenderKey,
-  wrapMediaSenderKeyForRecipient,
-} from './mediaSenderKeyEnvelope';
+  deriveTrackSsrc,
+  parseRoomIdFromToken,
+  parseUserIdFromToken,
+  reassembleVideoPayload,
+  selectPublishedLayer,
+  wrapSenderKeyForRecipients,
+  type VideoReassemblyState,
+} from './engineShared';
 
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 1;
@@ -71,17 +76,6 @@ interface VideoSubscription {
   streamId?: string;
   trackId?: string;
   activeLayer?: number;
-}
-
-interface VideoReassemblyState {
-  streamId: string;
-  trackId: string;
-  codec: number;
-  fragmentCount: number;
-  isKeyframe: boolean;
-  chunks: Array<Uint8Array | null>;
-  received: number;
-  lastUpdate: number;
 }
 
 interface SessionParticipantCapabilities {
@@ -255,12 +249,12 @@ export class BrowserMediaEngine implements MediaEngine {
   async connect(endpoint: string, token: string, certHash?: string): Promise<void> {
     // Generate local SSRC
     this.sequence = 0;
-    this.localUserId = this.parseUserIdFromToken(token);
-    this.localRoomId = this.parseRoomIdFromToken(token);
+    this.localUserId = parseUserIdFromToken(token);
+    this.localRoomId = parseRoomIdFromToken(token);
     if (this.localUserId) {
-      this.localAudioSsrc = await this.deriveTrackSsrc(this.localUserId, 'audio');
-      this.localVideoSsrc = await this.deriveTrackSsrc(this.localUserId, 'video');
-      this.localScreenSsrc = await this.deriveTrackSsrc(this.localUserId, 'screen');
+      this.localAudioSsrc = await deriveTrackSsrc(this.localUserId, 'audio');
+      this.localVideoSsrc = await deriveTrackSsrc(this.localUserId, 'video');
+      this.localScreenSsrc = await deriveTrackSsrc(this.localUserId, 'screen');
       this.localVideoLayerSsrcs = await this.buildLayerSsrcs(this.localUserId, 'video', this.localVideoSsrc);
       this.localScreenLayerSsrcs = await this.buildLayerSsrcs(this.localUserId, 'screen', this.localScreenSsrc);
     } else {
@@ -777,7 +771,7 @@ export class BrowserMediaEngine implements MediaEngine {
       height: Math.max(1, Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1))),
     };
     const selectedLayer = publishedTrack
-      ? this.selectPublishedLayer(publishedTrack, viewport.width, viewport.height)
+      ? selectPublishedLayer(publishedTrack, viewport.width, viewport.height)
       : null;
     let ssrc = 0;
     for (const [s, uid] of this.ssrcToUserId) {
@@ -836,7 +830,7 @@ export class BrowserMediaEngine implements MediaEngine {
         width: Math.max(1, Math.round((canvas.clientWidth || canvas.width || 1) * (window.devicePixelRatio || 1))),
         height: Math.max(1, Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1))),
       };
-      const nextLayer = this.selectPublishedLayer(track, nextViewport.width, nextViewport.height);
+      const nextLayer = selectPublishedLayer(track, nextViewport.width, nextViewport.height);
       const nextLayerId = nextLayer?.layerId;
       if (current.activeLayer === nextLayerId && current.ssrc === (nextLayer?.ssrc ?? current.ssrc)) {
         return;
@@ -1351,7 +1345,7 @@ export class BrowserMediaEngine implements MediaEngine {
       header.sequence,
       header.ssrc,
     ).then((decrypted) => {
-      const reassembled = this.reassembleVideoPayload(header, decrypted);
+      const reassembled = reassembleVideoPayload(this.videoReassembly, decrypted);
       if (!reassembled) {
         return;
       }
@@ -1386,92 +1380,6 @@ export class BrowserMediaEngine implements MediaEngine {
     }).catch(() => {
       // Decryption failed - missing key or corrupted
     });
-  }
-
-  private reassembleVideoPayload(
-    _header: MediaHeader,
-    payload: Uint8Array,
-  ): { data: Uint8Array; isKeyframe: boolean; streamId: string; trackId: string; codec: string } | null {
-    let metadata: VideoFrameMetadata;
-    let chunk: Uint8Array;
-    try {
-      const decoded = decodeVideoFrameMetadata(payload);
-      metadata = decoded.metadata;
-      chunk = payload.slice(decoded.payloadOffset);
-      if (metadata.fragmentCount === 0 || metadata.fragmentIndex >= metadata.fragmentCount) {
-        return null;
-      }
-    } catch {
-      return null;
-    }
-    if (metadata.fragmentCount === 1) {
-      return {
-        data: chunk,
-        isKeyframe: metadata.isKeyframe,
-        streamId: metadata.streamId,
-        trackId: metadata.trackId,
-        codec: this.codecLabelFromHeader(metadata.codec),
-      };
-    }
-
-    const key = `${metadata.streamId}:${metadata.trackId}:${metadata.frameId.toString()}`;
-    const now = performance.now();
-    for (const [existingKey, state] of this.videoReassembly) {
-      if (now - state.lastUpdate > 3000) {
-        this.videoReassembly.delete(existingKey);
-      }
-    }
-
-    let state = this.videoReassembly.get(key);
-    if (
-      !state ||
-      state.fragmentCount !== metadata.fragmentCount ||
-      state.streamId !== metadata.streamId ||
-      state.trackId !== metadata.trackId
-    ) {
-      state = {
-        streamId: metadata.streamId,
-        trackId: metadata.trackId,
-        codec: metadata.codec,
-        fragmentCount: metadata.fragmentCount,
-        isKeyframe: metadata.isKeyframe,
-        chunks: Array.from({ length: metadata.fragmentCount }, () => null),
-        received: 0,
-        lastUpdate: now,
-      };
-      this.videoReassembly.set(key, state);
-    }
-
-    if (!state.chunks[metadata.fragmentIndex]) {
-      state.chunks[metadata.fragmentIndex] = chunk;
-      state.received += 1;
-    }
-    state.lastUpdate = now;
-    state.isKeyframe = metadata.isKeyframe;
-    state.codec = metadata.codec;
-
-    if (state.received < metadata.fragmentCount) {
-      return null;
-    }
-
-    const totalLength = state.chunks.reduce((sum, part) => sum + (part?.byteLength ?? 0), 0);
-    const combined = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const part of state.chunks) {
-      if (!part) {
-        return null;
-      }
-      combined.set(part, offset);
-      offset += part.byteLength;
-    }
-    this.videoReassembly.delete(key);
-    return {
-      data: combined,
-      isKeyframe: state.isKeyframe,
-      streamId: state.streamId,
-      trackId: state.trackId,
-      codec: this.codecLabelFromHeader(state.codec),
-    };
   }
 
   private handleStreamControlMessage(msg: StreamControlMessage): void {
@@ -1626,7 +1534,7 @@ export class BrowserMediaEngine implements MediaEngine {
             : null;
           const primaryLayer =
             (viewport
-              ? this.selectPublishedLayer(track, viewport.width, viewport.height)
+              ? selectPublishedLayer(track, viewport.width, viewport.height)
               : null) ??
             track.layers.find((layer) => layer.active) ??
             track.layers[0];
@@ -1722,7 +1630,7 @@ export class BrowserMediaEngine implements MediaEngine {
             : null;
           const primaryLayer =
             (viewport
-              ? this.selectPublishedLayer(updatedTrack, viewport.width, viewport.height)
+              ? selectPublishedLayer(updatedTrack, viewport.width, viewport.height)
               : null) ??
             layers.find((layer) => layer.active) ??
             layers[0];
@@ -1811,40 +1719,6 @@ export class BrowserMediaEngine implements MediaEngine {
     }
   }
 
-  private parseUserIdFromToken(token: string): string | null {
-    try {
-      const [, payload] = token.split('.');
-      if (!payload) return null;
-      const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
-        sub?: string | number;
-      };
-      return json.sub != null ? String(json.sub) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  private parseRoomIdFromToken(token: string): string | null {
-    try {
-      const [, payload] = token.split('.');
-      if (!payload) return null;
-      const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
-        room?: string;
-      };
-      return typeof json.room === 'string' ? json.room : null;
-    } catch {
-      return null;
-    }
-  }
-
-  private async deriveTrackSsrc(userId: string, kind: string): Promise<number> {
-    const input = new TextEncoder().encode(`paracord-native-ssrc-v1:${kind}:${userId}`);
-    const digest = await crypto.subtle.digest('SHA-256', input);
-    const bytes = new Uint8Array(digest);
-    const ssrc = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, false);
-    return ssrc === 0 ? 1 : ssrc;
-  }
-
   private async buildLayerSsrcs(
     userId: string,
     kind: string,
@@ -1852,8 +1726,8 @@ export class BrowserMediaEngine implements MediaEngine {
   ): Promise<Map<number, number>> {
     const layerSsrcs = new Map<number, number>();
     layerSsrcs.set(2, primarySsrc);
-    layerSsrcs.set(0, await this.deriveTrackSsrc(userId, `${kind}:layer:0`));
-    layerSsrcs.set(1, await this.deriveTrackSsrc(userId, `${kind}:layer:1`));
+    layerSsrcs.set(0, await deriveTrackSsrc(userId, `${kind}:layer:0`));
+    layerSsrcs.set(1, await deriveTrackSsrc(userId, `${kind}:layer:1`));
     return layerSsrcs;
   }
 
@@ -2048,23 +1922,6 @@ export class BrowserMediaEngine implements MediaEngine {
     );
   }
 
-  private selectPublishedLayer(
-    track: PublishedTrackDescriptor,
-    viewportWidth: number,
-    viewportHeight: number,
-  ): PublishedLayerDescriptor | null {
-    if (!track.layers.length) {
-      return null;
-    }
-    const sortedLayers = [...track.layers].sort((a, b) => (a.layerId ?? 0) - (b.layerId ?? 0));
-    const fittingLayer = sortedLayers.find((layer) => {
-      const width = Number(layer.width ?? 0);
-      const height = Number(layer.height ?? 0);
-      return width >= viewportWidth || height >= viewportHeight;
-    });
-    return fittingLayer ?? sortedLayers[sortedLayers.length - 1] ?? null;
-  }
-
   private estimateTrackBitrateKbps(
     track: PublishedTrackDescriptor | undefined,
     requestedLayer?: number | null,
@@ -2155,17 +2012,10 @@ export class BrowserMediaEngine implements MediaEngine {
     epoch: number,
     recipientUserIds: string[],
   ): Promise<Array<[number, number[]]>> {
-    const encryptedKeys = await Promise.all(
-      recipientUserIds.map(async (recipientUserId) => {
-        const wrapped = await wrapMediaSenderKeyForRecipient(scope, rawKey, epoch, recipientUserId);
-        if (!wrapped) {
-          return null;
-        }
-        return [Number(recipientUserId), Array.from(wrapped)] as [number, number[]];
-      }),
+    const wrapped = await wrapSenderKeyForRecipients(scope, rawKey, epoch, recipientUserIds);
+    return wrapped.map(
+      (entry) => [Number(entry.recipientUserId), Array.from(entry.wrapped)] as [number, number[]],
     );
-
-    return encryptedKeys.filter((entry): entry is [number, number[]] => Array.isArray(entry));
   }
 
   private async announceTrackSenderKey(
@@ -2226,18 +2076,6 @@ export class BrowserMediaEngine implements MediaEngine {
     }
   }
 
-  private codecLabelFromHeader(codecId: number): string {
-    switch (codecId) {
-      case 2:
-        return 'av1';
-      case 3:
-        return 'h264';
-      case 1:
-      default:
-        return 'vp9';
-    }
-  }
-
   private async announcePublishedTrackKeysForRecipients(recipientUserIds: string[]): Promise<void> {
     if (recipientUserIds.length === 0) {
       return;
@@ -2280,7 +2118,7 @@ export class BrowserMediaEngine implements MediaEngine {
     const decrypted = await unwrapDeliveredMediaSenderKey(this.audioKeyScope(), senderUserId, payload);
     const rawKey = decrypted.rawKey;
     const resolvedEpoch = decrypted.epoch || epoch;
-    const ssrc = await this.deriveTrackSsrc(senderUserId, 'audio');
+    const ssrc = await deriveTrackSsrc(senderUserId, 'audio');
     await this.senderKeys.importPeerKey(ssrc, resolvedEpoch, rawKey);
     this.ensureRemoteParticipantState(senderUserId);
   }

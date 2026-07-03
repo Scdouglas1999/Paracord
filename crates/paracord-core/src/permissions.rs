@@ -1,15 +1,127 @@
 use crate::error::CoreError;
+use crate::member_index::MemberIndex;
 use crate::PermissionCacheKey;
+use dashmap::DashMap;
+use moka::notification::RemovalCause;
 use paracord_db::DbPool;
 use paracord_models::permissions::Permissions;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 pub const OVERWRITE_TARGET_ROLE: i16 = 0;
 pub const OVERWRITE_TARGET_MEMBER: i16 = 1;
 
+/// Remove `key` from the reverse index bucket `outer`, dropping the bucket when
+/// it becomes empty so the index cannot grow without bound.
+fn remove_from_reverse_index(
+    index: &DashMap<i64, HashSet<PermissionCacheKey>>,
+    outer: i64,
+    key: &PermissionCacheKey,
+) {
+    let now_empty = match index.get_mut(&outer) {
+        Some(mut bucket) => {
+            bucket.remove(key);
+            bucket.is_empty()
+        }
+        None => false,
+    };
+    if now_empty {
+        // Re-check under the write lock so a concurrent insert isn't clobbered.
+        index.remove_if(&outer, |_, bucket| bucket.is_empty());
+    }
+}
+
+/// The computed-permission cache: a moka LRU (5-min TTL, capped size) paired
+/// with two reverse indexes (`channel_id -> keys`, `user_id -> keys`) so that
+/// channel- and user-scoped invalidation is O(affected entries) instead of a
+/// full-cache scan. The reverse indexes are populated on insert and pruned by
+/// moka's eviction listener whenever a key truly leaves the cache (explicit
+/// invalidation, TTL expiry, or size eviction), keeping them consistent with
+/// the underlying cache without an unbounded scan.
+#[derive(Clone)]
+pub struct PermissionCache {
+    cache: moka::future::Cache<PermissionCacheKey, Permissions>,
+    by_channel: Arc<DashMap<i64, HashSet<PermissionCacheKey>>>,
+    by_user: Arc<DashMap<i64, HashSet<PermissionCacheKey>>>,
+}
+
+impl PermissionCache {
+    /// Build the cache with the given max entry count and a 5-minute TTL.
+    pub fn new(max_capacity: u64) -> Self {
+        let by_channel: Arc<DashMap<i64, HashSet<PermissionCacheKey>>> = Arc::new(DashMap::new());
+        let by_user: Arc<DashMap<i64, HashSet<PermissionCacheKey>>> = Arc::new(DashMap::new());
+        let listener_channels = Arc::clone(&by_channel);
+        let listener_users = Arc::clone(&by_user);
+        let cache = moka::future::Cache::builder()
+            .max_capacity(max_capacity)
+            .time_to_live(std::time::Duration::from_secs(300))
+            .eviction_listener(move |key: Arc<PermissionCacheKey>, _perms, cause| {
+                // A replacement keeps the same key present with a new value, so
+                // its reverse-index entries must survive; only prune when the
+                // key genuinely leaves the cache.
+                if cause == RemovalCause::Replaced {
+                    return;
+                }
+                let (user_id, channel_id) = *key;
+                remove_from_reverse_index(&listener_channels, channel_id, &key);
+                remove_from_reverse_index(&listener_users, user_id, &key);
+            })
+            .build();
+        Self {
+            cache,
+            by_channel,
+            by_user,
+        }
+    }
+
+    async fn get(&self, key: &PermissionCacheKey) -> Option<Permissions> {
+        self.cache.get(key).await
+    }
+
+    async fn insert(&self, key: PermissionCacheKey, perms: Permissions) {
+        let (user_id, channel_id) = key;
+        self.by_channel.entry(channel_id).or_default().insert(key);
+        self.by_user.entry(user_id).or_default().insert(key);
+        // The eviction listener prunes the reverse indexes for any key it evicts
+        // as a side effect of this insert (size eviction); a Replaced cause for
+        // this same key is ignored so the entries added above are preserved.
+        self.cache.insert(key, perms).await;
+    }
+
+    async fn invalidate_key(&self, key: &PermissionCacheKey) {
+        // Reverse-index cleanup happens in the eviction listener.
+        self.cache.invalidate(key).await;
+    }
+
+    /// Invalidate every cached entry for `channel_id` (all users).
+    pub async fn invalidate_channel(&self, channel_id: i64) {
+        let keys: Vec<PermissionCacheKey> = self
+            .by_channel
+            .get(&channel_id)
+            .map(|bucket| bucket.iter().copied().collect())
+            .unwrap_or_default();
+        for key in keys {
+            self.cache.invalidate(&key).await;
+        }
+    }
+
+    /// Invalidate every cached entry for `user_id` (all channels).
+    pub async fn invalidate_user(&self, user_id: i64) {
+        let keys: Vec<PermissionCacheKey> = self
+            .by_user
+            .get(&user_id)
+            .map(|bucket| bucket.iter().copied().collect())
+            .unwrap_or_default();
+        for key in keys {
+            self.cache.invalidate(&key).await;
+        }
+    }
+}
+
 /// Compute channel permissions with cache lookup.  Falls back to
 /// `compute_channel_permissions` on cache miss and stores the result.
 pub async fn compute_channel_permissions_cached(
-    cache: &moka::future::Cache<PermissionCacheKey, Permissions>,
+    cache: &PermissionCache,
     pool: &DbPool,
     guild_id: i64,
     channel_id: i64,
@@ -27,49 +139,35 @@ pub async fn compute_channel_permissions_cached(
 }
 
 /// Invalidate cached permissions for a specific user in a specific channel.
-pub async fn invalidate_user_channel(
-    cache: &moka::future::Cache<PermissionCacheKey, Permissions>,
-    user_id: i64,
-    channel_id: i64,
-) {
-    cache.invalidate(&(user_id, channel_id)).await;
+pub async fn invalidate_user_channel(cache: &PermissionCache, user_id: i64, channel_id: i64) {
+    cache.invalidate_key(&(user_id, channel_id)).await;
 }
 
 /// Invalidate all cached permissions for a specific channel (all users).
-/// Uses targeted invalidation to only remove entries for this channel.
-pub async fn invalidate_channel(
-    cache: &moka::future::Cache<PermissionCacheKey, Permissions>,
-    channel_id: i64,
-) {
-    let keys_to_invalidate: Vec<PermissionCacheKey> = cache
-        .iter()
-        .filter(|(k, _)| k.1 == channel_id)
-        .map(|(k, _)| *k)
-        .collect();
-    for key in keys_to_invalidate {
-        cache.invalidate(&key).await;
-    }
+/// Uses the channel reverse index so only affected entries are touched.
+pub async fn invalidate_channel(cache: &PermissionCache, channel_id: i64) {
+    cache.invalidate_channel(channel_id).await;
 }
 
 /// Invalidate all cached permissions for a user across all channels.
 /// Used when a user's roles change.
-pub async fn invalidate_user(
-    cache: &moka::future::Cache<PermissionCacheKey, Permissions>,
-    user_id: i64,
-) {
-    let keys_to_invalidate: Vec<PermissionCacheKey> = cache
-        .iter()
-        .filter(|(k, _)| k.0 == user_id)
-        .map(|(k, _)| *k)
-        .collect();
-    for key in keys_to_invalidate {
-        cache.invalidate(&key).await;
-    }
+pub async fn invalidate_user(cache: &PermissionCache, user_id: i64) {
+    cache.invalidate_user(user_id).await;
 }
 
-/// Invalidate the entire permission cache (e.g. when roles are modified).
-pub async fn invalidate_all(cache: &moka::future::Cache<PermissionCacheKey, Permissions>) {
-    cache.invalidate_all();
+/// Invalidate cached permissions for every member of a guild. Used when a
+/// role's permissions change or a role is deleted, which can alter effective
+/// permissions for any member across any channel. Iterates the guild's members
+/// (via the in-memory index) and invalidates each user's entries through the
+/// user reverse index, so no full-cache scan is required.
+pub async fn invalidate_guild_members(
+    cache: &PermissionCache,
+    member_index: &MemberIndex,
+    guild_id: i64,
+) {
+    for user_id in member_index.members_of(guild_id) {
+        cache.invalidate_user(user_id).await;
+    }
 }
 
 /// Compute effective permissions for a member in a guild
@@ -202,18 +300,10 @@ fn apply_overwrites(
 /// If the user is a bot account, intersect the given permissions with the
 /// bot's install-time permissions for the guild.  Returns the capped
 /// permissions, or the original permissions unchanged for non-bot users.
-pub async fn cap_bot_install_permissions(
-    pool: &DbPool,
-    guild_id: i64,
-    user_id: i64,
-    perms: Permissions,
-) -> Result<Permissions, CoreError> {
-    cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, None).await
-}
-
-/// Like [`cap_bot_install_permissions`], but accepts an optional `is_bot`
-/// hint so hot paths that already know the account type (or know the caller is
-/// an ordinary human) can skip the `get_user_by_id` round-trip entirely.
+///
+/// The `is_bot` hint lets callers that already know the account type reuse a
+/// single lookup across many cap calls (e.g. the batch path) or skip the
+/// `get_user_by_id` round-trip entirely:
 ///
 /// - `Some(false)`: known non-bot, return `perms` unchanged with no DB access.
 /// - `Some(true)`: known bot, skip the user lookup and go straight to the
@@ -259,9 +349,27 @@ pub async fn compute_channel_permissions(
 ) -> Result<Permissions, CoreError> {
     let roles = paracord_db::roles::get_member_roles(pool, user_id, guild_id).await?;
     let mut perms = compute_permissions_from_roles(&roles, guild_owner_id, user_id);
+
+    // Determine bot status once and thread it through every cap point via the
+    // hinted variant, mirroring the batch path. This keeps the single-channel
+    // path to a single `get_user_by_id`, and the common human case (`is_bot`
+    // false) turns each cap into a no-op with no further DB access.
+    let is_bot = match paracord_db::users::get_user_by_id(pool, user_id).await? {
+        Some(user) => crate::is_bot(user.flags),
+        None => false,
+    };
+    let hint = Some(is_bot);
+
     if perms.contains(Permissions::ADMINISTRATOR) || user_id == guild_owner_id {
         // Still cap bots even if they somehow have ADMINISTRATOR from roles
-        return cap_bot_install_permissions(pool, guild_id, user_id, Permissions::all()).await;
+        return cap_bot_install_permissions_hinted(
+            pool,
+            guild_id,
+            user_id,
+            Permissions::all(),
+            hint,
+        )
+        .await;
     }
 
     let channel = paracord_db::channels::get_channel(pool, channel_id)
@@ -273,14 +381,14 @@ pub async fn compute_channel_permissions(
         paracord_db::channels::parse_required_role_ids(&channel.required_role_ids);
     if !required_role_ids.is_empty() && !required_role_ids.iter().any(|id| role_ids.contains(id)) {
         perms.remove(Permissions::VIEW_CHANNEL);
-        return cap_bot_install_permissions(pool, guild_id, user_id, perms).await;
+        return cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, hint).await;
     }
 
     let overwrites =
         paracord_db::channel_overwrites::get_channel_overwrites(pool, channel_id).await?;
     let perms = apply_overwrites(perms, &role_ids, guild_id, user_id, &overwrites);
 
-    cap_bot_install_permissions(pool, guild_id, user_id, perms).await
+    cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, hint).await
 }
 
 /// Compute channel permissions for multiple channels in a single batch.
@@ -865,5 +973,74 @@ mod tests {
 
         assert_eq!(single, batch);
         assert_eq!(single, Permissions::empty());
+    }
+
+    // ── PermissionCache targeted invalidation ────────────────────────────────
+
+    #[tokio::test]
+    async fn invalidate_channel_only_affects_that_channel() {
+        let cache = PermissionCache::new(100);
+        let p = Permissions::VIEW_CHANNEL;
+        cache.insert((1, 10), p).await; // user 1, channel 10
+        cache.insert((2, 10), p).await; // user 2, channel 10
+        cache.insert((1, 11), p).await; // user 1, channel 11
+
+        cache.invalidate_channel(10).await;
+
+        assert_eq!(cache.get(&(1, 10)).await, None);
+        assert_eq!(cache.get(&(2, 10)).await, None);
+        assert_eq!(cache.get(&(1, 11)).await, Some(p));
+    }
+
+    #[tokio::test]
+    async fn invalidate_user_only_affects_that_user() {
+        let cache = PermissionCache::new(100);
+        let p = Permissions::VIEW_CHANNEL;
+        cache.insert((1, 10), p).await;
+        cache.insert((1, 11), p).await;
+        cache.insert((2, 10), p).await;
+
+        cache.invalidate_user(1).await;
+
+        assert_eq!(cache.get(&(1, 10)).await, None);
+        assert_eq!(cache.get(&(1, 11)).await, None);
+        assert_eq!(cache.get(&(2, 10)).await, Some(p));
+    }
+
+    #[tokio::test]
+    async fn invalidate_prunes_reverse_indexes() {
+        let cache = PermissionCache::new(100);
+        let p = Permissions::VIEW_CHANNEL;
+        cache.insert((1, 10), p).await;
+        cache.insert((2, 10), p).await;
+
+        cache.invalidate_channel(10).await;
+        // Force moka to drain its eviction listener so the reverse indexes are
+        // pruned deterministically.
+        cache.cache.run_pending_tasks().await;
+
+        assert!(cache.by_channel.get(&10).is_none());
+        assert!(cache.by_user.get(&1).is_none());
+        assert!(cache.by_user.get(&2).is_none());
+    }
+
+    #[tokio::test]
+    async fn invalidate_guild_members_clears_all_member_entries() {
+        let cache = PermissionCache::new(100);
+        let p = Permissions::VIEW_CHANNEL;
+        cache.insert((1, 10), p).await; // member 1
+        cache.insert((2, 11), p).await; // member 2
+        cache.insert((3, 10), p).await; // non-member 3
+
+        let index = MemberIndex::empty();
+        index.add_member(500, 1);
+        index.add_member(500, 2);
+
+        invalidate_guild_members(&cache, &index, 500).await;
+
+        assert_eq!(cache.get(&(1, 10)).await, None);
+        assert_eq!(cache.get(&(2, 11)).await, None);
+        // A user who is not a member of the guild is untouched.
+        assert_eq!(cache.get(&(3, 10)).await, Some(p));
     }
 }

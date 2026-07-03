@@ -1,7 +1,13 @@
-use crate::{
-    active_database_engine, datetime_from_db_text, datetime_to_db_text, DatabaseEngine, DbError,
-    DbPool,
-};
+//! Scheduled-message storage.
+//!
+//! Datetime convention: `send_at` is stored as epoch milliseconds in an
+//! INTEGER (SQLite) / BIGINT (PostgreSQL) column, mirroring the i64 timestamp
+//! style used across the schema, so it needs no per-engine casts on read or
+//! write and compares numerically on both engines. The bookkeeping columns
+//! `created_at`/`updated_at` remain DB-native timestamp values (TEXT on SQLite,
+//! TIMESTAMPTZ on PostgreSQL) and are rendered to text on PostgreSQL via the
+//! projection below so they read back as strings on either engine.
+use crate::{active_database_engine, datetime_from_db_text, DatabaseEngine, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
@@ -28,7 +34,7 @@ pub struct ScheduledMessageRow {
 
 impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ScheduledMessageRow {
     fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
-        let send_at_raw: String = row.try_get("send_at")?;
+        let send_at_ms: i64 = row.try_get("send_at")?;
         let created_at_raw: String = row.try_get("created_at")?;
         let updated_at_raw: String = row.try_get("updated_at")?;
         Ok(Self {
@@ -38,7 +44,9 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ScheduledMessageRow {
             content: row.try_get("content")?,
             e2ee_payload: row.try_get("e2ee_payload")?,
             nonce: row.try_get("nonce")?,
-            send_at: datetime_from_db_text(&send_at_raw)?,
+            send_at: DateTime::from_timestamp_millis(send_at_ms).ok_or_else(|| {
+                sqlx::Error::Protocol(format!("invalid send_at epoch millis {send_at_ms}"))
+            })?,
             delivered_message_id: row.try_get("delivered_message_id")?,
             status: row.try_get("status")?,
             error: row.try_get("error")?,
@@ -53,8 +61,7 @@ const SCHEDULED_MESSAGES_SELECT_SQLITE: &str =
      status, error, created_at, updated_at";
 
 const SCHEDULED_MESSAGES_SELECT_POSTGRES: &str =
-    "id, channel_id, author_id, content, e2ee_payload, nonce,
-     to_char(timezone('UTC', send_at), 'YYYY-MM-DD HH24:MI:SS.US') AS send_at,
+    "id, channel_id, author_id, content, e2ee_payload, nonce, send_at,
      delivered_message_id, status, error,
      to_char(timezone('UTC', created_at), 'YYYY-MM-DD HH24:MI:SS.US') AS created_at,
      to_char(timezone('UTC', updated_at), 'YYYY-MM-DD HH24:MI:SS.US') AS updated_at";
@@ -69,49 +76,28 @@ pub async fn create_scheduled_message(
     nonce: Option<&str>,
     send_at: DateTime<Utc>,
 ) -> Result<ScheduledMessageRow, DbError> {
-    let send_at_text = datetime_to_db_text(send_at);
-    let row = match active_database_engine() {
-        DatabaseEngine::Postgres => {
-            sqlx::query_as::<_, ScheduledMessageRow>(&format!(
-                "INSERT INTO scheduled_messages
-                    (id, channel_id, author_id, content, e2ee_payload, nonce, send_at, status, updated_at)
-                 VALUES
-                    ($1, $2, $3, $4, $5, $6, CAST($7 AS TIMESTAMPTZ), $8, CURRENT_TIMESTAMP)
-                 RETURNING {}",
-                SCHEDULED_MESSAGES_SELECT_POSTGRES
-            ))
-            .bind(id)
-            .bind(channel_id)
-            .bind(author_id)
-            .bind(content)
-            .bind(e2ee_payload)
-            .bind(nonce)
-            .bind(&send_at_text)
-            .bind(STATUS_SCHEDULED)
-            .fetch_one(pool)
-            .await?
-        }
-        DatabaseEngine::Sqlite => {
-            sqlx::query_as::<_, ScheduledMessageRow>(&format!(
-                "INSERT INTO scheduled_messages
-                    (id, channel_id, author_id, content, e2ee_payload, nonce, send_at, status, updated_at)
-                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
-                 RETURNING {}",
-                SCHEDULED_MESSAGES_SELECT_SQLITE
-            ))
-            .bind(id)
-            .bind(channel_id)
-            .bind(author_id)
-            .bind(content)
-            .bind(e2ee_payload)
-            .bind(nonce)
-            .bind(send_at_text)
-            .bind(STATUS_SCHEDULED)
-            .fetch_one(pool)
-            .await?
-        }
+    let select_cols = match active_database_engine() {
+        DatabaseEngine::Postgres => SCHEDULED_MESSAGES_SELECT_POSTGRES,
+        DatabaseEngine::Sqlite => SCHEDULED_MESSAGES_SELECT_SQLITE,
     };
+    let row = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
+        "INSERT INTO scheduled_messages
+            (id, channel_id, author_id, content, e2ee_payload, nonce, send_at, status, updated_at)
+         VALUES
+            ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+         RETURNING {}",
+        select_cols
+    ))
+    .bind(id)
+    .bind(channel_id)
+    .bind(author_id)
+    .bind(content)
+    .bind(e2ee_payload)
+    .bind(nonce)
+    .bind(send_at.timestamp_millis())
+    .bind(STATUS_SCHEDULED)
+    .fetch_one(pool)
+    .await?;
     Ok(row)
 }
 
@@ -191,53 +177,30 @@ pub async fn update_scheduled_message(
     nonce: Option<&str>,
     send_at: DateTime<Utc>,
 ) -> Result<Option<ScheduledMessageRow>, DbError> {
-    let send_at_text = datetime_to_db_text(send_at);
-    let row = match active_database_engine() {
-        DatabaseEngine::Postgres => {
-            sqlx::query_as::<_, ScheduledMessageRow>(&format!(
-                "UPDATE scheduled_messages
-                 SET content = $2,
-                     e2ee_payload = $3,
-                     nonce = $4,
-                     send_at = CAST($5 AS TIMESTAMPTZ),
-                     updated_at = CURRENT_TIMESTAMP
-                 WHERE id = $1
-                   AND status = $6
-                 RETURNING {}",
-                SCHEDULED_MESSAGES_SELECT_POSTGRES
-            ))
-            .bind(id)
-            .bind(content)
-            .bind(e2ee_payload)
-            .bind(nonce)
-            .bind(&send_at_text)
-            .bind(STATUS_SCHEDULED)
-            .fetch_optional(pool)
-            .await?
-        }
-        DatabaseEngine::Sqlite => {
-            sqlx::query_as::<_, ScheduledMessageRow>(&format!(
-                "UPDATE scheduled_messages
-                 SET content = $2,
-                     e2ee_payload = $3,
-                     nonce = $4,
-                     send_at = $5,
-                     updated_at = CURRENT_TIMESTAMP
-                 WHERE id = $1
-                   AND status = $6
-                 RETURNING {}",
-                SCHEDULED_MESSAGES_SELECT_SQLITE
-            ))
-            .bind(id)
-            .bind(content)
-            .bind(e2ee_payload)
-            .bind(nonce)
-            .bind(send_at_text)
-            .bind(STATUS_SCHEDULED)
-            .fetch_optional(pool)
-            .await?
-        }
+    let select_cols = match active_database_engine() {
+        DatabaseEngine::Postgres => SCHEDULED_MESSAGES_SELECT_POSTGRES,
+        DatabaseEngine::Sqlite => SCHEDULED_MESSAGES_SELECT_SQLITE,
     };
+    let row = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
+        "UPDATE scheduled_messages
+         SET content = $2,
+             e2ee_payload = $3,
+             nonce = $4,
+             send_at = $5,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+           AND status = $6
+         RETURNING {}",
+        select_cols
+    ))
+    .bind(id)
+    .bind(content)
+    .bind(e2ee_payload)
+    .bind(nonce)
+    .bind(send_at.timestamp_millis())
+    .bind(STATUS_SCHEDULED)
+    .fetch_optional(pool)
+    .await?;
     Ok(row)
 }
 
@@ -246,41 +209,24 @@ pub async fn list_due_scheduled_messages(
     now: DateTime<Utc>,
     limit: i64,
 ) -> Result<Vec<ScheduledMessageRow>, DbError> {
-    let now_text = datetime_to_db_text(now);
-    let rows = match active_database_engine() {
-        DatabaseEngine::Postgres => {
-            sqlx::query_as::<_, ScheduledMessageRow>(&format!(
-                "SELECT {}
-                 FROM scheduled_messages
-                 WHERE status = $1
-                   AND send_at <= CAST($2 AS TIMESTAMPTZ)
-                 ORDER BY send_at ASC, id ASC
-                 LIMIT $3",
-                SCHEDULED_MESSAGES_SELECT_POSTGRES
-            ))
-            .bind(STATUS_SCHEDULED)
-            .bind(&now_text)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-        }
-        DatabaseEngine::Sqlite => {
-            sqlx::query_as::<_, ScheduledMessageRow>(&format!(
-                "SELECT {}
-                 FROM scheduled_messages
-                 WHERE status = $1
-                   AND send_at <= $2
-                 ORDER BY send_at ASC, id ASC
-                 LIMIT $3",
-                SCHEDULED_MESSAGES_SELECT_SQLITE
-            ))
-            .bind(STATUS_SCHEDULED)
-            .bind(now_text)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-        }
+    let select_cols = match active_database_engine() {
+        DatabaseEngine::Postgres => SCHEDULED_MESSAGES_SELECT_POSTGRES,
+        DatabaseEngine::Sqlite => SCHEDULED_MESSAGES_SELECT_SQLITE,
     };
+    let rows = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
+        "SELECT {}
+         FROM scheduled_messages
+         WHERE status = $1
+           AND send_at <= $2
+         ORDER BY send_at ASC, id ASC
+         LIMIT $3",
+        select_cols
+    ))
+    .bind(STATUS_SCHEDULED)
+    .bind(now.timestamp_millis())
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 

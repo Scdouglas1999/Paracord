@@ -70,6 +70,40 @@ pub fn create_decoder(
 
 // ── VP9 Decoder (feature-gated) ──────────────────────────────────────
 
+/// Largest decoded frame dimension (width or height) we will accept.
+#[cfg(feature = "vpx")]
+const MAX_DECODE_DIMENSION: u32 = 8192;
+
+/// Largest decoded pixel count we will accept — an 8K UHD budget
+/// (7680 × 4320 ≈ 33.2M pixels). Comfortably above any real call resolution.
+#[cfg(feature = "vpx")]
+const MAX_DECODE_PIXELS: u32 = 7680 * 4320;
+
+/// Reject implausibly large decoded resolutions before any plane buffer is
+/// allocated.
+///
+/// libvpx reports the display dimensions (`d_w`/`d_h`) straight from the
+/// compressed bitstream header, which is remote, untrusted input. Without a
+/// bound, a crafted header could drive an enormous `Vec::with_capacity` (a
+/// denial-of-service allocation) and out-of-bounds plane reads in the copy
+/// loops below. This caps each dimension and the total pixel budget, using
+/// checked arithmetic so the `w * h` product cannot overflow before it is
+/// range-checked. Callers must treat a rejection as a decode failure and
+/// request a fresh keyframe.
+#[cfg(feature = "vpx")]
+fn check_decode_resolution(w: u32, h: u32) -> Result<(), VideoError> {
+    let within_bounds = w <= MAX_DECODE_DIMENSION
+        && h <= MAX_DECODE_DIMENSION
+        && w.checked_mul(h).is_some_and(|px| px <= MAX_DECODE_PIXELS);
+    if within_bounds {
+        Ok(())
+    } else {
+        Err(VideoError::DecodeFailed(format!(
+            "decoded frame resolution out of bounds: {w}x{h}"
+        )))
+    }
+}
+
 #[cfg(feature = "vpx")]
 mod vpx_impl {
     use super::*;
@@ -178,6 +212,26 @@ mod vpx_impl {
                     let img = &*img;
                     let w = img.d_w;
                     let h = img.d_h;
+
+                    // Bound the decoded resolution before computing plane sizes
+                    // or allocating any buffer. `d_w`/`d_h` come from the remote
+                    // bitstream header, so an unbounded value here is both a DoS
+                    // allocation vector and an out-of-bounds risk in the copy
+                    // loops below. On rejection, request a keyframe to recover.
+                    if let Err(e) = super::check_decode_resolution(w, h) {
+                        self.needs_keyframe = true;
+                        return Err(e);
+                    }
+
+                    // VP9's I420 (4:2:0) subsampling requires even display
+                    // dimensions: the chroma planes are exactly w/2 × h/2, and
+                    // the copy loops below assume that halving is exact. libvpx
+                    // never emits odd display dimensions for an I420 stream, so
+                    // an odd value here indicates a corrupt or misdecoded frame.
+                    debug_assert!(
+                        w.is_multiple_of(2) && h.is_multiple_of(2),
+                        "VP9 I420 frame has non-even dimensions: {w}x{h}"
+                    );
 
                     // Extract I420 planes
                     let y_stride = img.stride[0] as usize;
@@ -542,5 +596,181 @@ mod tests {
         };
         let decoded = dec.decode(&f).unwrap();
         assert_eq!(decoded[0].pts, 42);
+    }
+}
+
+// ── VP9 decode tests (require libvpx via the `vpx` feature) ───────────
+
+#[cfg(all(test, feature = "vpx"))]
+mod vpx_tests {
+    use super::*;
+    use crate::video::encoder::{VideoEncoder, Vp9Encoder};
+    use crate::video::{EncoderConfig, PixelFormat, VideoContentHint};
+
+    const W: u32 = 320;
+    const H: u32 = 240;
+
+    /// Build a deterministic, non-uniform I420 frame so the encoder has real
+    /// content to compress. A flat frame would still work, but a gradient
+    /// exercises the DCT/quantization path more realistically.
+    fn synthetic_i420(width: u32, height: u32, seed: u8) -> Vec<u8> {
+        let w = width as usize;
+        let h = height as usize;
+        let uv_w = w / 2;
+        let uv_h = h / 2;
+        let mut frame = Vec::with_capacity(w * h + 2 * uv_w * uv_h);
+        for y in 0..h {
+            for x in 0..w {
+                frame.push(((x + y) as u8).wrapping_add(seed));
+            }
+        }
+        for _y in 0..uv_h {
+            for x in 0..uv_w {
+                frame.push(((x * 2) as u8).wrapping_add(seed));
+            }
+        }
+        for y in 0..uv_h {
+            for _x in 0..uv_w {
+                frame.push(((y * 2) as u8).wrapping_add(seed).wrapping_add(64));
+            }
+        }
+        debug_assert_eq!(frame.len(), PixelFormat::I420.frame_size(width, height));
+        frame
+    }
+
+    fn encoder_config() -> EncoderConfig {
+        EncoderConfig {
+            width: W,
+            height: H,
+            fps: 30,
+            bitrate_kbps: 500,
+            pixel_format: PixelFormat::I420,
+            keyframe_interval: 0,
+            content_hint: VideoContentHint::Default,
+        }
+    }
+
+    #[test]
+    fn vp9_decodes_keyframe_to_i420() {
+        let mut enc = Vp9Encoder::new(encoder_config()).unwrap();
+        let mut dec = Vp9Decoder::new(DecoderConfig::default()).unwrap();
+        assert!(dec.needs_keyframe(), "fresh decoder must want a keyframe");
+
+        let src = synthetic_i420(W, H, 0);
+        let encoded = enc.encode(0, &src, true).unwrap();
+        let keyframe = encoded
+            .iter()
+            .find(|f| f.is_keyframe)
+            .expect("encoder must emit a keyframe when forced");
+
+        let decoded = dec.decode(keyframe).unwrap();
+        assert_eq!(decoded.len(), 1, "one keyframe packet -> one decoded frame");
+        let frame = &decoded[0];
+        assert_eq!(frame.pixel_format, PixelFormat::I420);
+        assert_eq!(frame.width, W);
+        assert_eq!(frame.height, H);
+        assert_eq!(frame.data.len(), (W * H * 3 / 2) as usize);
+        assert!(
+            !dec.needs_keyframe(),
+            "decoder no longer needs a keyframe after decoding one"
+        );
+    }
+
+    #[test]
+    fn vp9_decodes_following_inter_frame() {
+        let mut enc = Vp9Encoder::new(encoder_config()).unwrap();
+        let mut dec = Vp9Decoder::new(DecoderConfig::default()).unwrap();
+
+        // Keyframe first to prime both encoder and decoder reference state.
+        let kf = enc.encode(0, &synthetic_i420(W, H, 0), true).unwrap();
+        let kf = kf.into_iter().find(|f| f.is_keyframe).unwrap();
+        dec.decode(&kf).unwrap();
+
+        // A subsequent inter frame with different content.
+        let inter = enc.encode(1, &synthetic_i420(W, H, 40), false).unwrap();
+        let inter = inter
+            .into_iter()
+            .next()
+            .expect("encoder must emit the inter frame");
+        assert!(!inter.is_keyframe, "second frame should be an inter frame");
+
+        let decoded = dec.decode(&inter).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].pixel_format, PixelFormat::I420);
+        assert_eq!(decoded[0].width, W);
+        assert_eq!(decoded[0].height, H);
+        assert_eq!(decoded[0].data.len(), (W * H * 3 / 2) as usize);
+    }
+
+    #[test]
+    fn check_decode_resolution_accepts_normal_sizes() {
+        // Common call resolutions all pass.
+        assert!(check_decode_resolution(320, 240).is_ok());
+        assert!(check_decode_resolution(1920, 1080).is_ok());
+        assert!(check_decode_resolution(3840, 2160).is_ok());
+        // Exactly the pixel budget (8K UHD) is accepted.
+        assert!(check_decode_resolution(7680, 4320).is_ok());
+    }
+
+    #[test]
+    fn check_decode_resolution_rejects_oversize() {
+        // A single dimension past the cap is rejected.
+        assert!(matches!(
+            check_decode_resolution(8193, 16),
+            Err(VideoError::DecodeFailed(_))
+        ));
+        assert!(matches!(
+            check_decode_resolution(16, 8193),
+            Err(VideoError::DecodeFailed(_))
+        ));
+        // Both dimensions within the per-dimension cap but the pixel product
+        // over budget is rejected.
+        assert!(matches!(
+            check_decode_resolution(8192, 8192),
+            Err(VideoError::DecodeFailed(_))
+        ));
+        // Extreme values that would overflow a naive `w * h` are rejected via
+        // checked arithmetic rather than wrapping.
+        assert!(matches!(
+            check_decode_resolution(u32::MAX, u32::MAX),
+            Err(VideoError::DecodeFailed(_))
+        ));
+    }
+
+    #[test]
+    fn vp9_rejects_non_keyframe_first() {
+        let mut dec = Vp9Decoder::new(DecoderConfig::default()).unwrap();
+
+        let non_kf = EncodedFrame {
+            data: vec![0u8; 64],
+            codec: VideoCodec::Vp9,
+            pts: 0,
+            is_keyframe: false,
+            layer: None,
+            width: W,
+            height: H,
+        };
+        assert!(
+            matches!(dec.decode(&non_kf), Err(VideoError::KeyframeRequired)),
+            "a fresh decoder must reject a non-keyframe"
+        );
+        assert!(dec.needs_keyframe());
+    }
+
+    #[test]
+    fn vp9_reset_requires_keyframe_again() {
+        let mut enc = Vp9Encoder::new(encoder_config()).unwrap();
+        let mut dec = Vp9Decoder::new(DecoderConfig::default()).unwrap();
+
+        let kf = enc.encode(0, &synthetic_i420(W, H, 0), true).unwrap();
+        let kf = kf.into_iter().find(|f| f.is_keyframe).unwrap();
+        dec.decode(&kf).unwrap();
+        assert!(!dec.needs_keyframe());
+
+        dec.reset().unwrap();
+        assert!(
+            dec.needs_keyframe(),
+            "reset must restore the keyframe requirement"
+        );
     }
 }

@@ -1040,6 +1040,12 @@ pub async fn import_identity(
     // Verify the bundle signature
     paracord_core::identity::verify_identity_bundle(&bundle, &public_key_hex)?;
 
+    // Bind the bundle's subject to the authenticated importer. The signature only
+    // proves origin; without this an account could import another account's
+    // same-server bundle (settings/prekeys) into its own record. Enforced here at
+    // the API boundary (before any writes) and again inside import_identity.
+    paracord_core::identity::verify_subject_binding(&state.db, &bundle, auth.user_id).await?;
+
     // Import the bundle
     let result = paracord_core::identity::import_identity(&state.db, &bundle, auth.user_id).await?;
 

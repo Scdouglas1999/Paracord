@@ -120,6 +120,7 @@ impl From<paracord_db::DbError> for ApiError {
     fn from(e: paracord_db::DbError) -> Self {
         match e {
             paracord_db::DbError::NotFound => ApiError::NotFound,
+            paracord_db::DbError::LimitReached(msg) => ApiError::Conflict(msg),
             paracord_db::DbError::Sqlx(_) => ApiError::Internal(anyhow::anyhow!("database error")),
         }
     }

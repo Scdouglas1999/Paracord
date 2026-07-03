@@ -76,6 +76,10 @@ pub enum DbError {
     Sqlx(#[from] sqlx::Error),
     #[error("not found")]
     NotFound,
+    /// A per-resource limit was reached (e.g. the maximum number of pinned
+    /// messages in a channel). The API layer maps this to HTTP 409 Conflict.
+    #[error("limit reached: {0}")]
+    LimitReached(String),
 }
 
 /// Optional tuning knobs applied after each PostgreSQL connection is established.

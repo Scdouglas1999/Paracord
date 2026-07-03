@@ -193,7 +193,7 @@ pub async fn get_attachments_for_message_ids(
         )));
     }
 
-    let placeholders: Vec<String> = (1..=message_ids.len()).map(|i| format!("${}", i)).collect();
+    let placeholders = crate::messages::build_placeholders(1, message_ids.len());
     let sql = format!(
         "SELECT
             id, message_id, filename, content_type, size, url, width, height,
@@ -203,7 +203,7 @@ pub async fn get_attachments_for_message_ids(
          WHERE message_id IN ({})
          ORDER BY upload_created_at ASC
          LIMIT ${}",
-        placeholders.join(", "),
+        placeholders,
         message_ids.len() + 1
     );
 

@@ -117,22 +117,59 @@ async fn create_text_channel(
     guild_id: &str,
     name: &str,
 ) -> anyhow::Result<String> {
+    create_channel_of_type(ctx, guild_id, name, 0).await
+}
+
+async fn create_channel_of_type(
+    ctx: &TestContext,
+    guild_id: &str,
+    name: &str,
+    channel_type: i64,
+) -> anyhow::Result<String> {
     let (status, payload) = ctx
         .request_json(
             Method::POST,
             &format!("/api/v1/guilds/{guild_id}/channels"),
             Some(json!({
                 "name": name,
-                "channel_type": 0,
+                "channel_type": channel_type,
                 "parent_id": Value::Null,
                 "required_role_ids": Value::Null,
             })),
         )
         .await?;
-    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "channel create failed: {payload}"
+    );
     Ok(payload["id"]
         .as_str()
         .context("channel id should be a string")?
+        .to_string())
+}
+
+/// POST a plain-text message and return its id.
+async fn post_message(
+    ctx: &TestContext,
+    channel_id: &str,
+    content: &str,
+) -> anyhow::Result<String> {
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            Some(json!({ "content": content })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "message post failed: {payload}"
+    );
+    Ok(payload["id"]
+        .as_str()
+        .context("message id should be a string")?
         .to_string())
 }
 
@@ -715,6 +752,473 @@ async fn create_thread_accepts_100_char_multibyte_name() -> anyhow::Result<()> {
         StatusCode::CREATED,
         "100-char multibyte thread name must be accepted: {created_thread}"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pin_add_list_and_remove_roundtrip() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Pin Roundtrip Guild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "pins").await?;
+    let message_id = post_message(&ctx, &channel_id, "pin me").await?;
+
+    let pin_path = format!("/api/v1/channels/{channel_id}/pins/{message_id}");
+
+    // Pinning a nonexistent message is a 404, not a silent success.
+    let (status, _) = ctx
+        .request_json(
+            Method::PUT,
+            &format!("/api/v1/channels/{channel_id}/pins/999999999"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Pin, then confirm it appears in the pins listing.
+    let (status, _) = ctx.request_json(Method::PUT, &pin_path, None).await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, pins) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/pins"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(pins
+        .as_array()
+        .context("pins should be an array")?
+        .iter()
+        .any(|m| m.get("id").and_then(Value::as_str) == Some(message_id.as_str())));
+
+    // Unpin, then confirm the listing is empty again.
+    let (status, _) = ctx.request_json(Method::DELETE, &pin_path, None).await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, pins) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/pins"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(pins
+        .as_array()
+        .context("pins should be an array")?
+        .is_empty());
+
+    // Unpinning a message that does not exist in the channel is a 404 (unpin of
+    // an existing-but-unpinned message is an idempotent 204, so this uses a
+    // nonexistent id to exercise the miss path).
+    let (status, _) = ctx
+        .request_json(
+            Method::DELETE,
+            &format!("/api/v1/channels/{channel_id}/pins/999999999"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pin_cap_boundary_is_enforced_by_route() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Pin Cap Guild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "capped").await?;
+    let channel_id_num = channel_id.parse::<i64>()?;
+    let owner_id = ctx.user_id(&ctx.token).await?;
+
+    // Seed the channel to exactly the pin cap directly in the database so the
+    // boundary can be exercised through the route without issuing ~100 HTTP
+    // calls (which would also stress the shared test-process rate limiter).
+    let cap = paracord_db::messages::MAX_PINS_PER_CHANNEL;
+    let mut seeded = Vec::new();
+    for i in 0..cap {
+        let id = 900_000 + i;
+        paracord_db::messages::create_message(
+            &ctx.db,
+            id,
+            channel_id_num,
+            owner_id,
+            &format!("seed {i}"),
+            0,
+            None,
+        )
+        .await?;
+        let pinned = paracord_db::messages::pin_message(&ctx.db, id, channel_id_num).await?;
+        assert!(pinned, "seed pin {i} should succeed below the cap");
+        seeded.push(id);
+    }
+
+    // One message over the cap: pinning it via the route must be rejected with
+    // 409 Conflict (the DbError::LimitReached mapping).
+    let over_id = 900_000 + cap;
+    paracord_db::messages::create_message(
+        &ctx.db,
+        over_id,
+        channel_id_num,
+        owner_id,
+        "over cap",
+        0,
+        None,
+    )
+    .await?;
+    let (status, payload) = ctx
+        .request_json(
+            Method::PUT,
+            &format!("/api/v1/channels/{channel_id}/pins/{over_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "pinning past the cap must be a 409: {payload}"
+    );
+
+    // Freeing a slot via the unpin route lets the next pin through.
+    let freed = seeded[0];
+    let (status, _) = ctx
+        .request_json(
+            Method::DELETE,
+            &format!("/api/v1/channels/{channel_id}/pins/{freed}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = ctx
+        .request_json(
+            Method::PUT,
+            &format!("/api/v1/channels/{channel_id}/pins/{over_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "pinning must succeed once a slot is freed"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pin_without_manage_messages_is_forbidden() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Pin Perm Guild").await?;
+    let guild_id_num = guild_id_i64(&guild_id)?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "gated-pins").await?;
+    let message_id = post_message(&ctx, &channel_id, "owner message").await?;
+
+    // A default member holds SEND_MESSAGES but not MANAGE_MESSAGES.
+    let (member_token, _uid) = ctx.add_member("pinner", guild_id_num).await?;
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::PUT,
+            &format!("/api/v1/channels/{channel_id}/pins/{message_id}"),
+            None,
+            &member_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "member without MANAGE_MESSAGES must not pin: {payload}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn bulk_delete_enforces_bounds_and_permission() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Bulk Delete Guild").await?;
+    let guild_id_num = guild_id_i64(&guild_id)?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "bulk").await?;
+    let bulk_path = format!("/api/v1/channels/{channel_id}/messages/bulk-delete");
+
+    // Empty id list is rejected before anything else.
+    let (status, _) = ctx
+        .request_json(Method::POST, &bulk_path, Some(json!({ "message_ids": [] })))
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // More than the 500-id cap is rejected (this bound is checked before the
+    // permission check, so even the owner is refused).
+    let too_many: Vec<String> = (0..501).map(|i| (1_000_000 + i).to_string()).collect();
+    let (status, _) = ctx
+        .request_json(
+            Method::POST,
+            &bulk_path,
+            Some(json!({ "message_ids": too_many })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let m1 = post_message(&ctx, &channel_id, "m1").await?;
+    let m2 = post_message(&ctx, &channel_id, "m2").await?;
+
+    // A well-formed request from a member without MANAGE_MESSAGES is forbidden.
+    let (member_token, _uid) = ctx.add_member("bulkmember", guild_id_num).await?;
+    let (status, _) = ctx
+        .request_json_as(
+            Method::POST,
+            &bulk_path,
+            Some(json!({ "message_ids": [m1.clone(), m2.clone()] })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // The owner (MANAGE_MESSAGES) succeeds and only the named messages are gone.
+    let m3 = post_message(&ctx, &channel_id, "m3").await?;
+    let (status, deleted) = ctx
+        .request_json(
+            Method::POST,
+            &bulk_path,
+            Some(json!({ "message_ids": [m1.clone(), m2.clone()] })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "bulk delete failed: {deleted}");
+    assert_eq!(deleted["deleted"], json!(2));
+
+    let (status, remaining) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<&str> = remaining
+        .as_array()
+        .context("messages should be an array")?
+        .iter()
+        .filter_map(|m| m.get("id").and_then(Value::as_str))
+        .collect();
+    assert!(ids.contains(&m3.as_str()), "unrelated message must survive");
+    assert!(!ids.contains(&m1.as_str()));
+    assert!(!ids.contains(&m2.as_str()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn forum_search_fans_out_across_posts_and_honors_date_filters() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Forum Search Guild").await?;
+    let forum_id = create_channel_of_type(&ctx, &guild_id, "help-forum", 7).await?;
+
+    // Two forum posts, each seeding a starter message inside its own post thread.
+    for (name, content) in [
+        ("alpha", "needle in the first post"),
+        ("beta", "hay in the second post"),
+    ] {
+        let (status, payload) = ctx
+            .request_json(
+                Method::POST,
+                &format!("/api/v1/channels/{forum_id}/forum/posts"),
+                Some(json!({ "name": name, "content": content })),
+            )
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "forum post create failed: {payload}"
+        );
+    }
+
+    let search = |query: &str| format!("/api/v1/channels/{forum_id}/messages/search?{query}");
+    let result_len = |value: &Value| -> anyhow::Result<usize> {
+        Ok(value.as_array().context("search results array")?.len())
+    };
+
+    // A forum-wide search must fan out into the child post threads and find the
+    // needle that lives in one of them (the forum channel holds no messages).
+    let (status, results) = ctx
+        .request_json(Method::GET, &search("q=needle"), None)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "forum search failed: {results}");
+    assert!(
+        results
+            .as_array()
+            .context("search results array")?
+            .iter()
+            .any(|m| m
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|c| c.contains("needle"))),
+        "forum search should reach into post threads: {results}"
+    );
+
+    // A future `after` bound excludes the just-created messages.
+    let (status, results) = ctx
+        .request_json(Method::GET, &search("q=needle&after=2999-01-01"), None)
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        result_len(&results)?,
+        0,
+        "a future after-filter must exclude present messages"
+    );
+
+    // A distant-past `before` bound likewise excludes them.
+    let (status, results) = ctx
+        .request_json(Method::GET, &search("q=needle&before=2000-01-01"), None)
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result_len(&results)?, 0);
+
+    // Malformed date filter is a 400.
+    let (status, _) = ctx
+        .request_json(Method::GET, &search("q=needle&after=not-a-date"), None)
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Inverted range (after later than before) is a 400.
+    let (status, _) = ctx
+        .request_json(
+            Method::GET,
+            &search("q=needle&after=2999-01-01&before=2000-01-01"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn message_pagination_rejects_multiple_cursors_and_supports_around() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Pagination Guild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "paging").await?;
+
+    let m0 = post_message(&ctx, &channel_id, "m0").await?;
+    let m1 = post_message(&ctx, &channel_id, "m1").await?;
+    let _m2 = post_message(&ctx, &channel_id, "m2").await?;
+
+    // before + after together is rejected (cursors are mutually exclusive).
+    let (status, _) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/messages?before={m1}&after={m0}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // before + around together is likewise rejected.
+    let (status, _) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/messages?before={m1}&around={m1}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // `around` returns a window that includes the anchor itself.
+    let (status, around) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/messages?around={m1}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "around query failed: {around}");
+    assert!(
+        around
+            .as_array()
+            .context("around results array")?
+            .iter()
+            .any(|m| m.get("id").and_then(Value::as_str) == Some(m1.as_str())),
+        "around page must include the anchor message"
+    );
+
+    // `after` is exclusive of the anchor and returns only strictly-newer ids.
+    let (status, after) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/messages?after={m0}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    let after_ids: Vec<&str> = after
+        .as_array()
+        .context("after results array")?
+        .iter()
+        .filter_map(|m| m.get("id").and_then(Value::as_str))
+        .collect();
+    assert!(after_ids.contains(&m1.as_str()));
+    assert!(
+        !after_ids.contains(&m0.as_str()),
+        "the after cursor must be exclusive of its anchor"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn slowmode_rate_limits_a_non_privileged_member() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Slowmode Guild").await?;
+    let guild_id_num = guild_id_i64(&guild_id)?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "slow").await?;
+
+    // A long per-user slowmode guarantees the second post inside the window is
+    // blocked regardless of test timing.
+    let (status, _) = ctx
+        .request_json(
+            Method::PATCH,
+            &format!("/api/v1/channels/{channel_id}"),
+            Some(json!({ "rate_limit_per_user": 600 })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+
+    let (member_token, _uid) = ctx.add_member("slowposter", guild_id_num).await?;
+    let path = format!("/api/v1/channels/{channel_id}/messages");
+
+    // First member message is accepted.
+    let (status, _) = ctx
+        .request_json_as(
+            Method::POST,
+            &path,
+            Some(json!({ "content": "first" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // The rapid second message is rate limited by slowmode (429).
+    let (status, _) = ctx
+        .request_json_as(
+            Method::POST,
+            &path,
+            Some(json!({ "content": "second" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "slowmode should block the rapid second post"
+    );
+
+    // The owner holds MANAGE_MESSAGES and bypasses slowmode entirely.
+    let (status, _) = ctx
+        .request_json(
+            Method::POST,
+            &path,
+            Some(json!({ "content": "owner bypass" })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED);
 
     Ok(())
 }

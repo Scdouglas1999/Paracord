@@ -31,13 +31,11 @@ const WS_MAX_TYPING_EVENTS_PER_MINUTE_DEFAULT: u32 = 120;
 const WS_MAX_VOICE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct CachedSession {
     user_id: i64,
     guild_ids: Vec<i64>,
     guild_owner_ids: HashMap<i64, i64>,
     sequence: u64,
-    updated_at: i64,
 }
 
 static SESSION_CACHE: OnceLock<moka::future::Cache<String, CachedSession>> = OnceLock::new();
@@ -77,7 +75,12 @@ fn event_buffers() -> &'static dashmap::DashMap<String, VecDeque<BufferedEvent>>
 }
 
 const MAX_REPLAY_EVENTS: usize = 100;
-const MAX_REPLAY_AGE: Duration = Duration::from_secs(300); // 5 minutes
+// Keep buffered events replayable for as long as the resumed session stays in
+// `SESSION_CACHE` (`SESSION_TTL_SECONDS`). If this were shorter, a client that
+// resumes after the buffer window but within the session TTL would still find
+// its `CachedSession` yet have no events to replay, forcing an unnecessary
+// fall-back to a fresh IDENTIFY.
+const MAX_REPLAY_AGE: Duration = Duration::from_secs(SESSION_TTL_SECONDS as u64);
 
 fn session_cache() -> &'static moka::future::Cache<String, CachedSession> {
     SESSION_CACHE.get_or_init(|| {
@@ -529,25 +532,39 @@ fn default_presence_payload(user_id: i64, status: &str) -> Value {
     })
 }
 
-async fn collect_presence_recipient_ids(
+/// Load a user's friend ids from the DB (used to seed the per-session cache).
+async fn load_friend_ids(state: &AppState, user_id: i64) -> Vec<i64> {
+    paracord_db::relationships::get_friend_user_ids(&state.db, user_id)
+        .await
+        .unwrap_or_default()
+}
+
+/// Build the presence fan-out recipient set from the in-memory member index
+/// plus an already-resolved friend list. No DB queries.
+fn presence_recipient_ids(
     state: &AppState,
     user_id: i64,
     guild_ids: &[i64],
+    friend_ids: &[i64],
 ) -> Vec<i64> {
-    // In-memory lookup: zero DB queries for guild members
+    // In-memory lookup: zero DB queries for guild members.
     let mut recipients = state
         .member_index
         .get_presence_recipients(user_id, guild_ids);
     recipients.insert(user_id);
-
-    // Friends still need a DB query (not tracked in the member index)
-    if let Ok(friend_ids) =
-        paracord_db::relationships::get_friend_user_ids(&state.db, user_id).await
-    {
-        recipients.extend(friend_ids);
-    }
-
+    recipients.extend(friend_ids.iter().copied());
     recipients.into_iter().collect()
+}
+
+/// Presence recipients for a live session, caching the friend list on the
+/// session so repeated presence transitions don't re-query the DB. The cache is
+/// invalidated when a relationship-change event is delivered to the session.
+async fn session_presence_recipient_ids(state: &AppState, session: &mut Session) -> Vec<i64> {
+    if session.friend_ids.is_none() {
+        session.friend_ids = Some(load_friend_ids(state, session.user_id).await);
+    }
+    let friend_ids = session.friend_ids.as_deref().unwrap_or(&[]);
+    presence_recipient_ids(state, session.user_id, &session.guild_ids, friend_ids)
 }
 
 fn extract_channel_id_from_event(event_type: &str, payload: &Value) -> Option<i64> {
@@ -575,8 +592,22 @@ fn extract_channel_id_from_event(event_type: &str, payload: &Value) -> Option<i6
     None
 }
 
-async fn can_receive_guild_event(_state: &AppState, session: &mut Session, guild_id: i64) -> bool {
-    session.guild_ids.contains(&guild_id)
+/// Derive the host advertised in native-media endpoints from the configured
+/// public URL (scheme/port/path stripped), falling back to loopback when the
+/// server has no public URL configured.
+fn media_endpoint_host(public_url: Option<&str>) -> String {
+    public_url
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(|url| {
+            let no_scheme = url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            let host = no_scheme.split('/').next().unwrap_or(no_scheme);
+            host.split(':').next().unwrap_or(host).to_string()
+        })
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
 }
 
 async fn can_receive_channel_event(
@@ -606,8 +637,17 @@ async fn can_receive_channel_event(
     perms.contains(Permissions::VIEW_CHANNEL)
 }
 
-pub async fn handle_connection(socket: WebSocket, state: AppState, compress: bool) {
-    let compressor = WsCompressor::new(compress);
+pub async fn handle_connection(
+    socket: WebSocket,
+    state: AppState,
+    compress: bool,
+    stream_context: bool,
+) {
+    let compressor = if stream_context {
+        WsCompressor::streaming()
+    } else {
+        WsCompressor::new(compress)
+    };
     let mut connection_guard = ConnectionGuard::new();
     if !try_acquire_global_connection_slot() {
         let (mut sender, _) = socket.split();
@@ -626,7 +666,7 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
     observability::ws_connection_open();
 
     if compress {
-        tracing::debug!("Client requested zlib-stream compression");
+        tracing::debug!(stream_context, "Client requested zlib-stream compression");
     }
 
     let (mut sender, mut receiver) = socket.split();
@@ -976,13 +1016,10 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
         .insert(session_user_id, online_presence.clone());
 
     // Publish presence only to users who share a guild or friendship edge.
-    let presence_recipient_ids =
-        collect_presence_recipient_ids(&state, session_user_id, &session.guild_ids).await;
-    state.event_bus.dispatch_to_users(
-        EVENT_PRESENCE_UPDATE,
-        online_presence,
-        presence_recipient_ids,
-    );
+    let online_recipient_ids = session_presence_recipient_ids(&state, &mut session).await;
+    state
+        .event_bus
+        .dispatch_to_users(EVENT_PRESENCE_UPDATE, online_presence, online_recipient_ids);
 
     let session = run_session(sender, receiver, session, state.clone(), &compressor).await;
 
@@ -1100,6 +1137,9 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
         // conditions where a reconnecting client briefly appears offline.
         let state_clone = state.clone();
         let guild_ids = session.guild_ids.clone();
+        // Reuse the friend list already resolved during the session; fall back to
+        // a DB load only if presence never transitioned while connected.
+        let cached_friend_ids = session.friend_ids.clone();
         state
             .presence_manager
             .schedule_offline(session_user_id, async move {
@@ -1120,8 +1160,12 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
                     .user_presences
                     .insert(session_user_id, offline_presence.clone());
 
+                let friend_ids = match cached_friend_ids {
+                    Some(friend_ids) => friend_ids,
+                    None => load_friend_ids(&state_clone, session_user_id).await,
+                };
                 let offline_presence_recipient_ids =
-                    collect_presence_recipient_ids(&state_clone, session_user_id, &guild_ids).await;
+                    presence_recipient_ids(&state_clone, session_user_id, &guild_ids, &friend_ids);
                 state_clone.event_bus.dispatch_to_users(
                     EVENT_PRESENCE_UPDATE,
                     offline_presence,
@@ -1131,7 +1175,8 @@ pub async fn handle_connection(socket: WebSocket, state: AppState, compress: boo
     }
 }
 
-async fn wait_for_identify_or_resume(
+#[doc(hidden)] // internal seam exposed for the crate's integration tests
+pub async fn wait_for_identify_or_resume(
     receiver: &mut (impl StreamExt<Item = Result<Message, axum::Error>> + Unpin),
     state: &AppState,
 ) -> Option<(Session, bool, u64)> {
@@ -1251,7 +1296,8 @@ async fn wait_for_identify_or_resume(
     None
 }
 
-async fn run_session(
+#[doc(hidden)] // internal seam exposed for the crate's integration tests
+pub async fn run_session(
     mut sender: impl SinkExt<Message> + Unpin,
     mut receiver: impl StreamExt<Item = Result<Message, axum::Error>> + Unpin,
     mut session: Session,
@@ -1364,10 +1410,10 @@ async fn run_session(
                             continue;
                         }
 
+                        // `should_receive_event` above already verified guild
+                        // membership, so only the finer per-channel authorization
+                        // check remains for channel-scoped events.
                         if let Some(guild_id) = event.guild_id {
-                            if !can_receive_guild_event(&state, &mut session, guild_id).await {
-                                continue;
-                            }
                             if let Some(channel_id) =
                                 extract_channel_id_from_event(&event.event_type, &event.payload)
                             {
@@ -1375,6 +1421,14 @@ async fn run_session(
                                     continue;
                                 }
                             }
+                        }
+
+                        // Relationship changes alter the friend set used for
+                        // presence fan-out; drop the cache so it reloads lazily.
+                        if event.event_type == EVENT_RELATIONSHIP_ADD
+                            || event.event_type == EVENT_RELATIONSHIP_REMOVE
+                        {
+                            session.friend_ids = None;
                         }
 
                         // Dynamically update guild scope for this active session.
@@ -1536,7 +1590,6 @@ async fn run_session(
                 guild_ids: session.guild_ids.clone(),
                 guild_owner_ids: session.guild_owner_ids.clone(),
                 sequence: session.sequence,
-                updated_at: chrono::Utc::now().timestamp(),
             },
         )
         .await;
@@ -1599,13 +1652,11 @@ async fn handle_client_message(
                     .user_presences
                     .insert(session.user_id, presence_payload.clone());
 
-                let presence_recipient_ids =
-                    collect_presence_recipient_ids(state, session.user_id, &session.guild_ids)
-                        .await;
+                let recipient_ids = session_presence_recipient_ids(state, session).await;
                 state.event_bus.dispatch_to_users(
                     EVENT_PRESENCE_UPDATE,
                     presence_payload,
-                    presence_recipient_ids,
+                    recipient_ids,
                 );
             }
         }
@@ -1990,11 +2041,45 @@ async fn handle_client_message(
                             })
                             .unwrap_or_default();
 
+                        // Persist a voice state keyed to this gateway session so
+                        // the issued media token resolves to an active room on
+                        // the transport side (see `resolve_active_media_room`).
+                        let _ = paracord_db::voice_states::upsert_voice_state(
+                            &state.db,
+                            session.user_id,
+                            Some(guild_id),
+                            channel_id,
+                            &session.session_id,
+                        )
+                        .await;
+
+                        // Issue a real media token (same claims/signing as the
+                        // REST join path) and advertise the configured endpoints.
                         let port = state.config.native_media_port;
+                        let host = media_endpoint_host(state.config.public_url.as_deref());
+                        let media_room = format!("{}:{}", guild_id, channel_id);
+                        let issued_at = chrono::Utc::now().timestamp();
+                        let media_claims = json!({
+                            "sub": session.user_id,
+                            "sid": &session.session_id,
+                            "session_id": &session.session_id,
+                            "room": &media_room,
+                            "iat": issued_at,
+                            "exp": issued_at + 86400,
+                        });
+                        let token = jsonwebtoken::encode(
+                            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+                            &media_claims,
+                            &jsonwebtoken::EncodingKey::from_secret(
+                                state.config.jwt_secret.as_bytes(),
+                            ),
+                        )
+                        .unwrap_or_default();
                         let desc = json!({
-                            "relay_endpoint": format!("quic://0.0.0.0:{}", port),
-                            "wt_endpoint": format!("https://0.0.0.0:{}/media", port),
-                            "token": "", // Token generation deferred
+                            "relay_endpoint": format!("quic://{}:{}", host, port),
+                            "wt_endpoint": format!("https://{}:{}/media", host, port),
+                            "token": token,
+                            "cert_hash": native.cert_hash,
                             "room_id": room_id,
                             "codecs": ["opus", "vp9"],
                             "peers": peers,
@@ -2198,4 +2283,43 @@ async fn handle_client_message(
             tracing::debug!("Unknown opcode {} from client {}", op, session.user_id);
         }
     }
+}
+
+// ── Test seams ─────────────────────────────────────────────────────────────
+// The process-global session cache and event buffers are private, so the
+// integration tests use these thin helpers to seed a resumable session. They do
+// not change runtime behavior; production code never calls them.
+
+#[doc(hidden)]
+pub async fn test_insert_cached_session(
+    session_id: String,
+    user_id: i64,
+    guild_ids: Vec<i64>,
+    guild_owner_ids: HashMap<i64, i64>,
+    sequence: u64,
+) {
+    session_cache()
+        .insert(
+            session_id,
+            CachedSession {
+                user_id,
+                guild_ids,
+                guild_owner_ids,
+                sequence,
+            },
+        )
+        .await;
+}
+
+#[doc(hidden)]
+pub fn test_push_buffered_event(session_id: &str, sequence: u64, event_type: &str, payload: Value) {
+    event_buffers()
+        .entry(session_id.to_string())
+        .or_default()
+        .push_back(BufferedEvent {
+            sequence,
+            event_type: event_type.to_string(),
+            payload: Arc::new(payload),
+            timestamp: Instant::now(),
+        });
 }

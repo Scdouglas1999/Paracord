@@ -48,6 +48,10 @@ const mockAuthUser = vi.hoisted((): { value: { id: string } | null } => ({
   value: { id: 'u1' },
 }));
 
+const mockSelectedChannelId = vi.hoisted((): { value: string | null } => ({
+  value: null,
+}));
+
 vi.mock('./toastStore', () => ({ toast: mockToast }));
 
 vi.mock('./pollStore', () => ({
@@ -63,6 +67,7 @@ vi.mock('./channelStore', () => ({
   useChannelStore: {
     getState: () => ({
       channelsByGuild: mockChannelsByGuild.value,
+      selectedChannelId: mockSelectedChannelId.value,
     }),
   },
 }));
@@ -90,7 +95,7 @@ vi.mock('../lib/constants', () => ({
   DEFAULT_MESSAGE_FETCH_LIMIT: 50,
 }));
 
-import { useMessageStore } from './messageStore';
+import { useMessageStore, MAX_MESSAGES_PER_CHANNEL, MAX_CACHED_CHANNELS } from './messageStore';
 import { encryptDmMessageV2 } from '../lib/dmE2ee';
 import { hasUnlockedPrivateKey, withUnlockedPrivateKey } from '../lib/accountSession';
 
@@ -135,6 +140,7 @@ describe('messageStore', () => {
     vi.mocked(withUnlockedPrivateKey).mockReset();
     vi.mocked(encryptDmMessageV2).mockReset();
     mockAuthUser.value = { id: 'u1' };
+    mockSelectedChannelId.value = null;
     useMessageStore.setState({
       messages: {},
       hasMore: {},
@@ -536,6 +542,87 @@ describe('messageStore', () => {
 
       useMessageStore.getState().updatePinState('ch1', 'm1', false);
       expect(useMessageStore.getState().messages['ch1'][0].pinned).toBe(false);
+    });
+  });
+
+  describe('per-channel message cap', () => {
+    it('trims oldest messages beyond the cap on setMessages, preserving order', () => {
+      const overflow = 5;
+      const msgs = Array.from({ length: MAX_MESSAGES_PER_CHANNEL + overflow }, (_, i) =>
+        makeMessage({ id: `cap-${i}` }),
+      );
+
+      useMessageStore.getState().setMessages('cap-ch', msgs);
+
+      const stored = useMessageStore.getState().messages['cap-ch'];
+      expect(stored).toHaveLength(MAX_MESSAGES_PER_CHANNEL);
+      // Oldest `overflow` messages dropped; newest kept at the tail.
+      expect(stored[0].id).toBe(`cap-${overflow}`);
+      expect(stored[stored.length - 1].id).toBe(`cap-${MAX_MESSAGES_PER_CHANNEL + overflow - 1}`);
+    });
+
+    it('appending beyond the cap trims the oldest and keeps newest at the tail', () => {
+      const seed = Array.from({ length: MAX_MESSAGES_PER_CHANNEL }, (_, i) =>
+        makeMessage({ id: `a-${i}` }),
+      );
+      useMessageStore.getState().setMessages('cap-ch2', seed);
+
+      useMessageStore.getState().addMessage('cap-ch2', makeMessage({ id: 'a-new' }));
+
+      const stored = useMessageStore.getState().messages['cap-ch2'];
+      expect(stored).toHaveLength(MAX_MESSAGES_PER_CHANNEL);
+      expect(stored[0].id).toBe('a-1'); // oldest ('a-0') evicted
+      expect(stored[stored.length - 1].id).toBe('a-new');
+    });
+  });
+
+  describe('LRU channel eviction', () => {
+    it('evicts the least-recently-used channels but never the active one', () => {
+      // The active channel is visited first, making it the least-recently-used;
+      // it must survive eviction regardless.
+      mockSelectedChannelId.value = 'lru-0';
+
+      const total = MAX_CACHED_CHANNELS + 2;
+      for (let i = 0; i < total; i++) {
+        useMessageStore.getState().setMessages(`lru-${i}`, [makeMessage({ id: `m-${i}` })]);
+      }
+
+      const { messages } = useMessageStore.getState();
+      expect(Object.keys(messages)).toHaveLength(MAX_CACHED_CHANNELS);
+      // Active channel retained despite being the oldest access.
+      expect(messages['lru-0']).toBeDefined();
+      // The two oldest NON-active channels were dropped.
+      expect(messages['lru-1']).toBeUndefined();
+      expect(messages['lru-2']).toBeUndefined();
+      // Most recently visited channels retained.
+      expect(messages[`lru-${total - 1}`]).toBeDefined();
+    });
+
+    it('clears all channel-keyed aux maps for an evicted channel', () => {
+      mockSelectedChannelId.value = 'aux-active';
+
+      // Populate the victim channel and its parallel channel-keyed maps.
+      useMessageStore.getState().setMessages('aux-victim', [makeMessage({ id: 'v1' })]);
+      useMessageStore.setState((s) => ({
+        hasMore: { ...s.hasMore, 'aux-victim': true },
+        pins: { ...s.pins, 'aux-victim': [makeMessage({ id: 'pin1' })] },
+        messageErrors: { ...s.messageErrors, 'aux-victim': 'boom' },
+      }));
+      // Keep the active channel present so it is never a victim.
+      useMessageStore.getState().setMessages('aux-active', [makeMessage({ id: 'a1' })]);
+
+      // Flood with fresh channels to push the (older, non-active) victim out.
+      for (let i = 0; i < MAX_CACHED_CHANNELS; i++) {
+        useMessageStore.getState().setMessages(`aux-fill-${i}`, [makeMessage({ id: `f-${i}` })]);
+      }
+
+      const state = useMessageStore.getState();
+      expect(state.messages['aux-victim']).toBeUndefined();
+      expect(state.hasMore['aux-victim']).toBeUndefined();
+      expect(state.pins['aux-victim']).toBeUndefined();
+      expect(state.messageErrors['aux-victim']).toBeUndefined();
+      // The active channel survived eviction.
+      expect(state.messages['aux-active']).toBeDefined();
     });
   });
 });

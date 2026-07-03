@@ -363,6 +363,47 @@ pub fn verify_identity_bundle(
         .map_err(|_| CoreError::BadRequest("invalid bundle signature".to_string()))
 }
 
+// ── Subject binding ──────────────────────────────────────────────────────────
+
+/// Verify that the bundle's subject identity belongs to `target_user_id`.
+///
+/// The server signature only proves which server issued the bundle, not that
+/// the importing account is the bundle's subject. Without this check any account
+/// could import another same-server account's bundle and have that account's
+/// settings (custom CSS/theme) and prekeys written into its own record. Binding
+/// is enforced on the long-term public key when the bundle carries one, and
+/// falls back to the username only for legacy bundles that have no crypto
+/// identity. Cross-server imports still require this binding in addition to the
+/// origin-server signature verified separately.
+pub async fn verify_subject_binding(
+    pool: &DbPool,
+    bundle: &IdentityBundle,
+    target_user_id: i64,
+) -> Result<(), CoreError> {
+    let target = paracord_db::users::get_user_by_id(pool, target_user_id)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+
+    match bundle.user.public_key.as_deref() {
+        Some(bundle_pk) => {
+            // Cryptographic identity binding: the importing account must own the
+            // exact long-term public key the bundle was issued for.
+            match target.public_key.as_deref() {
+                Some(target_pk) if target_pk == bundle_pk => Ok(()),
+                _ => Err(CoreError::Forbidden),
+            }
+        }
+        None => {
+            // Legacy bundle without a crypto identity: fall back to username.
+            if bundle.user.username == target.username {
+                Ok(())
+            } else {
+                Err(CoreError::Forbidden)
+            }
+        }
+    }
+}
+
 // ── Import ─────────────────────────────────────────────────────────────────
 
 pub async fn import_identity(
@@ -370,6 +411,9 @@ pub async fn import_identity(
     bundle: &IdentityBundle,
     target_user_id: i64,
 ) -> Result<ImportResult, CoreError> {
+    // Bind the bundle's subject to the importing account before writing anything.
+    verify_subject_binding(pool, bundle, target_user_id).await?;
+
     let mut warnings = Vec::new();
 
     // 1. Update user profile with exported data
@@ -530,4 +574,109 @@ pub async fn import_identity(
         guilds_noted,
         warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn mem_pool() -> DbPool {
+        let pool = paracord_db::create_pool("sqlite::memory:", 1)
+            .await
+            .expect("create in-memory pool");
+        paracord_db::run_migrations(&pool)
+            .await
+            .expect("run migrations");
+        pool
+    }
+
+    fn bundle_for(username: &str, public_key: Option<&str>) -> IdentityBundle {
+        IdentityBundle {
+            version: BUNDLE_VERSION,
+            exported_at: Utc::now(),
+            origin_server: "example.test".to_string(),
+            user: UserExport {
+                username: username.to_string(),
+                display_name: None,
+                avatar_hash: None,
+                bio: None,
+                public_key: public_key.map(|s| s.to_string()),
+                created_at: Utc::now(),
+            },
+            settings: None,
+            messages: vec![],
+            attachments: vec![],
+            relationships: vec![],
+            guilds: vec![],
+            prekeys: None,
+            signature: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn subject_binding_rejects_public_key_mismatch() {
+        let pool = mem_pool().await;
+        // Attacker account owns pk_importer.
+        paracord_db::users::create_user(&pool, 2, "attacker", 2, "a@x", "h")
+            .await
+            .unwrap();
+        paracord_db::users::update_user_public_key(&pool, 2, "pk_importer")
+            .await
+            .unwrap();
+
+        // Bundle is the victim's identity (pk_victim), signed by the shared server.
+        let bundle = bundle_for("victim", Some("pk_victim"));
+
+        let err = verify_subject_binding(&pool, &bundle, 2).await.unwrap_err();
+        assert!(matches!(err, CoreError::Forbidden));
+
+        // import_identity must reject too and write nothing.
+        let err = import_identity(&pool, &bundle, 2).await.unwrap_err();
+        assert!(matches!(err, CoreError::Forbidden));
+    }
+
+    #[tokio::test]
+    async fn subject_binding_accepts_matching_public_key() {
+        let pool = mem_pool().await;
+        paracord_db::users::create_user(&pool, 1, "victim", 1, "v@x", "h")
+            .await
+            .unwrap();
+        paracord_db::users::update_user_public_key(&pool, 1, "pk_victim")
+            .await
+            .unwrap();
+
+        let bundle = bundle_for("victim", Some("pk_victim"));
+        verify_subject_binding(&pool, &bundle, 1).await.unwrap();
+        // Full import path succeeds for the rightful owner.
+        import_identity(&pool, &bundle, 1).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn subject_binding_legacy_falls_back_to_username() {
+        let pool = mem_pool().await;
+        paracord_db::users::create_user(&pool, 3, "legacy", 3, "l@x", "h")
+            .await
+            .unwrap();
+
+        // No public key on either side -> username must match.
+        let ok = bundle_for("legacy", None);
+        verify_subject_binding(&pool, &ok, 3).await.unwrap();
+
+        let bad = bundle_for("someone-else", None);
+        let err = verify_subject_binding(&pool, &bad, 3).await.unwrap_err();
+        assert!(matches!(err, CoreError::Forbidden));
+    }
+
+    #[tokio::test]
+    async fn subject_binding_rejects_keyed_bundle_for_keyless_account() {
+        let pool = mem_pool().await;
+        // Account has no crypto identity yet but the bundle claims one.
+        paracord_db::users::create_user(&pool, 4, "victim", 4, "v4@x", "h")
+            .await
+            .unwrap();
+
+        let bundle = bundle_for("victim", Some("pk_victim"));
+        let err = verify_subject_binding(&pool, &bundle, 4).await.unwrap_err();
+        assert!(matches!(err, CoreError::Forbidden));
+    }
 }

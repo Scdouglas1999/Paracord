@@ -25,6 +25,7 @@ describe('channelStore', () => {
   beforeEach(() => {
     useChannelStore.setState({
       channelsByGuild: {},
+      channelsById: {},
       channels: [],
       guildChannelsLoaded: {},
       selectedChannelId: null,
@@ -36,6 +37,7 @@ describe('channelStore', () => {
   it('has correct initial state', () => {
     const state = useChannelStore.getState();
     expect(state.channelsByGuild).toEqual({});
+    expect(state.channelsById).toEqual({});
     expect(state.channels).toEqual([]);
     expect(state.guildChannelsLoaded).toEqual({});
     expect(state.selectedChannelId).toBeNull();
@@ -56,17 +58,47 @@ describe('channelStore', () => {
 
   it('selectGuild sets guild and populates channels', () => {
     const ch = makeChannel({ id: 'c1', guild_id: 'g1' });
-    useChannelStore.setState({ channelsByGuild: { g1: [ch] } });
+    useChannelStore.getState().setChannels([ch]);
 
     useChannelStore.getState().selectGuild('g1');
     expect(useChannelStore.getState().selectedGuildId).toBe('g1');
-    expect(useChannelStore.getState().channels).toEqual([ch]);
+    expect(useChannelStore.getState().channels.map((c) => c.id)).toEqual(['c1']);
   });
 
   it('selectGuild with null clears channels', () => {
     useChannelStore.getState().selectGuild(null);
     expect(useChannelStore.getState().selectedGuildId).toBeNull();
     expect(useChannelStore.getState().channels).toEqual([]);
+  });
+
+  describe('setChannels', () => {
+    it('builds correct byId index and flat array', () => {
+      const a = makeChannel({ id: 'c1', guild_id: 'g1', position: 1 });
+      const b = makeChannel({ id: 'c2', guild_id: 'g1', position: 0 });
+      useChannelStore.getState().setChannels([a, b]);
+
+      const state = useChannelStore.getState();
+      // channelsByGuild sorted by position
+      expect(state.channelsByGuild['g1'].map((c) => c.id)).toEqual(['c2', 'c1']);
+      // byId indexes every channel
+      expect(Object.keys(state.channelsById).sort()).toEqual(['c1', 'c2']);
+      expect(state.channelsById['c1'].id).toBe('c1');
+      expect(state.channelsById['c2'].id).toBe('c2');
+      // flat array holds the normalized input
+      expect(state.channels.map((c) => c.id).sort()).toEqual(['c1', 'c2']);
+    });
+
+    it('groups channels across guilds and reindexes each', () => {
+      const a = makeChannel({ id: 'c1', guild_id: 'g1' });
+      const b = makeChannel({ id: 'c2', guild_id: 'g2' });
+      useChannelStore.getState().setChannels([a, b]);
+
+      const state = useChannelStore.getState();
+      expect(state.channelsByGuild['g1'].map((c) => c.id)).toEqual(['c1']);
+      expect(state.channelsByGuild['g2'].map((c) => c.id)).toEqual(['c2']);
+      expect(state.channelsById['c1'].guild_id).toBe('g1');
+      expect(state.channelsById['c2'].guild_id).toBe('g2');
+    });
   });
 
   it('addChannel adds a channel to the correct guild', () => {
@@ -93,6 +125,23 @@ describe('channelStore', () => {
     expect(guild[1].id).toBe('c1');
   });
 
+  it('addChannel keeps byGuild, byId and flat in sync', () => {
+    useChannelStore.getState().selectGuild('g1');
+    const ch1 = makeChannel({ id: 'c1', guild_id: 'g1', position: 0 });
+    const ch2 = makeChannel({ id: 'c2', guild_id: 'g1', position: 1 });
+    useChannelStore.getState().addChannel(ch1);
+    useChannelStore.getState().addChannel(ch2);
+
+    const state = useChannelStore.getState();
+    expect(state.channelsByGuild['g1'].map((c) => c.id)).toEqual(['c1', 'c2']);
+    expect(Object.keys(state.channelsById).sort()).toEqual(['c1', 'c2']);
+    // byId points at the exact object stored in the guild bucket
+    expect(state.channelsById['c1']).toBe(state.channelsByGuild['g1'][0]);
+    expect(state.channelsById['c2']).toBe(state.channelsByGuild['g1'][1]);
+    // flat view mirrors the selected guild
+    expect(state.channels.map((c) => c.id)).toEqual(['c1', 'c2']);
+  });
+
   it('updateChannel updates an existing channel', () => {
     const ch = makeChannel({ id: 'c1', guild_id: 'g1', name: 'old' });
     useChannelStore.getState().addChannel(ch);
@@ -100,6 +149,7 @@ describe('channelStore', () => {
     const updated = makeChannel({ id: 'c1', guild_id: 'g1', name: 'new' });
     useChannelStore.getState().updateChannel(updated);
     expect(useChannelStore.getState().channelsByGuild['g1'][0].name).toBe('new');
+    expect(useChannelStore.getState().channelsById['c1'].name).toBe('new');
   });
 
   it('removeChannel removes a channel', () => {
@@ -111,22 +161,75 @@ describe('channelStore', () => {
     expect(useChannelStore.getState().channelsByGuild['g1']).toHaveLength(0);
   });
 
-  it('updateLastMessageId updates the last message id', () => {
-    const ch = makeChannel({ id: 'c1', guild_id: 'g1', last_message_id: 'old' });
-    useChannelStore.setState({ channelsByGuild: { g1: [ch] } });
+  it('removeChannel keeps byGuild, byId and flat in sync', () => {
+    useChannelStore.getState().selectGuild('g1');
+    useChannelStore.getState().setChannels([
+      makeChannel({ id: 'c1', guild_id: 'g1', position: 0 }),
+      makeChannel({ id: 'c2', guild_id: 'g1', position: 1 }),
+    ]);
+    // flat view follows the selected guild after seeding
+    useChannelStore.getState().selectGuild('g1');
 
-    useChannelStore.getState().updateLastMessageId('c1', 'new-msg-id');
-    expect(useChannelStore.getState().channelsByGuild['g1'][0].last_message_id).toBe('new-msg-id');
+    useChannelStore.getState().removeChannel('g1', 'c1');
+    const state = useChannelStore.getState();
+    expect(state.channelsByGuild['g1'].map((c) => c.id)).toEqual(['c2']);
+    expect(Object.keys(state.channelsById)).toEqual(['c2']);
+    expect(state.channelsById['c1']).toBeUndefined();
+    expect(state.channels.map((c) => c.id)).toEqual(['c2']);
   });
 
-  it('updateLastMessageId does nothing for unknown channel', () => {
-    const ch = makeChannel({ id: 'c1', guild_id: 'g1' });
-    useChannelStore.setState({ channelsByGuild: { g1: [ch] } });
+  describe('updateLastMessageId', () => {
+    it('updates the last message id on the target only', () => {
+      const ch = makeChannel({ id: 'c1', guild_id: 'g1', last_message_id: 'old' });
+      useChannelStore.getState().setChannels([ch]);
 
-    const before = useChannelStore.getState();
-    useChannelStore.getState().updateLastMessageId('unknown', 'msg');
-    // State reference should be the same (no-op)
-    expect(useChannelStore.getState().channelsByGuild).toBe(before.channelsByGuild);
+      useChannelStore.getState().updateLastMessageId('c1', 'new-msg-id');
+      const state = useChannelStore.getState();
+      expect(state.channelsByGuild['g1'][0].last_message_id).toBe('new-msg-id');
+      expect(state.channelsById['c1'].last_message_id).toBe('new-msg-id');
+    });
+
+    it('does nothing for unknown channel (state reference unchanged)', () => {
+      const ch = makeChannel({ id: 'c1', guild_id: 'g1' });
+      useChannelStore.getState().setChannels([ch]);
+
+      const before = useChannelStore.getState();
+      useChannelStore.getState().updateLastMessageId('unknown', 'msg');
+      expect(useChannelStore.getState().channelsByGuild).toBe(before.channelsByGuild);
+      expect(useChannelStore.getState().channelsById).toBe(before.channelsById);
+    });
+
+    it('preserves === identity of untouched channel objects and array length', () => {
+      useChannelStore.getState().selectGuild('g1');
+      useChannelStore.getState().setChannels([
+        makeChannel({ id: 'c1', guild_id: 'g1', position: 0 }),
+        makeChannel({ id: 'c2', guild_id: 'g1', position: 1 }),
+        makeChannel({ id: 'd1', guild_id: 'g2', position: 0 }),
+      ]);
+      useChannelStore.getState().selectGuild('g1');
+
+      const before = useChannelStore.getState();
+      const untouchedSameGuild = before.channelsByGuild['g1'][1]; // c2
+      const untouchedGuildArray = before.channelsByGuild['g2'];
+      const beforeLen = before.channelsByGuild['g1'].length;
+
+      useChannelStore.getState().updateLastMessageId('c1', 'msg-99');
+      const after = useChannelStore.getState();
+
+      // target mutated to a new object
+      expect(after.channelsByGuild['g1'][0]).not.toBe(before.channelsByGuild['g1'][0]);
+      expect(after.channelsByGuild['g1'][0].last_message_id).toBe('msg-99');
+      // sibling channel object identity preserved
+      expect(after.channelsByGuild['g1'][1]).toBe(untouchedSameGuild);
+      // untouched guild's array reference preserved
+      expect(after.channelsByGuild['g2']).toBe(untouchedGuildArray);
+      // array length unchanged
+      expect(after.channelsByGuild['g1'].length).toBe(beforeLen);
+      // flat view patched in place, identity of sibling preserved
+      expect(after.channels).toHaveLength(before.channels.length);
+      expect(after.channels[1]).toBe(untouchedSameGuild);
+      expect(after.channels[0].last_message_id).toBe('msg-99');
+    });
   });
 
   it('setDmChannels sets DMs under empty guild key', () => {
@@ -134,6 +237,7 @@ describe('channelStore', () => {
     useChannelStore.getState().setDmChannels([dm]);
     expect(useChannelStore.getState().channelsByGuild['']).toHaveLength(1);
     expect(useChannelStore.getState().channelsByGuild[''][0].id).toBe('dm1');
+    expect(useChannelStore.getState().channelsById['dm1'].id).toBe('dm1');
   });
 
   it('addChannel updates flat channels when guild is selected', () => {

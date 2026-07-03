@@ -237,7 +237,12 @@ pub async fn update_role(
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     // Invalidate permission cache when role permissions change
-    paracord_core::permissions::invalidate_all(&state.permission_cache).await;
+    paracord_core::permissions::invalidate_guild_members(
+        &state.permission_cache,
+        &state.member_index,
+        guild_id,
+    )
+    .await;
 
     let role_json = role_to_json(&updated);
 
@@ -324,7 +329,12 @@ pub async fn delete_role(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     // Invalidate permission cache when a role is deleted
-    paracord_core::permissions::invalidate_all(&state.permission_cache).await;
+    paracord_core::permissions::invalidate_guild_members(
+        &state.permission_cache,
+        &state.member_index,
+        guild_id,
+    )
+    .await;
 
     state.event_bus.dispatch(
         "GUILD_ROLE_DELETE",

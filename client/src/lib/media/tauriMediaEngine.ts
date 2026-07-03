@@ -11,10 +11,14 @@ import type {
 import { MediaVideoDecoder } from './video/videoDecoder';
 import { CanvasRenderer } from './video/canvasRenderer';
 import { logVoiceDiagnostic } from '../desktopDiagnostics';
+import { unwrapDeliveredMediaSenderKey } from './mediaSenderKeyEnvelope';
+import type { PulledFrame } from './transport/protocol';
 import {
-  unwrapDeliveredMediaSenderKey,
-  wrapMediaSenderKeyForRecipient,
-} from './mediaSenderKeyEnvelope';
+  parseRoomIdFromToken,
+  parseUserIdFromToken,
+  selectPublishedLayer,
+  wrapSenderKeyForRecipients,
+} from './engineShared';
 
 // Tauri API imports - these resolve at runtime in the Tauri environment
 let invoke: (cmd: string, args?: Record<string, unknown> | ArrayBuffer | Uint8Array) => Promise<unknown>;
@@ -38,13 +42,7 @@ const VP9_CODEC = 'vp09.00.10.08';
 const H264_CODEC = 'avc1.640028';
 const AV1_CODEC = 'av01.0.10M.08';
 
-type PulledEncodedFrameResponse = {
-  timestampUs: number;
-  sequence: number;
-  isKeyframe: boolean;
-  codec: 'vp9' | 'av1' | 'h264' | string;
-  dataBase64: string;
-};
+type PulledEncodedFrameResponse = PulledFrame;
 
 type ExportedSenderKey = {
   epoch: number;
@@ -150,22 +148,6 @@ function rendererCanvasSize(renderer: CanvasRenderer): { width: number; height: 
   };
 }
 
-function selectPublishedLayer(
-  track: PublishedTrackDescriptor,
-  viewport: { width: number; height: number },
-) {
-  if (!track.layers.length) {
-    return null;
-  }
-  const sortedLayers = [...track.layers].sort((a, b) => a.layerId - b.layerId);
-  const fittingLayer = sortedLayers.find((layer) => {
-    const width = Number(layer.width ?? 0);
-    const height = Number(layer.height ?? 0);
-    return width >= viewport.width || height >= viewport.height;
-  });
-  return fittingLayer ?? sortedLayers[sortedLayers.length - 1] ?? null;
-}
-
 function normalizeNativeRelayEndpoint(endpoint: string): string {
   if (!endpoint) return '';
   const trimmed = endpoint.trim();
@@ -187,6 +169,146 @@ function normalizeNativeRelayEndpoint(endpoint: string): string {
   } catch {
     return trimmed;
   }
+}
+
+/**
+ * Poll the native engine for video frames and render them to `renderer`.
+ *
+ * Natively-decoded frames (`format === 'i420'`) are drawn straight to the
+ * canvas via {@link CanvasRenderer.drawI420}, bypassing WebCodecs entirely.
+ * Any other frame (including ones with no `format`, i.e. the historical encoded
+ * path) is fed to a {@link MediaVideoDecoder}, which is (re)created on codec
+ * change. Exported for unit testing of the per-frame render routing.
+ */
+export function startPulledEncodedVideoSubscription(
+  label: string,
+  pullFrame: (afterSequence: number | null) => Promise<PulledEncodedFrameResponse | null>,
+  decoderRef: { current: MediaVideoDecoder | null; codec: string | null },
+  renderer: CanvasRenderer,
+  onFrame?: () => void,
+  onDecodedFrame?: () => void,
+): () => void {
+  let stopped = false;
+  let lastSequence: number | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pollInFlight = false;
+  let sawDecodedFrame = false;
+  let pollCount = 0;
+  let emptyPollCount = 0;
+
+  const attachDecoder = (decoder: MediaVideoDecoder) => {
+    decoder.onDecoded((frame) => {
+      if (!sawDecodedFrame) {
+        sawDecodedFrame = true;
+        logVoiceDiagnostic('[media] native video subscription received first decoded frame', {
+          label,
+          width: frame.displayWidth,
+          height: frame.displayHeight,
+          timestamp: frame.timestamp,
+        });
+        onDecodedFrame?.();
+      }
+      renderer.renderFrame(frame);
+      onFrame?.();
+    });
+  };
+
+  if (decoderRef.current) {
+    attachDecoder(decoderRef.current);
+  }
+
+  const scheduleNextPoll = () => {
+    if (stopped) return;
+    timer = setTimeout(runPoll, VIDEO_POLL_INTERVAL_MS);
+  };
+
+  const renderNativeI420Frame = (
+    frame: PulledEncodedFrameResponse & { width: number; height: number },
+  ) => {
+    const pixels = decodeBase64Frame(frame.dataBase64);
+    renderer.drawI420(pixels, frame.width, frame.height);
+    if (!sawDecodedFrame) {
+      sawDecodedFrame = true;
+      logVoiceDiagnostic('[media] native video subscription received first decoded frame', {
+        label,
+        width: frame.width,
+        height: frame.height,
+        timestamp: frame.timestampUs,
+      });
+      onDecodedFrame?.();
+    }
+    onFrame?.();
+  };
+
+  const runPoll = async () => {
+    if (stopped || pollInFlight) {
+      scheduleNextPoll();
+      return;
+    }
+
+    pollInFlight = true;
+    pollCount += 1;
+    if (pollCount <= 3) {
+      logVoiceDiagnostic('[media] native encoded video poll start', {
+        label,
+        pollCount,
+        afterSequence: lastSequence,
+      });
+    }
+    try {
+      const frame = await pullFrame(lastSequence);
+      if (stopped) {
+        return;
+      }
+      if (frame) {
+        lastSequence = frame.sequence;
+        emptyPollCount = 0;
+        if (frame.format === 'i420' && frame.width && frame.height) {
+          renderNativeI420Frame(frame as PulledEncodedFrameResponse & { width: number; height: number });
+        } else {
+          const encoded = decodeBase64Frame(frame.dataBase64);
+          if (!decoderRef.current || frame.codec !== decoderRef.codec) {
+            decoderRef.current?.close();
+            decoderRef.current = new MediaVideoDecoder({ codec: frame.codec });
+            decoderRef.codec = frame.codec;
+            sawDecodedFrame = false;
+            attachDecoder(decoderRef.current);
+            logVoiceDiagnostic('[media] native video decoder prepared codec', {
+              label,
+              codec: frame.codec,
+            });
+          }
+          decoderRef.current.decode(encoded, frame.timestampUs, frame.isKeyframe);
+        }
+      } else if (emptyPollCount < 5) {
+        emptyPollCount += 1;
+        logVoiceDiagnostic('[media] native encoded video poll returned no frame', {
+          label,
+          pollCount,
+          afterSequence: lastSequence,
+        });
+      }
+    } catch (err) {
+      if (!stopped) {
+        logVoiceDiagnostic('[media] native encoded video pull failed', {
+          label,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } finally {
+      pollInFlight = false;
+      scheduleNextPoll();
+    }
+  };
+
+  void runPoll();
+
+  return () => {
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+    }
+  };
 }
 
 /**
@@ -217,8 +339,8 @@ export class TauriMediaEngine implements MediaEngine {
 
   async connect(endpoint: string, token: string, _certHash?: string): Promise<void> {
     await tauriReady;
-    this.localUserId = this.parseUserIdFromToken(token);
-    this.localRoomId = this.parseRoomIdFromToken(token);
+    this.localUserId = parseUserIdFromToken(token);
+    this.localRoomId = parseRoomIdFromToken(token);
     // Wait for all pending listener registrations to complete before
     // starting the session so we don't miss early events on cold boot.
     if (this.listenerPromises.length > 0) {
@@ -663,115 +785,6 @@ export class TauriMediaEngine implements MediaEngine {
     this.videoSubscriptions.clear();
   }
 
-  private startPulledEncodedVideoSubscription(
-    label: string,
-    pullFrame: (afterSequence: number | null) => Promise<PulledEncodedFrameResponse | null>,
-    decoderRef: { current: MediaVideoDecoder | null; codec: string | null },
-    renderer: CanvasRenderer,
-    onFrame?: () => void,
-    onDecodedFrame?: () => void,
-  ): () => void {
-    let stopped = false;
-    let lastSequence: number | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let pollInFlight = false;
-    let sawDecodedFrame = false;
-    let pollCount = 0;
-    let emptyPollCount = 0;
-
-    const attachDecoder = (decoder: MediaVideoDecoder) => {
-      decoder.onDecoded((frame) => {
-        if (!sawDecodedFrame) {
-          sawDecodedFrame = true;
-          logVoiceDiagnostic('[media] native video subscription received first decoded frame', {
-            label,
-            width: frame.displayWidth,
-            height: frame.displayHeight,
-            timestamp: frame.timestamp,
-          });
-          onDecodedFrame?.();
-        }
-        renderer.renderFrame(frame);
-        onFrame?.();
-      });
-    };
-
-    if (decoderRef.current) {
-      attachDecoder(decoderRef.current);
-    }
-
-    const scheduleNextPoll = () => {
-      if (stopped) return;
-      timer = setTimeout(runPoll, VIDEO_POLL_INTERVAL_MS);
-    };
-
-    const runPoll = async () => {
-      if (stopped || pollInFlight) {
-        scheduleNextPoll();
-        return;
-      }
-
-      pollInFlight = true;
-      pollCount += 1;
-      if (pollCount <= 3) {
-        logVoiceDiagnostic('[media] native encoded video poll start', {
-          label,
-          pollCount,
-          afterSequence: lastSequence,
-        });
-      }
-      try {
-        const frame = await pullFrame(lastSequence);
-        if (stopped) {
-          return;
-        }
-        if (frame) {
-          lastSequence = frame.sequence;
-          emptyPollCount = 0;
-          const encoded = decodeBase64Frame(frame.dataBase64);
-          if (!decoderRef.current || frame.codec !== decoderRef.codec) {
-            decoderRef.current?.close();
-            decoderRef.current = new MediaVideoDecoder({ codec: frame.codec });
-            decoderRef.codec = frame.codec;
-            sawDecodedFrame = false;
-            attachDecoder(decoderRef.current);
-            logVoiceDiagnostic('[media] native video decoder prepared codec', {
-              label,
-              codec: frame.codec,
-            });
-          }
-          decoderRef.current.decode(encoded, frame.timestampUs, frame.isKeyframe);
-        } else if (emptyPollCount < 5) {
-          emptyPollCount += 1;
-          logVoiceDiagnostic('[media] native encoded video poll returned no frame', {
-            label,
-            pollCount,
-            afterSequence: lastSequence,
-          });
-        }
-      } catch (err) {
-        if (!stopped) {
-          logVoiceDiagnostic('[media] native encoded video pull failed', {
-            label,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      } finally {
-        pollInFlight = false;
-        scheduleNextPoll();
-      }
-    };
-
-    void runPoll();
-
-    return () => {
-      stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-    };
-  }
-
   private startEncodedTrackVideoSubscription(
     label: string,
     pullEncodedFrame: (afterSequence: number | null) => Promise<PulledEncodedFrameResponse | null>,
@@ -783,7 +796,7 @@ export class TauriMediaEngine implements MediaEngine {
       codec: null as string | null,
     };
 
-    const stop = this.startPulledEncodedVideoSubscription(
+    const stop = startPulledEncodedVideoSubscription(
       label,
       pullEncodedFrame,
       decoderRef,
@@ -847,7 +860,7 @@ export class TauriMediaEngine implements MediaEngine {
         return;
       }
       const viewport = rendererCanvasSize(existing.renderer);
-      const selectedLayer = selectPublishedLayer(track, viewport);
+      const selectedLayer = selectPublishedLayer(track, viewport.width, viewport.height);
       if (!selectedLayer) {
         return;
       }
@@ -1001,7 +1014,7 @@ export class TauriMediaEngine implements MediaEngine {
         let subscription: NativeVideoSubscription;
         if (publishedTrack && !disposed) {
           const viewport = rendererCanvasSize(renderer);
-          const selectedLayer = selectPublishedLayer(publishedTrack, viewport);
+          const selectedLayer = selectPublishedLayer(publishedTrack, viewport.width, viewport.height);
         if (selectedLayer) {
           await invoke('media_register_stream_video_subscription', {
             streamId: publishedTrack.streamId,
@@ -1057,7 +1070,7 @@ export class TauriMediaEngine implements MediaEngine {
             return;
           }
           const viewport = rendererCanvasSize(current.renderer);
-          const selectedLayer = selectPublishedLayer(track, viewport);
+          const selectedLayer = selectPublishedLayer(track, viewport.width, viewport.height);
           if (!selectedLayer) {
             return;
           }
@@ -1127,32 +1140,6 @@ export class TauriMediaEngine implements MediaEngine {
       return () => {};
     }
     return this.subscribeVideo(this.localUserId, canvas, onFrame);
-  }
-
-  private parseUserIdFromToken(token: string): string | null {
-    try {
-      const [, payload] = token.split('.');
-      if (!payload) return null;
-      const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
-        sub?: string | number;
-      };
-      return json.sub != null ? String(json.sub) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  private parseRoomIdFromToken(token: string): string | null {
-    try {
-      const [, payload] = token.split('.');
-      if (!payload) return null;
-      const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
-        room?: string;
-      };
-      return typeof json.room === 'string' ? json.room : null;
-    } catch {
-      return null;
-    }
   }
 
   private async listSessionParticipantCapabilities(): Promise<SessionParticipantCapabilities[]> {
@@ -1234,32 +1221,16 @@ export class TauriMediaEngine implements MediaEngine {
     senderKey: ExportedSenderKey,
     recipientUserIds: string[],
   ): Promise<Array<{ recipientUserId: string; ciphertext: number[] }>> {
-    const encrypted = await Promise.all(
-      recipientUserIds.map(async (recipientUserId) => {
-        const wrapped = await wrapMediaSenderKeyForRecipient(
-          scope,
-          Uint8Array.from(senderKey.rawKey),
-          senderKey.epoch,
-          recipientUserId,
-        );
-        if (!wrapped) {
-          return null;
-        }
-        return {
-          recipientUserId,
-          ciphertext: Array.from(wrapped),
-        };
-      }),
+    const wrapped = await wrapSenderKeyForRecipients(
+      scope,
+      Uint8Array.from(senderKey.rawKey),
+      senderKey.epoch,
+      recipientUserIds,
     );
-
-    return encrypted.filter(
-      (
-        value,
-      ): value is {
-        recipientUserId: string;
-        ciphertext: number[];
-      } => Boolean(value),
-    );
+    return wrapped.map((entry) => ({
+      recipientUserId: entry.recipientUserId,
+      ciphertext: Array.from(entry.wrapped),
+    }));
   }
 
   private async announceWrappedAudioSenderKey(

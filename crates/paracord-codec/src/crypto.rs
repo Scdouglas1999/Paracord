@@ -8,6 +8,17 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 /// AES-128 key size in bytes.
+///
+/// We deliberately use AES-128-GCM (not AES-256) for per-frame media
+/// encryption. This mirrors the SRTP `AEAD_AES_128_GCM` profile (RFC 7714),
+/// the de-facto standard for real-time WebRTC/SRTP media, so we align with the
+/// same security/performance trade-off the rest of the ecosystem has settled
+/// on. AES-128 is not a meaningful downgrade here: media keys are ephemeral and
+/// rotate per epoch on every membership change, so there is no long-lived
+/// secret to justify the ~40% extra round cost of AES-256 on every 20 ms audio
+/// frame / video packet. On hardware without AES-NI (e.g. some mobile targets)
+/// that per-frame cost is what actually gates real-time throughput. Keep this
+/// at 16 (AES-128) — the TypeScript client mirrors this key length.
 pub const KEY_SIZE: usize = 16;
 /// GCM authentication tag size in bytes.
 pub const TAG_SIZE: usize = 16;
@@ -91,6 +102,60 @@ fn estimate_roc(ref_roc: u32, ref_seq: u16, seq: u16) -> u32 {
     best_roc
 }
 
+/// Shared per-(ssrc, epoch) key store and rollover-counter state.
+///
+/// Both [`FrameEncryptor`] and [`FrameDecryptor`] need the exact same three
+/// primitives — install a key, remove a key, and resolve the cipher for an
+/// incoming `(ssrc, epoch)` with SSRC 0 acting as a wildcard fallback — plus a
+/// place to track the per-stream 48-bit rollover counter. Keeping them in one
+/// struct means the wildcard-lookup and ROC-eviction logic lives in exactly one
+/// place instead of being reimplemented (and independently fixed) in both.
+struct KeyRing {
+    /// Keys indexed by (ssrc, epoch). SSRC 0 is treated as a wildcard fallback.
+    keys: HashMap<(u32, u8), Aes128Gcm>,
+    /// Rollover-counter state: `(ssrc, epoch) -> (roc, last/ref sequence)`.
+    roc_state: HashMap<(u32, u8), (u32, u16)>,
+}
+
+impl KeyRing {
+    fn new() -> Self {
+        Self {
+            keys: HashMap::new(),
+            roc_state: HashMap::new(),
+        }
+    }
+
+    /// Install a cipher for a specific `(ssrc, epoch)`. SSRC 0 is the wildcard
+    /// that matches any sender at that epoch.
+    fn set(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
+        // Key is a fixed 16-byte array, so AES-128 construction is infallible.
+        let cipher = Aes128Gcm::new((*key).as_ref().into());
+        self.keys.insert((ssrc, epoch), cipher);
+    }
+
+    /// Remove the cipher and any rollover-counter state for `(ssrc, epoch)`.
+    fn remove(&mut self, ssrc: u32, epoch: u8) {
+        self.keys.remove(&(ssrc, epoch));
+        self.roc_state.remove(&(ssrc, epoch));
+    }
+
+    /// True when a cipher — specific to `(ssrc, epoch)` or the `(0, epoch)`
+    /// wildcard — is available.
+    fn has_key(&self, ssrc: u32, epoch: u8) -> bool {
+        self.keys.contains_key(&(ssrc, epoch)) || self.keys.contains_key(&(0, epoch))
+    }
+
+    /// Resolve the cipher for `(ssrc, epoch)`, preferring the SSRC-specific key
+    /// and falling back to the `(0, epoch)` wildcard. Returns
+    /// [`CryptoError::NoKeyForEpoch`] when neither is present.
+    fn cipher(&self, ssrc: u32, epoch: u8) -> Result<&Aes128Gcm, CryptoError> {
+        self.keys
+            .get(&(ssrc, epoch))
+            .or_else(|| self.keys.get(&(0, epoch)))
+            .ok_or(CryptoError::NoKeyForEpoch(epoch))
+    }
+}
+
 /// Frame encryptor using AES-128-GCM.
 ///
 /// Encrypts media frame payloads using per-epoch keys. The 16-byte MediaHeader
@@ -101,42 +166,35 @@ fn estimate_roc(ref_roc: u32, ref_seq: u16, seq: u16) -> u32 {
 /// packet counter to 48 bits and preventing (key, nonce) reuse. See `build_nonce`
 /// for the nonce layout and the max-frames-per-epoch invariant.
 pub struct FrameEncryptor {
-    /// Keys indexed by (ssrc, epoch). SSRC 0 is treated as a wildcard fallback.
-    keys: HashMap<(u32, u8), Aes128Gcm>,
-    /// Rollover-counter state: `(ssrc, epoch) -> (roc, last_sequence)`.
-    roc_state: HashMap<(u32, u8), (u32, u16)>,
+    ring: KeyRing,
 }
 
 impl FrameEncryptor {
     /// Create a new encryptor with no keys.
     pub fn new() -> Self {
         Self {
-            keys: HashMap::new(),
-            roc_state: HashMap::new(),
+            ring: KeyRing::new(),
         }
     }
 
     /// Set the encryption key for a given epoch.
     pub fn set_key(&mut self, epoch: u8, key: &[u8; KEY_SIZE]) {
-        self.set_peer_key(0, epoch, key);
+        self.ring.set(0, epoch, key);
     }
 
     /// Set the encryption key for a specific sender SSRC + epoch.
     pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
-        // Key is a fixed 16-byte array, so AES-128 construction is infallible.
-        let cipher = Aes128Gcm::new((*key).as_ref().into());
-        self.keys.insert((ssrc, epoch), cipher);
+        self.ring.set(ssrc, epoch, key);
     }
 
     /// Remove the key for a given epoch.
     pub fn remove_key(&mut self, epoch: u8) {
-        self.remove_peer_key(0, epoch);
+        self.ring.remove(0, epoch);
     }
 
     /// Remove the key for a specific sender SSRC + epoch.
     pub fn remove_peer_key(&mut self, ssrc: u32, epoch: u8) {
-        self.keys.remove(&(ssrc, epoch));
-        self.roc_state.remove(&(ssrc, epoch));
+        self.ring.remove(ssrc, epoch);
     }
 
     /// Advance and return the rollover counter for the given sender stream.
@@ -145,10 +203,10 @@ impl FrameEncryptor {
     /// sequence is not greater than the previously observed one for this
     /// stream). The first packet of a stream establishes the baseline at ROC 0.
     fn next_roc(&mut self, ssrc: u32, epoch: u8, sequence: u16) -> u32 {
-        match self.roc_state.get_mut(&(ssrc, epoch)) {
+        match self.ring.roc_state.get_mut(&(ssrc, epoch)) {
             None => {
                 // First packet of this stream establishes ROC 0.
-                self.roc_state.insert((ssrc, epoch), (0, sequence));
+                self.ring.roc_state.insert((ssrc, epoch), (0, sequence));
                 0
             }
             Some((roc, last_seq)) => {
@@ -185,17 +243,13 @@ impl FrameEncryptor {
         plaintext: &[u8],
     ) -> Result<Vec<u8>, CryptoError> {
         // Resolve the cipher first so a missing key does not perturb ROC state.
-        if !self.keys.contains_key(&(ssrc, epoch)) && !self.keys.contains_key(&(0, epoch)) {
+        if !self.ring.has_key(ssrc, epoch) {
             return Err(CryptoError::NoKeyForEpoch(epoch));
         }
 
         let roc = self.next_roc(ssrc, epoch, sequence);
 
-        let cipher = self
-            .keys
-            .get(&(ssrc, epoch))
-            .or_else(|| self.keys.get(&(0, epoch)))
-            .ok_or(CryptoError::NoKeyForEpoch(epoch))?;
+        let cipher = self.ring.cipher(ssrc, epoch)?;
 
         let nonce_bytes = build_nonce(ssrc, epoch, roc, sequence);
         let nonce = Nonce::from_slice(&nonce_bytes);
@@ -228,42 +282,35 @@ impl Default for FrameEncryptor {
 /// `estimate_roc`), so it recovers the correct 48-bit nonce even across a
 /// sequence wrap or moderate packet reordering.
 pub struct FrameDecryptor {
-    /// Keys indexed by (ssrc, epoch). SSRC 0 is treated as a wildcard fallback.
-    keys: HashMap<(u32, u8), Aes128Gcm>,
-    /// Highest packet index observed per stream: `(ssrc, epoch) -> (roc, seq)`.
-    roc_state: HashMap<(u32, u8), (u32, u16)>,
+    ring: KeyRing,
 }
 
 impl FrameDecryptor {
     /// Create a new decryptor with no keys.
     pub fn new() -> Self {
         Self {
-            keys: HashMap::new(),
-            roc_state: HashMap::new(),
+            ring: KeyRing::new(),
         }
     }
 
     /// Set the decryption key for a given epoch.
     pub fn set_key(&mut self, epoch: u8, key: &[u8; KEY_SIZE]) {
-        self.set_peer_key(0, epoch, key);
+        self.ring.set(0, epoch, key);
     }
 
     /// Set the decryption key for a specific sender SSRC + epoch.
     pub fn set_peer_key(&mut self, ssrc: u32, epoch: u8, key: &[u8; KEY_SIZE]) {
-        // Key is a fixed 16-byte array, so AES-128 construction is infallible.
-        let cipher = Aes128Gcm::new((*key).as_ref().into());
-        self.keys.insert((ssrc, epoch), cipher);
+        self.ring.set(ssrc, epoch, key);
     }
 
     /// Remove the key for a given epoch.
     pub fn remove_key(&mut self, epoch: u8) {
-        self.remove_peer_key(0, epoch);
+        self.ring.remove(0, epoch);
     }
 
     /// Remove the key for a specific sender SSRC + epoch.
     pub fn remove_peer_key(&mut self, ssrc: u32, epoch: u8) {
-        self.keys.remove(&(ssrc, epoch));
-        self.roc_state.remove(&(ssrc, epoch));
+        self.ring.remove(ssrc, epoch);
     }
 
     /// Decrypt a media frame payload.
@@ -288,21 +335,17 @@ impl FrameDecryptor {
             return Err(CryptoError::CiphertextTooShort);
         }
 
-        if !self.keys.contains_key(&(ssrc, epoch)) && !self.keys.contains_key(&(0, epoch)) {
+        if !self.ring.has_key(ssrc, epoch) {
             return Err(CryptoError::NoKeyForEpoch(epoch));
         }
 
         // Estimate the ROC for this sequence relative to the highest index seen.
-        let roc = match self.roc_state.get(&(ssrc, epoch)) {
+        let roc = match self.ring.roc_state.get(&(ssrc, epoch)) {
             Some(&(ref_roc, ref_seq)) => estimate_roc(ref_roc, ref_seq, sequence),
             None => 0,
         };
 
-        let cipher = self
-            .keys
-            .get(&(ssrc, epoch))
-            .or_else(|| self.keys.get(&(0, epoch)))
-            .ok_or(CryptoError::NoKeyForEpoch(epoch))?;
+        let cipher = self.ring.cipher(ssrc, epoch)?;
 
         let nonce_bytes = build_nonce(ssrc, epoch, roc, sequence);
         let nonce = Nonce::from_slice(&nonce_bytes);
@@ -322,12 +365,12 @@ impl FrameDecryptor {
         // reference. This keeps the estimator anchored to real, verified traffic
         // and prevents forged sequence numbers from moving the window.
         let index = ((roc as u64) << 16) | sequence as u64;
-        let advance = match self.roc_state.get(&(ssrc, epoch)) {
+        let advance = match self.ring.roc_state.get(&(ssrc, epoch)) {
             Some(&(ref_roc, ref_seq)) => index > (((ref_roc as u64) << 16) | ref_seq as u64),
             None => true,
         };
         if advance {
-            self.roc_state.insert((ssrc, epoch), (roc, sequence));
+            self.ring.roc_state.insert((ssrc, epoch), (roc, sequence));
         }
 
         Ok(plaintext)
@@ -543,6 +586,42 @@ mod tests {
             .decrypt(&header, ssrc, epoch, sequence, &ciphertext)
             .expect("peer decrypt failed");
         assert_eq!(decrypted, b"ssrc scoped sender key");
+    }
+
+    #[test]
+    fn keyring_wildcard_lookup() {
+        let mut ring = KeyRing::new();
+
+        // Empty ring: nothing resolves.
+        assert!(!ring.has_key(0xABCD, 3));
+        assert!(matches!(
+            ring.cipher(0xABCD, 3),
+            Err(CryptoError::NoKeyForEpoch(3))
+        ));
+
+        // A wildcard (SSRC 0) key matches any SSRC at that epoch...
+        ring.set(0, 3, &test_key());
+        assert!(ring.has_key(0xABCD, 3));
+        assert!(ring.has_key(0x1234, 3));
+        assert!(ring.cipher(0xABCD, 3).is_ok());
+        // ...but only for its own epoch.
+        assert!(!ring.has_key(0xABCD, 4));
+        assert!(matches!(
+            ring.cipher(0xABCD, 4),
+            Err(CryptoError::NoKeyForEpoch(4))
+        ));
+
+        // An SSRC-specific key coexists with the wildcard; other SSRCs still
+        // fall back to the wildcard.
+        ring.set(0xABCD, 3, &[0xEE; KEY_SIZE]);
+        assert!(ring.cipher(0xABCD, 3).is_ok());
+        assert!(ring.cipher(0x1234, 3).is_ok());
+
+        // Removing the wildcard leaves only the specific key: the previously
+        // wildcard-served SSRC no longer resolves, the specific one still does.
+        ring.remove(0, 3);
+        assert!(ring.has_key(0xABCD, 3));
+        assert!(!ring.has_key(0x1234, 3));
     }
 
     #[test]

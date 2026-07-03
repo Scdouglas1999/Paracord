@@ -235,13 +235,43 @@ impl StorageBackend for LocalStorage {
 
     async fn get_url(&self, key: &str) -> Result<String, StorageError> {
         validate_key(key)?;
-        // Extract the attachment ID from the key for the API path.
-        // Keys are formatted as `attachments/{id}.{ext}`.
-        let stem = Path::new(key)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(key);
-        Ok(format!("/api/v1/attachments/{}", stem))
+        Ok(local_download_url(key))
+    }
+}
+
+/// Map a validated storage key to the API path that serves it.
+///
+/// Keys are prefix-namespaced and each namespace is exposed under a different
+/// download route, so the URL cannot be derived from the file stem alone:
+/// - `attachments/{id}.{ext}` → `/api/v1/attachments/{id}`
+/// - `stickers/{guild_id}/{sticker_id}.{ext}` →
+///   `/api/v1/guilds/{guild_id}/stickers/{sticker_id}/image`
+/// - `fed-cache/{origin_server}/{attachment_id}` →
+///   `/api/v1/federated-files/{origin_server}/{attachment_id}`
+///
+/// Any other shape falls back to the historical `/api/v1/attachments/{stem}`
+/// behaviour so callers passing bare keys keep working.
+fn local_download_url(key: &str) -> String {
+    let parts: Vec<&str> = key.split('/').collect();
+    match parts.as_slice() {
+        // Sticker assets are served by guild + sticker id, not by raw key.
+        ["stickers", guild_id, file] => {
+            let sticker_id = file.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(file);
+            format!("/api/v1/guilds/{guild_id}/stickers/{sticker_id}/image")
+        }
+        // Federation cache entries mirror the federated-file proxy route and
+        // keep their `attachment_id` verbatim (they carry no extension).
+        ["fed-cache", origin_server, attachment_id] => {
+            format!("/api/v1/federated-files/{origin_server}/{attachment_id}")
+        }
+        // Attachments (and any other single-file key) are served by stem.
+        _ => {
+            let stem = Path::new(key)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(key);
+            format!("/api/v1/attachments/{stem}")
+        }
     }
 }
 
@@ -478,6 +508,42 @@ mod tests {
         let key = "fed-cache/example.org/98765.webp";
         storage.store(key, b"cached").await.expect("store");
         assert_eq!(storage.retrieve(key).await.expect("retrieve"), b"cached");
+    }
+
+    #[tokio::test]
+    async fn get_url_attachment_prefix() {
+        let (_dir, storage) = local_storage();
+        let url = storage.get_url("attachments/12345.png").await.expect("url");
+        assert_eq!(url, "/api/v1/attachments/12345");
+    }
+
+    #[tokio::test]
+    async fn get_url_sticker_prefix() {
+        let (_dir, storage) = local_storage();
+        let url = storage
+            .get_url("stickers/999/54321.webp")
+            .await
+            .expect("url");
+        assert_eq!(url, "/api/v1/guilds/999/stickers/54321/image");
+    }
+
+    #[tokio::test]
+    async fn get_url_fed_cache_prefix() {
+        let (_dir, storage) = local_storage();
+        let url = storage
+            .get_url("fed-cache/example.org/98765")
+            .await
+            .expect("url");
+        assert_eq!(url, "/api/v1/federated-files/example.org/98765");
+    }
+
+    #[tokio::test]
+    async fn get_url_rejects_invalid_key() {
+        let (_dir, storage) = local_storage();
+        assert!(matches!(
+            storage.get_url("../secret").await,
+            Err(StorageError::InvalidKey(_))
+        ));
     }
 
     #[tokio::test]
