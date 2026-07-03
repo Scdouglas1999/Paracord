@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState, useCallback, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare } from 'lucide-react';
@@ -91,7 +91,7 @@ function getTimestamp(msg: { timestamp?: string; created_at?: string }): string 
   return msg.timestamp || msg.created_at || '';
 }
 
-function shouldGroup(prev: { author: { id: string }; timestamp?: string; created_at?: string } | null, curr: { author: { id: string }; timestamp?: string; created_at?: string }): boolean {
+export function shouldGroup(prev: { author: { id: string }; timestamp?: string; created_at?: string } | null, curr: { author: { id: string }; timestamp?: string; created_at?: string }): boolean {
   if (!prev) return false;
   if (prev.author.id !== curr.author.id) return false;
   const prevTs = getTimestamp(prev);
@@ -101,7 +101,7 @@ function shouldGroup(prev: { author: { id: string }; timestamp?: string; created
   return diff < 7 * 60 * 1000;
 }
 
-function isDifferentDay(a: string, b: string): boolean {
+export function isDifferentDay(a: string, b: string): boolean {
   try {
     return new Date(a).toDateString() !== new Date(b).toDateString();
   } catch {
@@ -125,11 +125,77 @@ function getReplyPreviewText(message: Message): string {
   return '[Message]';
 }
 
-function resolveReplyParentId(message: Message): string | null {
+export function resolveReplyParentId(message: Message): string | null {
   const legacyReferencedId = (message as Message & { referenced_message_id?: string }).referenced_message_id;
   const raw = message.reference_id || message.referenced_message?.id || legacyReferencedId || null;
   if (!raw) return null;
   return String(raw);
+}
+
+export interface ReplyLayout {
+  depth: number;
+  parentId: string | null;
+}
+
+/**
+ * Resolve per-message reply nesting depth and parent id for the whole feed.
+ * Iterative resolution is memoized in `cache`; `visited` guards against
+ * self-references and cyclic reply chains so a corrupt graph can never cause
+ * infinite recursion. Depth is clamped to MAX_REPLY_NEST_DEPTH.
+ */
+export function computeReplyLayout(messages: Message[]): Map<string, ReplyLayout> {
+  const messageById = new Map<string, Message>();
+  for (const msg of messages) messageById.set(msg.id, msg);
+
+  const cache = new Map<string, ReplyLayout>();
+
+  const resolve = (messageId: string, visited: Set<string>): ReplyLayout => {
+    const cached = cache.get(messageId);
+    if (cached) return cached;
+
+    const current = messageById.get(messageId);
+    if (!current) {
+      const fallback = { depth: 0, parentId: null };
+      cache.set(messageId, fallback);
+      return fallback;
+    }
+
+    const parentId = resolveReplyParentId(current);
+    if (!parentId) {
+      const root = { depth: 0, parentId: null };
+      cache.set(messageId, root);
+      return root;
+    }
+
+    if (visited.has(messageId)) {
+      const looped = { depth: 1, parentId };
+      cache.set(messageId, looped);
+      return looped;
+    }
+
+    visited.add(messageId);
+    const parent = messageById.get(parentId);
+    if (!parent) {
+      const unresolved = { depth: 1, parentId };
+      cache.set(messageId, unresolved);
+      visited.delete(messageId);
+      return unresolved;
+    }
+
+    const parentLayout = resolve(parent.id, visited);
+    const computed = {
+      depth: Math.min(MAX_REPLY_NEST_DEPTH, parentLayout.depth + 1),
+      parentId,
+    };
+    cache.set(messageId, computed);
+    visited.delete(messageId);
+    return computed;
+  };
+
+  for (const message of messages) {
+    resolve(message.id, new Set<string>());
+  }
+  return cache;
 }
 
 // Row types for the virtual list
@@ -146,6 +212,119 @@ type VirtualRow =
     }
   | { type: 'typing' }
   | { type: 'bottom-sentinel' };
+
+// --- Consolidated UI state (useReducer) -------------------------------------
+// The message feed carries several loosely-related overlay/dialog state groups.
+// They are held in one reducer keyed by slice; each dispatch carries a partial
+// patch (or a function of the current slice, for updates that depend on the
+// latest value) that is merged into that slice.
+
+interface PopupSlice {
+  hoveredMessageId: string | null;
+  focusedMessageId: string | null;
+  menuMessageId: string | null;
+  profileUser: Message['author'] | null;
+  profilePos: { x: number; y: number };
+  emojiPickerFor: { messageId: string; position: { x: number; y: number } } | null;
+  deleteConfirmId: string | null;
+  contextMenuAnchor: { x: number; y: number };
+}
+interface EditSlice {
+  editingMessageId: string | null;
+  editContent: string;
+}
+interface ReportSlice {
+  reportingMessage: Message | null;
+  reportReason: string;
+  reportEvidence: string;
+  reportSubmitting: boolean;
+}
+interface ThreadCreateSlice {
+  threadModalForMessageId: string | null;
+  threadName: string;
+  threadCreateError: string | null;
+}
+interface BulkDeleteSlice {
+  bulkDeleteMode: boolean;
+  selectedMessageIds: string[];
+  bulkDeleting: boolean;
+}
+interface AttachmentSlice {
+  attachmentBusyId: string | null;
+  downloadProgress: number | null;
+}
+interface EditHistorySlice {
+  editHistoryMsgId: string | null;
+  editHistoryPos: { x: number; y: number };
+  editHistoryData: { id: string; content: string; edited_at: string }[];
+  editHistoryLoading: boolean;
+}
+
+interface MessageListUIState {
+  popup: PopupSlice;
+  edit: EditSlice;
+  report: ReportSlice;
+  threadCreate: ThreadCreateSlice;
+  bulkDelete: BulkDeleteSlice;
+  attachment: AttachmentSlice;
+  editHistory: EditHistorySlice;
+}
+
+type SlicePatch<S> = Partial<S> | ((prev: S) => Partial<S>);
+
+type MessageListUIAction =
+  | { slice: 'popup'; patch: SlicePatch<PopupSlice> }
+  | { slice: 'edit'; patch: SlicePatch<EditSlice> }
+  | { slice: 'report'; patch: SlicePatch<ReportSlice> }
+  | { slice: 'threadCreate'; patch: SlicePatch<ThreadCreateSlice> }
+  | { slice: 'bulkDelete'; patch: SlicePatch<BulkDeleteSlice> }
+  | { slice: 'attachment'; patch: SlicePatch<AttachmentSlice> }
+  | { slice: 'editHistory'; patch: SlicePatch<EditHistorySlice> };
+
+function applySlicePatch<S>(prev: S, patch: SlicePatch<S>): S {
+  const resolved = typeof patch === 'function' ? (patch as (p: S) => Partial<S>)(prev) : patch;
+  return { ...prev, ...resolved };
+}
+
+function messageListUIReducer(state: MessageListUIState, action: MessageListUIAction): MessageListUIState {
+  switch (action.slice) {
+    case 'popup':
+      return { ...state, popup: applySlicePatch(state.popup, action.patch) };
+    case 'edit':
+      return { ...state, edit: applySlicePatch(state.edit, action.patch) };
+    case 'report':
+      return { ...state, report: applySlicePatch(state.report, action.patch) };
+    case 'threadCreate':
+      return { ...state, threadCreate: applySlicePatch(state.threadCreate, action.patch) };
+    case 'bulkDelete':
+      return { ...state, bulkDelete: applySlicePatch(state.bulkDelete, action.patch) };
+    case 'attachment':
+      return { ...state, attachment: applySlicePatch(state.attachment, action.patch) };
+    case 'editHistory':
+      return { ...state, editHistory: applySlicePatch(state.editHistory, action.patch) };
+    default:
+      return state;
+  }
+}
+
+const initialMessageListUIState: MessageListUIState = {
+  popup: {
+    hoveredMessageId: null,
+    focusedMessageId: null,
+    menuMessageId: null,
+    profileUser: null,
+    profilePos: { x: 0, y: 0 },
+    emojiPickerFor: null,
+    deleteConfirmId: null,
+    contextMenuAnchor: { x: 0, y: 0 },
+  },
+  edit: { editingMessageId: null, editContent: '' },
+  report: { reportingMessage: null, reportReason: '', reportEvidence: '', reportSubmitting: false },
+  threadCreate: { threadModalForMessageId: null, threadName: '', threadCreateError: null },
+  bulkDelete: { bulkDeleteMode: false, selectedMessageIds: [], bulkDeleting: false },
+  attachment: { attachmentBusyId: null, downloadProgress: null },
+  editHistory: { editHistoryMsgId: null, editHistoryPos: { x: 0, y: 0 }, editHistoryData: [], editHistoryLoading: false },
+};
 
 export function MessageList({ channelId, onReply }: MessageListProps) {
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
@@ -199,183 +378,94 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
 
-  // Popup/overlay state group
-  const [popupState, setPopupState] = useState<{
-    hoveredMessageId: string | null;
-    focusedMessageId: string | null;
-    menuMessageId: string | null;
-    profileUser: Message['author'] | null;
-    profilePos: { x: number; y: number };
-    emojiPickerFor: { messageId: string; position: { x: number; y: number } } | null;
-    deleteConfirmId: string | null;
-    contextMenuAnchor: { x: number; y: number };
-  }>({
-    hoveredMessageId: null,
-    focusedMessageId: null,
-    menuMessageId: null,
-    profileUser: null,
-    profilePos: { x: 0, y: 0 },
-    emojiPickerFor: null,
-    deleteConfirmId: null,
-    contextMenuAnchor: { x: 0, y: 0 },
-  });
-  const hoveredMessageId = popupState.hoveredMessageId;
-  const focusedMessageId = popupState.focusedMessageId;
-  const menuMessageId = popupState.menuMessageId;
-  const profileUser = popupState.profileUser;
-  const profilePos = popupState.profilePos;
-  const emojiPickerFor = popupState.emojiPickerFor;
-  const deleteConfirmId = popupState.deleteConfirmId;
-  const contextMenuAnchor = popupState.contextMenuAnchor;
+  // All overlay/dialog UI state lives in one reducer; slice setters below are
+  // thin wrappers over dispatch that keep the previous call-site API intact.
+  const [uiState, dispatchUI] = useReducer(messageListUIReducer, initialMessageListUIState);
+
+  // Popup/overlay slice
+  const { hoveredMessageId, focusedMessageId, menuMessageId, profileUser, profilePos, emojiPickerFor, deleteConfirmId, contextMenuAnchor } = uiState.popup;
   const setHoveredMessageId = (hoveredMessageId: string | null) =>
-    setPopupState((s) => ({ ...s, hoveredMessageId }));
+    dispatchUI({ slice: 'popup', patch: { hoveredMessageId } });
   const setFocusedMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
-    setPopupState((s) => ({ ...s, focusedMessageId: typeof value === 'function' ? value(s.focusedMessageId) : value }));
+    dispatchUI({ slice: 'popup', patch: (s) => ({ focusedMessageId: typeof value === 'function' ? value(s.focusedMessageId) : value }) });
   const setMenuMessageId = (value: string | null | ((curr: string | null) => string | null)) =>
-    setPopupState((s) => ({ ...s, menuMessageId: typeof value === 'function' ? value(s.menuMessageId) : value }));
+    dispatchUI({ slice: 'popup', patch: (s) => ({ menuMessageId: typeof value === 'function' ? value(s.menuMessageId) : value }) });
   const setProfileUser = (profileUser: Message['author'] | null) =>
-    setPopupState((s) => ({ ...s, profileUser }));
+    dispatchUI({ slice: 'popup', patch: { profileUser } });
   const setProfilePos = (profilePos: { x: number; y: number }) =>
-    setPopupState((s) => ({ ...s, profilePos }));
+    dispatchUI({ slice: 'popup', patch: { profilePos } });
   const setEmojiPickerFor = (emojiPickerFor: { messageId: string; position: { x: number; y: number } } | null) =>
-    setPopupState((s) => ({ ...s, emojiPickerFor }));
+    dispatchUI({ slice: 'popup', patch: { emojiPickerFor } });
   const setDeleteConfirmId = (deleteConfirmId: string | null) =>
-    setPopupState((s) => ({ ...s, deleteConfirmId }));
+    dispatchUI({ slice: 'popup', patch: { deleteConfirmId } });
   const setContextMenuAnchor = (contextMenuAnchor: { x: number; y: number }) =>
-    setPopupState((s) => ({ ...s, contextMenuAnchor }));
+    dispatchUI({ slice: 'popup', patch: { contextMenuAnchor } });
 
-  const [editState, setEditState] = useState<{ editingMessageId: string | null; editContent: string }>({
-    editingMessageId: null,
-    editContent: '',
-  });
-  const editingMessageId = editState.editingMessageId;
-  const editContent = editState.editContent;
+  // Inline edit slice
+  const { editingMessageId, editContent } = uiState.edit;
   const setEditingMessageId = (editingMessageId: string | null) =>
-    setEditState((state) => ({ ...state, editingMessageId }));
+    dispatchUI({ slice: 'edit', patch: { editingMessageId } });
   const setEditContent = (editContent: string) =>
-    setEditState((state) => ({ ...state, editContent }));
+    dispatchUI({ slice: 'edit', patch: { editContent } });
 
-  // Report state group
-  const [reportState, setReportState] = useState<{
-    reportingMessage: Message | null;
-    reportReason: string;
-    reportEvidence: string;
-    reportSubmitting: boolean;
-  }>({
-    reportingMessage: null,
-    reportReason: '',
-    reportEvidence: '',
-    reportSubmitting: false,
-  });
-  const reportingMessage = reportState.reportingMessage;
-  const reportReason = reportState.reportReason;
-  const reportEvidence = reportState.reportEvidence;
-  const reportSubmitting = reportState.reportSubmitting;
+  // Report slice
+  const { reportingMessage, reportReason, reportEvidence, reportSubmitting } = uiState.report;
   const setReportingMessage = (reportingMessage: Message | null) =>
-    setReportState((s) => ({ ...s, reportingMessage }));
+    dispatchUI({ slice: 'report', patch: { reportingMessage } });
   const setReportReason = (reportReason: string) =>
-    setReportState((s) => ({ ...s, reportReason }));
+    dispatchUI({ slice: 'report', patch: { reportReason } });
   const setReportEvidence = (reportEvidence: string) =>
-    setReportState((s) => ({ ...s, reportEvidence }));
+    dispatchUI({ slice: 'report', patch: { reportEvidence } });
   const setReportSubmitting = (reportSubmitting: boolean) =>
-    setReportState((s) => ({ ...s, reportSubmitting }));
+    dispatchUI({ slice: 'report', patch: { reportSubmitting } });
   const reportDialogRef = useRef<HTMLDivElement>(null);
 
   const { contextMenu, onContextMenu, closeContextMenu } = useContextMenu();
-  const [threadCreateState, setThreadCreateState] = useState<{
-    threadModalForMessageId: string | null;
-    threadName: string;
-    threadCreateError: string | null;
-  }>({
-    threadModalForMessageId: null,
-    threadName: '',
-    threadCreateError: null,
-  });
-  const threadModalForMessageId = threadCreateState.threadModalForMessageId;
-  const threadName = threadCreateState.threadName;
-  const threadCreateError = threadCreateState.threadCreateError;
+
+  // Thread-create slice
+  const { threadModalForMessageId, threadName, threadCreateError } = uiState.threadCreate;
   const setThreadModalForMessageId = (threadModalForMessageId: string | null) =>
-    setThreadCreateState((state) => ({ ...state, threadModalForMessageId }));
+    dispatchUI({ slice: 'threadCreate', patch: { threadModalForMessageId } });
   const setThreadName = (threadName: string) =>
-    setThreadCreateState((state) => ({ ...state, threadName }));
+    dispatchUI({ slice: 'threadCreate', patch: { threadName } });
   const setThreadCreateError = (threadCreateError: string | null) =>
-    setThreadCreateState((state) => ({ ...state, threadCreateError }));
+    dispatchUI({ slice: 'threadCreate', patch: { threadCreateError } });
   const threadCreateDialogRef = useRef<HTMLDivElement>(null);
   const closeThreadCreateDialog = useCallback(() => {
-    setThreadCreateState((state) => ({
-      ...state,
-      threadModalForMessageId: null,
-      threadCreateError: null,
-    }));
+    dispatchUI({ slice: 'threadCreate', patch: { threadModalForMessageId: null, threadCreateError: null } });
   }, []);
   const closeReportDialog = useCallback(() => {
-    setReportState((state) => ({ ...state, reportingMessage: null }));
+    dispatchUI({ slice: 'report', patch: { reportingMessage: null } });
   }, []);
   useFocusTrap(threadCreateDialogRef, Boolean(threadModalForMessageId), closeThreadCreateDialog);
   useFocusTrap(reportDialogRef, Boolean(reportingMessage), closeReportDialog);
 
-  const [bulkDeleteState, setBulkDeleteState] = useState<{
-    bulkDeleteMode: boolean;
-    selectedMessageIds: string[];
-    bulkDeleting: boolean;
-  }>({
-    bulkDeleteMode: false,
-    selectedMessageIds: [],
-    bulkDeleting: false,
-  });
-  const bulkDeleteMode = bulkDeleteState.bulkDeleteMode;
-  const selectedMessageIds = bulkDeleteState.selectedMessageIds;
-  const bulkDeleting = bulkDeleteState.bulkDeleting;
+  // Bulk-delete slice
+  const { bulkDeleteMode, selectedMessageIds, bulkDeleting } = uiState.bulkDelete;
   const setBulkDeleteMode = (bulkDeleteMode: boolean) =>
-    setBulkDeleteState((state) => ({ ...state, bulkDeleteMode }));
-  const setSelectedMessageIds = (
-    value: string[] | ((current: string[]) => string[]),
-  ) =>
-    setBulkDeleteState((state) => ({
-      ...state,
-      selectedMessageIds:
-        typeof value === 'function' ? (value as (current: string[]) => string[])(state.selectedMessageIds) : value,
-    }));
+    dispatchUI({ slice: 'bulkDelete', patch: { bulkDeleteMode } });
+  const setSelectedMessageIds = (value: string[] | ((current: string[]) => string[])) =>
+    dispatchUI({ slice: 'bulkDelete', patch: (s) => ({ selectedMessageIds: typeof value === 'function' ? value(s.selectedMessageIds) : value }) });
   const setBulkDeleting = (bulkDeleting: boolean) =>
-    setBulkDeleteState((state) => ({ ...state, bulkDeleting }));
+    dispatchUI({ slice: 'bulkDelete', patch: { bulkDeleting } });
 
-  const [attachmentState, setAttachmentState] = useState<{
-    attachmentBusyId: string | null;
-    downloadProgress: number | null;
-  }>({
-    attachmentBusyId: null,
-    downloadProgress: null,
-  });
-  const attachmentBusyId = attachmentState.attachmentBusyId;
-  const downloadProgress = attachmentState.downloadProgress;
+  // Attachment slice
+  const { attachmentBusyId, downloadProgress } = uiState.attachment;
   const setAttachmentBusyId = (attachmentBusyId: string | null) =>
-    setAttachmentState((state) => ({ ...state, attachmentBusyId }));
+    dispatchUI({ slice: 'attachment', patch: { attachmentBusyId } });
   const setDownloadProgress = (downloadProgress: number | null) =>
-    setAttachmentState((state) => ({ ...state, downloadProgress }));
-  // Edit history state group
-  const [editHistoryState, setEditHistoryState] = useState<{
-    editHistoryMsgId: string | null;
-    editHistoryPos: { x: number; y: number };
-    editHistoryData: { id: string; content: string; edited_at: string }[];
-    editHistoryLoading: boolean;
-  }>({
-    editHistoryMsgId: null,
-    editHistoryPos: { x: 0, y: 0 },
-    editHistoryData: [],
-    editHistoryLoading: false,
-  });
-  const editHistoryMsgId = editHistoryState.editHistoryMsgId;
-  const editHistoryPos = editHistoryState.editHistoryPos;
-  const editHistoryData = editHistoryState.editHistoryData;
-  const editHistoryLoading = editHistoryState.editHistoryLoading;
+    dispatchUI({ slice: 'attachment', patch: { downloadProgress } });
+
+  // Edit-history slice
+  const { editHistoryMsgId, editHistoryPos, editHistoryData, editHistoryLoading } = uiState.editHistory;
   const setEditHistoryMsgId = (editHistoryMsgId: string | null) =>
-    setEditHistoryState((s) => ({ ...s, editHistoryMsgId }));
+    dispatchUI({ slice: 'editHistory', patch: { editHistoryMsgId } });
   const setEditHistoryPos = (editHistoryPos: { x: number; y: number }) =>
-    setEditHistoryState((s) => ({ ...s, editHistoryPos }));
+    dispatchUI({ slice: 'editHistory', patch: { editHistoryPos } });
   const setEditHistoryData = (editHistoryData: { id: string; content: string; edited_at: string }[]) =>
-    setEditHistoryState((s) => ({ ...s, editHistoryData }));
+    dispatchUI({ slice: 'editHistory', patch: { editHistoryData } });
   const setEditHistoryLoading = (editHistoryLoading: boolean) =>
-    setEditHistoryState((s) => ({ ...s, editHistoryLoading }));
+    dispatchUI({ slice: 'editHistory', patch: { editHistoryLoading } });
   const [isCoarsePointer, setIsCoarsePointer] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(hover: none), (pointer: coarse)').matches;
@@ -434,57 +524,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     return map;
   }, [messages]);
 
-  const replyLayoutById = useMemo(() => {
-    const cache = new Map<string, { depth: number; parentId: string | null }>();
-
-    const resolve = (messageId: string, visited: Set<string>): { depth: number; parentId: string | null } => {
-      const cached = cache.get(messageId);
-      if (cached) return cached;
-
-      const current = messageById.get(messageId);
-      if (!current) {
-        const fallback = { depth: 0, parentId: null };
-        cache.set(messageId, fallback);
-        return fallback;
-      }
-
-      const parentId = resolveReplyParentId(current);
-      if (!parentId) {
-        const root = { depth: 0, parentId: null };
-        cache.set(messageId, root);
-        return root;
-      }
-
-      if (visited.has(messageId)) {
-        const looped = { depth: 1, parentId };
-        cache.set(messageId, looped);
-        return looped;
-      }
-
-      visited.add(messageId);
-      const parent = messageById.get(parentId);
-      if (!parent) {
-        const unresolved = { depth: 1, parentId };
-        cache.set(messageId, unresolved);
-        visited.delete(messageId);
-        return unresolved;
-      }
-
-      const parentLayout = resolve(parent.id, visited);
-      const computed = {
-        depth: Math.min(MAX_REPLY_NEST_DEPTH, parentLayout.depth + 1),
-        parentId,
-      };
-      cache.set(messageId, computed);
-      visited.delete(messageId);
-      return computed;
-    };
-
-    for (const message of messages) {
-      resolve(message.id, new Set<string>());
-    }
-    return cache;
-  }, [messages, messageById]);
+  const replyLayoutById = useMemo(() => computeReplyLayout(messages), [messages]);
 
   // Build flat row list for virtualization
   const rows: VirtualRow[] = useMemo(() => {

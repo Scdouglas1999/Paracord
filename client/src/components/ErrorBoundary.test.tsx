@@ -42,7 +42,7 @@ describe('ErrorBoundary', () => {
 
     expect(screen.getByRole('link', { name: 'Report bug' })).toHaveAttribute(
       'href',
-      'https://github.com/paracord/paracord/issues/new',
+      'https://github.com/Scoduglas1999/Paracord/issues/new',
     );
   });
 });

@@ -14,6 +14,7 @@ import { MarkdownToolbar, applyMarkdownToolbarAction, resolveMarkdownShortcut } 
 import { GifPicker } from './GifPicker';
 import { StickerPicker } from './StickerPicker';
 import { SlashCommandPopup } from './SlashCommandPopup';
+import { ScheduledMessagesPanel } from './ScheduledMessagesPanel';
 import type { ApplicationCommand } from '../../types/commands';
 import {
   getVersionedStorageItem,
@@ -21,6 +22,7 @@ import {
   setVersionedStorageItem,
 } from '../../lib/versionedStorage';
 import { isAllowedImageMimeType } from '../../lib/security';
+import { formatFileSize } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 
@@ -92,6 +94,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const [showScheduleComposer, setShowScheduleComposer] = useState(false);
   const [scheduledAt, setScheduledAt] = useState('');
   const [schedulingMessage, setSchedulingMessage] = useState(false);
+  const [showScheduledPanel, setShowScheduledPanel] = useState(false);
+  const [scheduledCount, setScheduledCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { upload, uploading } = useFileUpload(channelId);
@@ -171,7 +175,25 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     setScheduledAt('');
     setSchedulingMessage(false);
     setSubmitError(null);
+    setShowScheduledPanel(false);
+    setScheduledCount(0);
   }, [channelId]);
+
+  const refreshScheduledCount = useCallback(async () => {
+    try {
+      const { data } = await channelApi.listScheduledMessages(channelId);
+      setScheduledCount(data.filter((m) => m.status === 0).length);
+    } catch {
+      // Non-critical: the badge simply stays at its last known value.
+    }
+  }, [channelId]);
+
+  // Populate the pending badge when the schedule composer is first opened.
+  useEffect(() => {
+    if (showScheduleComposer) {
+      void refreshScheduledCount();
+    }
+  }, [showScheduleComposer, refreshScheduledCount]);
 
   const stagedImagePreviews = useMemo(
     () =>
@@ -273,6 +295,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         toast.success('Message scheduled.');
         setContent('');
         setScheduledAt('');
+        setScheduledCount((prev) => prev + 1);
         setShowScheduleComposer(false);
         saveDraft(channelId, '');
         onCancelReply?.();
@@ -450,12 +473,6 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
   const removeFile = (index: number) => {
     setStagedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
   const togglePollComposer = () => {
@@ -682,7 +699,23 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
               min={new Date(Date.now() + 5000).toISOString().slice(0, 16)}
             />
           </label>
+          <button
+            type="button"
+            onClick={() => setShowScheduledPanel(true)}
+            className="mt-2 text-xs font-semibold text-accent-primary hover:underline"
+          >
+            {scheduledCount > 0 ? `View scheduled (${scheduledCount})` : 'View scheduled'}
+          </button>
         </div>
+      )}
+
+      {showScheduledPanel && (
+        <ScheduledMessagesPanel
+          channelId={channelId}
+          channelName={channelName}
+          onClose={() => setShowScheduledPanel(false)}
+          onCountChange={setScheduledCount}
+        />
       )}
 
       {submitError && (

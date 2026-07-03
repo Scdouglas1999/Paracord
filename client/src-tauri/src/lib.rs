@@ -356,6 +356,8 @@ pub fn run() {
         native_media::commands::media_register_stream_video_subscription,
         native_media::commands::media_unregister_track_subscription,
         native_media::commands::media_unregister_stream_video_subscription,
+        native_media::commands::media_subscribe_audio,
+        native_media::commands::media_unsubscribe_audio,
         native_media::commands::media_apply_audio_sender_key,
         native_media::commands::media_apply_track_sender_key,
     ]);

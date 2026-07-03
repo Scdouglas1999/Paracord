@@ -48,8 +48,23 @@ function computePermState(flag: bigint, allow: bigint, deny: bigint): PermState 
   return 'inherit';
 }
 
-function permsToBigInt(value: number): bigint {
-  return BigInt(value);
+// Overwrite bitsets are kept as bigint internally. Accepting `string | number`
+// keeps the read path lossless if the API ever transports i64 values as strings
+// (values above 2^53 survive), while preserving the current numeric behavior.
+function permsToBigInt(value: number | string): bigint {
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+// The channel-overwrite REST endpoint accepts i64 permission bitsets as JSON
+// numbers, so bigint state is narrowed at this boundary only. Every permission
+// bit the server defines fits within Number.MAX_SAFE_INTEGER, so this is
+// lossless for all valid overwrites.
+function permsToWire(value: bigint): number {
+  return Number(value);
 }
 
 interface EditingOverwrite {
@@ -167,8 +182,8 @@ export function ChannelPermissionsEditor({
     try {
       await channelApi.upsertOverwrite(channelId, editing.targetId, {
         target_type: editing.targetType,
-        allow_perms: Number(editing.allow),
-        deny_perms: Number(editing.deny),
+        allow_perms: permsToWire(editing.allow),
+        deny_perms: permsToWire(editing.deny),
       });
       await loadOverwrites();
       setEditing(null);

@@ -70,12 +70,12 @@
 
 ::-webkit-scrollbar-track {
   background: transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 ::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-auto-thumb);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 3px solid transparent;
   background-clip: padding-box;
   transition: background-color 0.2s ease;

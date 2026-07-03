@@ -2,18 +2,13 @@ import { useCallback, useRef, useState } from 'react';
 import { Download, FileText, X } from 'lucide-react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
+import { formatFileSize } from '../../lib/formatters';
 
 interface FilePreviewProps {
   url: string;
   filename: string;
   mimeType: string;
   size: number;
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
 export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps) {

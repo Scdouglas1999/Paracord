@@ -121,8 +121,6 @@ pub struct NativeMediaSession {
     pub screen_encoder_config: Option<paracord_codec::video::EncoderConfig>,
     #[cfg(feature = "vpx")]
     pub screen_encoder_codec: Option<paracord_codec::video::VideoCodec>,
-    #[cfg(feature = "vpx")]
-    pub video_decoders: HashMap<u32, Box<dyn paracord_codec::video::decoder::VideoDecoder>>,
     /// Reusable buffer for RGBA→I420 conversion before VP9 encoding.
     #[cfg(feature = "vpx")]
     pub i420_convert_buf: Vec<u8>,
@@ -342,8 +340,6 @@ impl NativeMediaSession {
             screen_encoder_config: None,
             #[cfg(feature = "vpx")]
             screen_encoder_codec: None,
-            #[cfg(feature = "vpx")]
-            video_decoders: HashMap::new(),
             #[cfg(feature = "vpx")]
             i420_convert_buf: Vec::new(),
             video_send_task: None,

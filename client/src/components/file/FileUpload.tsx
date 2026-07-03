@@ -1,6 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { Upload, X, FileText, AlertTriangle } from 'lucide-react';
 import { isAllowedImageMimeType } from '../../lib/security';
+import { formatFileSize } from '../../lib/formatters';
 
 interface FileUploadProps {
   onFilesSelected: (files: File[]) => void;
@@ -12,13 +13,6 @@ const ONE_GB = 1024 * 1024 * 1024;
 
 function canPreviewImage(file: File): boolean {
   return isAllowedImageMimeType(file.type);
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  if (bytes < ONE_GB) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / ONE_GB).toFixed(1) + ' GB';
 }
 
 export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileUploadProps) {
@@ -116,7 +110,7 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
               <button
                 type="button"
                 onClick={() => onRemoveFile(i)}
-                className="rounded p-1.5 opacity-0 transition-opacity group-hover:opacity-100"
+                className="rounded p-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                 style={{ color: 'var(--text-muted)' }}
                 aria-label={`Remove ${file.name}`}
                 title={`Remove ${file.name}`}

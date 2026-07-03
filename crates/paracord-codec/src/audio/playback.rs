@@ -28,6 +28,32 @@ pub enum PlaybackError {
     Resampler(String),
 }
 
+/// Enumerate available audio output devices as `(index, name, is_default)`.
+///
+/// The `index` is the device's position in cpal's `output_devices()` iterator
+/// and is exactly what [`AudioPlayback::start_device`] consumes via `.nth(index)`.
+/// These indices are enumeration-order only: they are assigned by iterating the
+/// host's device list at call time and can shift if devices are added or removed
+/// between calls (e.g. a USB headset plugged in). Callers must therefore treat an
+/// enumeration result and a subsequent switch as a paired operation — never cache
+/// an index across device topology changes.
+pub fn list_output_devices() -> Result<Vec<(usize, String, bool)>, PlaybackError> {
+    let host = cpal::default_host();
+    // The default device name is used to flag the default entry. cpal exposes no
+    // stable device identity, so name comparison is the only portable signal.
+    let default_name = host
+        .default_output_device()
+        .and_then(|device| device.name().ok());
+
+    let mut devices = Vec::new();
+    for (index, device) in host.output_devices()?.enumerate() {
+        let name = device.name().unwrap_or_else(|_| format!("Device {index}"));
+        let is_default = default_name.as_deref() == Some(name.as_str());
+        devices.push((index, name, is_default));
+    }
+    Ok(devices)
+}
+
 /// Internal buffer for a single audio source.
 struct SourceBuffer {
     /// Ring buffer of PCM samples ready for playback (at device sample rate).

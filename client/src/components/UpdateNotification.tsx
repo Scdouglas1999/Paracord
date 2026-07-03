@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
+import { X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { safeExternalUrl } from '../lib/security';
 import { isTauri } from '../lib/tauriEnv';
@@ -305,7 +306,7 @@ export function UpdateNotification() {
           type="button"
           aria-label="Dismiss update notification"
         >
-          x
+          <X size={16} />
         </button>
       </div>
 

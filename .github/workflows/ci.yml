@@ -144,6 +144,11 @@ jobs:
         run: cargo build --release --bin paracord-server
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
+      - name: Clippy (desktop crate, all targets)
+        # The desktop Tauri crate carries native-media test targets that the
+        # plain `--workspace` clippy above does not lint (`--all-targets`).
+        # Native deps (webkit2gtk, libvpx, ...) are installed on this runner.
+        run: cargo clippy -p paracord-desktop --all-targets -- -D warnings
       - name: Format
         run: cargo fmt --all -- --check
 
@@ -201,6 +206,15 @@ jobs:
         run: cargo test -p paracord-db postgres_query_plan_smoke_when_configured -- --nocapture
       - name: Run paracord-api PostgreSQL route smoke
         run: cargo test -p paracord-api --test postgres_route_smoke -- --nocapture
+      - name: Install SQLite CLI (migrator fixture)
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - name: SQLite -> PostgreSQL migrator end-to-end
+        # Seeds a freshly migrated temp SQLite database, runs
+        # `paracord-server migrate-to-postgres` against the live PG service, and
+        # asserts every table's row count matches the source. Uses a dedicated
+        # throwaway target database so it does not collide with the smoke data
+        # loaded above.
+        run: python3 scripts/ci_pg_migrator_smoke.py
 
   client:
     name: Client Build

@@ -3,7 +3,10 @@ use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// `Instant` is only used by the non-Linux thumbnail capture path below.
+#[cfg(not(target_os = "linux"))]
+use std::time::Instant;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;

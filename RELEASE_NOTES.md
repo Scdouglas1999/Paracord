@@ -4,6 +4,19 @@
 > `overhaul/v1.0-shippable` targets **v1.0.0** as the first public tag; the
 > version metadata across Cargo, npm, and Tauri is only bumped at tag time.
 
+### Round 2 Overhaul
+
+A second overhaul pass closed the remaining desktop-media gaps, added an
+operational database-migration path, and tightened cross-platform build
+hygiene. Highlights:
+
+- **Scheduled-message editing**: A scheduled message's content and delivery time can now be edited before it fires, not only created and deleted.
+- **Native output-device switching**: The Tauri audio pipeline can now switch the speaker/output device at runtime (previously input-only; the output path returned an error).
+- **Native video decode on receive**: Incoming VP9 frames are now routed to per-SSRC decoders and rendered on the desktop client, completing the native receive path (frames were previously decrypted but dropped).
+- **Media subscription negotiation**: The native transport now honors subscribe/unsubscribe control messages so a client only receives the tracks it asks for (the subscribe control message was previously a no-op).
+- **SQLite → PostgreSQL migrator**: A new `paracord-server migrate-to-postgres` subcommand copies an existing SQLite database into a freshly migrated PostgreSQL database inside a single all-or-nothing transaction, verifying every table's row count against the source. See [docs/sqlite-to-postgres-migration.md](docs/sqlite-to-postgres-migration.md).
+- **Cross-platform build hygiene**: The Windows-only libvpx (`VPX_*`) environment is no longer hard-coded into a global `.cargo/config.toml` (which leaked onto Linux/macOS builds); Windows developers now source `scripts/set-vpx-env.ps1`, while Linux/macOS discover libvpx through `pkg-config`. CI additionally lints the desktop crate (`cargo clippy -p paracord-desktop --all-targets`) and exercises the PostgreSQL migrator end-to-end against a live PostgreSQL service.
+
 ### Release Candidate Overhaul
 
 Ahead of the public release candidate, the whole codebase went through a correctness, consistency, and test-hardening pass. No new runtime dependencies were added; the changes are refactors, real fixes, and coverage. Highlights:

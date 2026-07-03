@@ -13,7 +13,7 @@ interface State {
 }
 
 const MAX_RETRIES = 2;
-const DEFAULT_BUG_REPORT_URL = 'https://github.com/paracord/paracord/issues/new';
+const DEFAULT_BUG_REPORT_URL = 'https://github.com/Scoduglas1999/Paracord/issues/new';
 const BUG_REPORT_URL =
   safeExternalUrl(import.meta.env.VITE_BUG_REPORT_URL || DEFAULT_BUG_REPORT_URL) ??
   DEFAULT_BUG_REPORT_URL;

@@ -862,6 +862,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
               <button
                 key={item.id}
                 onClick={() => setActiveSection(item.id)}
+                aria-current={activeSection === item.id ? 'page' : undefined}
                 className={`settings-nav-item ${activeSection === item.id ? 'active' : ''}`}
               >
                 {item.label}

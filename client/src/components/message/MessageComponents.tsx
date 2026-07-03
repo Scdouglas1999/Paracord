@@ -9,6 +9,7 @@ import { useChannelStore } from '../../stores/channelStore';
 import { toast } from '../../stores/toastStore';
 import type { Member, Role, Channel } from '../../types';
 import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
+import { roleColorToHex } from '../../lib/colors';
 import { LoadingSpinner } from '../ui/Feedback';
 
 interface MessageComponentsProps {
@@ -642,9 +643,7 @@ function RoleSelectMenu({
   }, [guildId]);
 
   const renderItem = useCallback((item: EntityItem) => {
-    const colorHex = item.color
-      ? `#${item.color.toString(16).padStart(6, '0')}`
-      : undefined;
+    const colorHex = item.color ? roleColorToHex(item.color) : undefined;
     return (
       <div className="flex min-w-0 items-center gap-2">
         <span
@@ -718,9 +717,7 @@ function MentionableSelectMenu({
 
   const renderItem = useCallback((item: EntityItem) => {
     const isRole = item.id.startsWith('role:');
-    const colorHex = item.color
-      ? `#${item.color.toString(16).padStart(6, '0')}`
-      : undefined;
+    const colorHex = item.color ? roleColorToHex(item.color) : undefined;
     const avatarSrc = safeStoredImageDataUrl(item.avatar);
     return (
       <div className="flex min-w-0 items-center gap-2">

@@ -2,6 +2,42 @@ import { useState, useEffect, useRef } from 'react';
 import { RotateCcw, Save } from 'lucide-react';
 import { sanitizeCustomCss } from '../../lib/security';
 
+// Shared with useTheme(): the single <style> element that owns rendered custom CSS.
+const CUSTOM_CSS_STYLE_ID = 'paracord-custom-css';
+
+// Mirrors the at-rule stripping in sanitizeCustomCss(); used to detect (not perform) drops.
+const AT_RULE_RE = /@[^{;]+(?:;|\{[^}]*\})/g;
+
+// Count structurally valid `prop: value` declarations across all rule blocks, ignoring
+// whether the sanitizer's allow/block lists keep them. Comparing this count before and
+// after sanitization reveals whether real declarations were dropped, independent of the
+// reformatting sanitizeCustomCss() applies to every surviving rule.
+function countDeclarations(css: string): number {
+  let count = 0;
+  const ruleRegex = /[^{}]+\{([^{}]*)\}/g;
+  let match: RegExpExecArray | null;
+  while ((match = ruleRegex.exec(css)) !== null) {
+    for (const declaration of match[1].split(';')) {
+      const idx = declaration.indexOf(':');
+      if (idx <= 0) continue;
+      if (declaration.slice(0, idx).trim() && declaration.slice(idx + 1).trim()) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+// True only when sanitization actually removed content (an at-rule was stripped, or a
+// declaration/rule was dropped) — not when it merely reformatted safe input.
+function sanitizationDroppedContent(source: string, sanitized: string): boolean {
+  const trimmed = source.trim();
+  if (!trimmed) return false;
+  const droppedAtRule = trimmed.replace(AT_RULE_RE, '') !== trimmed;
+  const droppedDeclarations = countDeclarations(trimmed) > countDeclarations(sanitized);
+  return droppedAtRule || droppedDeclarations;
+}
+
 interface CustomCSSProps {
   initialCSS?: string;
   onSave?: (css: string) => void;
@@ -11,32 +47,38 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
   const [css, setCss] = useState(initialCSS);
   const [saved, setSaved] = useState(false);
   const [sanitized, setSanitized] = useState(false);
-  const styleRef = useRef<HTMLStyleElement | null>(null);
+  const initialCssRef = useRef(initialCSS);
 
-  // Live preview: inject CSS into document
   useEffect(() => {
-    if (!styleRef.current) {
-      styleRef.current = document.createElement('style');
-      styleRef.current.setAttribute('data-custom-css', 'true');
-      document.head.appendChild(styleRef.current);
-    }
-    const safeCss = sanitizeCustomCss(css);
-    setSanitized(safeCss !== css);
-    styleRef.current.textContent = safeCss;
+    initialCssRef.current = initialCSS;
+  }, [initialCSS]);
 
-    return () => {
-      if (styleRef.current) {
-        styleRef.current.textContent = '';
-      }
-    };
+  // Live preview: drive the single theme-owned <style> element (shared with useTheme),
+  // never a competing private element.
+  useEffect(() => {
+    const safeCss = sanitizeCustomCss(css);
+    setSanitized(sanitizationDroppedContent(css, safeCss));
+
+    let styleEl = document.getElementById(CUSTOM_CSS_STYLE_ID) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = CUSTOM_CSS_STYLE_ID;
+      document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = safeCss;
   }, [css]);
 
-  // Cleanup on unmount
+  // On unmount, discard unsaved preview and restore the committed value so custom CSS the
+  // user actually saved (rendered via useTheme from the same source) survives.
   useEffect(() => {
     return () => {
-      if (styleRef.current && styleRef.current.parentNode) {
-        styleRef.current.parentNode.removeChild(styleRef.current);
-        styleRef.current = null;
+      const styleEl = document.getElementById(CUSTOM_CSS_STYLE_ID) as HTMLStyleElement | null;
+      if (!styleEl) return;
+      const committed = sanitizeCustomCss(initialCssRef.current);
+      if (committed) {
+        styleEl.textContent = committed;
+      } else {
+        styleEl.remove();
       }
     };
   }, []);
@@ -49,9 +91,6 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
 
   const handleReset = () => {
     setCss('');
-    if (styleRef.current) {
-      styleRef.current.textContent = '';
-    }
   };
 
   return (

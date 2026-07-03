@@ -547,6 +547,40 @@ cargo build --release --bin paracord-server
 
 ### Building the Desktop Client
 
+The desktop client links **libvpx** for VP9 video (the `vpx` feature is on by
+default and is required for screen share and video calls — never disable it).
+
+**Linux / macOS** — libvpx is discovered automatically through `pkg-config`.
+Install the dev package first:
+
+```bash
+# Debian/Ubuntu
+sudo apt install libvpx-dev webkit2gtk-4.1-dev
+# Arch/CachyOS
+sudo pacman -S libvpx webkit2gtk-4.1
+# macOS
+brew install libvpx
+# Verify discovery:
+pkg-config --libs vpx
+```
+
+**Windows** — libvpx comes from the vcpkg `x64-windows-static` triplet under
+`tmp-vcpkg/`. Set the build environment for your PowerShell session by
+dot-sourcing the helper script (it exports `VPX_LIB_DIR`, `VPX_INCLUDE_DIR`,
+`VPX_VERSION`, and `VPX_STATIC`):
+
+```powershell
+# From the repo root, once per shell session:
+. .\scripts\set-vpx-env.ps1
+# If tmp-vcpkg/ is missing:  cd tmp-vcpkg; vcpkg install libvpx:x64-windows-static
+```
+
+> These vars are intentionally **not** committed to `.cargo/config.toml`:
+> cargo's `[env]` block cannot be scoped per-OS, so hard-coding the Windows
+> vcpkg paths there would break Linux/macOS builds that use `pkg-config`.
+
+Then build:
+
 ```bash
 cd client
 npm install

@@ -2668,6 +2668,89 @@ mod media_room_tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn is_media_session_active_rejects_revoked_expired_and_mismatched_sessions() -> Result<()>
+    {
+        let db = media_room_test_db().await?;
+        let user_id = 903_001;
+        let session_id = "media-auth-session";
+
+        paracord_db::users::create_user(
+            &db,
+            user_id,
+            "revokeuser",
+            1,
+            "revokeuser@example.com",
+            "hash",
+        )
+        .await?;
+        paracord_db::sessions::create_session(
+            &db,
+            session_id,
+            user_id,
+            "refresh-hash",
+            "jti-1",
+            None,
+            None,
+            None,
+            None,
+            chrono::Utc::now() + chrono::Duration::hours(1),
+        )
+        .await?;
+
+        assert!(
+            is_media_session_active(&db, user_id, session_id).await,
+            "a live, unrevoked session must authorize media bridging"
+        );
+        assert!(
+            !is_media_session_active(&db, user_id, "no-such-session").await,
+            "missing sessions must fail closed"
+        );
+        assert!(
+            !is_media_session_active(&db, user_id + 1, session_id).await,
+            "a session belonging to another user must not authorize media"
+        );
+
+        // Revoking the underlying auth session must immediately cut off media,
+        // even though the media JWT itself is still within its 24h exp.
+        assert!(
+            paracord_db::sessions::revoke_session(
+                &db,
+                session_id,
+                user_id,
+                "logout",
+                chrono::Utc::now(),
+            )
+            .await?
+        );
+        assert!(
+            !is_media_session_active(&db, user_id, session_id).await,
+            "a revoked auth session must not authorize media bridging"
+        );
+
+        // An expired session must also be rejected.
+        let expired_session = "media-auth-session-expired";
+        paracord_db::sessions::create_session(
+            &db,
+            expired_session,
+            user_id,
+            "refresh-hash-2",
+            "jti-2",
+            None,
+            None,
+            None,
+            None,
+            chrono::Utc::now() - chrono::Duration::seconds(1),
+        )
+        .await?;
+        assert!(
+            !is_media_session_active(&db, user_id, expired_session).await,
+            "an expired auth session must not authorize media bridging"
+        );
+
+        Ok(())
+    }
 }
 
 /// Handle an HTTP/3 WebTransport connection from a browser client.

@@ -1,3 +1,27 @@
+/* =============================================================================
+   Paracord design-system tokens — single source of truth (FEAT-7).
+
+   CANONICAL VOCABULARY (consume these in components/pages):
+     Spacing ....... --space-1 … --space-12          (4px grid, 0.25rem * n)
+     Radii ......... --radius-sm|md|lg|full
+     Type size ..... --text-xs|sm|base|lg|xl|2xl      (mirrors Tailwind text-*)
+     Line height ... --leading-tight|snug|normal|relaxed|loose
+     Font weight ... --font-weight-normal|medium|semibold|bold
+     Elevation ..... --shadow-sm|md|lg|xl
+     Text .......... --text-primary|secondary|muted|link
+     Surfaces ...... --bg-primary|secondary|tertiary|accent|floating (+ mods)
+     Border ........ --border-subtle|strong|glow
+     Accent/state .. --accent(-primary|-hover) --accent-success|danger|warning
+     Presence ...... --status-online|idle|dnd|offline|streaming
+
+   The --text-*/--leading-*/--font-weight-*/--radius-* values intentionally match
+   Tailwind v4 defaults so `var(--text-sm)` and the `text-sm` utility agree.
+
+   NORMALIZING/ADDITIVE ONLY. Aliases (kept for back-compat, do not remove):
+     --line-height-tight|normal|relaxed → --leading-*
+   Theme-scoped semantic tokens (--bg-*, --text-*, --accent-*, --status-*, …) are
+   redefined per theme in the :root[data-theme='…'] blocks below.
+   ============================================================================= */
 @theme {
   --color-bg-primary: #10141d;
   --color-bg-secondary: #141a26;
@@ -51,20 +75,50 @@
   --sidebar-item-size: 3.25rem;
   /* ~52px */
 
-  --font-size-xs: 0.6875rem;
-  /* 11px */
-  --font-size-sm: 0.8125rem;
-  /* 13px */
-  --font-size-base: 0.9375rem;
-  /* 15px */
-  --font-size-lg: 1.0625rem;
-  /* 17px */
-  --font-size-xl: 1.25rem;
-  /* 20px */
-  --font-size-2xl: 1.5rem;
-  --line-height-tight: 1.25;
-  --line-height-normal: 1.5;
-  --line-height-relaxed: 1.625;
+  /* Typography scale — canonical. Mirrors Tailwind v4 so var(--text-sm) and the
+     `text-sm` utility resolve identically (no visual drift on adoption). */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+
+  --leading-tight: 1.25;
+  --leading-snug: 1.375;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.625;
+  --leading-loose: 2;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Legacy line-height names kept as aliases (base styles still consume them). */
+  --line-height-tight: var(--leading-tight);
+  --line-height-normal: var(--leading-normal);
+  --line-height-relaxed: var(--leading-relaxed);
+
+  /* Spacing scale — 4px base grid, aligned to Tailwind's --spacing (0.25rem * n). */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-7: 1.75rem;
+  --space-8: 2rem;
+  --space-9: 2.25rem;
+  --space-10: 2.5rem;
+  --space-11: 2.75rem;
+  --space-12: 3rem;
+
+  /* Radii — sm/md/lg mirror Tailwind defaults; full = pill. */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-full: calc(infinity * 1px);
 
   --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 16px 30px rgba(0, 0, 0, 0.28);
@@ -112,10 +166,10 @@
   --bg-tertiary: var(--color-bg-tertiary);
   --bg-accent: var(--color-bg-accent);
   --bg-floating: var(--color-bg-floating);
-  --bg-canvas: var(--color-bg-primary);
-  --bg-panel: var(--color-bg-secondary);
+  --bg-canvas: var(--bg-primary);
+  --bg-panel: var(--bg-secondary);
   --bg-dock: #000000;
-  --bg-chat: var(--color-bg-primary);
+  --bg-chat: var(--bg-primary);
   --bg-mod-subtle: var(--color-bg-mod-subtle);
   --bg-mod-strong: var(--color-bg-mod-strong);
 
@@ -124,7 +178,7 @@
   --text-muted: var(--color-text-muted);
   --text-link: var(--color-text-link);
 
-  --accent: var(--color-accent-primary);
+  --accent: var(--accent-primary);
   --accent-primary: var(--color-accent-primary);
   --accent-primary-hover: var(--color-accent-primary-hover);
   --accent-success: var(--color-accent-success);
@@ -186,7 +240,7 @@
   --sidebar-icon-size: 26px;
   --sidebar-bg: rgba(10, 14, 23, 0.65);
   --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-active-indicator: var(--color-accent-primary);
+  --sidebar-active-indicator: var(--accent-primary);
   --bg-code: rgba(255, 255, 255, 0.06);
   --border-code: rgba(255, 255, 255, 0.04);
 }
@@ -241,6 +295,8 @@
   --status-idle: #d69c2a;
   --status-dnd: #d64560;
   --status-offline: #7d8fab;
+  /* Tuned deep violet: reads on light surfaces where the dark #8b6fff washes out. */
+  --status-streaming: #7a3fd1;
 
   --app-bg-layer-one: radial-gradient(120% 90% at 0% 0%, rgba(80, 103, 241, 0.2) 0%, rgba(80, 103, 241, 0) 54%);
   --app-bg-layer-two: radial-gradient(115% 90% at 100% 0%, rgba(31, 159, 114, 0.15) 0%, rgba(31, 159, 114, 0) 48%);

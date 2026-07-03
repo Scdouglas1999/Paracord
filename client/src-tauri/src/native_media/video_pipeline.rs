@@ -69,7 +69,14 @@ pub struct PulledVideoFramePayload {
     pub sequence: u64,
     pub timestamp_us: u64,
     pub is_keyframe: bool,
+    /// Source codec of the stream (`vp9` / `av1` / `h264`).
     pub codec: String,
+    /// Wire format of `data`: `i420` when the frame was natively decoded, or
+    /// the encoded codec label (`vp9` / `h264` / `av1`) when passed through for
+    /// the frontend to decode.
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
     pub data: Vec<u8>,
 }
 
@@ -80,6 +87,9 @@ pub struct PulledVideoFrameResponse {
     pub timestamp_us: u64,
     pub is_keyframe: bool,
     pub codec: String,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
     pub data_base64: String,
 }
 
@@ -94,6 +104,36 @@ fn video_dispatch_state() -> &'static Mutex<VideoDispatchState> {
     static STATE: OnceLock<Mutex<VideoDispatchState>> = OnceLock::new();
     STATE.get_or_init(|| Mutex::new(VideoDispatchState::default()))
 }
+
+/// Per-remote-track native decoders, keyed by `make_track_key(stream, track)`.
+///
+/// Kept in a dedicated `Mutex` separate from [`video_dispatch_state`] so decode
+/// work (which runs on the datagram receive task) never holds the frame-store
+/// lock and never needs the async session lock. The lock is only ever held for
+/// synchronous decode calls — never across an `.await`.
+#[cfg(feature = "vpx")]
+#[allow(clippy::type_complexity)]
+fn video_decoder_pool(
+) -> &'static Mutex<HashMap<String, Box<dyn paracord_codec::video::decoder::VideoDecoder>>> {
+    static POOL: OnceLock<
+        Mutex<HashMap<String, Box<dyn paracord_codec::video::decoder::VideoDecoder>>>,
+    > = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Remove and drop the native decoder for a remote track. Dropping a
+/// `Vp9Decoder` calls `vpx_codec_destroy`, releasing libvpx state. Idempotent:
+/// safe to call for a track that never had a decoder.
+#[cfg(feature = "vpx")]
+pub fn remove_remote_video_decoder(stream_id: &str, track_id: &str) {
+    let key = make_track_key(stream_id, track_id);
+    if let Ok(mut pool) = video_decoder_pool().lock() {
+        pool.remove(&key);
+    }
+}
+
+#[cfg(not(feature = "vpx"))]
+pub fn remove_remote_video_decoder(_stream_id: &str, _track_id: &str) {}
 
 #[cfg(feature = "vpx")]
 fn reset_local_screen_dispatch_state() {
@@ -122,6 +162,7 @@ pub fn unregister_stream_video_subscription(stream_id: &str, track_id: &str) {
         state.remote_track_sequences.remove(&key);
         state.remote_track_ssrcs.remove(&key);
     }
+    remove_remote_video_decoder(stream_id, track_id);
 }
 
 #[cfg(feature = "vpx")]
@@ -148,6 +189,9 @@ pub fn encode_pulled_video_frame_response(
         timestamp_us: frame.timestamp_us,
         is_keyframe: frame.is_keyframe,
         codec: frame.codec,
+        format: frame.format,
+        width: frame.width,
+        height: frame.height,
         data_base64: BASE64_STANDARD.encode(frame.data),
     }
 }
@@ -226,11 +270,29 @@ fn choose_best_publish_codec(session: &NativeMediaSession, fallback: VideoCodec)
         .unwrap_or(fallback)
 }
 
+/// Signals whether a decoded frame was delivered to the pull store or the
+/// remote sender should be asked for a keyframe.
 #[cfg(feature = "vpx")]
-fn dispatch_remote_track_video_frame(
+enum VideoDecodeOutcome {
+    /// Frame(s) were stored (or intentionally dropped); no action required.
+    Delivered,
+    /// The decoder could not use this frame and needs a keyframe to recover.
+    KeyframeRequired,
+}
+
+/// Store the latest frame for a remote track into the pull store, assigning a
+/// monotonically increasing per-track sequence.
+#[cfg(feature = "vpx")]
+#[allow(clippy::too_many_arguments)]
+fn store_pulled_video_frame(
     track_key: &str,
     timestamp_us: u64,
-    encoded: paracord_codec::video::EncodedFrame,
+    is_keyframe: bool,
+    codec: &str,
+    format: &str,
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
 ) {
     let mut state = match video_dispatch_state().lock() {
         Ok(state) => state,
@@ -251,11 +313,110 @@ fn dispatch_remote_track_video_frame(
         PulledVideoFramePayload {
             sequence: next_sequence,
             timestamp_us,
-            is_keyframe: encoded.is_keyframe,
-            codec: codec_label(encoded.codec).to_string(),
-            data: encoded.data.clone(),
+            is_keyframe,
+            codec: codec.to_string(),
+            format: format.to_string(),
+            width,
+            height,
+            data,
         },
     );
+}
+
+/// Route a reassembled remote video frame through its per-track native decoder.
+///
+/// VP9 frames are decoded to raw I420 and stored for the pull mechanism. Codecs
+/// with no native decoder backend (AV1/H.264 today) are passed through encoded
+/// so the frontend can decode them. Returns [`VideoDecodeOutcome::KeyframeRequired`]
+/// when the caller should emit a keyframe request for this stream/track.
+///
+/// The decoder-pool lock is held only for the synchronous decode; decoded planes
+/// are copied out before the lock is released and the frame store is touched.
+#[cfg(feature = "vpx")]
+fn decode_and_store_remote_video_frame(
+    track_key: &str,
+    timestamp_us: u64,
+    encoded: paracord_codec::video::EncodedFrame,
+) -> VideoDecodeOutcome {
+    use paracord_codec::video::decoder::{create_decoder, VideoDecoder};
+    use paracord_codec::video::{DecodedFrame, DecoderConfig, EncodedFrame, VideoError};
+
+    enum Work {
+        Passthrough,
+        Decoded(Vec<DecodedFrame>),
+        NeedKeyframe,
+        Drop,
+    }
+
+    // Decode one frame and classify the result. `needs_keyframe()` is checked
+    // after every decode so a decoder still waiting for an intra frame requests
+    // one even if the current call did not error.
+    fn run_decode(decoder: &mut dyn VideoDecoder, encoded: &EncodedFrame) -> Work {
+        match decoder.decode(encoded) {
+            Ok(frames) if !decoder.needs_keyframe() => Work::Decoded(frames),
+            Ok(_) => Work::NeedKeyframe,
+            Err(VideoError::KeyframeRequired | VideoError::DecodeFailed(_)) => Work::NeedKeyframe,
+            Err(_) => Work::Drop,
+        }
+    }
+
+    let source_codec = codec_label(encoded.codec);
+
+    // The pool lock is held only for the synchronous decode below; no `.await`
+    // occurs while it is held, and the frame store is a separate lock touched
+    // only after this scope ends.
+    let work = {
+        let mut pool = match video_decoder_pool().lock() {
+            Ok(pool) => pool,
+            Err(_) => return VideoDecodeOutcome::Delivered,
+        };
+        if let Some(decoder) = pool.get_mut(track_key) {
+            run_decode(decoder.as_mut(), &encoded)
+        } else {
+            match create_decoder(encoded.codec, DecoderConfig::default()) {
+                Ok(mut decoder) => {
+                    let work = run_decode(decoder.as_mut(), &encoded);
+                    pool.insert(track_key.to_string(), decoder);
+                    work
+                }
+                // No native decoder for this codec: fall back to encoded passthrough.
+                Err(_) => Work::Passthrough,
+            }
+        }
+    };
+
+    match work {
+        Work::Passthrough => {
+            store_pulled_video_frame(
+                track_key,
+                timestamp_us,
+                encoded.is_keyframe,
+                source_codec,
+                source_codec,
+                encoded.width,
+                encoded.height,
+                encoded.data,
+            );
+            VideoDecodeOutcome::Delivered
+        }
+        Work::Decoded(frames) => {
+            for frame in frames {
+                store_pulled_video_frame(
+                    track_key,
+                    timestamp_us,
+                    encoded.is_keyframe,
+                    source_codec,
+                    "i420",
+                    frame.width,
+                    frame.height,
+                    frame.data,
+                );
+            }
+            VideoDecodeOutcome::Delivered
+        }
+        Work::NeedKeyframe => VideoDecodeOutcome::KeyframeRequired,
+        Work::Drop => VideoDecodeOutcome::Delivered,
+    }
 }
 
 #[cfg(feature = "vpx")]
@@ -1151,11 +1312,14 @@ fn align_dimensions_for_codec(codec: VideoCodec, width: u32, height: u32) -> (u3
     (aligned_width.max(alignment), aligned_height.max(alignment))
 }
 
-/// Handle an incoming video datagram: decrypt, reassemble, decode, emit.
+/// Handle an incoming video datagram: reassemble fragments, natively decode
+/// (VP9) into I420 or pass encoded frames through, store the result for the
+/// pull mechanism, and request a keyframe from the sender when the decoder
+/// cannot make progress.
 pub fn handle_video_datagram(
     header: &MediaHeader,
     decrypted_payload: &[u8],
-    _app: &tauri::AppHandle,
+    app: &tauri::AppHandle,
 ) {
     #[cfg(feature = "vpx")]
     {
@@ -1177,16 +1341,29 @@ pub fn handle_video_datagram(
             width: 0,
             height: 0,
         };
+        // The reassembled metadata always carries the stream/track identity, so
+        // it is authoritative for keying. The SSRC map is only a fallback for
+        // datagrams whose metadata could not be recovered.
         let track_key = Some(make_track_key(&metadata.stream_id.0, &metadata.track_id.0))
             .or_else(|| resolve_video_track_key(header.ssrc));
         if let Some(track_key) = track_key {
-            dispatch_remote_track_video_frame(&track_key, timestamp_us, encoded.clone());
+            match decode_and_store_remote_video_frame(&track_key, timestamp_us, encoded) {
+                VideoDecodeOutcome::Delivered => {}
+                VideoDecodeOutcome::KeyframeRequired => {
+                    super::events::emit_media_request_keyframe(
+                        app,
+                        &metadata.stream_id.0,
+                        &metadata.track_id.0,
+                        Some(header.simulcast_layer),
+                    );
+                }
+            }
         }
     }
 
     #[cfg(not(feature = "vpx"))]
     {
-        let _ = (header, decrypted_payload, _app);
+        let _ = (header, decrypted_payload, app);
     }
 }
 
@@ -1717,5 +1894,121 @@ mod tests {
                 "fallback list for {current:?} must not contain itself"
             );
         }
+    }
+
+    #[test]
+    fn decodes_vp9_keyframe_datagram_into_i420_frame() {
+        use paracord_codec::video::encoder::create_encoder;
+        use paracord_codec::video::{EncoderConfig, PixelFormat, VideoContentHint};
+
+        let width = 320u32;
+        let height = 240u32;
+
+        // Encode a real VP9 keyframe so libvpx produces a valid bitstream.
+        let mut encoder = create_encoder(
+            VideoCodec::Vp9,
+            EncoderConfig {
+                width,
+                height,
+                fps: 30,
+                bitrate_kbps: 500,
+                pixel_format: PixelFormat::I420,
+                keyframe_interval: 0,
+                content_hint: VideoContentHint::Default,
+            },
+        )
+        .expect("vp9 encoder");
+
+        let y_size = (width * height) as usize;
+        let uv_size = ((width / 2) * (height / 2)) as usize;
+        let mut i420 = vec![128u8; y_size + 2 * uv_size];
+        for (i, px) in i420.iter_mut().take(y_size).enumerate() {
+            *px = (i % 256) as u8;
+        }
+        let keyframe = encoder
+            .encode(0, &i420, true)
+            .expect("encode keyframe")
+            .into_iter()
+            .find(|frame| frame.is_keyframe)
+            .expect("encoder emits a keyframe when forced");
+
+        // Wrap the encoded keyframe in a single-fragment video datagram payload.
+        let metadata = VideoFrameMetadata {
+            stream_id: StreamId::new("stream:decode-test:camera"),
+            track_id: TrackId::new("camera"),
+            frame_id: 3,
+            layer_id: 0,
+            codec: TransportVideoCodec::Vp9,
+            timestamp_us: 4_242,
+            is_keyframe: true,
+            fragment_index: 0,
+            fragment_count: 1,
+        };
+        let mut payload = BytesMut::new();
+        metadata.encode(&mut payload).unwrap();
+        payload.extend_from_slice(&keyframe.data);
+
+        let header = MediaHeader {
+            version: 1,
+            track_type: TrackType::Video,
+            simulcast_layer: 0,
+            sequence: 1,
+            timestamp: 90_000,
+            ssrc: 4321,
+            audio_level: 127,
+            key_epoch: 0,
+            payload_length: payload.len() as u16,
+            codec: TransportVideoCodec::Vp9.header_id(),
+        };
+
+        // Reassembly + native decode should yield an I420 frame in the pull store.
+        let (decoded_metadata, encoded_bytes) =
+            reassemble_video_payload(&header, &payload).expect("single fragment reassembles");
+        let track_key = make_track_key(&decoded_metadata.stream_id.0, &decoded_metadata.track_id.0);
+        let encoded = paracord_codec::video::EncodedFrame {
+            data: encoded_bytes,
+            codec: VideoCodec::Vp9,
+            pts: decoded_metadata.frame_id as i64,
+            is_keyframe: decoded_metadata.is_keyframe,
+            layer: None,
+            width: 0,
+            height: 0,
+        };
+        let outcome =
+            decode_and_store_remote_video_frame(&track_key, decoded_metadata.timestamp_us, encoded);
+        assert!(matches!(outcome, VideoDecodeOutcome::Delivered));
+
+        let stored = pull_latest_remote_stream_video_frame(
+            &decoded_metadata.stream_id.0,
+            &decoded_metadata.track_id.0,
+            None,
+        )
+        .expect("decoded frame stored for pull");
+        assert_eq!(stored.format, "i420");
+        assert_eq!(stored.codec, "vp9");
+        assert_eq!(stored.width, width);
+        assert_eq!(stored.height, height);
+        assert_eq!(
+            stored.data.len(),
+            PixelFormat::I420.frame_size(width, height)
+        );
+
+        let response = encode_pulled_video_frame_response(stored);
+        assert_eq!(response.format, "i420");
+        assert_eq!(response.width, width);
+        assert_eq!(response.height, height);
+
+        // Tear down: dropping the decoder must release its libvpx state and the
+        // pull store must forget the track.
+        unregister_stream_video_subscription(
+            &decoded_metadata.stream_id.0,
+            &decoded_metadata.track_id.0,
+        );
+        assert!(pull_latest_remote_stream_video_frame(
+            &decoded_metadata.stream_id.0,
+            &decoded_metadata.track_id.0,
+            None,
+        )
+        .is_none());
     }
 }

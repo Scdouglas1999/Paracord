@@ -88,6 +88,28 @@ pub fn emit_session_error(app: &tauri::AppHandle, error: &str) {
     let _ = app.emit("media_session_error", error);
 }
 
+/// Emit a keyframe request for a remote video track.
+///
+/// Used both when the relay asks us for a keyframe and when a local decoder
+/// cannot decode a remote track and needs the sender to produce a fresh intra
+/// frame. The frontend forwards this upstream.
+pub fn emit_media_request_keyframe(
+    app: &tauri::AppHandle,
+    stream_id: &str,
+    track_id: &str,
+    layer_id: Option<u8>,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "media_request_keyframe",
+        serde_json::json!({
+            "streamId": stream_id,
+            "trackId": track_id,
+            "layerId": layer_id,
+        }),
+    );
+}
+
 /// Spawn a task that receives stream-control messages on QUIC bidi streams and
 /// folds them into the local session stream registry.
 pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
@@ -140,6 +162,7 @@ pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: tauri::App
 
                     handle_control_message(
                         message,
+                        &conn,
                         &stream_registry,
                         &session_participants,
                         &frame_encryptor,
@@ -162,6 +185,7 @@ pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: tauri::App
 
 async fn handle_control_message(
     message: ControlMessage,
+    conn: &quinn::Connection,
     stream_registry: &std::sync::Arc<tokio::sync::Mutex<super::stream_registry::StreamRegistry>>,
     session_participants: &std::sync::Arc<
         tokio::sync::Mutex<
@@ -185,6 +209,12 @@ async fn handle_control_message(
         ControlMessage::SessionState { participants } => {
             let session_state =
                 apply_session_state(app, local_user_id, session_participants, &participants).await;
+            // Reconcile the local subscription set against the fresh snapshot:
+            // any participant that dropped out must have their subscriptions torn
+            // down so bandwidth is not spent on stale tracks.
+            for user_id in &session_state.departed {
+                handle_participant_departure(conn, stream_registry, *user_id).await;
+            }
             if session_state.membership_changed && !session_state.initial_sync {
                 let _ = match rotate_audio_sender_key(
                     frame_encryptor,
@@ -257,6 +287,10 @@ async fn handle_control_message(
                     emit_participant_leave(app, &user_id.to_string());
                 }
                 drop(known);
+                // Tear down subscriptions and native decoders for the departed
+                // participant so the relay stops forwarding their tracks and
+                // libvpx state is released promptly instead of lingering.
+                handle_participant_departure(conn, stream_registry, user_id).await;
                 let _ = match rotate_audio_sender_key(
                     frame_encryptor,
                     audio_sender_state,
@@ -350,6 +384,46 @@ async fn handle_control_message(
             layer_id,
             active,
         } => {
+            if active {
+                // Mark the local subscription confirmed by recording the layer
+                // the relay committed to forwarding.
+                let mut registry = stream_registry.lock().await;
+                if let Some(mut subscription) = registry
+                    .subscriptions()
+                    .into_iter()
+                    .find(|sub| sub.stream_id == stream_id && sub.track_id == track_id)
+                {
+                    if layer_id.is_some() {
+                        subscription.active_layer = layer_id;
+                    }
+                    registry.subscribe(subscription);
+                    tracing::debug!(
+                        stream_id = %stream_id.0,
+                        track_id = %track_id.0,
+                        ?layer_id,
+                        "subscription confirmed by relay"
+                    );
+                } else {
+                    tracing::debug!(
+                        stream_id = %stream_id.0,
+                        track_id = %track_id.0,
+                        "subscription ack for a track we no longer track locally"
+                    );
+                }
+            } else {
+                // Unsubscribe ack: drop the local subscription and any decoder so
+                // no stale state or libvpx context lingers.
+                {
+                    let mut registry = stream_registry.lock().await;
+                    registry.unsubscribe(&stream_id, &track_id);
+                }
+                super::video_pipeline::remove_remote_video_decoder(&stream_id.0, &track_id.0);
+                tracing::debug!(
+                    stream_id = %stream_id.0,
+                    track_id = %track_id.0,
+                    "unsubscribe confirmed by relay; dropped local decoder"
+                );
+            }
             use tauri::Emitter;
             let _ = app.emit(
                 "media_subscription_ack",
@@ -366,15 +440,7 @@ async fn handle_control_message(
             track_id,
             layer_id,
         } => {
-            use tauri::Emitter;
-            let _ = app.emit(
-                "media_request_keyframe",
-                serde_json::json!({
-                    "streamId": stream_id.0,
-                    "trackId": track_id.0,
-                    "layerId": layer_id,
-                }),
-            );
+            emit_media_request_keyframe(app, &stream_id.0, &track_id.0, layer_id);
         }
         ControlMessage::StreamKeyAnnounce {
             stream_id,
@@ -505,6 +571,7 @@ async fn handle_control_message(
 struct SessionStateUpdate {
     membership_changed: bool,
     initial_sync: bool,
+    departed: Vec<i64>,
 }
 
 async fn apply_session_state(
@@ -559,19 +626,112 @@ async fn apply_session_state(
             emit_participant_join_details(app, participant);
         }
     }
-    for user_id in known
+    let departed = known
         .keys()
         .filter(|user_id| !desired.contains_key(user_id))
         .copied()
-        .collect::<Vec<_>>()
-    {
+        .collect::<Vec<_>>();
+    for user_id in &departed {
         emit_participant_leave(app, &user_id.to_string());
     }
     *known = desired;
     SessionStateUpdate {
         membership_changed,
         initial_sync,
+        departed,
     }
+}
+
+/// Build the `UnsubscribeStream` messages the client should send when `user_id`
+/// leaves: one per track that participant published and we still hold a live
+/// subscription for.
+fn unsubscribe_messages_for_participant(
+    registry: &super::stream_registry::StreamRegistry,
+    user_id: i64,
+) -> Vec<ControlMessage> {
+    let subscribed: std::collections::HashSet<(StreamId, TrackId)> = registry
+        .subscriptions()
+        .into_iter()
+        .map(|subscription| (subscription.stream_id, subscription.track_id))
+        .collect();
+    registry
+        .published_tracks()
+        .into_iter()
+        .filter(|track| track.publisher_user_id == user_id)
+        .filter(|track| subscribed.contains(&(track.stream_id.clone(), track.track_id.clone())))
+        .map(|track| ControlMessage::UnsubscribeStream {
+            stream_id: track.stream_id,
+            track_id: track.track_id,
+        })
+        .collect()
+}
+
+/// Reconcile local state after a participant leaves the session: remove local
+/// subscription entries, drop native decoders for every track they published,
+/// and tell the relay to stop forwarding the tracks we were subscribed to.
+async fn handle_participant_departure(
+    conn: &quinn::Connection,
+    stream_registry: &std::sync::Arc<tokio::sync::Mutex<super::stream_registry::StreamRegistry>>,
+    user_id: i64,
+) {
+    let (published_tracks, unsubscribes) = {
+        let registry = stream_registry.lock().await;
+        let published_tracks: Vec<(String, String)> = registry
+            .published_tracks()
+            .into_iter()
+            .filter(|track| track.publisher_user_id == user_id)
+            .map(|track| (track.stream_id.0, track.track_id.0))
+            .collect();
+        let unsubscribes = unsubscribe_messages_for_participant(&registry, user_id);
+        (published_tracks, unsubscribes)
+    };
+
+    if !unsubscribes.is_empty() {
+        let mut registry = stream_registry.lock().await;
+        for message in &unsubscribes {
+            if let ControlMessage::UnsubscribeStream {
+                stream_id,
+                track_id,
+            } = message
+            {
+                registry.unsubscribe(stream_id, track_id);
+            }
+        }
+    }
+
+    for (stream_id, track_id) in published_tracks {
+        super::video_pipeline::remove_remote_video_decoder(&stream_id, &track_id);
+    }
+
+    for message in unsubscribes {
+        if let Err(err) = send_control_over_connection(conn, &message).await {
+            tracing::warn!(
+                error = %err,
+                "failed to send UnsubscribeStream for departed participant"
+            );
+        }
+    }
+}
+
+/// Send a single control message over the session's QUIC connection using the
+/// length-prefixed framing the relay expects.
+async fn send_control_over_connection(
+    conn: &quinn::Connection,
+    message: &ControlMessage,
+) -> Result<(), String> {
+    let (mut send, _recv) = conn
+        .open_bi()
+        .await
+        .map_err(|e| format!("open control stream: {e}"))?;
+    let encoded = message
+        .encode()
+        .map_err(|e| format!("encode control message: {e}"))?;
+    send.write_all(&encoded)
+        .await
+        .map_err(|e| format!("write control message: {e}"))?;
+    send.finish()
+        .map_err(|e| format!("finish control message: {e}"))?;
+    Ok(())
 }
 
 fn rotate_audio_sender_key(
@@ -722,5 +882,80 @@ async fn apply_delivered_track_key(
         for (epoch, key) in &epochs {
             decryptor.set_peer_key(layer.ssrc, *epoch, key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paracord_transport::control::TrackKind;
+    use paracord_transport::stream::{
+        PublishedLayer, PublishedTrack, TrackSubscription, VideoCodec,
+    };
+
+    fn video_track(publisher_user_id: i64, stream: &str, track: &str) -> PublishedTrack {
+        PublishedTrack {
+            stream_id: StreamId::new(stream),
+            track_id: TrackId::new(track),
+            publisher_user_id,
+            kind: TrackKind::Video,
+            codec: Some(VideoCodec::Vp9),
+            layers: vec![PublishedLayer {
+                layer_id: 0,
+                ssrc: 42,
+                width: Some(1280),
+                height: Some(720),
+                max_bitrate_kbps: Some(2500),
+                active: true,
+            }],
+        }
+    }
+
+    fn subscription(stream: &str, track: &str) -> TrackSubscription {
+        TrackSubscription {
+            stream_id: StreamId::new(stream),
+            track_id: TrackId::new(track),
+            requested_layer: Some(0),
+            active_layer: Some(0),
+            viewport: None,
+        }
+    }
+
+    #[test]
+    fn participant_leave_enqueues_unsubscribe_for_registered_tracks() {
+        let mut registry = super::super::stream_registry::StreamRegistry::default();
+
+        // Departing participant 42 publishes a track we are subscribed to.
+        registry.publish_track(video_track(42, "stream-a", "screen"));
+        registry.subscribe(subscription("stream-a", "screen"));
+
+        // A different participant's subscribed track must be left untouched.
+        registry.publish_track(video_track(99, "stream-b", "camera"));
+        registry.subscribe(subscription("stream-b", "camera"));
+
+        let messages = unsubscribe_messages_for_participant(&registry, 42);
+        assert_eq!(
+            messages.len(),
+            1,
+            "exactly one unsubscribe for participant 42"
+        );
+        match &messages[0] {
+            ControlMessage::UnsubscribeStream {
+                stream_id,
+                track_id,
+            } => {
+                assert_eq!(stream_id.0, "stream-a");
+                assert_eq!(track_id.0, "screen");
+            }
+            other => panic!("expected UnsubscribeStream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn participant_leave_ignores_published_tracks_without_subscription() {
+        let mut registry = super::super::stream_registry::StreamRegistry::default();
+        // Published but never subscribed: leaving must not emit an unsubscribe.
+        registry.publish_track(video_track(42, "stream-a", "screen"));
+        assert!(unsubscribe_messages_for_participant(&registry, 42).is_empty());
     }
 }

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useState, useRef, useCallback, useLayoutEffect } from "react";
+import { useState, useRef, useCallback, useLayoutEffect, useId } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "../../lib/utils";
@@ -23,6 +23,7 @@ export function Tooltip({
 }: TooltipProps) {
     const [isVisible, setIsVisible] = useState(false);
     const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+    const tooltipId = useId();
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const triggerRef = useRef<HTMLDivElement>(null);
     const tooltipRef = useRef<HTMLDivElement>(null);
@@ -96,6 +97,7 @@ export function Tooltip({
             onMouseLeave={hideTooltip}
             onFocus={showTooltip}
             onBlur={hideTooltip}
+            aria-describedby={isVisible ? tooltipId : undefined}
         >
             {children}
             {createPortal(
@@ -103,6 +105,8 @@ export function Tooltip({
                     {isVisible && (
                         <motion.div
                             ref={tooltipRef}
+                            id={tooltipId}
+                            role="tooltip"
                             initial={{ opacity: 0, scale: 0.9 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.95 }}

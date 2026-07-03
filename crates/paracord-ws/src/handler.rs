@@ -1959,30 +1959,19 @@ async fn handle_client_message(
                             return;
                         }
 
-                        // 3. Compute channel permissions and require VIEW_CHANNEL + CONNECT
-                        let owner_id = session
-                            .guild_owner_ids
-                            .get(&guild_id)
-                            .copied()
-                            .unwrap_or_else(|| {
-                                // Fallback: check if this user is the owner
-                                if session.guild_ids.contains(&guild_id) {
-                                    0 // Will be resolved by compute_channel_permissions
-                                } else {
-                                    0
-                                }
-                            });
-                        // Try to get the actual owner_id from DB if not cached
-                        let resolved_owner_id = if owner_id == 0 {
-                            paracord_db::guilds::get_guild(&state.db, guild_id)
-                                .await
-                                .ok()
-                                .flatten()
-                                .map(|g| g.owner_id)
-                                .unwrap_or(0)
-                        } else {
-                            owner_id
-                        };
+                        // 3. Compute channel permissions and require VIEW_CHANNEL + CONNECT.
+                        // Prefer the owner cached on the session; fall back to a DB
+                        // lookup when this session never learned it.
+                        let resolved_owner_id =
+                            match session.guild_owner_ids.get(&guild_id).copied() {
+                                Some(owner_id) => owner_id,
+                                None => paracord_db::guilds::get_guild(&state.db, guild_id)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .map(|g| g.owner_id)
+                                    .unwrap_or(0),
+                            };
                         let perms =
                             match paracord_core::permissions::compute_channel_permissions_cached(
                                 &state.permission_cache,

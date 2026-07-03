@@ -17,7 +17,7 @@ import type { Channel, ForumTag, Member, Message } from '../../types';
 import { cn } from '../../lib/utils';
 import { toast } from '../../stores/toastStore';
 import { useMemberStore } from '../../stores/memberStore';
-import { EmptyState, LoadingSpinner } from '../ui/Feedback';
+import { EmptyState, ErrorBanner, LoadingSpinner } from '../ui/Feedback';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 interface ForumViewProps {
@@ -64,6 +64,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
   const [tags, setTags] = useState<ForumTag[]>([]);
   const [sortOrder, setSortOrder] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [layout, setLayout] = useState<ViewLayout>('grid');
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [showNewPost, setShowNewPost] = useState(false);
@@ -84,6 +85,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
   const fetchPosts = useCallback(async () => {
     try {
       setLoading(true);
+      setLoadError(null);
       const { data } = await channelApi.getForumPosts(channelId, {
         sort_order: sortOrder,
         include_archived: includeArchived,
@@ -91,7 +93,9 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
       setPosts(data.posts || []);
       setTags(data.tags || []);
     } catch (err) {
-      toast.error(`Failed to load forum posts: ${extractApiError(err)}`);
+      const message = extractApiError(err);
+      setLoadError(message);
+      toast.error(`Failed to load forum posts: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -357,6 +361,12 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
       {searchResults === null && <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
         {loading ? (
           <LoadingSpinner className="py-12" label="Loading posts..." />
+        ) : loadError ? (
+          <ErrorBanner
+            className="mt-2"
+            message={`Failed to load forum posts: ${loadError}`}
+            onRetry={() => void fetchPosts()}
+          />
         ) : filteredPosts.length === 0 ? (
           <EmptyState
             className="py-16"

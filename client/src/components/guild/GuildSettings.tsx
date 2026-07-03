@@ -1003,6 +1003,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
                 <button
                   key={item.id}
                   onClick={() => setActiveSection(item.id)}
+                  aria-current={activeSection === item.id ? 'page' : undefined}
                   className={`settings-nav-item ${activeSection === item.id ? 'active' : ''}`}
                 >
                   {item.icon}

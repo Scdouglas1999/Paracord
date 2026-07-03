@@ -18,6 +18,7 @@ import {
   formatActivityLabel,
   getPrimaryActivity,
 } from '../../lib/activityPresence';
+import { roleColorToHex } from '../../lib/colors';
 import { parseMarkdown } from '../../lib/markdown';
 import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
 import {
@@ -70,11 +71,6 @@ interface UserProfilePopupProps {
   position: { x: number; y: number };
   onClose: () => void;
   roles?: Array<{ id: string; name: string; color: number }>;
-}
-
-function intToHex(color: number): string {
-  if (color === 0) return 'var(--text-secondary)';
-  return '#' + color.toString(16).padStart(6, '0');
 }
 
 const STATUS_COLORS: Record<'online' | 'idle' | 'dnd' | 'offline', string> = {
@@ -568,13 +564,13 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                   className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium"
                   style={{
                     backgroundColor: 'var(--bg-mod-subtle)',
-                    color: intToHex(role.color),
+                    color: roleColorToHex(role.color),
                     border: '1px solid var(--border-subtle)',
                   }}
                 >
                   <span
                     className="w-2.5 h-2.5 rounded-full"
-                    style={{ backgroundColor: intToHex(role.color) }}
+                    style={{ backgroundColor: roleColorToHex(role.color) }}
                   />
                   {role.name}
                 </span>

@@ -30,7 +30,6 @@ export function MobileBottomNav() {
     if (path === '/app' || path === '/app/') return 'home';
     if (path.startsWith('/app/dms')) return 'dms';
     if (path.startsWith('/app/friends')) return 'friends';
-    if (path === '/app/settings') return 'settings';
     if (path.startsWith('/app/guilds')) return 'server';
     return 'home';
   })();

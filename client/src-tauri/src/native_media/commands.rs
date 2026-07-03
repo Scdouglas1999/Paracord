@@ -777,6 +777,7 @@ pub async fn media_unregister_track_subscription(
         let mut registry = session.stream_registry.lock().await;
         registry.unsubscribe(&stream_id, &track_id);
     }
+    super::video_pipeline::remove_remote_video_decoder(&stream_id.0, &track_id.0);
     session
         .send_control_message(&ControlMessage::UnsubscribeStream {
             stream_id,
@@ -784,6 +785,42 @@ pub async fn media_unregister_track_subscription(
         })
         .await?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn media_subscribe_audio(
+    user_id: String,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
+    let user_id = user_id
+        .parse::<i64>()
+        .map_err(|_| "invalid user id".to_string())?;
+    let guard = state.session.lock().await;
+    let session = guard.as_ref().ok_or("no active session")?;
+    session
+        .send_control_message(&ControlMessage::Subscribe {
+            user_id,
+            track_type: paracord_transport::control::TrackKind::Audio,
+        })
+        .await
+}
+
+#[tauri::command]
+pub async fn media_unsubscribe_audio(
+    user_id: String,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
+    let user_id = user_id
+        .parse::<i64>()
+        .map_err(|_| "invalid user id".to_string())?;
+    let guard = state.session.lock().await;
+    let session = guard.as_ref().ok_or("no active session")?;
+    session
+        .send_control_message(&ControlMessage::Unsubscribe {
+            user_id,
+            track_type: paracord_transport::control::TrackKind::Audio,
+        })
+        .await
 }
 
 #[tauri::command]

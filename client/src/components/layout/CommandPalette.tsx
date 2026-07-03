@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight, Bot } from 'lucide-react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { Modal } from '../ui/Modal';
 import { useUIStore } from '../../stores/uiStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
@@ -287,28 +287,18 @@ export function CommandPalette() {
   let flatIndex = 0;
 
   return (
-    <AnimatePresence>
-      {open && (
-        <div
-          className="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh] modal-backdrop"
-          style={{ backgroundColor: 'var(--overlay-backdrop)' }}
-          onClick={handleClose}
-        >
-          <motion.div
-            ref={panelRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="command-palette-title"
-            tabIndex={-1}
-            initial={{ opacity: 0, scale: 0.96, y: -12 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: -12 }}
-            transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
-            className="glass-modal w-full max-w-[560px] overflow-hidden rounded-2xl border border-border-strong/50"
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={handleKeyDown}
-          >
-            <h2 id="command-palette-title" className="sr-only">Command Palette</h2>
+    <Modal
+      open={open}
+      onClose={handleClose}
+      panelRef={panelRef}
+      manageFocus={false}
+      onKeyDown={handleKeyDown}
+      labelledBy="command-palette-title"
+      placement="top"
+      size="md"
+      panelClassName="border border-border-strong/50"
+    >
+      <h2 id="command-palette-title" className="sr-only">Command Palette</h2>
             {/* Search input */}
             <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3.5">
               <Search size={18} className="shrink-0 text-text-muted" />
@@ -399,9 +389,6 @@ export function CommandPalette() {
                 {flatItems.length} result{flatItems.length !== 1 ? 's' : ''}
               </div>
             </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    </Modal>
   );
 }
