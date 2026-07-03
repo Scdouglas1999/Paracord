@@ -753,6 +753,132 @@ async fn scheduled_messages_create_list_and_cancel() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn scheduled_messages_edit_and_reschedule() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Scheduled Edit Guild").await?;
+    let guild_id_i64 = guild_id.parse::<i64>()?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "scheduled-edit").await?;
+    let send_at = (chrono::Utc::now() + chrono::Duration::seconds(15)).to_rfc3339();
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/scheduled-messages"),
+            Some(json!({
+                "content": "original content",
+                "send_at": send_at,
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create scheduled message failed: {payload}"
+    );
+    let scheduled_id = payload["id"]
+        .as_str()
+        .context("scheduled message id should exist")?
+        .to_string();
+
+    // Author edits content + reschedules -> 200 reflected.
+    let new_send_at = (chrono::Utc::now() + chrono::Duration::seconds(120)).to_rfc3339();
+    let (status, payload) = ctx
+        .request_json(
+            Method::PATCH,
+            &format!("/api/v1/channels/{channel_id}/scheduled-messages/{scheduled_id}"),
+            Some(json!({
+                "content": "edited content",
+                "send_at": new_send_at,
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "edit scheduled message failed: {payload}"
+    );
+    assert_eq!(payload["content"], json!("edited content"));
+    assert_eq!(
+        payload["id"],
+        json!(scheduled_id),
+        "edited scheduled message id should match"
+    );
+
+    // Past send_at -> 400.
+    let past_send_at = (chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
+    let (status, _payload) = ctx
+        .request_json(
+            Method::PATCH,
+            &format!("/api/v1/channels/{channel_id}/scheduled-messages/{scheduled_id}"),
+            Some(json!({
+                "content": "too late",
+                "send_at": past_send_at,
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "past send_at should be 400"
+    );
+
+    // Non-author non-manager -> 403.
+    let other_token = create_authenticated_user_token(
+        &ctx.db,
+        &ctx._test_app.jwt_secret,
+        "schededitor",
+        "CoveragePass123!",
+    )
+    .await?;
+    let other_user_id = current_user_id_with_token(&ctx, &other_token).await?;
+    paracord_db::members::add_member(&ctx.db, other_user_id.parse::<i64>()?, guild_id_i64).await?;
+    let (status, _payload) = ctx
+        .request_json_with_token(
+            Method::PATCH,
+            &format!("/api/v1/channels/{channel_id}/scheduled-messages/{scheduled_id}"),
+            Some(json!({
+                "content": "not mine",
+                "send_at": new_send_at,
+            })),
+            &other_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "non-author non-manager should be 403"
+    );
+
+    // Cancel then edit -> 409.
+    let (status, _payload) = ctx
+        .request_json(
+            Method::DELETE,
+            &format!("/api/v1/channels/{channel_id}/scheduled-messages/{scheduled_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "cancel should succeed");
+
+    let (status, _payload) = ctx
+        .request_json(
+            Method::PATCH,
+            &format!("/api/v1/channels/{channel_id}/scheduled-messages/{scheduled_id}"),
+            Some(json!({
+                "content": "after cancel",
+                "send_at": new_send_at,
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "editing a cancelled scheduled message should be 409"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn data_export_includes_visible_messages_memberships_and_prekeys() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let user_id = current_user_id(&ctx).await?;

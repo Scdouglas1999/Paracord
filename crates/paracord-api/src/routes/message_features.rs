@@ -342,6 +342,82 @@ pub async fn delete_scheduled_message(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn update_scheduled_message(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, scheduled_message_id)): Path<(i64, i64)>,
+    Json(body): Json<ScheduledMessageRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let perms = compute_channel_permissions(&state, &channel, auth.user_id).await?;
+    paracord_core::permissions::require_permission(perms, Permissions::SEND_MESSAGES)?;
+
+    let send_at = parse_datetime(&body.send_at)?;
+    let min_send_at = Utc::now() + chrono::Duration::seconds(5);
+    if send_at < min_send_at {
+        return Err(ApiError::BadRequest(
+            "send_at must be at least 5 seconds in the future".into(),
+        ));
+    }
+
+    let content = body.content.unwrap_or_default();
+    let content_trimmed = content.trim();
+    if content_trimmed.is_empty() && body.e2ee.is_none() {
+        return Err(ApiError::BadRequest(
+            "Scheduled message requires content or e2ee payload".into(),
+        ));
+    }
+    if content_trimmed.len() > 2000 {
+        return Err(ApiError::BadRequest(
+            "content must be at most 2000 characters".into(),
+        ));
+    }
+
+    let e2ee_payload = body
+        .e2ee
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|_| ApiError::BadRequest("Invalid e2ee payload".into()))?;
+
+    let scheduled =
+        paracord_db::scheduled_messages::get_scheduled_message(&state.db, scheduled_message_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?;
+    if scheduled.channel_id != channel_id {
+        return Err(ApiError::NotFound);
+    }
+
+    let can_manage = perms.contains(Permissions::MANAGE_MESSAGES)
+        || perms.contains(Permissions::MANAGE_CHANNELS)
+        || perms.contains(Permissions::MANAGE_GUILD);
+    if scheduled.author_id != auth.user_id && !can_manage {
+        return Err(ApiError::Forbidden);
+    }
+
+    let updated = paracord_db::scheduled_messages::update_scheduled_message(
+        &state.db,
+        scheduled_message_id,
+        if content_trimmed.is_empty() {
+            None
+        } else {
+            Some(content_trimmed)
+        },
+        e2ee_payload.as_deref(),
+        body.nonce.as_deref(),
+        send_at,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    .ok_or_else(|| ApiError::Conflict("Scheduled message can no longer be edited".into()))?;
+
+    Ok((StatusCode::OK, Json(scheduled_message_to_json(&updated))))
+}
+
 pub async fn deanonymize_message(
     State(state): State<AppState>,
     auth: AuthUser,

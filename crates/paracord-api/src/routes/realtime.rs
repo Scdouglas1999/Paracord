@@ -26,6 +26,31 @@ use crate::middleware::AuthUser;
 pub struct RealtimeEventsQuery {
     pub session_id: Option<String>,
     pub cursor: Option<u64>,
+    /// Single-use stream ticket (minted by `POST /api/v1/stream/ticket`). This is
+    /// the only accepted credential for the SSE stream — the raw access token is
+    /// never carried in the query string.
+    pub ticket: Option<String>,
+}
+
+/// Time a minted SSE stream ticket stays redeemable before it is treated as
+/// expired. Short by design: the client fetches a fresh ticket immediately
+/// before opening (or reopening) the stream.
+const STREAM_TICKET_TTL: Duration = Duration::from_secs(45);
+
+/// Single-use SSE stream tickets: `ticket -> (user_id, minted_at)`. A ticket is
+/// removed on redemption (so it cannot be replayed) and expired tickets are
+/// swept opportunistically on each mint.
+fn stream_tickets() -> &'static DashMap<String, (i64, Instant)> {
+    static STREAM_TICKETS: OnceLock<DashMap<String, (i64, Instant)>> = OnceLock::new();
+    STREAM_TICKETS.get_or_init(DashMap::new)
+}
+
+/// Consume a stream ticket, returning the bound user id if it exists and has not
+/// expired. The ticket is always removed (single use); an expired ticket yields
+/// `None` even though it is evicted.
+fn consume_stream_ticket(ticket: &str) -> Option<i64> {
+    let (_, (user_id, minted_at)) = stream_tickets().remove(ticket)?;
+    (minted_at.elapsed() < STREAM_TICKET_TTL).then_some(user_id)
 }
 
 #[derive(Deserialize)]
@@ -702,6 +727,24 @@ async fn can_receive_channel_event(
     perms.contains(Permissions::VIEW_CHANNEL)
 }
 
+/// Mint a short-lived single-use ticket the client exchanges for the SSE stream.
+/// Requires a Bearer-authenticated user; the ticket is bound to that user id so
+/// the raw access token never has to travel in the stream's query string.
+pub async fn create_stream_ticket(
+    State(_state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let tickets = stream_tickets();
+    // Opportunistic sweep of expired tickets so the map cannot grow unbounded
+    // from tickets that are minted but never redeemed.
+    tickets.retain(|_, (_, minted_at)| minted_at.elapsed() < STREAM_TICKET_TTL);
+
+    let ticket = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    tickets.insert(ticket.clone(), (auth.user_id, Instant::now()));
+
+    Ok(Json(json!({ "ticket": ticket })))
+}
+
 pub async fn create_session(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -740,14 +783,24 @@ pub async fn create_session(
 
 pub async fn stream_events(
     State(state): State<AppState>,
-    auth: AuthUser,
     Query(query): Query<RealtimeEventsQuery>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    // The stream authenticates solely via a single-use ticket (minted by
+    // `POST /api/v1/stream/ticket`), never the raw access token in the query
+    // string. Reject missing/expired/reused tickets.
+    let user_id = query
+        .ticket
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .and_then(consume_stream_ticket)
+        .ok_or(ApiError::Unauthorized)?;
+
     let session_id = query
         .session_id
         .filter(|sid| !sid.trim().is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into())
+    let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, user_id.into())
         .await
         .unwrap_or_default();
     let guild_ids: Vec<i64> = guild_rows.iter().map(|g| g.id).collect();
@@ -757,13 +810,7 @@ pub async fn stream_events(
     // Attach to (or lazily establish) the persistent session channel. The
     // channel's background pump keeps buffering events across reconnect gaps, so
     // the ring buffer already holds anything emitted since `create_session`.
-    let channel = get_or_create_channel(
-        &state,
-        &session_id,
-        auth.user_id,
-        &guild_ids,
-        guild_owner_ids,
-    )?;
+    let channel = get_or_create_channel(&state, &session_id, user_id, &guild_ids, guild_owner_ids)?;
 
     // Count this connection against the channel for the whole stream lifetime so
     // the sweep cannot reclaim the channel while we are attached (even if idle).
@@ -814,7 +861,7 @@ pub async fn stream_events(
             (queue, last, cursor)
         };
 
-    let ready_payload = build_ready_payload(&state, auth.user_id, &session_id, ready_seq)
+    let ready_payload = build_ready_payload(&state, user_id, &session_id, ready_seq)
         .await
         .to_string();
 

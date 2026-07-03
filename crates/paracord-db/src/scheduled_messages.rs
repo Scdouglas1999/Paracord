@@ -183,6 +183,64 @@ pub async fn cancel_scheduled_message(
     Ok(row)
 }
 
+pub async fn update_scheduled_message(
+    pool: &DbPool,
+    id: i64,
+    content: Option<&str>,
+    e2ee_payload: Option<&str>,
+    nonce: Option<&str>,
+    send_at: DateTime<Utc>,
+) -> Result<Option<ScheduledMessageRow>, DbError> {
+    let send_at_text = datetime_to_db_text(send_at);
+    let row = match active_database_engine() {
+        DatabaseEngine::Postgres => {
+            sqlx::query_as::<_, ScheduledMessageRow>(&format!(
+                "UPDATE scheduled_messages
+                 SET content = $2,
+                     e2ee_payload = $3,
+                     nonce = $4,
+                     send_at = CAST($5 AS TIMESTAMPTZ),
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $1
+                   AND status = $6
+                 RETURNING {}",
+                SCHEDULED_MESSAGES_SELECT_POSTGRES
+            ))
+            .bind(id)
+            .bind(content)
+            .bind(e2ee_payload)
+            .bind(nonce)
+            .bind(&send_at_text)
+            .bind(STATUS_SCHEDULED)
+            .fetch_optional(pool)
+            .await?
+        }
+        DatabaseEngine::Sqlite => {
+            sqlx::query_as::<_, ScheduledMessageRow>(&format!(
+                "UPDATE scheduled_messages
+                 SET content = $2,
+                     e2ee_payload = $3,
+                     nonce = $4,
+                     send_at = $5,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $1
+                   AND status = $6
+                 RETURNING {}",
+                SCHEDULED_MESSAGES_SELECT_SQLITE
+            ))
+            .bind(id)
+            .bind(content)
+            .bind(e2ee_payload)
+            .bind(nonce)
+            .bind(send_at_text)
+            .bind(STATUS_SCHEDULED)
+            .fetch_optional(pool)
+            .await?
+        }
+    };
+    Ok(row)
+}
+
 pub async fn list_due_scheduled_messages(
     pool: &DbPool,
     now: DateTime<Utc>,

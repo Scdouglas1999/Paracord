@@ -61,9 +61,6 @@ fn get_query_token(uri: &Uri) -> Option<String> {
 
 fn allows_query_token_fallback(parts: &Parts) -> bool {
     let path = parts.uri.path();
-    if parts.method == Method::GET && path == "/api/v2/rt/events" {
-        return true;
-    }
     if parts.method == Method::GET
         && (path.starts_with("/api/v1/attachments/")
             || path.starts_with("/api/v1/federated-files/"))
@@ -202,14 +199,16 @@ mod tests {
     use axum::http::Request;
 
     #[test]
-    fn allows_query_token_for_realtime_events() {
+    fn rejects_query_token_for_realtime_events() {
+        // The SSE stream authenticates via a single-use ticket, never a raw
+        // access token in the query string.
         let request = Request::builder()
             .method("GET")
             .uri("/api/v2/rt/events?token=abc")
             .body(())
             .expect("request");
         let (parts, _) = request.into_parts();
-        assert!(allows_query_token_fallback(&parts));
+        assert!(!allows_query_token_fallback(&parts));
     }
 
     #[test]

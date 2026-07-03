@@ -498,15 +498,29 @@ class ConnectionManager {
         }
 
         const base = conn.serverUrl.replace(/\/+$/, '');
+
+        // Exchange the access token for a short-lived single-use stream ticket so
+        // the raw token never appears in the SSE query string. The axios client's
+        // auth interceptor supplies the Bearer header on this POST. A fresh ticket
+        // is fetched on every (re)connect since tickets are consumed on use.
+        const ticketResp = await conn.apiClient.post<{ ticket?: string }>(
+          `${base}/api/v1/stream/ticket`,
+          undefined,
+          { timeout: 10_000 },
+        );
+        if (!this.isCurrentConnection(conn) || !conn.allowReconnect) return;
+        const ticket = ticketResp.data?.ticket;
+        if (!ticket) throw new Error('stream ticket missing');
+
         const params = new URLSearchParams();
-        params.set('token', token);
+        params.set('ticket', ticket);
         if (conn.sessionId) params.set('session_id', conn.sessionId);
         if (conn.realtimeCursor != null) params.set('cursor', String(conn.realtimeCursor));
         const streamUrl = `${base}/api/v2/rt/events?${params.toString()}`;
         conn.streamUrl = streamUrl;
 
-        // Redact token from log
-        const logUrl = streamUrl.replace(/token=[^&]+/, 'token=***');
+        // Redact the single-use ticket from logs.
+        const logUrl = streamUrl.replace(/ticket=[^&]+/, 'ticket=***');
         logVoiceDiagnostic('[gateway] SSE EventSource opening', { url: logUrl });
 
         const es = new EventSource(streamUrl, { withCredentials: true });

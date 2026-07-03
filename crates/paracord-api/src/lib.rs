@@ -55,6 +55,10 @@ pub fn build_router() -> Router<AppState> {
         .route("/api/docs", get(routes::docs::swagger_ui))
         .route("/api/docs/openapi.json", get(routes::docs::openapi_spec))
         // Realtime v2 (SSE + HTTP command bus)
+        .route(
+            "/api/v1/stream/ticket",
+            post(routes::realtime::create_stream_ticket),
+        )
         .route("/api/v2/rt/session", post(routes::realtime::create_session))
         .route("/api/v2/rt/events", get(routes::realtime::stream_events))
         .route("/api/v2/rt/commands", post(routes::realtime::post_command))
@@ -438,7 +442,8 @@ pub fn build_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/channels/{channel_id}/scheduled-messages/{scheduled_message_id}",
-            delete(routes::message_features::delete_scheduled_message),
+            delete(routes::message_features::delete_scheduled_message)
+                .patch(routes::message_features::update_scheduled_message),
         )
         .route(
             "/api/v1/channels/{channel_id}/anonymous/deanonymize/{message_id}",

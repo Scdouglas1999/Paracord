@@ -389,6 +389,13 @@ interface MessageState {
     sendAtIso: string,
     referencedMessageId?: string,
   ) => Promise<void>;
+  editScheduledMessage: (
+    channelId: string,
+    scheduledMessageId: string,
+    content: string,
+    sendAtIso: string,
+    e2ee?: unknown,
+  ) => Promise<void>;
   flushOfflineQueue: () => Promise<void>;
   editMessage: (channelId: string, messageId: string, content: string) => Promise<void>;
   deleteMessage: (channelId: string, messageId: string) => Promise<void>;
@@ -562,6 +569,20 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
     await channelApi.createScheduledMessage(channelId, {
       content: request.content || undefined,
       e2ee: request.e2ee,
+      nonce: request.nonce,
+      send_at: sendAtIso,
+    });
+  },
+
+  editScheduledMessage: async (channelId, scheduledMessageId, content, sendAtIso, e2ee) => {
+    const normalized = content.trim();
+    if (!normalized && e2ee === undefined) {
+      return;
+    }
+    const request = await buildSendMessageRequest(channelId, normalized);
+    await channelApi.updateScheduledMessage(channelId, scheduledMessageId, {
+      content: request.content || undefined,
+      e2ee: e2ee ?? request.e2ee,
       nonce: request.nonce,
       send_at: sendAtIso,
     });

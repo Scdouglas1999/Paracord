@@ -21,6 +21,25 @@ use tower::ServiceExt;
 /// Open the SSE stream and collect gateway `data:` JSON frames until either
 /// `want` frames are gathered or the per-read timeout elapses. Keep-alive
 /// comments/lines are ignored.
+/// Mint a single-use SSE stream ticket for `token`. The stream endpoint no
+/// longer accepts the raw access token — it is exchanged for a ticket first.
+async fn mint_stream_ticket(app: &Router, token: &str) -> String {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v1/stream/ticket")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("ticket request");
+    let (status, body) = common::dispatch_json(app, request)
+        .await
+        .expect("mint stream ticket");
+    assert!(status.is_success(), "mint ticket failed: {status}");
+    body.get("ticket")
+        .and_then(|v| v.as_str())
+        .expect("ticket present")
+        .to_string()
+}
+
 async fn collect_gateway_frames(
     app: &Router,
     token: &str,
@@ -28,11 +47,11 @@ async fn collect_gateway_frames(
     cursor: u64,
     want: usize,
 ) -> Vec<Value> {
-    let uri = format!("/api/v2/rt/events?session_id={session_id}&cursor={cursor}");
+    let ticket = mint_stream_ticket(app, token).await;
+    let uri = format!("/api/v2/rt/events?session_id={session_id}&cursor={cursor}&ticket={ticket}");
     let request = Request::builder()
         .method(Method::GET)
         .uri(uri)
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::empty())
         .expect("build sse request");
 
@@ -326,13 +345,15 @@ async fn sse_attach_with_foreign_session_id_is_rejected() {
     let body_a = create_session_body(&app_ctx.app, &token_a).await;
     let victim_session = body_a["session_id"].as_str().unwrap().to_string();
 
-    // Attacker (authenticated as themselves) tries to attach to the victim's
-    // session id. This must be refused rather than returning the victim's stream.
-    let uri = format!("/api/v2/rt/events?session_id={victim_session}&cursor=0");
+    // Attacker (authenticated as themselves via their own ticket) tries to
+    // attach to the victim's session id. This must be refused rather than
+    // returning the victim's stream.
+    let attacker_ticket = mint_stream_ticket(&app_ctx.app, &token_b).await;
+    let uri =
+        format!("/api/v2/rt/events?session_id={victim_session}&cursor=0&ticket={attacker_ticket}");
     let request = Request::builder()
         .method(Method::GET)
         .uri(uri)
-        .header(header::AUTHORIZATION, format!("Bearer {token_b}"))
         .body(Body::empty())
         .expect("build sse request");
     let response = app_ctx

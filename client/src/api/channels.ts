@@ -129,6 +129,15 @@ export const channelApi = {
   ) => getApi().post<ScheduledMessage>(`/channels/${id}/scheduled-messages`, payload),
   listScheduledMessages: (id: string) =>
     getApi().get<ScheduledMessage[]>(`/channels/${id}/scheduled-messages`),
+  updateScheduledMessage: (
+    id: string,
+    scheduledMessageId: string,
+    payload: { content?: string; e2ee?: unknown; nonce?: string; send_at: string },
+  ) =>
+    getApi().patch<ScheduledMessage>(
+      `/channels/${id}/scheduled-messages/${scheduledMessageId}`,
+      payload,
+    ),
   deleteScheduledMessage: (id: string, scheduledMessageId: string) =>
     getApi().delete(`/channels/${id}/scheduled-messages/${scheduledMessageId}`),
   deanonymizeMessage: (id: string, messageId: string) =>
