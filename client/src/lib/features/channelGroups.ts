@@ -1,4 +1,4 @@
-import type { Channel } from '../types';
+import type { Channel } from '../../types';
 
 export const VIRTUAL_TEXT_ID = '__virtual_text__';
 export const VIRTUAL_VOICE_ID = '__virtual_voice__';

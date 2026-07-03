@@ -109,7 +109,7 @@ fn guild_json(guild: &paracord_db::guilds::GuildRow, member_count: Option<i64>) 
         "owner_id": guild.owner_id.to_string(),
         "created_at": guild.created_at.to_rfc3339(),
         "visibility": guild.visibility,
-        "discovery_tags": parse_discovery_tags(&guild.allowed_roles),
+        "discovery_tags": parse_discovery_tags(&guild.discovery_tags),
         "hub_settings": guild.hub_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
         "bot_settings": guild.bot_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
     });

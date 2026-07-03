@@ -190,7 +190,7 @@ pub async fn list_discoverable_guilds(
     if let Some(ref tag) = params.tag {
         let tag_lower = tag.to_lowercase();
         discoverable.retain(|g| {
-            let tags = parse_discovery_tags(&g.allowed_roles);
+            let tags = parse_discovery_tags(&g.discovery_tags);
             tags.iter().any(|t| t.to_lowercase() == tag_lower)
         });
     }
@@ -200,7 +200,7 @@ pub async fn list_discoverable_guilds(
         let member_count = paracord_db::members::get_member_count(&state.db, guild.id)
             .await
             .unwrap_or(0);
-        let tags = parse_discovery_tags(&guild.allowed_roles);
+        let tags = parse_discovery_tags(&guild.discovery_tags);
 
         // Count online members for this guild
         let guild_members = paracord_db::members::get_guild_member_user_ids(&state.db, guild.id)

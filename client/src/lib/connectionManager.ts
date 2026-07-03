@@ -9,7 +9,7 @@ import {
   signServerChallengeWithUnlockedKey,
 } from './accountSession';
 import { getRefreshToken, setAccessToken, setRefreshToken } from './authToken';
-import { getCurrentOriginServerUrl, getStoredServerUrl } from './apiBaseUrl';
+import { getCurrentOriginServerUrl, getStoredServerUrl } from './config/apiBaseUrl';
 import { inflateSync } from 'fflate';
 import type { Activity, GatewayPayload } from '../types';
 import { GatewayEvents } from '../gateway/events';
@@ -17,6 +17,25 @@ import { dispatchGatewayEvent } from '../gateway/dispatch';
 import { logVoiceDiagnostic } from './desktopDiagnostics';
 
 export const LOCAL_SERVER_ID = '__local__';
+
+/**
+ * Rate-limited diagnostic for frames we couldn't parse. We deliberately log
+ * only the transport and a short, truncated prefix of the payload — never the
+ * full frame, which may contain message content or tokens — and at most once
+ * per interval so a burst of malformed frames can't flood the console.
+ */
+const MALFORMED_FRAME_WARN_INTERVAL_MS = 10_000;
+const MALFORMED_FRAME_PREFIX_LEN = 48;
+let lastMalformedFrameWarnTs = 0;
+export function warnMalformedFrame(transport: 'sse' | 'ws', rawPreview: string): void {
+  const now = Date.now();
+  if (now - lastMalformedFrameWarnTs < MALFORMED_FRAME_WARN_INTERVAL_MS) return;
+  lastMalformedFrameWarnTs = now;
+  const prefix = rawPreview.slice(0, MALFORMED_FRAME_PREFIX_LEN);
+  console.warn(
+    `[gateway] dropping malformed ${transport} frame (prefix: ${JSON.stringify(prefix)})`,
+  );
+}
 
 export interface ServerConnection {
   serverId: string;
@@ -27,6 +46,10 @@ export interface ServerConnection {
   streamUrl: string | null;
   heartbeatTimer: ReturnType<typeof setInterval> | null;
   heartbeatInterval: number | null;
+  /** SSE liveness watchdog timer (WS uses the heartbeat instead). */
+  sseWatchdogTimer: ReturnType<typeof setInterval> | null;
+  /** Timestamp of the last SSE frame (event or open) for the watchdog. */
+  lastFrameTs: number;
   sequence: number | null;
   sessionId: string | null;
   realtimeCursor: number | null;
@@ -45,6 +68,12 @@ class ConnectionManager {
   private connections = new Map<string, ServerConnection>();
   private connecting = new Map<string, Promise<void>>();
   private static readonly MAX_PENDING_MESSAGES = 200;
+  /** Consecutive missed liveness checks (heartbeat acks / SSE frames) before a
+   *  connection is considered stale and torn down. Shared by WS and SSE. */
+  private static readonly MAX_MISSED_ACKS = 3;
+  /** SSE watchdog tick: mirrors the WS heartbeat cadence. Each tick with no
+   *  intervening frame counts as a miss, matching the WS missed-ack logic. */
+  private static readonly SSE_WATCHDOG_INTERVAL_MS = 30_000;
   private readonly useRealtimeV2 =
     import.meta.env.VITE_RT_V2 !== '0' && import.meta.env.VITE_RT_V2 !== 'false';
   private offline = typeof navigator !== 'undefined' && navigator.onLine === false;
@@ -238,6 +267,8 @@ class ConnectionManager {
       streamUrl: null,
       heartbeatTimer: null,
       heartbeatInterval: null,
+      sseWatchdogTimer: null,
+      lastFrameTs: 0,
       sequence: null,
       sessionId: null,
       realtimeCursor: null,
@@ -315,6 +346,8 @@ class ConnectionManager {
       streamUrl: null,
       heartbeatTimer: null,
       heartbeatInterval: null,
+      sseWatchdogTimer: null,
+      lastFrameTs: 0,
       sequence: null,
       sessionId: null,
       realtimeCursor: null,
@@ -417,6 +450,7 @@ class ConnectionManager {
       // Close stale EventSource before opening a new one to avoid
       // overlapping SSE connections (which can cause ERR_CONNECTION_RESET).
       if (conn.eventSource) {
+        this.clearSseWatchdog(conn);
         conn.eventSource.close();
         conn.eventSource = null;
       }
@@ -536,14 +570,22 @@ class ConnectionManager {
           conn.connecting = false;
           conn.connected = true;
           conn.reconnectAttempts = 0;
+          conn.missedAcks = 0;
           if (conn.serverId !== LOCAL_SERVER_ID) {
             useServerListStore.getState().setConnected(conn.serverId, true);
           }
+          // EventSource has no built-in heartbeat, so run a liveness watchdog
+          // that reconnects if the stream goes silent (mirrors the WS path).
+          this.startSseWatchdog(conn, es);
           this.syncUiConnectionStatus();
         };
 
         const handleRealtimeEvent = (rawData: string) => {
           if (!this.isCurrentConnection(conn) || conn.eventSource !== es) return;
+          // Any frame (even one we can't parse) proves the stream is alive, so
+          // reset the watchdog before attempting to decode it.
+          conn.lastFrameTs = Date.now();
+          conn.missedAcks = 0;
           try {
             const payload: GatewayPayload & { event_id?: number } = JSON.parse(rawData);
             if (typeof payload.event_id === 'number') {
@@ -551,7 +593,7 @@ class ConnectionManager {
             }
             this.handlePayload(conn, payload);
           } catch {
-            // ignore malformed payloads
+            warnMalformedFrame('sse', rawData);
           }
         };
         es.onmessage = (evt) => {
@@ -644,8 +686,8 @@ class ConnectionManager {
 
     activeWs.onmessage = (event) => {
       if (!this.isCurrentConnection(conn) || conn.ws !== activeWs) return;
+      let text: string | null = null;
       try {
-        let text: string;
         if (event.data instanceof ArrayBuffer) {
           // Compressed binary frame — strip Z_SYNC_FLUSH suffix and inflate
           const raw = new Uint8Array(event.data);
@@ -661,12 +703,12 @@ class ConnectionManager {
           text = new TextDecoder().decode(decompressed);
         } else {
           // Uncompressed text frame (fallback)
-          text = event.data;
+          text = event.data as string;
         }
         const payload: GatewayPayload = JSON.parse(text);
         this.handlePayload(conn, payload);
       } catch {
-        /* ignore malformed payloads */
+        warnMalformedFrame('ws', text ?? '<binary frame>');
       }
     };
 
@@ -715,6 +757,7 @@ class ConnectionManager {
         break;
       case 7: // RECONNECT
         if (this.useRealtimeV2) {
+          this.clearSseWatchdog(conn);
           conn.eventSource?.close();
           conn.eventSource = null;
           conn.connected = false;
@@ -727,6 +770,7 @@ class ConnectionManager {
       case 9: // INVALID_SESSION
         conn.sessionId = null;
         if (this.useRealtimeV2) {
+          this.clearSseWatchdog(conn);
           conn.eventSource?.close();
           conn.eventSource = null;
           conn.connected = false;
@@ -759,7 +803,7 @@ class ConnectionManager {
   private startHeartbeat(conn: ServerConnection): void {
     if (conn.heartbeatTimer) clearInterval(conn.heartbeatTimer);
     conn.heartbeatTimer = setInterval(() => {
-      if (conn.missedAcks >= 3) {
+      if (conn.missedAcks >= ConnectionManager.MAX_MISSED_ACKS) {
         conn.ws?.close();
         return;
       }
@@ -767,6 +811,51 @@ class ConnectionManager {
       conn.missedAcks++;
       this.send(conn, { op: 1, d: conn.sequence });
     }, conn.heartbeatInterval!);
+  }
+
+  /**
+   * SSE liveness watchdog. EventSource silently keeps a dead TCP connection
+   * "open", so — mirroring the WS heartbeat/missed-ack path — each tick with no
+   * intervening frame counts as a miss; once too many pile up the stream is
+   * declared stale, its latency recorded, and a reconnect is triggered.
+   */
+  private startSseWatchdog(conn: ServerConnection, es: EventSource): void {
+    this.clearSseWatchdog(conn);
+    conn.lastFrameTs = Date.now();
+    conn.missedAcks = 0;
+    conn.sseWatchdogTimer = setInterval(() => {
+      if (!this.isCurrentConnection(conn) || conn.eventSource !== es) {
+        this.clearSseWatchdog(conn);
+        return;
+      }
+      conn.missedAcks++;
+      if (conn.missedAcks < ConnectionManager.MAX_MISSED_ACKS) return;
+
+      // Stream is stale — record latency like the WS ack path and tear it down.
+      conn.connectionLatency = Date.now() - conn.lastFrameTs;
+      useUIStore.getState().setConnectionLatency(conn.connectionLatency);
+      this.clearSseWatchdog(conn);
+      conn.connected = false;
+      conn.connecting = false;
+      conn.eventSource = null;
+      es.close();
+      if (conn.serverId !== LOCAL_SERVER_ID) {
+        useServerListStore.getState().setConnected(conn.serverId, false);
+      }
+      this.cleanupConnection(conn);
+      if (conn.allowReconnect) {
+        this.reconnectGateway(conn);
+      } else {
+        this.syncUiConnectionStatus();
+      }
+    }, ConnectionManager.SSE_WATCHDOG_INTERVAL_MS);
+  }
+
+  private clearSseWatchdog(conn: ServerConnection): void {
+    if (conn.sseWatchdogTimer) {
+      clearInterval(conn.sseWatchdogTimer);
+      conn.sseWatchdogTimer = null;
+    }
   }
 
   private handleDispatch(conn: ServerConnection, event: string, data: unknown): void {
@@ -937,6 +1026,7 @@ class ConnectionManager {
       clearInterval(conn.heartbeatTimer);
       conn.heartbeatTimer = null;
     }
+    this.clearSseWatchdog(conn);
   }
 
   /** Disconnect a specific server */

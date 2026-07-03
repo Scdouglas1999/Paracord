@@ -1,4 +1,9 @@
-import { createElement, type ReactNode } from 'react';
+import {
+  createElement,
+  type ReactNode,
+  type MouseEvent as ReactMouseEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from './customEmoji';
 import { safeExternalUrl } from './security';
 import CodeBlock from '../components/message/CodeBlock';
@@ -26,6 +31,48 @@ interface Token {
   mentionUserId?: string;
 }
 
+
+const MARKDOWN_STYLE_ID = 'paracord-markdown-styles';
+const MARKDOWN_STYLES = `
+.spoiler {
+  background-color: var(--spoiler-bg, #202225);
+  color: transparent;
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.spoiler.spoiler-revealed {
+  background-color: var(--spoiler-bg-revealed, rgba(255, 255, 255, 0.1));
+  color: inherit;
+}
+.paracord-md-link {
+  color: var(--text-link, #00aff4);
+  text-decoration: none;
+}
+.paracord-md-link:hover {
+  text-decoration: underline;
+}
+`;
+
+/**
+ * Idempotently inject the markdown stylesheet (spoiler + link classes) into the
+ * document head. Safe to call repeatedly and in non-DOM environments.
+ */
+function ensureMarkdownStyles(): void {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(MARKDOWN_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = MARKDOWN_STYLE_ID;
+  style.textContent = MARKDOWN_STYLES;
+  document.head.appendChild(style);
+}
+
+/** Toggle a spoiler's revealed state, keeping its aria-expanded in sync. */
+function toggleSpoiler(el: HTMLElement): void {
+  const revealed = el.classList.toggle('spoiler-revealed');
+  el.setAttribute('aria-expanded', revealed ? 'true' : 'false');
+}
 
 function tokenizeInline(text: string): Token[] {
   const tokens: Token[] = [];
@@ -188,18 +235,18 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
           {
             key: i,
             className: 'spoiler',
-            style: {
-              backgroundColor: 'var(--spoiler-bg, #202225)',
-              color: 'transparent',
-              borderRadius: '3px',
-              padding: '0 2px',
-              cursor: 'pointer',
-              transition: 'all 0.1s',
+            role: 'button',
+            tabIndex: 0,
+            'aria-expanded': false,
+            'aria-label': 'Spoiler, activate to reveal',
+            onClick: (e: ReactMouseEvent<HTMLElement>) => {
+              toggleSpoiler(e.currentTarget);
             },
-            onClick: (e: MouseEvent) => {
-              const el = e.currentTarget as HTMLElement;
-              el.style.backgroundColor = 'var(--spoiler-bg-revealed, rgba(255,255,255,0.1))';
-              el.style.color = 'inherit';
+            onKeyDown: (e: ReactKeyboardEvent<HTMLElement>) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggleSpoiler(e.currentTarget);
+              }
             },
           },
           token.content,
@@ -230,13 +277,7 @@ function renderInline(text: string, guildId?: string, mentionMap?: Map<string, s
             href: safeHref,
             target: '_blank',
             rel: 'noopener noreferrer',
-            style: { color: 'var(--text-link, #00aff4)', textDecoration: 'none' },
-            onMouseEnter: (e: MouseEvent) => {
-              (e.currentTarget as HTMLElement).style.textDecoration = 'underline';
-            },
-            onMouseLeave: (e: MouseEvent) => {
-              (e.currentTarget as HTMLElement).style.textDecoration = 'none';
-            },
+            className: 'paracord-md-link',
           },
           token.content,
         );
@@ -310,6 +351,8 @@ function isOrderedList(line: string): boolean {
 
 export function parseMarkdown(text: string, guildId?: string, mentionMap?: Map<string, string>, onMentionClick?: (userId: string) => void): ReactNode[] {
   if (!text) return [];
+
+  ensureMarkdownStyles();
 
   const lines = text.split('\n');
   const nodes: ReactNode[] = [];

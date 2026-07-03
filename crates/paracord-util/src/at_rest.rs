@@ -180,7 +180,7 @@ pub fn parse_master_key(raw: &str) -> Result<[u8; 32], AtRestKeyError> {
 
 pub fn derive_sqlite_key_hex(master_key: &[u8; 32]) -> String {
     let key = derive_subkey(master_key, b"sqlite");
-    encode_hex(&key)
+    crate::hex::hex_encode(&key)
 }
 
 fn derive_subkey(master_key: &[u8; 32], context: &[u8]) -> [u8; 32] {
@@ -236,16 +236,6 @@ fn parse_base64_key(raw: &str) -> Result<[u8; 32], AtRestKeyError> {
         }
     }
     Err(AtRestKeyError::InvalidEncoding)
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 
 #[cfg(test)]

@@ -24,3 +24,9 @@ moka = { workspace = true }
 dashmap = { workspace = true }
 governor = { workspace = true }
 flate2 = "1"
+
+[dev-dependencies]
+paracord-media = { workspace = true }
+paracord-util = { workspace = true }
+tempfile = { workspace = true }
+anyhow = { workspace = true }

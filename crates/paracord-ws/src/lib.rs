@@ -16,7 +16,8 @@ mod session;
 pub use compression::WsCompressor;
 #[doc(hidden)]
 pub use handler::{
-    run_session, test_insert_cached_session, test_push_buffered_event, wait_for_identify_or_resume,
+    run_session, test_acquire_user_connection_slot, test_insert_cached_session,
+    test_max_connections_per_user, test_push_buffered_event, wait_for_identify_or_resume,
 };
 #[doc(hidden)]
 pub use session::Session;
@@ -72,6 +73,14 @@ fn build_allowed_origins(state: &AppState) -> BTreeSet<String> {
     }
 
     allowed
+}
+
+/// Internal seam exposed for the crate's integration tests. Delegates to the
+/// private `is_origin_allowed` so tests can exercise Origin accept/reject without
+/// standing up a full HTTP upgrade. Not part of the supported public API.
+#[doc(hidden)]
+pub fn test_is_origin_allowed(headers: &HeaderMap, state: &AppState) -> bool {
+    is_origin_allowed(headers, state)
 }
 
 fn is_origin_allowed(headers: &HeaderMap, state: &AppState) -> bool {

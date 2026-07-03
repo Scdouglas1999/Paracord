@@ -9,11 +9,35 @@ import {
   FileTransportManager,
   hasQuicTransport,
 } from '../lib/media/transport/fileTransportManager';
-import { resolveV2ApiUrl } from '../lib/apiBaseUrl';
 
 /** Check if we're running in Tauri (native desktop). */
 function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI__' in window;
+}
+
+/**
+ * Build an absolute `/api/v2` URL whose origin matches the axios instance that
+ * `getApi()` resolves to (the active server's per-server client under
+ * multi-server, or the LOCAL fallback singleton during bootstrap). Deriving the
+ * origin from the active client — rather than the globally stored server —
+ * ensures uploads/attachments target the same origin as the REST request that
+ * authorized them. Falls back to the current window origin when the active
+ * client's baseURL is relative (e.g. the Vite dev proxy).
+ */
+function resolveActiveV2ApiUrl(path: string): string {
+  const base = getApi().defaults.baseURL ?? '';
+  let origin = '';
+  if (base.startsWith('http')) {
+    try {
+      origin = new URL(base).origin;
+    } catch {
+      origin = '';
+    }
+  }
+  if (!origin) {
+    origin = typeof window !== 'undefined' ? window.location.origin : '';
+  }
+  return `${origin}/api/v2${path}`;
 }
 
 /**
@@ -25,7 +49,7 @@ async function getUploadToken(
   file: File,
 ): Promise<UploadTokenResponse> {
   const resp = await getApi().post<UploadTokenResponse>(
-    resolveV2ApiUrl(`/channels/${channelId}/upload-token`),
+    resolveActiveV2ApiUrl(`/channels/${channelId}/upload-token`),
     {
       filename: file.name,
       size: file.size,

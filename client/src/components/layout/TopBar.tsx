@@ -28,6 +28,7 @@ import { authApi } from '../../api/auth';
 import { useVoice } from '../../hooks/useVoice';
 import { useUIStore } from '../../stores/uiStore';
 import { useChannelStore } from '../../stores/channelStore';
+import { useReadStateStore } from '../../stores/readStateStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { toast } from '../../stores/toastStore';
 import type { Message, ReadState } from '../../types';
@@ -111,7 +112,8 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
   const [pinsError, setPinsError] = useState<string | null>(null);
   const [showInbox, setShowInbox] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
-  const [readStates, setReadStates] = useState<ReadState[]>([]);
+  const readStateRecord = useReadStateStore((s) => s.readStates);
+  const readStates = useMemo(() => Object.values(readStateRecord), [readStateRecord]);
   const [showHelp, setShowHelp] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -178,33 +180,10 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [channelId, setCommandPaletteOpen]);
 
+  // Read state lives in the shared store, kept live by dispatch and mark-read
+  // call sites; pull an authoritative snapshot once on mount.
   useEffect(() => {
-    let disposed = false;
-    const refreshReadStates = async () => {
-      try {
-        const { data } = await authApi.getReadStates();
-        if (!disposed) {
-          setReadStates(data);
-        }
-      } catch {
-        // keep existing unread snapshot on transient fetch failures
-      }
-    };
-
-    void refreshReadStates();
-    const intervalId = window.setInterval(() => {
-      void refreshReadStates();
-    }, 30000);
-
-    // Immediately refresh when a channel is marked as read
-    const onReadStateUpdated = () => void refreshReadStates();
-    window.addEventListener('paracord:read-state-updated', onReadStateUpdated);
-
-    return () => {
-      disposed = true;
-      window.clearInterval(intervalId);
-      window.removeEventListener('paracord:read-state-updated', onReadStateUpdated);
-    };
+    void useReadStateStore.getState().refresh();
   }, []);
 
   useEffect(() => {
@@ -323,9 +302,8 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
     }
     try {
       const { data } = await authApi.getReadStates();
-      setReadStates(data);
+      useReadStateStore.getState().setAll(data);
     } catch (err) {
-      setReadStates([]);
       setInboxError(`Failed to load inbox: ${extractApiError(err)}`);
     }
     setShowInbox(true);

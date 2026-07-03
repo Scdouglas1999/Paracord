@@ -6,7 +6,6 @@ describe('uiStore', () => {
     // Reset store to defaults
     useUIStore.setState({
       sidebarOpen: true,
-      memberSidebarOpen: true,
       theme: 'dark',
       customCss: '',
       compactMode: false,
@@ -21,7 +20,6 @@ describe('uiStore', () => {
   it('has correct initial state', () => {
     const state = useUIStore.getState();
     expect(state.sidebarOpen).toBe(true);
-    expect(state.memberSidebarOpen).toBe(true);
     expect(state.theme).toBe('dark');
     expect(state.customCss).toBe('');
     expect(state.compactMode).toBe(false);
@@ -33,13 +31,6 @@ describe('uiStore', () => {
     expect(useUIStore.getState().sidebarOpen).toBe(false);
     useUIStore.getState().toggleSidebar();
     expect(useUIStore.getState().sidebarOpen).toBe(true);
-  });
-
-  it('toggles member sidebar', () => {
-    useUIStore.getState().toggleMemberSidebar();
-    expect(useUIStore.getState().memberSidebarOpen).toBe(false);
-    useUIStore.getState().toggleMemberSidebar();
-    expect(useUIStore.getState().memberSidebarOpen).toBe(true);
   });
 
   it('sets theme', () => {

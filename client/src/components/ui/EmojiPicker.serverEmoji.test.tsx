@@ -10,7 +10,7 @@ vi.mock('../../api/emojis', () => ({
   },
 }));
 
-vi.mock('../../lib/apiBaseUrl', () => ({
+vi.mock('../../lib/config/apiBaseUrl', () => ({
   resolveApiBaseUrl: () => '/api/v1',
   resolveResourceUrl: (path: string, token?: string | null) =>
     token ? `/api/v1/${path}?token=${encodeURIComponent(token)}` : `/api/v1/${path}`,

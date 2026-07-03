@@ -36,6 +36,7 @@ pub mod error;
 pub mod middleware;
 pub mod opengraph;
 pub mod routes;
+pub mod secure_tokens;
 
 const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 const ATTACHMENT_REQUEST_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;

@@ -1,5 +1,5 @@
 import axios, { type AxiosError, type AxiosInstance } from 'axios';
-import { resolveApiBaseUrl } from '../lib/apiBaseUrl';
+import { resolveApiBaseUrl } from '../lib/config/apiBaseUrl';
 import { getTauriAdapter } from '../lib/tauriAxiosAdapter';
 import {
   clearLegacyPersistedAuth,

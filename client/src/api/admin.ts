@@ -1,5 +1,5 @@
 import { getApi } from './activeClient';
-import { resolveServerRootUrl } from '../lib/apiBaseUrl';
+import { resolveServerRootUrl } from '../lib/config/apiBaseUrl';
 
 export interface SecurityEvent {
   id: string;

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayEvents } from '../gateway/events';
-import { connectionManager, LOCAL_SERVER_ID, type ServerConnection } from './connectionManager';
+import {
+  connectionManager,
+  warnMalformedFrame,
+  LOCAL_SERVER_ID,
+  type ServerConnection,
+} from './connectionManager';
 
 function makeConnection(overrides: Partial<ServerConnection> = {}): ServerConnection {
   return {
@@ -12,6 +17,8 @@ function makeConnection(overrides: Partial<ServerConnection> = {}): ServerConnec
     streamUrl: null,
     heartbeatTimer: null,
     heartbeatInterval: null,
+    sseWatchdogTimer: null,
+    lastFrameTs: 0,
     sequence: 7,
     sessionId: 'session-before',
     realtimeCursor: null,
@@ -37,6 +44,7 @@ type ManagerInternals = {
   reconnectGateway: (conn: ServerConnection) => void;
   connectRealtime: (conn: ServerConnection) => void;
   connectRealtimeSse: (conn: ServerConnection) => void;
+  startSseWatchdog: (conn: ServerConnection, es: EventSource) => void;
 };
 
 const manager = connectionManager as unknown as ManagerInternals;
@@ -287,5 +295,90 @@ describe('connectionManager duplicate SSE guard', () => {
     expect(esInstances).toBe(0);
     expect(secondary.eventSource).toBeNull();
     expect(secondary.connected).toBe(true);
+  });
+});
+
+describe('connectionManager malformed frame diagnostics', () => {
+  it('logs at most one rate-limited warning per window and never throws', () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Two malformed frames inside the throttle window -> a single warning.
+      expect(() => warnMalformedFrame('sse', '{not valid json')).not.toThrow();
+      expect(() => warnMalformedFrame('ws', '  binary garbage')).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [firstMessage] = warnSpy.mock.calls[0];
+      expect(String(firstMessage)).toContain('malformed sse');
+      // The full payload is never logged, only a truncated prefix.
+      expect(String(firstMessage)).not.toContain('binary garbage');
+
+      // Once the throttle window elapses, a fresh warning is emitted.
+      vi.advanceTimersByTime(10_000);
+      warnMalformedFrame('ws', 'still broken');
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('connectionManager SSE watchdog', () => {
+  let reconnectSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    reconnectSpy = vi.spyOn(
+      manager as unknown as { reconnectGateway: (c: ServerConnection) => void },
+      'reconnectGateway',
+    ).mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    reconnectSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('marks the stream stale and reconnects after the no-frame timeout', () => {
+    const close = vi.fn();
+    const es = { close } as unknown as EventSource;
+    const conn = makeConnection({ eventSource: es, connected: true });
+
+    withConnection(conn, () => {
+      manager.startSseWatchdog(conn, es);
+      expect(conn.sseWatchdogTimer).not.toBeNull();
+
+      // Three silent watchdog ticks (no intervening frame) -> stale.
+      vi.advanceTimersByTime(30_000 * 3);
+
+      expect(reconnectSpy).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(conn.eventSource).toBeNull();
+      expect(conn.connected).toBe(false);
+      expect(conn.connectionLatency).toBeGreaterThan(0);
+      expect(conn.sseWatchdogTimer).toBeNull();
+    });
+  });
+
+  it('resets its miss counter whenever a frame keeps the stream alive', () => {
+    const es = { close: vi.fn() } as unknown as EventSource;
+    const conn = makeConnection({ eventSource: es, connected: true });
+
+    withConnection(conn, () => {
+      manager.startSseWatchdog(conn, es);
+      // Two silent ticks accumulate misses...
+      vi.advanceTimersByTime(30_000 * 2);
+      expect(conn.missedAcks).toBe(2);
+      expect(reconnectSpy).not.toHaveBeenCalled();
+
+      // ...a live frame resets the counter, so the stream survives.
+      conn.lastFrameTs = Date.now();
+      conn.missedAcks = 0;
+      vi.advanceTimersByTime(30_000 * 2);
+      expect(reconnectSpy).not.toHaveBeenCalled();
+
+      // The watchdog timer is not owned by withConnection's cleanup; clear it.
+      if (conn.sseWatchdogTimer) clearInterval(conn.sseWatchdogTimer);
+    });
   });
 });

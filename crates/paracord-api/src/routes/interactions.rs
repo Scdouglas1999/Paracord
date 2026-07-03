@@ -174,17 +174,7 @@ async fn validate_webhook_token(
     // If not found with new hash, try legacy SHA-256 hash
     if row.is_none() {
         // Compute legacy hash (without HMAC)
-        let legacy_hash = {
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(raw_token.as_bytes());
-            let digest = hasher.finalize();
-            let mut out = String::with_capacity(digest.len() * 2);
-            for b in digest {
-                out.push_str(&format!("{:02x}", b));
-            }
-            out
-        };
+        let legacy_hash = crate::secure_tokens::hash_token_sha256_hex(raw_token);
         row = paracord_db::interaction_tokens::get_interaction_token_by_app_and_hash(
             &state.db,
             app_id,

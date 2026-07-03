@@ -65,7 +65,7 @@ vi.mock('../../stores/voiceStore', () => ({
     }),
 }));
 
-vi.mock('../../lib/notifications', () => ({
+vi.mock('../../lib/features/notifications', () => ({
   isEnabled: vi.fn(() => false),
   isPermissionGranted: vi.fn(() => Promise.resolve(false)),
   requestPermission: vi.fn(() => Promise.resolve(false)),

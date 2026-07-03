@@ -1138,7 +1138,7 @@ pub async fn register(
         return Err(ApiError::Forbidden);
     }
 
-    if paracord_util::validation::validate_username(&body.username).is_err() {
+    if paracord_util::validation::is_valid_new_username(&body.username).is_err() {
         auth_guard_record_failure(
             &state,
             &headers,
@@ -1261,6 +1261,7 @@ pub async fn register(
         Some(user.id),
         Some(&session_id),
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "auth_method": "password" })),
     )
     .await;
@@ -1523,6 +1524,7 @@ pub async fn login(
         Some(user.id),
         Some(&session_id),
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "auth_method": "password" })),
     )
     .await;
@@ -1550,9 +1552,11 @@ pub async fn login(
 
 pub async fn refresh(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Option<Json<serde_json::Value>>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let peer_ip = addr.ip().to_string();
     // Accept refresh token from cookie OR request body (for cross-origin clients).
     let refresh_token = get_cookie_value(&headers, REFRESH_COOKIE_NAME)
         .or_else(|| {
@@ -1572,6 +1576,7 @@ pub async fn refresh(
         None,
         Some(&session_id),
         Some(&headers),
+        Some(peer_ip.as_str()),
         None,
     )
     .await;
@@ -1587,9 +1592,11 @@ pub async fn refresh(
 
 pub async fn logout(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: AuthUser,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
+    let peer_ip = addr.ip().to_string();
     let now = Utc::now();
     let mut revoked_session: Option<String> = None;
     if let Some(session_id) = auth.session_id.as_deref() {
@@ -1629,6 +1636,7 @@ pub async fn logout(
         Some(auth.user_id),
         revoked_session.as_deref(),
         Some(&headers),
+        Some(peer_ip.as_str()),
         None,
     )
     .await;
@@ -1676,9 +1684,11 @@ pub async fn list_sessions(
 
 pub async fn revoke_session(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: AuthUser,
     Path(session_id): Path<String>,
 ) -> Result<axum::response::Response, ApiError> {
+    let peer_ip = addr.ip().to_string();
     let revoked = paracord_db::sessions::revoke_session(
         &state.db,
         &session_id,
@@ -1699,6 +1709,7 @@ pub async fn revoke_session(
         Some(auth.user_id),
         Some(&session_id),
         None,
+        Some(peer_ip.as_str()),
         None,
     )
     .await;
@@ -1791,6 +1802,7 @@ pub async fn attach_public_key(
         Some(auth.user_id),
         Some(&session_id),
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "sessions_revoked": true })),
     )
     .await;
@@ -1937,6 +1949,7 @@ pub async fn forgot_password(
         Some(user.id),
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(serde_json::json!({ "ip": peer_ip })),
     )
     .await;
@@ -2012,6 +2025,7 @@ pub async fn reset_password(
         Some(token_row.user_id),
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(serde_json::json!({ "ip": peer_ip, "sessions_revoked": true })),
     )
     .await;
@@ -2075,6 +2089,7 @@ pub async fn verify_email(
         Some(token_row.user_id),
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(serde_json::json!({ "ip": peer_ip })),
     )
     .await;
@@ -2226,9 +2241,11 @@ pub async fn mfa_setup(
 
 pub async fn mfa_verify(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: AuthUser,
     Json(body): Json<MfaVerifyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let peer_ip = addr.ip().to_string();
     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -2272,6 +2289,7 @@ pub async fn mfa_verify(
         Some(user.id),
         auth.session_id.as_deref(),
         None,
+        Some(peer_ip.as_str()),
         None,
     )
     .await;
@@ -2285,9 +2303,11 @@ pub async fn mfa_verify(
 
 pub async fn mfa_disable(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: AuthUser,
     Json(body): Json<MfaDisableRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let peer_ip = addr.ip().to_string();
     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -2332,6 +2352,7 @@ pub async fn mfa_disable(
         Some(user.id),
         auth.session_id.as_deref(),
         None,
+        Some(peer_ip.as_str()),
         None,
     )
     .await;
@@ -2486,6 +2507,7 @@ pub async fn mfa_login(
         Some(user.id),
         Some(&session_id),
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "auth_method": "password+mfa" })),
     )
     .await;
@@ -2564,7 +2586,7 @@ pub async fn verify(
     )
     .await?;
 
-    if paracord_util::validation::validate_username(&body.username).is_err() {
+    if paracord_util::validation::is_valid_new_username(&body.username).is_err() {
         auth_guard_record_failure(
             &state,
             &headers,
@@ -2737,6 +2759,7 @@ pub async fn verify(
         Some(user.id),
         Some(&session_id),
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "auth_method": "public_key" })),
     )
     .await;

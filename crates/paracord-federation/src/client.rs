@@ -7,7 +7,7 @@ use crate::{
 };
 use ed25519_dalek::SigningKey;
 use reqwest::Client;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -68,6 +68,35 @@ impl FederationClient {
             http,
             transport_signer,
         })
+    }
+
+    /// Select the HTTP client to use for a request to `url`.
+    ///
+    /// When `pinned_addrs` is non-empty the host is a domain that has been
+    /// DNS-resolved and validated, so we return a client that pins the
+    /// connection to exactly those addresses (no re-resolution at connect
+    /// time). When empty (raw-IP host, or private URLs explicitly allowed) the
+    /// shared client is reused as-is.
+    fn client_for(
+        &self,
+        url: &str,
+        pinned_addrs: &[SocketAddr],
+    ) -> Result<Client, FederationError> {
+        if pinned_addrs.is_empty() {
+            return Ok(self.http.clone());
+        }
+        let host = url::Url::parse(url)
+            .ok()
+            .and_then(|parsed| parsed.host_str().map(str::to_string))
+            .ok_or_else(|| {
+                FederationError::Http("SSRF protection: URL has no host to pin".to_string())
+            })?;
+        ssrf_checked_http_client_pinned(
+            "Paracord-Federation/0.4",
+            DEFAULT_TIMEOUT,
+            &host,
+            pinned_addrs,
+        )
     }
 
     /// Discover a remote server's federation info via its `.well-known` endpoint.
@@ -285,14 +314,14 @@ impl FederationClient {
         max_size: u64,
     ) -> Result<(Vec<u8>, Option<String>, Option<String>), FederationError> {
         // Manual redirects allow every hop to receive the same async DNS
-        // validation before reqwest opens a connection.
-        let download_client = ssrf_checked_http_client("Paracord-Federation/0.4", DEFAULT_TIMEOUT)?;
-
+        // validation before reqwest opens a connection. Each hop pins the
+        // connection to the exact IP that just passed validation.
         let mut current_url = download_url.to_string();
         let mut redirects = 0usize;
         let resp = loop {
             validate_ssrf_safe_url(&current_url)?;
-            resolve_and_check_dns(&current_url).await?;
+            let pinned_addrs = resolve_and_check_dns(&current_url).await?;
+            let download_client = self.client_for(&current_url, &pinned_addrs)?;
 
             let resp = download_client
                 .get(&current_url)
@@ -402,12 +431,13 @@ impl FederationClient {
         url: &str,
         extra_headers: &[(&str, String)],
     ) -> Result<reqwest::Response, FederationError> {
-        validate_public_federation_url_with_dns(url).await?;
+        let pinned_addrs = resolve_public_federation_addrs(url).await?;
+        let client = self.client_for(url, &pinned_addrs)?;
         let mut last_err = FederationError::Http("no attempts made".to_string());
         for attempt in 0..MAX_RETRIES {
             let path = transport::request_path_from_url(url);
             for protocol_version in [FEDERATION_PROTOCOL_DEFAULT, FEDERATION_PROTOCOL_VERSION_V1] {
-                let mut request = self.http.get(url);
+                let mut request = client.get(url);
                 request = self.with_transport_signature_headers(
                     request,
                     "GET",
@@ -462,13 +492,17 @@ impl FederationClient {
         url: &str,
         body_bytes: Vec<u8>,
     ) -> Result<reqwest::Response, FederationError> {
-        validate_public_federation_url_with_dns(url).await?;
+        let pinned_addrs = resolve_public_federation_addrs(url).await?;
+        let client = self.client_for(url, &pinned_addrs)?;
         let mut last_err = FederationError::Http("no attempts made".to_string());
         for attempt in 0..MAX_RETRIES {
             let path = transport::request_path_from_url(url);
             for protocol_version in [FEDERATION_PROTOCOL_DEFAULT, FEDERATION_PROTOCOL_VERSION_V1] {
-                let mut request = self
-                    .http
+                // Sign and send the exact same bytes: `body_bytes` is serialized
+                // once by the caller, signed as-is below, and transmitted
+                // verbatim — no re-serialization that could diverge from the
+                // signed payload.
+                let mut request = client
                     .post(url)
                     .header("content-type", "application/json")
                     .body(body_bytes.clone());
@@ -554,6 +588,27 @@ pub fn ssrf_checked_http_client(
         .timeout(timeout)
         .user_agent(user_agent)
         .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| FederationError::Http(e.to_string()))
+}
+
+/// Build an SSRF-checked HTTP client whose DNS for `host` is pinned to `addrs`.
+///
+/// reqwest resolves `host` exclusively to `addrs` and never consults the system
+/// resolver for it, so the socket connects to the exact IP that was validated
+/// by [`resolve_and_check_dns`]. This closes the DNS-rebinding TOCTOU between
+/// validation and connect.
+fn ssrf_checked_http_client_pinned(
+    user_agent: &'static str,
+    timeout: Duration,
+    host: &str,
+    addrs: &[SocketAddr],
+) -> Result<Client, FederationError> {
+    Client::builder()
+        .timeout(timeout)
+        .user_agent(user_agent)
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs(host, addrs)
         .build()
         .map_err(|e| FederationError::Http(e.to_string()))
 }
@@ -772,8 +827,17 @@ pub fn validate_public_federation_url(url_str: &str) -> Result<(), FederationErr
 /// Validates a federation URL and resolves DNS so private-address hostnames are
 /// rejected before reqwest opens a connection.
 pub async fn validate_public_federation_url_with_dns(url_str: &str) -> Result<(), FederationError> {
+    resolve_public_federation_addrs(url_str).await.map(|_| ())
+}
+
+/// Validate a federation URL and resolve its DNS, returning the validated public
+/// socket addresses to pin onto the connecting client (empty when the host is a
+/// raw IP literal, or when private federation URLs are explicitly allowed).
+async fn resolve_public_federation_addrs(
+    url_str: &str,
+) -> Result<Vec<SocketAddr>, FederationError> {
     if private_federation_urls_allowed() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     validate_public_federation_url(url_str)?;
     resolve_and_check_dns(url_str).await
@@ -837,36 +901,52 @@ fn validate_url_host_is_public(parsed: &url::Url) -> Result<(), FederationError>
 }
 
 /// Resolves the hostname in the URL via DNS and checks that all returned IP
-/// addresses are public. This mitigates DNS rebinding attacks where an attacker
-/// controls a domain that resolves to an internal IP after initial validation.
+/// addresses are public, returning the validated socket addresses so the caller
+/// can pin them onto the connecting reqwest client.
 ///
-/// Note: there is an inherent TOCTOU gap between this check and the actual TCP
-/// connection made by reqwest. DNS rebinding with very low TTL can still slip
-/// through. This is a known residual risk; a complete fix requires resolving
-/// and connecting in a single step (e.g. via a custom `reqwest::dns::Resolve`).
-async fn resolve_and_check_dns(url_str: &str) -> Result<(), FederationError> {
+/// Pinning the returned addresses (via `resolve_to_addrs`) closes the
+/// DNS-rebinding TOCTOU: reqwest connects to the exact IP that passed this
+/// check instead of re-resolving the hostname at connect time, so a low-TTL
+/// rebind that flips the record to an internal IP after validation cannot
+/// redirect the socket.
+///
+/// For URLs whose host is a raw IP literal, an empty vector is returned: the
+/// literal has already been validated by [`validate_ssrf_safe_url`] /
+/// [`validate_url_host_is_public`] and reqwest connects to it directly, so
+/// there is nothing to pin.
+async fn resolve_and_check_dns(url_str: &str) -> Result<Vec<SocketAddr>, FederationError> {
     let parsed = url::Url::parse(url_str)
         .map_err(|e| FederationError::Http(format!("DNS check: invalid URL: {e}")))?;
 
     // Only domains need DNS resolution; raw IPs are already checked by validate_ssrf_safe_url
-    if let Some(url::Host::Domain(domain)) = parsed.host() {
-        let port = parsed.port().unwrap_or(443);
-        let lookup = format!("{domain}:{port}");
-        let addrs = tokio::net::lookup_host(&lookup).await.map_err(|e| {
+    let Some(url::Host::Domain(domain)) = parsed.host() else {
+        return Ok(Vec::new());
+    };
+
+    let port = parsed.port().unwrap_or(443);
+    let lookup = format!("{domain}:{port}");
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&lookup)
+        .await
+        .map_err(|e| {
             FederationError::Http(format!(
                 "SSRF protection: DNS resolution failed for '{domain}': {e}"
             ))
-        })?;
-        for addr in addrs {
-            if is_private_ip(&addr.ip()) {
-                return Err(FederationError::Http(format!(
-                    "SSRF protection: domain '{domain}' resolves to private IP {}",
-                    addr.ip()
-                )));
-            }
+        })?
+        .collect();
+    for addr in &addrs {
+        if is_private_ip(&addr.ip()) {
+            return Err(FederationError::Http(format!(
+                "SSRF protection: domain '{domain}' resolves to private IP {}",
+                addr.ip()
+            )));
         }
     }
-    Ok(())
+    if addrs.is_empty() {
+        return Err(FederationError::Http(format!(
+            "SSRF protection: DNS resolution returned no addresses for '{domain}'"
+        )));
+    }
+    Ok(addrs)
 }
 
 fn is_private_ip(ip: &IpAddr) -> bool {
@@ -921,7 +1001,10 @@ fn is_private_ip(ip: &IpAddr) -> bool {
 
 #[cfg(test)]
 mod ssrf_tests {
-    use super::{ssrf_checked_http_client, validate_public_federation_url, validate_ssrf_safe_url};
+    use super::{
+        ssrf_checked_http_client, ssrf_checked_http_client_pinned, validate_public_federation_url,
+        validate_ssrf_safe_url,
+    };
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -977,6 +1060,67 @@ mod ssrf_tests {
         assert_eq!(response.status(), reqwest::StatusCode::FOUND);
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!hit_redirect_target.load(Ordering::SeqCst));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn pinned_client_ignores_dns_and_connects_to_validated_ip() {
+        // Stand up a server on loopback; treat its address as the single IP that
+        // passed SSRF validation, and pin the client to it.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let pinned_addr = listener.local_addr().unwrap();
+        let hit = Arc::new(AtomicBool::new(false));
+        let hit_clone = hit.clone();
+        let server = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                hit_clone.store(true, Ordering::SeqCst);
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+
+        // `.invalid` is guaranteed by RFC 2606 never to resolve in real DNS, so
+        // the only way any connection can succeed is via the pinned address.
+        let host = "pinned.federation.invalid";
+        let url = format!("http://{host}:{}/", pinned_addr.port());
+
+        // Control: without the pin the hostname does not resolve, so the request
+        // cannot reach the listener at all.
+        let unpinned = ssrf_checked_http_client("Paracord-Test/1.0", Duration::from_secs(2))
+            .expect("unpinned client builds");
+        assert!(
+            unpinned.get(&url).send().await.is_err(),
+            "unpinned request must fail to resolve the .invalid host"
+        );
+        assert!(
+            !hit.load(Ordering::SeqCst),
+            "control request must not reach the listener"
+        );
+
+        // Pinned: reqwest connects to the exact validated IP and never consults
+        // DNS for the hostname, so a rebinding second resolution cannot move the
+        // connection off the pinned address.
+        let pinned = ssrf_checked_http_client_pinned(
+            "Paracord-Test/1.0",
+            Duration::from_secs(2),
+            host,
+            &[pinned_addr],
+        )
+        .expect("pinned client builds");
+        let resp = pinned
+            .get(&url)
+            .send()
+            .await
+            .expect("pinned request reaches the validated ip");
+        assert!(resp.status().is_success());
+        assert!(
+            hit.load(Ordering::SeqCst),
+            "pinned request must reach the pinned listener"
+        );
+
         server.abort();
     }
 

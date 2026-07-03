@@ -3,7 +3,7 @@ import type { Guild } from '../types';
 import { guildApi } from '../api/guilds';
 import { extractApiError } from '../api/client';
 import { toast } from './toastStore';
-import { resolveApiBaseUrl } from '../lib/apiBaseUrl';
+import { resolveApiBaseUrl } from '../lib/config/apiBaseUrl';
 
 interface GuildState {
   guilds: Guild[];

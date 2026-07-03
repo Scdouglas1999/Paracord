@@ -16,7 +16,7 @@ vi.mock('../../api/client', () => ({
   ),
 }));
 
-vi.mock('../../lib/apiBaseUrl', () => ({
+vi.mock('../../lib/config/apiBaseUrl', () => ({
   resolveResourceUrl: (url: string) => `/resolved${url}`,
 }));
 

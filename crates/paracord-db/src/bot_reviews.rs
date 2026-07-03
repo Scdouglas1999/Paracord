@@ -97,6 +97,36 @@ pub async fn get_review_summary(pool: &DbPool, bot_app_id: i64) -> Result<(i64, 
     Ok((row.0, row.1.unwrap_or(0.0)))
 }
 
+/// Batch review summaries (rating count and average) keyed by bot app id.
+/// Lets store listings enrich a whole page in one query instead of per row.
+/// Apps with no reviews are absent from the map; callers default to `(0, 0.0)`.
+pub async fn get_review_summaries(
+    pool: &DbPool,
+    app_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, (i64, f64)>, DbError> {
+    if app_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = crate::messages::build_placeholders(1, app_ids.len());
+    let sql = format!(
+        "SELECT bot_app_id, COUNT(*) AS review_count, AVG(rating * 1.0) AS avg_rating \
+         FROM bot_reviews WHERE bot_app_id IN ({placeholders}) GROUP BY bot_app_id"
+    );
+    let mut query = sqlx::query(&sql);
+    for id in app_ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    let mut map = std::collections::HashMap::with_capacity(rows.len());
+    for row in rows {
+        let app_id: i64 = row.try_get("bot_app_id")?;
+        let count: i64 = row.try_get("review_count").unwrap_or(0);
+        let avg: Option<f64> = row.try_get("avg_rating").ok().flatten();
+        map.insert(app_id, (count, avg.unwrap_or(0.0)));
+    }
+    Ok(map)
+}
+
 pub async fn record_metric_event(
     pool: &DbPool,
     id: i64,

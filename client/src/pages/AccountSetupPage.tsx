@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAccountStore } from '../stores/accountStore';
 import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
-import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/apiBaseUrl';
+import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/config/apiBaseUrl';
 import { authApi } from '../api/auth';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 

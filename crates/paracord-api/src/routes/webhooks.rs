@@ -25,6 +25,7 @@ use crate::routes::audit;
 const WEBHOOK_RATE_LIMIT: usize = 30;
 const WEBHOOK_RATE_WINDOW_SECS: u64 = 60;
 
+#[derive(Default)]
 struct WebhookRateEntry {
     timestamps: Vec<Instant>,
 }
@@ -32,23 +33,40 @@ struct WebhookRateEntry {
 static WEBHOOK_RATE_MAP: LazyLock<DashMap<i64, WebhookRateEntry>> = LazyLock::new(DashMap::new);
 
 fn check_webhook_rate_limit(webhook_id: i64) -> Result<(), ApiError> {
+    // NOTE: This limiter is process-local / single-instance. The sliding window
+    // lives in an in-memory map on one server process, so in a horizontally
+    // scaled deployment each instance enforces WEBHOOK_RATE_LIMIT independently
+    // and the effective global limit scales with the instance count. A shared
+    // backend (e.g. Redis) would be required for a cluster-wide guarantee.
     let now = Instant::now();
     let cutoff = now - std::time::Duration::from_secs(WEBHOOK_RATE_WINDOW_SECS);
 
-    let mut entry = WEBHOOK_RATE_MAP
-        .entry(webhook_id)
-        .or_insert_with(|| WebhookRateEntry {
-            timestamps: Vec::new(),
-        });
-
-    // Remove expired timestamps
-    entry.timestamps.retain(|ts| *ts > cutoff);
-
-    if entry.timestamps.len() >= WEBHOOK_RATE_LIMIT {
-        return Err(ApiError::RateLimited(WEBHOOK_RATE_WINDOW_SECS as i64));
+    // Fast path: an existing entry for an active webhook. Prune expired
+    // timestamps, enforce the window, then record this request in place.
+    if let Some(mut entry) = WEBHOOK_RATE_MAP.get_mut(&webhook_id) {
+        entry.timestamps.retain(|ts| *ts > cutoff);
+        if entry.timestamps.len() >= WEBHOOK_RATE_LIMIT {
+            return Err(ApiError::RateLimited(WEBHOOK_RATE_WINDOW_SECS as i64));
+        }
+        if !entry.timestamps.is_empty() {
+            entry.timestamps.push(now);
+            return Ok(());
+        }
+        // The window fully lapsed. Drop the entry (releasing its Vec, whose
+        // capacity may have grown during an earlier burst) instead of leaving a
+        // zombie entry behind for every webhook id that was ever executed, then
+        // fall through to record this request in a fresh entry.
+        drop(entry);
+        WEBHOOK_RATE_MAP.remove_if(&webhook_id, |_, e| e.timestamps.is_empty());
     }
 
-    entry.timestamps.push(now);
+    // No live entry (never existed, or just evicted as empty): record this
+    // request in a fresh entry.
+    WEBHOOK_RATE_MAP
+        .entry(webhook_id)
+        .or_default()
+        .timestamps
+        .push(now);
     Ok(())
 }
 
@@ -80,8 +98,16 @@ fn verify_github_signature(secret: &str, body: &[u8], signature_header: &str) ->
     mac.verify_slice(&expected_bytes).is_ok()
 }
 
-/// Simple hex decoder (avoids adding a `hex` crate dependency)
+/// Simple hex codec (avoids adding a `hex` crate dependency)
 mod hex {
+    pub fn encode(input: &[u8]) -> String {
+        let mut out = String::with_capacity(input.len() * 2);
+        for b in input {
+            out.push_str(&format!("{:02x}", b));
+        }
+        out
+    }
+
     pub fn decode(input: &str) -> Result<Vec<u8>, ()> {
         if input.len() % 2 != 0 {
             return Err(());
@@ -104,6 +130,48 @@ mod hex {
             _ => None,
         }
     }
+}
+
+/// Encrypt a GitHub webhook HMAC secret before storing it in the database.
+///
+/// The DB column stays a plain string, but its contents become hex-encoded
+/// AES-256-GCM ciphertext (via the shared at-rest master key). When no at-rest
+/// cryptor is configured the secret is stored as-is, matching the graceful
+/// degradation used for other at-rest secrets.
+fn encrypt_github_secret(state: &AppState, plaintext: &str) -> Result<String, ApiError> {
+    let Some(cryptor) = state.config.totp_cryptor.as_ref() else {
+        return Ok(plaintext.to_string());
+    };
+    let ciphertext = cryptor.encrypt(plaintext.as_bytes()).map_err(|e| {
+        ApiError::Internal(anyhow::anyhow!("github_secret encryption failed: {}", e))
+    })?;
+    Ok(hex::encode(&ciphertext))
+}
+
+/// Decrypt a stored GitHub webhook HMAC secret. Handles both encrypted values
+/// (hex-encoded ciphertext) and legacy plaintext secrets written before at-rest
+/// encryption was introduced, so HMAC verification always operates on the
+/// original secret bytes.
+fn decrypt_github_secret(state: &AppState, stored: &str) -> Result<String, ApiError> {
+    let Some(cryptor) = state.config.totp_cryptor.as_ref() else {
+        return Ok(stored.to_string());
+    };
+    // A legacy plaintext secret is not necessarily valid hex; if it fails to
+    // decode, treat it as plaintext.
+    let Ok(decoded) = hex::decode(stored) else {
+        return Ok(stored.to_string());
+    };
+    // A hex-decodable legacy secret that lacks the at-rest magic prefix is still
+    // plaintext (the hex decode was coincidental) — return it unchanged rather
+    // than mangling it through the decryptor.
+    if !paracord_util::at_rest::FileCryptor::payload_is_encrypted(&decoded) {
+        return Ok(stored.to_string());
+    }
+    let plaintext = cryptor.decrypt(&decoded).map_err(|e| {
+        ApiError::Internal(anyhow::anyhow!("github_secret decryption failed: {}", e))
+    })?;
+    String::from_utf8(plaintext)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("github_secret is not valid UTF-8: {}", e)))
 }
 
 fn webhook_to_json(w: &paracord_db::webhooks::WebhookRow, token: Option<&str>) -> Value {
@@ -193,7 +261,7 @@ pub async fn create_webhook(
     }
 
     let id = paracord_util::snowflake::generate(1);
-    let token = generate_webhook_token();
+    let token = crate::secure_tokens::generate_secure_token();
 
     let webhook = paracord_db::webhooks::create_webhook(
         &state.db,
@@ -311,17 +379,19 @@ pub async fn update_webhook(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    // Update github_secret if provided (empty string clears it)
+    // Update github_secret if provided (empty string clears it). The secret is
+    // encrypted at rest so the stored column holds ciphertext, never the raw
+    // HMAC key.
     if let Some(ref github_secret) = body.github_secret {
-        let secret_value = if github_secret.is_empty() {
+        let encrypted = if github_secret.is_empty() {
             None
         } else {
-            Some(github_secret.as_str())
+            Some(encrypt_github_secret(&state, github_secret)?)
         };
         updated = paracord_db::webhooks::update_webhook_github_secret(
             &state.db,
             webhook_id,
-            secret_value,
+            encrypted.as_deref(),
         )
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -611,18 +681,22 @@ pub async fn execute_webhook(
             // receives GitHub events MUST have a github_secret configured, and every
             // request must carry a valid HMAC signature. Without both we refuse the
             // request rather than accepting unauthenticated payloads.
-            let Some(ref secret) = webhook.github_secret else {
+            let Some(ref stored_secret) = webhook.github_secret else {
                 tracing::warn!(
                     webhook_id = webhook_id,
                     "Rejecting GitHub webhook event: no github_secret configured"
                 );
                 return Err(ApiError::Unauthorized);
             };
+            // The stored secret is encrypted at rest; recover the original HMAC
+            // key before verifying the signature so GitHub HMAC semantics are
+            // preserved.
+            let secret = decrypt_github_secret(&state, stored_secret)?;
             let sig_header = headers
                 .get("X-Hub-Signature-256")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
-            if !verify_github_signature(secret, &body, sig_header) {
+            if !verify_github_signature(&secret, &body, sig_header) {
                 return Err(ApiError::Unauthorized);
             }
 
@@ -670,9 +744,32 @@ pub async fn execute_webhook(
             (content, name, req.avatar_url, embeds)
         };
 
+    // Re-authorize the webhook creator at execution time. A webhook must never
+    // be able to post as a creator who has since left the guild or lost access
+    // to the target channel, so we re-check membership and SEND_MESSAGES here
+    // (using the shared permission cache) rather than trusting the stored
+    // creator id. Reject entirely if the webhook has no recorded creator.
+    let Some(author_id) = webhook.creator_id else {
+        return Err(ApiError::Forbidden);
+    };
+    let guild = paracord_db::guilds::get_guild(&state.db, webhook.space_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    paracord_core::permissions::ensure_guild_member(&state.db, webhook.space_id, author_id).await?;
+    let creator_perms = paracord_core::permissions::compute_channel_permissions_cached(
+        &state.permission_cache,
+        &state.db,
+        webhook.space_id,
+        webhook.channel_id,
+        guild.owner_id,
+        author_id,
+    )
+    .await?;
+    paracord_core::permissions::require_permission(creator_perms, Permissions::SEND_MESSAGES)?;
+
     // Create the message using the webhook creator as the author
     let msg_id = paracord_util::snowflake::generate(1);
-    let author_id = webhook.creator_id.unwrap_or(0);
 
     let msg = paracord_db::messages::create_message(
         &state.db,
@@ -846,15 +943,4 @@ pub async fn delete_webhook_message(
         .dispatch("MESSAGE_DELETE", delete_payload, guild_id);
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-fn generate_webhook_token() -> String {
-    use rand::RngCore;
-    let mut bytes = [0_u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push_str(&format!("{:02x}", b));
-    }
-    out
 }

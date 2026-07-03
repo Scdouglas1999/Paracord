@@ -54,7 +54,7 @@ vi.mock('../lib/account', () => ({
   hasAccount: mockAccount.hasAccount,
 }));
 
-vi.mock('../lib/apiBaseUrl', () => ({
+vi.mock('../lib/config/apiBaseUrl', () => ({
   getStoredServerUrl: mockApiBaseUrl.getStoredServerUrl,
   getCurrentOriginServerUrl: mockApiBaseUrl.getCurrentOriginServerUrl,
   setStoredServerUrl: mockApiBaseUrl.setStoredServerUrl,

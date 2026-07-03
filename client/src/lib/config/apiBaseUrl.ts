@@ -11,7 +11,7 @@ import {
   getVersionedStorageItem,
   removeVersionedStorageItem,
   setVersionedStorageItem,
-} from './versionedStorage';
+} from '../versionedStorage';
 
 export const SERVER_URL_KEY = 'server-url';
 

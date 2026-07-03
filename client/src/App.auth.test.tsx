@@ -20,7 +20,7 @@ vi.mock('./stores/serverListStore', () => ({
   useServerListStore: (selector: (s: typeof serverListState) => unknown) => selector(serverListState),
 }));
 
-vi.mock('./lib/apiBaseUrl', () => ({
+vi.mock('./lib/config/apiBaseUrl', () => ({
   API_BASE_URL: '/api/v1',
   SERVER_URL_KEY: 'server-url',
   clearStoredServerUrl: vi.fn(),

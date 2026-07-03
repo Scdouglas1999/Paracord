@@ -2,6 +2,38 @@ import { useCallback } from 'react';
 import { useVoiceStore } from '../stores/voiceStore';
 import { gateway } from '../gateway/manager';
 
+/**
+ * Toggle self-mute and sync the resulting state to every connected gateway.
+ * Exported as a stable, render-independent function so all mute entry points
+ * (the useVoice hook, keyboard shortcuts) converge on a single code path.
+ * The gateway update runs after the async mic operation settles so the server
+ * always reflects the actual outcome (the store reverts selfMute on failure).
+ */
+export async function toggleVoiceMute(): Promise<void> {
+  await useVoiceStore.getState().toggleMute();
+  const state = useVoiceStore.getState();
+  gateway.updateVoiceStateAll(
+    state.guildId,
+    state.channelId,
+    state.selfMute,
+    state.selfDeaf,
+    state.selfVideo
+  );
+}
+
+/** Toggle self-deafen and sync the resulting state to every connected gateway. */
+export async function toggleVoiceDeaf(): Promise<void> {
+  await useVoiceStore.getState().toggleDeaf();
+  const state = useVoiceStore.getState();
+  gateway.updateVoiceStateAll(
+    state.guildId,
+    state.channelId,
+    state.selfMute,
+    state.selfDeaf,
+    state.selfVideo
+  );
+}
+
 export function useVoice() {
   const connected = useVoiceStore((s) => s.connected);
   const joining = useVoiceStore((s) => s.joining);
@@ -55,32 +87,9 @@ export function useVoice() {
     await useVoiceStore.getState().leaveChannel();
   }, []);
 
-  const toggleMute = useCallback(async () => {
-    await useVoiceStore.getState().toggleMute();
-    // Send gateway update after the async mic operation settles so the
-    // server always reflects the actual mute outcome (the store reverts
-    // selfMute if the mic enable fails).
-    const state = useVoiceStore.getState();
-    gateway.updateVoiceStateAll(
-      state.guildId,
-      state.channelId,
-      state.selfMute,
-      state.selfDeaf,
-      state.selfVideo
-    );
-  }, []);
+  const toggleMute = useCallback(() => toggleVoiceMute(), []);
 
-  const toggleDeaf = useCallback(async () => {
-    await useVoiceStore.getState().toggleDeaf();
-    const state = useVoiceStore.getState();
-    gateway.updateVoiceStateAll(
-      state.guildId,
-      state.channelId,
-      state.selfMute,
-      state.selfDeaf,
-      state.selfVideo
-    );
-  }, []);
+  const toggleDeaf = useCallback(() => toggleVoiceDeaf(), []);
 
   const startStream = useCallback(async (qualityPreset?: string, sourceId?: string) => {
     await startStreamStore(qualityPreset, sourceId);

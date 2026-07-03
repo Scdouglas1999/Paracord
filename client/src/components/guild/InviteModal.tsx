@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { X, Copy, Check, Link, RefreshCw } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { inviteApi } from '../../api/invites';
-import { getStoredServerUrl } from '../../lib/apiBaseUrl';
+import { getStoredServerUrl } from '../../lib/config/apiBaseUrl';
 import { toPortableUri } from '../../lib/portableLinks';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { extractApiError } from '../../api/client';

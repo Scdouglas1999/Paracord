@@ -1,4 +1,4 @@
-import { resolveResourceUrl } from './apiBaseUrl';
+import { resolveResourceUrl } from './config/apiBaseUrl';
 import { getAccessToken } from './authToken';
 
 const CUSTOM_EMOJI_TOKEN_PATTERN = /^<(a?):([A-Za-z0-9_]{1,32}):([0-9]+)>$/;

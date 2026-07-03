@@ -5,7 +5,7 @@ import { useGuildStore } from '../stores/guildStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
-import { gateway } from '../gateway/manager';
+import { toggleVoiceMute, toggleVoiceDeaf } from './useVoice';
 import { isTauri } from '../lib/tauriEnv';
 
 const DEFAULT_KEYBINDS: Record<string, string> = {
@@ -198,12 +198,8 @@ export function useKeyboardNavigation() {
       // -- Toggle mute (configurable) --
       if (matchesKeybind(e, keybinds.toggleMute)) {
         e.preventDefault();
-        const voiceState = useVoiceStore.getState();
-        if (voiceState.connected) {
-          void voiceState.toggleMute().then(() => {
-            const s = useVoiceStore.getState();
-            gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf, s.selfVideo);
-          });
+        if (useVoiceStore.getState().connected) {
+          void toggleVoiceMute();
         }
         return;
       }
@@ -211,12 +207,8 @@ export function useKeyboardNavigation() {
       // -- Toggle deafen (configurable) --
       if (matchesKeybind(e, keybinds.toggleDeafen)) {
         e.preventDefault();
-        const voiceState = useVoiceStore.getState();
-        if (voiceState.connected) {
-          void voiceState.toggleDeaf().then(() => {
-            const s = useVoiceStore.getState();
-            gateway.updateVoiceStateAll(s.guildId, s.channelId, s.selfMute, s.selfDeaf, s.selfVideo);
-          });
+        if (useVoiceStore.getState().connected) {
+          void toggleVoiceDeaf();
         }
         return;
       }

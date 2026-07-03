@@ -173,20 +173,26 @@ fn verify_livekit_webhook_auth(
     )
     .map_err(|_| ApiError::Unauthorized)?;
 
-    if let Some(expected_hash) = decoded.claims.sha256.as_deref() {
-        let mut hasher = Sha256::new();
-        hasher.update(body);
-        let digest = hasher.finalize();
-        let actual_hash = digest
-            .iter()
-            .fold(String::with_capacity(64), |mut out, byte| {
-                use std::fmt::Write;
-                let _ = write!(out, "{:02x}", byte);
-                out
-            });
-        if actual_hash != expected_hash {
-            return Err(ApiError::Unauthorized);
-        }
+    // Body-hash binding is mandatory: a webhook token that omits the sha256
+    // claim cannot be tied to a specific payload, so a captured token could be
+    // replayed against a forged body. Reject any token missing the claim.
+    let expected_hash = decoded
+        .claims
+        .sha256
+        .as_deref()
+        .ok_or(ApiError::Unauthorized)?;
+    let mut hasher = Sha256::new();
+    hasher.update(body);
+    let digest = hasher.finalize();
+    let actual_hash = digest
+        .iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            use std::fmt::Write;
+            let _ = write!(out, "{:02x}", byte);
+            out
+        });
+    if actual_hash != expected_hash {
+        return Err(ApiError::Unauthorized);
     }
 
     Ok(())
@@ -1261,11 +1267,34 @@ mod tests {
         headers
     }
 
+    fn sha256_hex(body: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(body);
+        hasher
+            .finalize()
+            .iter()
+            .fold(String::with_capacity(64), |mut out, byte| {
+                use std::fmt::Write;
+                let _ = write!(out, "{:02x}", byte);
+                out
+            })
+    }
+
     #[test]
-    fn webhook_auth_accepts_valid_bearer() {
+    fn webhook_auth_accepts_valid_bearer_with_body_hash() {
+        let body = br#"{"event":"room_started"}"#;
+        let headers = bearer_header("secret-1", "api-key-1", Some(sha256_hex(body)));
+        let result = verify_livekit_webhook_auth(&headers, body, "api-key-1", "secret-1");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn webhook_auth_rejects_missing_body_hash() {
+        // Body-hash binding is mandatory; a token without the sha256 claim is
+        // rejected even if it is otherwise valid.
         let headers = bearer_header("secret-1", "api-key-1", None);
         let result = verify_livekit_webhook_auth(&headers, b"{}", "api-key-1", "secret-1");
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(crate::error::ApiError::Unauthorized)));
     }
 
     #[test]

@@ -2323,3 +2323,18 @@ pub fn test_push_buffered_event(session_id: &str, sequence: u64, event_type: &st
             timestamp: Instant::now(),
         });
 }
+
+/// Exercise the per-user connection-slot guard from integration tests. Uses the
+/// same global counter as production; tests must pass a unique `user_id` so their
+/// bucket is isolated. Not part of the supported public API.
+#[doc(hidden)]
+pub fn test_acquire_user_connection_slot(user_id: i64) -> bool {
+    try_acquire_user_connection_slot(user_id)
+}
+
+/// The configured per-user connection cap (so tests assert against the effective
+/// limit rather than a hard-coded constant).
+#[doc(hidden)]
+pub fn test_max_connections_per_user() -> usize {
+    ws_limits().max_connections_per_user
+}

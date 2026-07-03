@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
 use paracord_core::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::net::SocketAddr;
 use std::sync::OnceLock;
 use std::time::Instant;
 use url::Url;
@@ -333,10 +334,12 @@ pub struct UpdateSettingsRequest {
 
 pub async fn update_settings(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: AuthUser,
     headers: HeaderMap,
     Json(body): Json<UpdateSettingsRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let peer_ip = addr.ip().to_string();
     let route_started = Instant::now();
     let trace_id = headers
         .get(TRACE_ID_HEADER)
@@ -416,6 +419,7 @@ pub async fn update_settings(
             Some(auth.user_id),
             auth.session_id.as_deref(),
             Some(&headers),
+            Some(peer_ip.as_str()),
             Some(json!({ "crypto_auth_enabled": enabled })),
         )
         .await;
@@ -798,10 +802,12 @@ pub struct ChangePasswordRequest {
 
 pub async fn change_password(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: AuthUser,
     headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let peer_ip = addr.ip().to_string();
     if body.current_password == body.new_password {
         return Err(ApiError::BadRequest(
             "new_password must differ from current_password".into(),
@@ -848,6 +854,7 @@ pub async fn change_password(
         Some(auth.user_id),
         auth.session_id.as_deref(),
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "revoked_other_sessions": true })),
     )
     .await;
@@ -863,10 +870,12 @@ pub struct ChangeEmailRequest {
 
 pub async fn change_email(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: AuthUser,
     headers: HeaderMap,
     Json(body): Json<ChangeEmailRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let peer_ip = addr.ip().to_string();
     let normalized_email = body.new_email.trim().to_ascii_lowercase();
     paracord_util::validation::validate_email(&normalized_email)
         .map_err(|_| ApiError::BadRequest("Invalid email address".into()))?;
@@ -941,6 +950,7 @@ pub async fn change_email(
         Some(auth.user_id),
         auth.session_id.as_deref(),
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "revoked_other_sessions": true })),
     )
     .await;

@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { useAccountStore } from '../stores/accountStore';
 import { useServerListStore } from '../stores/serverListStore';
-import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/apiBaseUrl';
+import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/config/apiBaseUrl';
 import { hasAccount } from '../lib/account';
 import { authApi } from '../api/auth';
 import { extractApiError } from '../api/client';

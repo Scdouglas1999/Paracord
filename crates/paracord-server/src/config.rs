@@ -84,7 +84,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind_address: "0.0.0.0:8080".into(),
+            bind_address: "0.0.0.0:8090".into(),
             server_name: default_server_name(),
             permission_cache_max_entries: default_permission_cache_max_entries(),
             web_dir: None,

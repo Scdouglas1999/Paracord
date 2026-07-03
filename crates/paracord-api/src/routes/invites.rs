@@ -286,12 +286,6 @@ pub async fn accept_invite(
     Path(code): Path<String>,
     body: Option<Json<AcceptInviteRequest>>,
 ) -> Result<Json<Value>, ApiError> {
-    use dashmap::DashMap;
-    use std::sync::OnceLock;
-
-    static RAID_JOIN_WINDOWS: OnceLock<DashMap<i64, Vec<i64>>> = OnceLock::new();
-    let raid_join_windows = RAID_JOIN_WINDOWS.get_or_init(DashMap::new);
-
     let preview = paracord_db::invites::get_invite(&state.db, &code)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -378,16 +372,23 @@ pub async fn accept_invite(
             }
         }
 
-        let mut recent = raid_join_windows
-            .get(&space_id)
-            .map(|value| value.clone())
-            .unwrap_or_default();
-        let cutoff = now_ms - (join_window_seconds * 1_000);
-        recent.retain(|entry| *entry >= cutoff);
-        recent.push(now_ms);
-        raid_join_windows.insert(space_id, recent.clone());
+        // Join-rate counter is persisted in `rate_limit_counters` so raid
+        // detection survives restarts and is shared across replicas (a tumbling
+        // window keyed on the space). Fail-open on a counter error rather than
+        // blocking legitimate joins on a transient DB hiccup.
+        let now_secs = now_ms / 1_000;
+        let window_start = now_secs / join_window_seconds;
+        let bucket_key = format!("raid:join:{space_id}");
+        let join_count = paracord_db::rate_limits::increment_window_counter(
+            &state.db,
+            &bucket_key,
+            window_start,
+            join_window_seconds,
+        )
+        .await
+        .unwrap_or(0);
 
-        if recent.len() >= join_threshold {
+        if join_count as usize >= join_threshold {
             let locked_until = now_ms + lockdown_minutes * 60 * 1_000;
             if !bot_settings_json.is_object() {
                 bot_settings_json = json!({});

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, fireEvent } from '@testing-library/react';
 import { createElement } from 'react';
 import { parseMarkdown, stripMarkdown } from './markdown';
 
@@ -141,5 +141,70 @@ describe('parseMarkdown', () => {
     expect(links).toHaveLength(1);
     expect(links[0].getAttribute('href')).toBe('https://example.com/path');
     expect(container.textContent).toContain('https://user:pass@example.com/secret');
+  });
+
+  it('renders links via CSS class without inline hover-style mutation', () => {
+    const { container } = render(
+      createElement('div', null, parseMarkdown('visit https://example.com/path')),
+    );
+    const link = container.querySelector('a');
+    expect(link).not.toBeNull();
+    expect(link?.classList.contains('paracord-md-link')).toBe(true);
+    // Hover styling now lives in CSS, so no inline style attribute is emitted.
+    expect(link?.getAttribute('style')).toBeNull();
+  });
+});
+
+describe('parseMarkdown spoilers (accessibility)', () => {
+  it('renders spoilers as keyboard-accessible buttons with the spoiler class', () => {
+    const { container } = render(
+      createElement('div', null, parseMarkdown('a ||hidden|| b')),
+    );
+    const spoiler = container.querySelector('.spoiler') as HTMLElement | null;
+    expect(spoiler).not.toBeNull();
+    expect(spoiler?.textContent).toBe('hidden');
+    expect(spoiler?.getAttribute('role')).toBe('button');
+    expect(spoiler?.getAttribute('tabindex')).toBe('0');
+    expect(spoiler?.getAttribute('aria-expanded')).toBe('false');
+    // Styling is class-driven; no inline style attribute should be present.
+    expect(spoiler?.getAttribute('style')).toBeNull();
+  });
+
+  it('toggles the revealed class and aria-expanded on click (and re-hides)', () => {
+    const { container } = render(
+      createElement('div', null, parseMarkdown('||secret||')),
+    );
+    const spoiler = container.querySelector('.spoiler') as HTMLElement;
+    expect(spoiler.classList.contains('spoiler-revealed')).toBe(false);
+
+    fireEvent.click(spoiler);
+    expect(spoiler.classList.contains('spoiler-revealed')).toBe(true);
+    expect(spoiler.getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.click(spoiler);
+    expect(spoiler.classList.contains('spoiler-revealed')).toBe(false);
+    expect(spoiler.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('toggles via Enter and Space keys', () => {
+    const { container } = render(
+      createElement('div', null, parseMarkdown('||secret||')),
+    );
+    const spoiler = container.querySelector('.spoiler') as HTMLElement;
+
+    fireEvent.keyDown(spoiler, { key: 'Enter' });
+    expect(spoiler.classList.contains('spoiler-revealed')).toBe(true);
+
+    fireEvent.keyDown(spoiler, { key: ' ' });
+    expect(spoiler.classList.contains('spoiler-revealed')).toBe(false);
+  });
+
+  it('injects a single idempotent markdown style element', () => {
+    render(createElement('div', null, parseMarkdown('||one||')));
+    render(createElement('div', null, parseMarkdown('||two||')));
+    const styles = document.querySelectorAll('#paracord-markdown-styles');
+    expect(styles.length).toBe(1);
+    expect(styles[0].textContent).toContain('.spoiler-revealed');
+    expect(styles[0].textContent).toContain('.paracord-md-link:hover');
   });
 });

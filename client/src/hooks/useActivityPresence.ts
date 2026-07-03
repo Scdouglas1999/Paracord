@@ -17,13 +17,6 @@ const POLL_INTERVAL_MS = 5000;
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const IDLE_CHECK_INTERVAL_MS = 30_000; // 30 seconds
 
-// Module-level timestamp shared across the app
-let lastActivityTimestamp = Date.now();
-
-function resetActivity(): void {
-  lastActivityTimestamp = Date.now();
-}
-
 interface ForegroundApplication {
   pid: number;
   process_name: string;
@@ -76,22 +69,24 @@ function publishPresence(status: Presence['status'], activities: Activity[]): vo
   }
 }
 
-/** Returns true when the user has been inactive longer than the given timeout. */
-function isUserIdle(timeoutMs: number): boolean {
-  return Date.now() - lastActivityTimestamp > timeoutMs;
-}
-
 export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
   const token = useAuthStore((state) => state.token);
   const idleTimeout = options?.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const isIdleRef = useRef(false);
+  // Per-hook-instance activity timestamp (avoids a module-level singleton
+  // shared across mounts). Updated by user-input listeners below.
+  const lastActivityRef = useRef(Date.now());
 
   // --- Idle detection (works everywhere, including non-Tauri browsers) ---
   useEffect(() => {
     if (!token) return;
 
-    lastActivityTimestamp = Date.now();
+    lastActivityRef.current = Date.now();
     isIdleRef.current = false;
+
+    const resetActivity = () => {
+      lastActivityRef.current = Date.now();
+    };
 
     const activityEvents: Array<keyof DocumentEventMap> = [
       'mousemove',
@@ -114,7 +109,7 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
         return;
       }
 
-      const idle = isUserIdle(idleTimeout);
+      const idle = Date.now() - lastActivityRef.current > idleTimeout;
 
       if (idle && !isIdleRef.current) {
         isIdleRef.current = true;
@@ -141,17 +136,20 @@ export function useActivityPresence(options?: { idleTimeoutMs?: number }) {
     let inFlight = false;
     let activeAppId: string | null = null;
     let startedAt: string | null = null;
-    let lastPayloadSignature = '';
+    let lastStatus: Presence['status'] | null = null;
+    let lastAppId: string | null = null;
+    let lastStartedAt: string | null = null;
 
     const emit = (status: Presence['status'], activities: Activity[]) => {
-      const signature = JSON.stringify({
-        status,
-        app: activities[0]?.application_id || null,
-        started_at: activities[0]?.started_at || null,
-      });
-      if (signature === lastPayloadSignature) return;
+      const appId = activities[0]?.application_id ?? null;
+      const emittedStartedAt = activities[0]?.started_at ?? null;
+      if (status === lastStatus && appId === lastAppId && emittedStartedAt === lastStartedAt) {
+        return;
+      }
       publishPresence(status, activities);
-      lastPayloadSignature = signature;
+      lastStatus = status;
+      lastAppId = appId;
+      lastStartedAt = emittedStartedAt;
     };
 
     const tick = async () => {

@@ -20,6 +20,8 @@ pub struct BotApplicationRow {
     pub tags: Option<String>,
     pub icon_hash: Option<String>,
     pub install_count: i64,
+    pub revoked: bool,
+    pub last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -67,6 +69,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for BotApplicationRow {
     fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
         let created_at_raw: String = row.try_get("created_at")?;
         let updated_at_raw: String = row.try_get("updated_at")?;
+        let last_used_at_raw: Option<String> = row.try_get("last_used_at").ok().flatten();
         Ok(Self {
             id: row.try_get("id")?,
             name: row.try_get("name")?,
@@ -83,6 +86,11 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for BotApplicationRow {
             tags: row.try_get("tags").ok().flatten(),
             icon_hash: row.try_get("icon_hash").ok().flatten(),
             install_count: row.try_get("install_count").unwrap_or(0),
+            revoked: bool_from_any_row(row, "revoked").unwrap_or(false),
+            last_used_at: last_used_at_raw
+                .as_deref()
+                .map(datetime_from_db_text)
+                .transpose()?,
             created_at: datetime_from_db_text(&created_at_raw)?,
             updated_at: datetime_from_db_text(&updated_at_raw)?,
         })
@@ -131,7 +139,7 @@ pub fn verify_token_hash(token: &str, stored_hash: &str) -> bool {
     diff == 0
 }
 
-const BOT_APP_SELECT_COLS: &str = "id, name, description, owner_id, bot_user_id, token_hash, redirect_uri, permissions, scopes, intents, public_listed, category, tags, icon_hash, install_count, created_at, updated_at";
+const BOT_APP_SELECT_COLS: &str = "id, name, description, owner_id, bot_user_id, token_hash, redirect_uri, permissions, scopes, intents, public_listed, category, tags, icon_hash, install_count, revoked, last_used_at, created_at, updated_at";
 
 pub async fn create_bot_application(
     pool: &DbPool,
@@ -251,8 +259,11 @@ pub async fn regenerate_bot_token(
     id: i64,
     new_token_hash: &str,
 ) -> Result<BotApplicationRow, DbError> {
+    // Rotating the token re-activates the application and clears the old
+    // last-used marker so lockout/telemetry start fresh for the new secret.
     let sql = format!(
-        "UPDATE bot_applications SET token_hash = $2, updated_at = $3
+        "UPDATE bot_applications
+         SET token_hash = $2, revoked = FALSE, last_used_at = NULL, updated_at = $3
          WHERE id = $1
          RETURNING {BOT_APP_SELECT_COLS}"
     );
@@ -263,6 +274,42 @@ pub async fn regenerate_bot_token(
         .fetch_one(pool)
         .await?;
     Ok(row)
+}
+
+/// Mark a bot application's token as revoked (or re-enable it). A revoked token
+/// is rejected by bot authentication until the token is regenerated.
+pub async fn set_bot_application_revoked(
+    pool: &DbPool,
+    id: i64,
+    revoked: bool,
+) -> Result<BotApplicationRow, DbError> {
+    let sql = format!(
+        "UPDATE bot_applications SET revoked = $2, updated_at = $3
+         WHERE id = $1
+         RETURNING {BOT_APP_SELECT_COLS}"
+    );
+    let row = sqlx::query_as::<_, BotApplicationRow>(&sql)
+        .bind(id)
+        .bind(revoked)
+        .bind(datetime_to_db_text(Utc::now()))
+        .fetch_one(pool)
+        .await?;
+    Ok(row)
+}
+
+/// Best-effort update of a bot application's `last_used_at` timestamp. Called on
+/// every successful bot authentication; failures are non-fatal to the request.
+pub async fn touch_bot_last_used(
+    pool: &DbPool,
+    id: i64,
+    now: DateTime<Utc>,
+) -> Result<(), DbError> {
+    sqlx::query("UPDATE bot_applications SET last_used_at = $2 WHERE id = $1")
+        .bind(id)
+        .bind(datetime_to_db_text(now))
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn delete_bot_application(pool: &DbPool, id: i64) -> Result<(), DbError> {
@@ -493,6 +540,38 @@ pub async fn list_store_bots(
             Ok((rows, total))
         }
     }
+}
+
+/// Batch-load owner verification signals (email-verified flag and account
+/// flags) keyed by bot application id. Lets store listings compute
+/// `verified_developer` for a whole page in one query instead of per row.
+/// Apps whose owner is missing are simply absent from the map.
+pub async fn get_owner_verification_by_app_ids(
+    pool: &DbPool,
+    app_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, (bool, i32)>, DbError> {
+    if app_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = crate::messages::build_placeholders(1, app_ids.len());
+    let sql = format!(
+        "SELECT ba.id AS app_id, u.email_verified AS email_verified, u.flags AS flags \
+         FROM bot_applications ba JOIN users u ON u.id = ba.owner_id \
+         WHERE ba.id IN ({placeholders})"
+    );
+    let mut query = sqlx::query(&sql);
+    for id in app_ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    let mut map = std::collections::HashMap::with_capacity(rows.len());
+    for row in rows {
+        let app_id: i64 = row.try_get("app_id")?;
+        let email_verified = bool_from_any_row(&row, "email_verified").unwrap_or(false);
+        let flags: i32 = row.try_get("flags").unwrap_or(0);
+        map.insert(app_id, (email_verified, flags));
+    }
+    Ok(map)
 }
 
 /// Get the top featured (most installed) publicly listed bots.

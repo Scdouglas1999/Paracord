@@ -1,5 +1,5 @@
-import { isTauri } from './tauriEnv';
-import { getVersionedStorageItem, setVersionedStorageItem } from './versionedStorage';
+import { isTauri } from '../tauriEnv';
+import { getVersionedStorageItem, setVersionedStorageItem } from '../versionedStorage';
 
 const NOTIFICATIONS_ENABLED_KEY = 'notifications-enabled';
 

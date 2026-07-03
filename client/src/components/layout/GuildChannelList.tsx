@@ -10,7 +10,7 @@ import { VoiceControls } from '../voice/VoiceControls';
 import { ConnectionStatusBar } from './ConnectionStatusBar';
 import { InviteModal } from '../guild/InviteModal';
 import { Permissions, hasPermission, isAdmin as isGlobalAdmin, ChannelType, type Channel } from '../../types/index';
-import { buildChannelGroups, isVirtualGroup } from '../../lib/channelGroups';
+import { buildChannelGroups, isVirtualGroup } from '../../lib/features/channelGroups';
 import { extractApiError } from '../../api/client';
 import { channelApi } from '../../api/channels';
 import { useVoice } from '../../hooks/useVoice';

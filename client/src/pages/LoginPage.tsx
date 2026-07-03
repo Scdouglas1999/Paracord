@@ -8,7 +8,7 @@ import {
   getCurrentOriginServerUrl,
   setStoredServerUrl,
   clearStoredServerUrl,
-} from '../lib/apiBaseUrl';
+} from '../lib/config/apiBaseUrl';
 import { hasAccount } from '../lib/account';
 import { authApi } from '../api/auth';
 import { setAccessToken, setRefreshToken } from '../lib/authToken';

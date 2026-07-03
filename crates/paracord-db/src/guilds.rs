@@ -16,7 +16,11 @@ pub struct SpaceRow {
     pub system_channel_id: Option<i64>,
     pub vanity_url_code: Option<String>,
     pub visibility: String,
+    /// JSON array of role IDs permitted to see a role-gated guild. Empty (`[]`)
+    /// for guilds that are not role-gated. Kept distinct from `discovery_tags`.
     pub allowed_roles: String,
+    /// JSON array of discovery tag strings for public/discoverable guilds.
+    pub discovery_tags: String,
     pub created_at: DateTime<Utc>,
     pub hub_settings: Option<String>,
     pub bot_settings: Option<String>,
@@ -49,6 +53,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for SpaceRow {
             vanity_url_code: row.try_get("vanity_url_code")?,
             visibility: row.try_get("visibility")?,
             allowed_roles: row.try_get("allowed_roles")?,
+            discovery_tags: row.try_get("discovery_tags")?,
             created_at: datetime_from_db_text(&created_at_raw)?,
             hub_settings: row.try_get("hub_settings").unwrap_or(None),
             bot_settings: row.try_get("bot_settings").unwrap_or(None),
@@ -70,7 +75,7 @@ pub async fn create_space(
     let row = sqlx::query_as::<_, SpaceRow>(
         "INSERT INTO spaces (id, name, owner_id, icon_hash, visibility)
          VALUES ($1, $2, $3, $4, 'private')
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
     )
     .bind(id)
     .bind(name)
@@ -102,7 +107,7 @@ pub async fn create_guild(
 /// Core implementation using newtype ID.
 pub async fn get_space(pool: &DbPool, id: GuildId) -> Result<Option<SpaceRow>, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
-        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings
+        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings
          FROM spaces WHERE id = $1"
     )
     .bind(id)
@@ -135,7 +140,7 @@ pub async fn update_space(
              bot_settings = COALESCE($6, bot_settings),
              updated_at = $7
          WHERE id = $1
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
     )
     .bind(id)
     .bind(name)
@@ -171,24 +176,29 @@ pub async fn update_guild(
     .await
 }
 
+/// Update a guild's discovery visibility and its discovery tags.
+///
+/// `discovery_tags` is written to the dedicated `discovery_tags` column and is
+/// kept separate from `allowed_roles` (the role-gating allowed role IDs), which
+/// this function does not touch.
 /// Core implementation using newtype ID.
 pub async fn update_space_visibility(
     pool: &DbPool,
     id: GuildId,
     visibility: &str,
-    allowed_roles: &str,
+    discovery_tags: &str,
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
         "UPDATE spaces
          SET visibility = $2,
-             allowed_roles = $3,
+             discovery_tags = $3,
              updated_at = $4
          WHERE id = $1
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
     )
     .bind(id)
     .bind(visibility)
-    .bind(allowed_roles)
+    .bind(discovery_tags)
     .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
@@ -211,7 +221,7 @@ pub async fn delete_guild(pool: &DbPool, id: i64) -> Result<(), DbError> {
 
 pub async fn list_all_spaces(pool: &DbPool) -> Result<Vec<SpaceRow>, DbError> {
     let rows = sqlx::query_as::<_, SpaceRow>(
-        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings
+        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings
          FROM spaces
          ORDER BY created_at ASC"
     )
@@ -224,7 +234,7 @@ pub async fn list_all_spaces(pool: &DbPool) -> Result<Vec<SpaceRow>, DbError> {
 pub async fn get_user_guilds(pool: &DbPool, user_id: UserId) -> Result<Vec<SpaceRow>, DbError> {
     let rows = sqlx::query_as::<_, SpaceRow>(
         "SELECT s.id, s.name, s.description, s.icon_hash, s.banner_hash, s.owner_id, s.features,
-                s.system_channel_id, s.vanity_url_code, s.visibility, s.allowed_roles, s.created_at, s.hub_settings, s.bot_settings
+                s.system_channel_id, s.vanity_url_code, s.visibility, s.allowed_roles, s.discovery_tags, s.created_at, s.hub_settings, s.bot_settings
          FROM spaces s
          INNER JOIN members m ON m.guild_id = s.id
          WHERE m.user_id = $1
@@ -300,7 +310,7 @@ pub async fn update_vanity_url(
         "UPDATE spaces
          SET vanity_url_code = $2, updated_at = $3
          WHERE id = $1
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
     )
     .bind(guild_id)
     .bind(code)
@@ -316,7 +326,7 @@ pub async fn get_guild_by_vanity_code(
     code: &str,
 ) -> Result<Option<SpaceRow>, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
-        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings
+        "SELECT id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings
          FROM spaces WHERE vanity_url_code = $1"
     )
     .bind(code)
@@ -349,7 +359,7 @@ pub async fn transfer_ownership(
     let row = sqlx::query_as::<_, SpaceRow>(
         "UPDATE spaces SET owner_id = $2, updated_at = $3
          WHERE id = $1
-         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, created_at, hub_settings, bot_settings"
+         RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
     )
     .bind(space_id)
     .bind(new_owner_id)
@@ -534,11 +544,36 @@ mod tests {
         create_guild(&pool, 900, "Vis Guild", 1, None)
             .await
             .unwrap();
-        let updated = update_space_visibility(&pool, GuildId::new(900), "roles", "[10,20]")
+        let updated =
+            update_space_visibility(&pool, GuildId::new(900), "public", "[\"gaming\",\"chat\"]")
+                .await
+                .unwrap();
+        assert_eq!(updated.visibility, "public");
+        // Discovery tags land in their own column, leaving allowed_roles (the
+        // role-gating role IDs) untouched.
+        assert_eq!(updated.discovery_tags, "[\"gaming\",\"chat\"]");
+        assert_eq!(updated.allowed_roles, "[]");
+    }
+
+    #[tokio::test]
+    async fn test_public_guild_with_discovery_tags_is_not_role_gated() {
+        // A public guild that sets discovery tags must keep an empty
+        // allowed_roles column so it is NOT treated as role-gated. This is the
+        // invariant auto_join_public_spaces relies on to still auto-join it.
+        let pool = test_pool().await;
+        create_test_user(&pool, 1).await;
+        create_guild(&pool, 950, "Public Guild", 1, None)
             .await
             .unwrap();
-        assert_eq!(updated.visibility, "roles");
-        assert_eq!(updated.allowed_roles, "[10,20]");
+        let updated = update_space_visibility(&pool, GuildId::new(950), "public", "[\"gaming\"]")
+            .await
+            .unwrap();
+        assert_eq!(updated.visibility, "public");
+        assert_eq!(
+            parse_allowed_role_ids(&updated.allowed_roles),
+            Vec::<i64>::new()
+        );
+        assert_eq!(updated.discovery_tags, "[\"gaming\"]");
     }
 
     #[tokio::test]

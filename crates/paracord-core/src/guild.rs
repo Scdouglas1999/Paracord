@@ -99,12 +99,12 @@ pub async fn update_guild(
     .await?;
     if visibility.is_some() || discovery_tags.is_some() {
         let next_visibility = visibility.unwrap_or(&updated.visibility);
-        let next_allowed_roles = discovery_tags.unwrap_or(&updated.allowed_roles);
+        let next_discovery_tags = discovery_tags.unwrap_or(&updated.discovery_tags);
         updated = paracord_db::guilds::update_space_visibility(
             pool,
             guild_id.into(),
             next_visibility,
-            next_allowed_roles,
+            next_discovery_tags,
         )
         .await?;
     }

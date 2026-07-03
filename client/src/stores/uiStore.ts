@@ -19,8 +19,6 @@ type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'disconnec
 interface UIState {
   sidebarOpen: boolean;
   dockPinned: boolean;
-  /** @deprecated Use memberPanelOpen instead */
-  memberSidebarOpen: boolean;
   theme: Theme;
   accentPreset: AccentPreset;
   customCss: string;
@@ -41,7 +39,6 @@ interface UIState {
   toggleSidebar: () => void;
   toggleDockPinned: () => void;
   setDockPinned: (pinned: boolean) => void;
-  toggleMemberSidebar: () => void;
   setTheme: (theme: Theme) => void;
   setAccentPreset: (accentPreset: AccentPreset) => void;
   setCustomCss: (css: string) => void;
@@ -68,7 +65,6 @@ export const useUIStore = create<UIState>()(
     (set) => ({
       sidebarOpen: true,
       dockPinned: true,
-      memberSidebarOpen: true,
       theme: 'dark',
       accentPreset: 'red',
       customCss: '',
@@ -89,7 +85,6 @@ export const useUIStore = create<UIState>()(
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       toggleDockPinned: () => set((s) => ({ dockPinned: !s.dockPinned })),
       setDockPinned: (dockPinned) => set({ dockPinned }),
-      toggleMemberSidebar: () => set((s) => ({ memberPanelOpen: !s.memberPanelOpen, memberSidebarOpen: !s.memberPanelOpen })),
       setTheme: (theme) => set({ theme }),
       setAccentPreset: (accentPreset) => set({ accentPreset }),
       setCustomCss: (customCss) => set({ customCss }),
@@ -97,8 +92,8 @@ export const useUIStore = create<UIState>()(
       setServerRestarting: (serverRestarting) => set({ serverRestarting }),
       toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen })),
       setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
-      toggleMemberPanel: () => set((s) => ({ memberPanelOpen: !s.memberPanelOpen, memberSidebarOpen: !s.memberPanelOpen })),
-      setMemberPanelOpen: (memberPanelOpen) => set({ memberPanelOpen, memberSidebarOpen: memberPanelOpen }),
+      toggleMemberPanel: () => set((s) => ({ memberPanelOpen: !s.memberPanelOpen })),
+      setMemberPanelOpen: (memberPanelOpen) => set({ memberPanelOpen }),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSearchPanel: () => set((s) => ({ searchPanelOpen: !s.searchPanelOpen })),
@@ -123,7 +118,6 @@ export const useUIStore = create<UIState>()(
         customCss: state.customCss,
         compactMode: state.compactMode,
         dockPinned: state.dockPinned,
-        memberSidebarOpen: state.memberSidebarOpen,
         memberPanelOpen: state.memberPanelOpen,
         sidebarCollapsed: state.sidebarCollapsed,
         lowBandwidthMode: state.lowBandwidthMode,

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { extractApiError } from '../../api/client';
 import { guildApi } from '../../api/guilds';
 import type { Sticker } from '../../types/message.types';
-import { resolveResourceUrl } from '../../lib/apiBaseUrl';
+import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getAccessToken } from '../../lib/authToken';
 import { safeClientResourceUrl } from '../../lib/security';
 

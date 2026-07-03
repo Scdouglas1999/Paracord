@@ -8,6 +8,7 @@ import { useTypingStore } from '../../stores/typingStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useChannelStore } from '../../stores/channelStore';
+import { useReadStateStore } from '../../stores/readStateStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useUIStore } from '../../stores/uiStore';
 import { channelApi } from '../../api/channels';
@@ -20,7 +21,7 @@ import { EmojiPicker } from '../ui/EmojiPicker';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { resolveResourceUrl } from '../../lib/apiBaseUrl';
+import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getAccessToken } from '../../lib/authToken';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
@@ -544,7 +545,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     if (readStateTimerRef.current) clearTimeout(readStateTimerRef.current);
     readStateTimerRef.current = setTimeout(() => {
       channelApi.updateReadState(channelId, lastMessage.id).then(() => {
-        window.dispatchEvent(new CustomEvent('paracord:read-state-updated'));
+        useReadStateStore.getState().markRead(channelId, lastMessage.id);
       }).catch(() => {
         /* ignore */
       });

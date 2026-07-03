@@ -5,7 +5,6 @@ use axum::{
 };
 use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
-use rand::RngCore;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use url::Url;
@@ -20,6 +19,13 @@ const MAX_BOT_NAME_LEN: usize = 80;
 const MAX_BOT_DESCRIPTION_LEN: usize = 400;
 const MAX_REDIRECT_URI_LEN: usize = 2_000;
 
+/// Defense-in-depth denylist for obviously dangerous markup in bot metadata.
+///
+/// XSS safety for these values ultimately rests on React output escaping at the
+/// client: every stored string is rendered as text, never as raw HTML. This
+/// denylist is a coarse secondary guard to reject blatant injection attempts
+/// early; it is intentionally incomplete and MUST NOT be treated as the sole
+/// gate for any stored value. Do not rely on it to sanitize output.
 fn contains_dangerous_markup(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     lower.contains("<script")
@@ -27,16 +33,6 @@ fn contains_dangerous_markup(value: &str) -> bool {
         || lower.contains("onerror=")
         || lower.contains("onload=")
         || lower.contains("<iframe")
-}
-
-fn generate_secure_token() -> String {
-    let mut bytes = [0_u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push_str(&format!("{:02x}", b));
-    }
-    out
 }
 
 fn parse_permission_bits(raw: &str, field_name: &str) -> Result<i64, ApiError> {
@@ -88,41 +84,17 @@ fn validate_redirect_uri(raw: &str) -> Result<String, ApiError> {
     Ok(trimmed.to_string())
 }
 
-async fn is_verified_developer(state: &AppState, owner_id: i64) -> bool {
-    let Some(owner) = paracord_db::users::get_user_by_id(&state.db, owner_id)
-        .await
-        .ok()
-        .flatten()
-    else {
-        return false;
-    };
-    owner.email_verified || paracord_core::is_admin(owner.flags)
-}
-
-async fn bot_store_row_to_json(
-    state: &AppState,
+fn bot_store_row_to_json(
     row: &paracord_db::bot_applications::BotStoreRow,
+    verified_developer: bool,
+    review_count: i64,
+    average_rating: f64,
 ) -> Value {
     let tags: Vec<String> = row
         .tags
         .as_deref()
         .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
         .unwrap_or_default();
-    let mut verified_developer = false;
-    let mut review_count = 0_i64;
-    let mut average_rating = 0.0_f64;
-    if let Some(app) = paracord_db::bot_applications::get_bot_application(&state.db, row.id)
-        .await
-        .ok()
-        .flatten()
-    {
-        verified_developer = is_verified_developer(state, app.owner_id).await;
-    }
-    if let Ok((count, avg)) = paracord_db::bot_reviews::get_review_summary(&state.db, row.id).await
-    {
-        review_count = count;
-        average_rating = avg;
-    }
     json!({
         "id": row.id.to_string(),
         "name": row.name,
@@ -137,6 +109,35 @@ async fn bot_store_row_to_json(
         "review_count": review_count,
         "average_rating": average_rating,
     })
+}
+
+/// Enrich a page of store rows with owner-verification and review-summary data
+/// using two batch queries instead of a per-row lookup (avoids N+1).
+async fn enrich_store_rows(
+    state: &AppState,
+    rows: &[paracord_db::bot_applications::BotStoreRow],
+) -> Result<Vec<Value>, ApiError> {
+    let app_ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
+    let owner_info =
+        paracord_db::bot_applications::get_owner_verification_by_app_ids(&state.db, &app_ids)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let review_summaries = paracord_db::bot_reviews::get_review_summaries(&state.db, &app_ids)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let verified_developer = owner_info
+                .get(&row.id)
+                .map(|&(email_verified, flags)| email_verified || paracord_core::is_admin(flags))
+                .unwrap_or(false);
+            let (review_count, average_rating) =
+                review_summaries.get(&row.id).copied().unwrap_or((0, 0.0));
+            bot_store_row_to_json(row, verified_developer, review_count, average_rating)
+        })
+        .collect())
 }
 
 fn bot_app_to_json(
@@ -246,7 +247,7 @@ pub async fn create_bot_application(
     let bot_username = format!("bot-{}", app_id);
     let bot_email = format!("bot-{}@bots.paracord.local", bot_user_id);
     let discriminator = ((bot_user_id % 9000) + 1000) as i16;
-    let bot_password = generate_secure_token();
+    let bot_password = crate::secure_tokens::generate_secure_token();
     let bot_password_hash = paracord_core::auth::hash_password(&bot_password)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
@@ -268,7 +269,7 @@ pub async fn create_bot_application(
     )
     .await;
 
-    let token = generate_secure_token();
+    let token = crate::secure_tokens::generate_secure_token();
     let token_hash = paracord_db::bot_applications::hash_token(&token);
     let app = paracord_db::bot_applications::create_bot_application(
         &state.db,
@@ -496,7 +497,7 @@ pub async fn regenerate_bot_token(
         return Err(ApiError::Forbidden);
     }
 
-    let token = generate_secure_token();
+    let token = crate::secure_tokens::generate_secure_token();
     let token_hash = paracord_db::bot_applications::hash_token(&token);
     let updated =
         paracord_db::bot_applications::regenerate_bot_token(&state.db, bot_app_id, &token_hash)
@@ -787,10 +788,7 @@ pub async fn store_search(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let mut bots: Vec<Value> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        bots.push(bot_store_row_to_json(&state, row).await);
-    }
+    let bots = enrich_store_rows(&state, &rows).await?;
     Ok(Json(json!({ "bots": bots, "total": total })))
 }
 
@@ -799,10 +797,7 @@ pub async fn store_featured(State(state): State<AppState>) -> Result<Json<Value>
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let mut bots: Vec<Value> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        bots.push(bot_store_row_to_json(&state, row).await);
-    }
+    let bots = enrich_store_rows(&state, &rows).await?;
     Ok(Json(json!({ "bots": bots })))
 }
 

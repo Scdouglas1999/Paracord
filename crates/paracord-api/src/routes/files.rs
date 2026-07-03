@@ -125,12 +125,68 @@ fn resolve_stored_content_type(filename: &str, claimed: Option<&str>, data: &[u8
     normalized
 }
 
-fn build_content_disposition(filename: &str, allow_inline: bool) -> String {
+pub(crate) fn build_content_disposition(filename: &str, allow_inline: bool) -> String {
     let safe_name = sanitize_filename_for_disposition(filename);
     if allow_inline {
         format!("inline; filename=\"{}\"", safe_name)
     } else {
         format!("attachment; filename=\"{}\"", safe_name)
+    }
+}
+
+/// Build the standard download response headers: content type, disposition, and
+/// an unconditional `X-Content-Type-Options: nosniff`. Shared by the local and
+/// federated download paths so the anti-sniffing guard can never be dropped.
+pub(crate) fn download_response_headers(
+    content_type: &str,
+    disposition: &str,
+) -> [(header::HeaderName, HeaderValue); 3] {
+    [
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(content_type)
+                .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+        ),
+        (
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(disposition).unwrap_or(HeaderValue::from_static("attachment")),
+        ),
+        (
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ),
+    ]
+}
+
+/// Resolved federation file-cache settings, read from `server_settings` at
+/// request time so admin edits take effect without a server restart. Falls back
+/// to the static config defaults when a key is unset.
+struct FederationCacheSettings {
+    enabled: bool,
+    max_size: u64,
+    ttl_hours: u64,
+}
+
+async fn resolve_federation_cache_settings(state: &AppState) -> FederationCacheSettings {
+    FederationCacheSettings {
+        enabled: paracord_db::server_settings::get_bool_setting(
+            &state.db,
+            "federation_file_cache_enabled",
+            state.config.federation_file_cache_enabled,
+        )
+        .await,
+        max_size: paracord_db::server_settings::get_u64_setting(
+            &state.db,
+            "federation_file_cache_max_size",
+            state.config.federation_file_cache_max_size,
+        )
+        .await,
+        ttl_hours: paracord_db::server_settings::get_u64_setting(
+            &state.db,
+            "federation_file_cache_ttl_hours",
+            state.config.federation_file_cache_ttl_hours,
+        )
+        .await,
     }
 }
 
@@ -701,25 +757,7 @@ pub async fn download_file(
         is_inline_safe_content_type(&content_type) && !has_active_extension(&attachment.filename);
     let disposition = build_content_disposition(&attachment.filename, allow_inline);
 
-    Ok((
-        [
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_str(&content_type)
-                    .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-            ),
-            (
-                header::CONTENT_DISPOSITION,
-                HeaderValue::from_str(&disposition)
-                    .unwrap_or(HeaderValue::from_static("attachment")),
-            ),
-            (
-                header::X_CONTENT_TYPE_OPTIONS,
-                HeaderValue::from_static("nosniff"),
-            ),
-        ],
-        data,
-    ))
+    Ok((download_response_headers(&content_type, &disposition), data))
 }
 
 pub async fn delete_file(
@@ -1072,32 +1110,9 @@ pub async fn download_federated_file(
                 .content_type
                 .clone()
                 .unwrap_or_else(|| "application/octet-stream".to_string());
-            let safe_filename: String = cached
-                .filename
-                .chars()
-                .filter(|ch| *ch != '"' && *ch != '\\' && *ch != '\r' && *ch != '\n')
-                .collect();
-            let disposition = format!("attachment; filename=\"{}\"", safe_filename);
+            let disposition = build_content_disposition(&cached.filename, false);
 
-            return Ok((
-                [
-                    (
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_str(&content_type)
-                            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-                    ),
-                    (
-                        header::CONTENT_DISPOSITION,
-                        HeaderValue::from_str(&disposition)
-                            .unwrap_or(HeaderValue::from_static("attachment")),
-                    ),
-                    (
-                        header::X_CONTENT_TYPE_OPTIONS,
-                        HeaderValue::from_static("nosniff"),
-                    ),
-                ],
-                data,
-            ));
+            return Ok((download_response_headers(&content_type, &disposition), data));
         }
     }
 
@@ -1123,8 +1138,10 @@ pub async fn download_federated_file(
     let content_type = resp_content_type.unwrap_or_else(|| "application/octet-stream".to_string());
     let filename = resp_filename.unwrap_or_else(|| format!("federated_{}", attachment_id));
 
-    // Optionally cache the file
-    if state.config.federation_file_cache_enabled {
+    // Optionally cache the file. Settings are read from server_settings at
+    // request time so admin edits apply without a restart.
+    let cache_settings = resolve_federation_cache_settings(&state).await;
+    if cache_settings.enabled {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(&file_data);
@@ -1134,16 +1151,15 @@ pub async fn download_federated_file(
         let cache_size = paracord_db::federation_file_cache::get_total_cache_size(&state.db)
             .await
             .unwrap_or(0);
-        if cache_size + file_data.len() as i64 <= state.config.federation_file_cache_max_size as i64
-        {
+        if cache_size + file_data.len() as i64 <= cache_settings.max_size as i64 {
             if state
                 .storage_backend
                 .store(&cache_key, &file_data)
                 .await
                 .is_ok()
             {
-                let expires = chrono::Utc::now()
-                    + chrono::Duration::hours(state.config.federation_file_cache_ttl_hours as i64);
+                let expires =
+                    chrono::Utc::now() + chrono::Duration::hours(cache_settings.ttl_hours as i64);
                 let expires_str = expires.format("%Y-%m-%d %H:%M:%S").to_string();
                 let _ = paracord_db::federation_file_cache::insert_cached_file(
                     &state.db,
@@ -1161,29 +1177,10 @@ pub async fn download_federated_file(
         }
     }
 
-    let safe_filename: String = filename
-        .chars()
-        .filter(|ch| *ch != '"' && *ch != '\\' && *ch != '\r' && *ch != '\n')
-        .collect();
-    let disposition = format!("attachment; filename=\"{}\"", safe_filename);
+    let disposition = build_content_disposition(&filename, false);
 
     Ok((
-        [
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_str(&content_type)
-                    .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-            ),
-            (
-                header::CONTENT_DISPOSITION,
-                HeaderValue::from_str(&disposition)
-                    .unwrap_or(HeaderValue::from_static("attachment")),
-            ),
-            (
-                header::X_CONTENT_TYPE_OPTIONS,
-                HeaderValue::from_static("nosniff"),
-            ),
-        ],
+        download_response_headers(&content_type, &disposition),
         file_data,
     ))
 }

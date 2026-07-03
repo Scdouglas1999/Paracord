@@ -12,16 +12,82 @@ pub enum ValidationError {
     InvalidFormat,
 }
 
+const USERNAME_MIN_CHARS: usize = 2;
+const USERNAME_MAX_CHARS: usize = 32;
+
+fn is_username_separator(c: char) -> bool {
+    c == '_' || c == '.' || c == '-'
+}
+
+/// Lenient username check for names that already exist (login/lookup paths).
+///
+/// Length is measured in Unicode scalar values, not bytes, so a 32-character
+/// name is accepted regardless of its UTF-8 byte width. Control characters and
+/// whitespace are always rejected. Existing accounts registered under the old
+/// permissive policy (which allowed any Unicode alphanumeric) stay valid — use
+/// [`is_valid_new_username`] to gate NEW registrations and renames.
 pub fn validate_username(name: &str) -> Result<(), ValidationError> {
-    let len = name.len();
-    if len < 2 {
-        return Err(ValidationError::TooShort { min: 2, got: len });
+    let chars = name.chars().count();
+    if chars < USERNAME_MIN_CHARS {
+        return Err(ValidationError::TooShort {
+            min: USERNAME_MIN_CHARS,
+            got: chars,
+        });
     }
-    if len > 32 {
-        return Err(ValidationError::TooLong { max: 32, got: len });
+    if chars > USERNAME_MAX_CHARS {
+        return Err(ValidationError::TooLong {
+            max: USERNAME_MAX_CHARS,
+            got: chars,
+        });
+    }
+    if name.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(ValidationError::InvalidCharacters);
     }
     if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(ValidationError::InvalidCharacters);
+    }
+    Ok(())
+}
+
+/// Strict username policy for NEW registrations and renames.
+///
+/// Restricts the character set to ASCII alphanumerics plus a limited separator
+/// set (`_`, `.`, `-`). This rejects Unicode-homograph impersonation such as
+/// Cyrillic `а` (U+0430) or full-width `ａ` (U+FF41) that would otherwise be
+/// visually indistinguishable from ASCII look-alikes. Separators may not lead,
+/// trail, or repeat consecutively.
+pub fn is_valid_new_username(name: &str) -> Result<(), ValidationError> {
+    let chars = name.chars().count();
+    if chars < USERNAME_MIN_CHARS {
+        return Err(ValidationError::TooShort {
+            min: USERNAME_MIN_CHARS,
+            got: chars,
+        });
+    }
+    if chars > USERNAME_MAX_CHARS {
+        return Err(ValidationError::TooLong {
+            max: USERNAME_MAX_CHARS,
+            got: chars,
+        });
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || is_username_separator(c))
+    {
+        return Err(ValidationError::InvalidCharacters);
+    }
+    // Separators must not lead, trail, or appear consecutively.
+    let first = name.chars().next().expect("min length checked above");
+    let last = name.chars().next_back().expect("min length checked above");
+    if is_username_separator(first) || is_username_separator(last) {
+        return Err(ValidationError::InvalidFormat);
+    }
+    if name
+        .chars()
+        .zip(name.chars().skip(1))
+        .any(|(a, b)| is_username_separator(a) && is_username_separator(b))
+    {
+        return Err(ValidationError::InvalidFormat);
     }
     Ok(())
 }
@@ -74,6 +140,9 @@ pub fn validate_email(email: &str) -> Result<(), ValidationError> {
             max: 255,
             got: email.len(),
         });
+    }
+    if email.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(ValidationError::InvalidFormat);
     }
     let parts: Vec<&str> = email.splitn(2, '@').collect();
     if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
@@ -145,6 +214,79 @@ mod tests {
         assert!(validate_username("ab").is_ok());
         // Exactly 32 chars - maximum valid
         assert!(validate_username(&"a".repeat(32)).is_ok());
+    }
+
+    #[test]
+    fn username_length_counts_chars_not_bytes() {
+        // 32 multi-byte chars (2 bytes each = 64 bytes) is within the char limit.
+        assert!(validate_username(&"é".repeat(32)).is_ok());
+        // 33 chars exceeds it, reported in chars not bytes.
+        let err = validate_username(&"é".repeat(33)).unwrap_err();
+        assert!(matches!(err, ValidationError::TooLong { max: 32, got: 33 }));
+    }
+
+    #[test]
+    fn username_rejects_control_and_whitespace() {
+        assert!(matches!(
+            validate_username("a\tb").unwrap_err(),
+            ValidationError::InvalidCharacters
+        ));
+        assert!(matches!(
+            validate_username("a\u{0000}b").unwrap_err(),
+            ValidationError::InvalidCharacters
+        ));
+    }
+
+    // ---- is_valid_new_username ----
+
+    #[test]
+    fn new_username_valid_ascii() {
+        assert!(is_valid_new_username("alice").is_ok());
+        assert!(is_valid_new_username("user_123").is_ok());
+        assert!(is_valid_new_username("a.b-c_d").is_ok());
+        assert!(is_valid_new_username("Bob99").is_ok());
+    }
+
+    #[test]
+    fn new_username_rejects_cyrillic_homograph() {
+        // "аdmin" — leading char is Cyrillic 'а' (U+0430), not ASCII 'a'.
+        let err = is_valid_new_username("\u{0430}dmin").unwrap_err();
+        assert!(matches!(err, ValidationError::InvalidCharacters));
+    }
+
+    #[test]
+    fn new_username_rejects_fullwidth_homograph() {
+        // Full-width Latin small letter a (U+FF41).
+        let err = is_valid_new_username("\u{FF41}dmin").unwrap_err();
+        assert!(matches!(err, ValidationError::InvalidCharacters));
+    }
+
+    #[test]
+    fn new_username_rejects_edge_and_repeated_separators() {
+        assert!(matches!(
+            is_valid_new_username("_alice").unwrap_err(),
+            ValidationError::InvalidFormat
+        ));
+        assert!(matches!(
+            is_valid_new_username("alice.").unwrap_err(),
+            ValidationError::InvalidFormat
+        ));
+        assert!(matches!(
+            is_valid_new_username("a__b").unwrap_err(),
+            ValidationError::InvalidFormat
+        ));
+    }
+
+    #[test]
+    fn new_username_length_bounds() {
+        assert!(matches!(
+            is_valid_new_username("a").unwrap_err(),
+            ValidationError::TooShort { min: 2, got: 1 }
+        ));
+        assert!(matches!(
+            is_valid_new_username(&"a".repeat(33)).unwrap_err(),
+            ValidationError::TooLong { max: 32, .. }
+        ));
     }
 
     // ---- validate_guild_name ----
@@ -269,6 +411,26 @@ mod tests {
     fn email_empty_domain() {
         let err = validate_email("user@").unwrap_err();
         assert!(matches!(err, ValidationError::InvalidFormat));
+    }
+
+    #[test]
+    fn email_rejects_control_chars() {
+        assert!(matches!(
+            validate_email("user\r\n@example.com").unwrap_err(),
+            ValidationError::InvalidFormat
+        ));
+        assert!(matches!(
+            validate_email("us\u{0000}er@example.com").unwrap_err(),
+            ValidationError::InvalidFormat
+        ));
+    }
+
+    #[test]
+    fn email_rejects_whitespace() {
+        assert!(matches!(
+            validate_email("user name@example.com").unwrap_err(),
+            ValidationError::InvalidFormat
+        ));
     }
 
     // ---- validate_password ----

@@ -85,6 +85,17 @@ async fn main() -> Result<()> {
         .init();
 
     let args = cli::Args::parse();
+
+    // Maintenance subcommands run to completion and exit without starting the
+    // server or touching the runtime config.
+    if let Some(command) = &args.command {
+        return match command {
+            cli::Command::MigrateToPostgres(migrate_args) => {
+                run_migrate_to_postgres(migrate_args).await
+            }
+        };
+    }
+
     let config = config::Config::load(&args.config)?;
     if config.tls.acme.enabled && !config.tls.enabled {
         tracing::warn!(
@@ -180,7 +191,7 @@ async fn main() -> Result<()> {
         .rsplit(':')
         .next()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
+        .unwrap_or(8090);
     let tls_port = config.tls.port;
 
     let livekit_port: u16 = config
@@ -843,6 +854,64 @@ async fn main() -> Result<()> {
         )
         .with_graceful_shutdown(shutdown_signal_http)
         .await?;
+    }
+
+    Ok(())
+}
+
+/// Run the `migrate-to-postgres` subcommand: copy a SQLite database into a
+/// PostgreSQL database and print a per-table report.
+async fn run_migrate_to_postgres(args: &cli::MigrateToPostgresArgs) -> Result<()> {
+    if args.dry_run {
+        tracing::info!(
+            "Dry run: validating column maps and counting rows (no data will be written)"
+        );
+    } else {
+        tracing::info!(
+            "Migrating SQLite -> PostgreSQL (single transaction, all-or-nothing). \
+             Ensure the server is stopped and the SQLite file is idle."
+        );
+    }
+
+    let report = paracord_db::migrate_export::migrate_sqlite_to_postgres(
+        &args.source,
+        &args.target,
+        i64::from(args.batch_size),
+        args.dry_run,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("migration failed (target left unchanged): {e}"))?;
+
+    for table in &report.tables {
+        if report.dry_run {
+            tracing::info!(
+                "  {:<32} {:>4} cols  {:>10} rows",
+                table.table,
+                table.columns,
+                table.source_rows
+            );
+        } else {
+            tracing::info!(
+                "  {:<32} {:>4} cols  {:>10} rows copied",
+                table.table,
+                table.columns,
+                table.copied_rows
+            );
+        }
+    }
+
+    if report.dry_run {
+        tracing::info!(
+            "Dry run complete: {} tables, {} source rows. No data written.",
+            report.tables.len(),
+            report.total_source_rows()
+        );
+    } else {
+        tracing::info!(
+            "Migration complete: {} tables, {} rows copied and verified.",
+            report.tables.len(),
+            report.total_copied_rows()
+        );
     }
 
     Ok(())
@@ -2432,6 +2501,11 @@ async fn handle_raw_quic_connection(
         }
     };
 
+    if !is_media_session_active(&db, user_id, session_id).await {
+        tracing::warn!(user_id, "QUIC: media token session revoked or expired");
+        return;
+    }
+
     let handle = paracord_relay::relay::ConnectionHandle::new(user_id, room_id.clone(), conn);
     relay.add_connection(handle.clone());
     relay.spawn_forwarding_task(handle.clone());
@@ -2443,6 +2517,22 @@ async fn handle_raw_quic_connection(
         });
     }
     tracing::info!(user_id, room_id = %room_id, "QUIC: relay forwarding started");
+}
+
+/// Reject media bridging when the auth session behind a media JWT has been
+/// revoked or has expired. Media tokens carry a 24h `exp` (voice.rs) and no
+/// rotating `jti`, so without this the REST/WS revocation applied by
+/// `is_access_token_active` would not reach QUIC/WebTransport for up to a day.
+/// Fails closed on any lookup error.
+async fn is_media_session_active(db: &paracord_db::DbPool, user_id: i64, session_id: &str) -> bool {
+    match paracord_db::sessions::get_session_by_id(db, session_id).await {
+        Ok(Some(session)) => {
+            session.user_id == user_id
+                && session.revoked_at.is_none()
+                && session.expires_at > chrono::Utc::now()
+        }
+        _ => false,
+    }
 }
 
 async fn resolve_active_media_room(
@@ -2777,6 +2867,14 @@ async fn handle_webtransport_connection(
                                     return;
                                 }
                             };
+
+                        if !is_media_session_active(&db, user_id, session_id).await {
+                            tracing::warn!(
+                                user_id,
+                                "WebTransport: media token session revoked or expired"
+                            );
+                            return;
+                        }
 
                         // Send length-prefixed Pong acknowledgement.
                         if let Ok(ack) = paracord_transport::control::ControlMessage::Pong.encode()

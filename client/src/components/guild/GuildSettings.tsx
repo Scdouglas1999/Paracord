@@ -14,7 +14,7 @@ import { Permissions, hasPermission } from '../../types';
 import type { AuditLogEntry, Ban, Channel, Guild, GuildBotConfig, GuildEmoji, Invite, Member, ModerationReport, Role } from '../../types';
 import type { Webhook } from '../../types';
 import { isAllowedImageMimeType, isSafeImageDataUrl, safeStoredImageDataUrl } from '../../lib/security';
-import { resolveApiBaseUrl } from '../../lib/apiBaseUrl';
+import { resolveApiBaseUrl } from '../../lib/config/apiBaseUrl';
 import { cn } from '../../lib/utils';
 import { writeClipboardText } from '../../lib/clipboard';
 import { confirm } from '../../stores/confirmStore';

@@ -61,10 +61,10 @@ fn get_query_token(uri: &Uri) -> Option<String> {
 
 fn allows_query_token_fallback(parts: &Parts) -> bool {
     let path = parts.uri.path();
-    if parts.method == Method::GET
-        && (path.starts_with("/api/v1/attachments/")
-            || path.starts_with("/api/v1/federated-files/"))
-    {
+    // Attachment downloads no longer accept a `?token=` query fallback: raw
+    // access tokens in the URL leak into logs, referrers, and history. Clients
+    // must send the Authorization header (or use the SSE-style download ticket).
+    if parts.method == Method::GET && path.starts_with("/api/v1/federated-files/") {
         return true;
     }
     if parts.method == Method::GET
@@ -120,6 +120,11 @@ async fn validate_auth(
 }
 
 /// Validate a "Bot <token>" header by looking up the token hash in bot_applications.
+///
+/// Hardening mirrors the password/MFA auth guards: presenting an unknown or
+/// revoked token is a rate-limited failure keyed on the token hash (so a leaked
+/// or stale token that keeps being replayed is throttled), while a successful
+/// authentication clears any prior failures and best-effort records `last_used_at`.
 async fn validate_bot_auth(parts: &Parts, state: &AppState) -> Result<i64, ApiError> {
     let token = match extract_auth_scheme(parts) {
         Some(AuthScheme::Bot(t)) => t,
@@ -127,11 +132,56 @@ async fn validate_bot_auth(parts: &Parts, state: &AppState) -> Result<i64, ApiEr
     };
 
     let token_hash = paracord_db::bot_applications::hash_token(token);
+    let guard_key = format!("bot:{token_hash}");
+    let now = Utc::now();
+    let now_epoch = now.timestamp();
+
+    // Reject early if this token hash is currently locked out from repeated
+    // failures, before touching the bot_applications table.
+    let guard_states = paracord_db::rate_limits::get_auth_guard_states(
+        &state.db,
+        std::slice::from_ref(&guard_key),
+    )
+    .await
+    .map_err(|_| ApiError::Internal(anyhow::anyhow!("database error")))?;
+    if guard_states.iter().any(|row| row.locked_until > now_epoch) {
+        return Err(ApiError::Unauthorized);
+    }
+
     let app =
         paracord_db::bot_applications::get_bot_application_by_token_hash(&state.db, &token_hash)
             .await
-            .map_err(|_| ApiError::Internal(anyhow::anyhow!("database error")))?
-            .ok_or(ApiError::Unauthorized)?;
+            .map_err(|_| ApiError::Internal(anyhow::anyhow!("database error")))?;
+
+    let app = match app {
+        Some(app) if !app.revoked => app,
+        // Unknown or revoked token: record a failure so replayed bad tokens
+        // eventually lock out. Best-effort — never block the rejection on it.
+        _ => {
+            let _ = paracord_db::rate_limits::record_auth_guard_failure(
+                &state.db, &guard_key, now_epoch,
+            )
+            .await;
+            return Err(ApiError::Unauthorized);
+        }
+    };
+
+    // Success: clear any accumulated failures for this token and record usage.
+    if !guard_states.is_empty() {
+        let _ = paracord_db::rate_limits::clear_auth_guard_keys(
+            &state.db,
+            std::slice::from_ref(&guard_key),
+        )
+        .await;
+    }
+    let db = state.db.clone();
+    let app_id = app.id;
+    tokio::spawn(async move {
+        if let Err(err) = paracord_db::bot_applications::touch_bot_last_used(&db, app_id, now).await
+        {
+            tracing::debug!("failed to update bot last_used_at for {}: {}", app_id, err);
+        }
+    });
 
     Ok(app.bot_user_id)
 }
@@ -212,10 +262,23 @@ mod tests {
     }
 
     #[test]
-    fn allows_query_token_for_attachment_downloads_only() {
+    fn rejects_query_token_for_attachment_downloads() {
+        // Attachment GETs must authenticate via the Authorization header or a
+        // single-use download ticket, never a raw token in the query string.
         let get_request = Request::builder()
             .method("GET")
             .uri("/api/v1/attachments/123?token=abc")
+            .body(())
+            .expect("request");
+        let (get_parts, _) = get_request.into_parts();
+        assert!(!allows_query_token_fallback(&get_parts));
+    }
+
+    #[test]
+    fn allows_query_token_for_federated_file_downloads_only() {
+        let get_request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/federated-files/123?token=abc")
             .body(())
             .expect("request");
         let (get_parts, _) = get_request.into_parts();
@@ -223,7 +286,7 @@ mod tests {
 
         let delete_request = Request::builder()
             .method("DELETE")
-            .uri("/api/v1/attachments/123?token=abc")
+            .uri("/api/v1/federated-files/123?token=abc")
             .body(())
             .expect("request");
         let (delete_parts, _) = delete_request.into_parts();

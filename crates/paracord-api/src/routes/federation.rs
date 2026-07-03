@@ -1,5 +1,6 @@
 use axum::{
-    extract::{Path, Query, State},
+    body::Bytes,
+    extract::{ConnectInfo, Path, Query, State},
     http::StatusCode,
     http::{HeaderMap, Uri},
     Json,
@@ -13,10 +14,12 @@ use paracord_federation::{
 use paracord_models::permissions::Permissions;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::error::ApiError;
 use crate::middleware::AdminUser;
+use crate::routes::security;
 
 fn parse_signing_key() -> Option<SigningKey> {
     let raw = std::env::var("PARACORD_FEDERATION_SIGNING_KEY_HEX").ok()?;
@@ -506,6 +509,27 @@ async fn verify_transport_request(
     Ok(transport)
 }
 
+/// Constant-time string equality. Both inputs are folded through an HMAC keyed
+/// by a server secret and the fixed-length tags are compared with the
+/// constant-time `verify_slice`, mirroring the file-token check. This avoids
+/// leaking how many leading bytes matched via an early-exit `==` comparison.
+fn constant_time_str_eq(secret: &str, a: &str, b: &str) -> bool {
+    use hmac::{Hmac, Mac};
+    type HmacSha256 = Hmac<sha2::Sha256>;
+
+    let Ok(mut mac_a) = HmacSha256::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac_a.update(a.as_bytes());
+    let tag_a = mac_a.finalize().into_bytes();
+
+    let Ok(mut mac_b) = HmacSha256::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac_b.update(b.as_bytes());
+    mac_b.verify_slice(&tag_a).is_ok()
+}
+
 fn sanitize_remote_username(localpart: &str, fallback: &str) -> String {
     let mut out: String = localpart
         .chars()
@@ -820,25 +844,28 @@ pub async fn get_keys(State(state): State<AppState>) -> Result<Json<Value>, ApiE
 pub async fn ingest_event(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<FederationEventEnvelope>,
+    raw_body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
 
-    let transport_body = serde_json::to_vec(&payload).unwrap_or_default();
+    // Verify the transport signature over the exact bytes received, then parse.
+    // Re-serializing a parsed struct could diverge from what the peer signed.
     let transport = verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/event",
-        &transport_body,
+        &raw_body,
         None,
         true,
     )
     .await?;
+    let payload: FederationEventEnvelope = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid federation envelope: {e}")))?;
 
     // Per-peer rate limiting on event ingestion
     if let Some(limit) = state.config.federation_max_events_per_peer_per_minute {
@@ -2125,7 +2152,9 @@ async fn authorize_federation_read_request(
             .get("x-paracord-federation-token")
             .and_then(|v| v.to_str().ok())
             .map(str::trim);
-        if presented == Some(expected.as_str()) {
+        if presented
+            .is_some_and(|p| constant_time_str_eq(&state.config.jwt_secret, p, expected.as_str()))
+        {
             return Ok(FederationReadAuth::OperatorToken);
         }
     }
@@ -2218,21 +2247,22 @@ pub struct FederationMediaRelayRequest {
 pub async fn invite(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<FederationInviteRequest>,
+    raw_body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
 
-    let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+    let body: FederationInviteRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
     verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/invite",
-        &body_bytes,
+        &raw_body,
         Some(body.origin_server.as_str()),
         true,
     )
@@ -2269,20 +2299,21 @@ pub async fn invite(
 pub async fn join(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<FederationJoinRequest>,
+    raw_body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
-    let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+    let body: FederationJoinRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
     verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/join",
-        &body_bytes,
+        &raw_body,
         Some(body.origin_server.as_str()),
         true,
     )
@@ -2349,20 +2380,21 @@ pub async fn join(
 pub async fn leave(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<FederationLeaveRequest>,
+    raw_body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
-    let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+    let body: FederationLeaveRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
     verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/leave",
-        &body_bytes,
+        &raw_body,
         Some(body.origin_server.as_str()),
         true,
     )
@@ -2415,20 +2447,21 @@ pub async fn leave(
 pub async fn media_token(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<FederationMediaTokenRequest>,
+    raw_body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
-    let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+    let body: FederationMediaTokenRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
     verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/media/token",
-        &body_bytes,
+        &raw_body,
         Some(body.origin_server.as_str()),
         true,
     )
@@ -2515,20 +2548,21 @@ pub async fn media_token(
 pub async fn media_relay(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<FederationMediaRelayRequest>,
+    raw_body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
-    let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+    let body: FederationMediaRelayRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
     verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/media/relay",
-        &body_bytes,
+        &raw_body,
         Some(body.origin_server.as_str()),
         true,
     )
@@ -2653,8 +2687,10 @@ pub async fn list_servers(
 }
 
 pub async fn add_server(
-    _admin: AdminUser,
+    admin: AdminUser,
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<AddServerRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let service = federation_service_from_state(&state);
@@ -2712,6 +2748,23 @@ pub async fn add_server(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    let peer_ip = addr.ip().to_string();
+    security::log_security_event(
+        &state,
+        "federation.server.add",
+        Some(admin.user_id),
+        None,
+        None,
+        Some(&headers),
+        Some(peer_ip.as_str()),
+        Some(json!({
+            "server_name": body.server_name,
+            "domain": body.domain,
+            "trusted": body.trusted,
+        })),
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -2743,8 +2796,10 @@ pub async fn get_server(
 }
 
 pub async fn delete_server(
-    _admin: AdminUser,
+    admin: AdminUser,
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(server_name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let service = federation_service_from_state(&state);
@@ -2755,6 +2810,20 @@ pub async fn delete_server(
     let deleted = paracord_db::federation::delete_federated_server(&state.db, &server_name)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let peer_ip = addr.ip().to_string();
+    security::log_security_event(
+        &state,
+        "federation.server.delete",
+        Some(admin.user_id),
+        None,
+        None,
+        Some(&headers),
+        Some(peer_ip.as_str()),
+        Some(json!({ "server_name": server_name, "deleted": deleted })),
+    )
+    .await;
+
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -2778,10 +2847,18 @@ pub struct ApplyModerationListRequest {
     pub entries: Vec<ModerationListEntry>,
 }
 
-fn normalize_moderation_action(action: &str) -> Option<&'static str> {
+/// Normalize a moderation action string to its canonical form.
+///
+/// `allow_unblock` controls whether an `allow`/`unblock` action is honored. It
+/// must be `false` for entries ingested from a remote subscription: a remote
+/// list may add blocks/quarantines but must never be able to *lift* a block a
+/// local operator applied, otherwise a compromised or hostile upstream list
+/// could silently re-admit a server the admin banned. Admin-direct applies pass
+/// `true` and retain the full capability.
+fn normalize_moderation_action(action: &str, allow_unblock: bool) -> Option<&'static str> {
     let normalized = action.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "allow" | "unblock" => Some("allow"),
+        "allow" | "unblock" => allow_unblock.then_some("allow"),
         "block" | "deny" => Some("block"),
         "quarantine" => Some("quarantine"),
         _ => None,
@@ -2792,6 +2869,7 @@ async fn apply_moderation_entries(
     state: &AppState,
     source: &str,
     entries: &[ModerationListEntry],
+    allow_unblock: bool,
 ) -> Result<usize, ApiError> {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut applied = 0usize;
@@ -2800,7 +2878,7 @@ async fn apply_moderation_entries(
         if server.is_empty() {
             continue;
         }
-        let Some(mode) = normalize_moderation_action(&entry.action) else {
+        let Some(mode) = normalize_moderation_action(&entry.action, allow_unblock) else {
             continue;
         };
         let quarantined_until_ms = if mode == "quarantine" {
@@ -2834,8 +2912,10 @@ async fn apply_moderation_entries(
 }
 
 pub async fn apply_moderation_list(
-    _admin: AdminUser,
+    admin: AdminUser,
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<ApplyModerationListRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let source = body.source.trim();
@@ -2844,7 +2924,22 @@ pub async fn apply_moderation_list(
             "source must be provided for moderation list auditability".to_string(),
         ));
     }
-    let applied = apply_moderation_entries(&state, source, &body.entries).await?;
+    // Admin-direct apply retains the full capability, including lifting blocks.
+    let applied = apply_moderation_entries(&state, source, &body.entries, true).await?;
+
+    let peer_ip = addr.ip().to_string();
+    security::log_security_event(
+        &state,
+        "federation.moderation.apply",
+        Some(admin.user_id),
+        None,
+        None,
+        Some(&headers),
+        Some(peer_ip.as_str()),
+        Some(json!({ "source": source, "applied": applied, "entries": body.entries.len() })),
+    )
+    .await;
+
     Ok(Json(json!({
         "source": source,
         "applied": applied,
@@ -2859,8 +2954,10 @@ pub struct UpsertModerationSubscriptionRequest {
 }
 
 pub async fn upsert_moderation_subscription(
-    _admin: AdminUser,
+    admin: AdminUser,
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<UpsertModerationSubscriptionRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let source_url = body.source_url.trim();
@@ -2898,6 +2995,24 @@ pub async fn upsert_moderation_subscription(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    let peer_ip = addr.ip().to_string();
+    security::log_security_event(
+        &state,
+        "federation.moderation.subscription.add",
+        Some(admin.user_id),
+        None,
+        None,
+        Some(&headers),
+        Some(peer_ip.as_str()),
+        Some(json!({
+            "id": id.to_string(),
+            "source_url": source_url,
+            "source_server": normalized_source_server,
+            "enabled": body.enabled.unwrap_or(true),
+        })),
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -2922,14 +3037,30 @@ pub async fn list_moderation_subscriptions(
 }
 
 pub async fn delete_moderation_subscription(
-    _admin: AdminUser,
+    admin: AdminUser,
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(subscription_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
     let removed =
         paracord_db::federation::delete_moderation_subscription_by_id(&state.db, subscription_id)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let peer_ip = addr.ip().to_string();
+    security::log_security_event(
+        &state,
+        "federation.moderation.subscription.delete",
+        Some(admin.user_id),
+        None,
+        None,
+        Some(&headers),
+        Some(peer_ip.as_str()),
+        Some(json!({ "subscription_id": subscription_id.to_string(), "removed": removed })),
+    )
+    .await;
+
     if removed {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -3013,7 +3144,9 @@ pub async fn sync_moderation_lists_once(state: &AppState) {
                 .await
                 .map_err(|err| anyhow::anyhow!("invalid moderation list payload: {err}"))?;
             let entries = parse_remote_mod_entries(&payload);
-            apply_moderation_entries(state, &source_label, &entries).await?;
+            // Remote subscriptions can add blocks/quarantines but must never
+            // lift a locally-applied block (allow/unblock is ignored).
+            apply_moderation_entries(state, &source_label, &entries, false).await?;
             Ok::<usize, anyhow::Error>(entries.len())
         }
         .await;
@@ -3108,21 +3241,22 @@ pub struct FederationFileTokenRequest {
 pub async fn file_token(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<FederationFileTokenRequest>,
+    raw_body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
 
-    let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+    let body: FederationFileTokenRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
     let transport = verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/file/token",
-        &body_bytes,
+        &raw_body,
         Some(body.origin_server.as_str()),
         true,
     )
@@ -3240,31 +3374,10 @@ pub async fn file_download(
         .content_type
         .clone()
         .unwrap_or_else(|| "application/octet-stream".to_string());
-    let safe_filename: String = attachment
-        .filename
-        .chars()
-        .filter(|ch| *ch != '"' && *ch != '\\' && *ch != '\r' && *ch != '\n')
-        .collect();
-    let disposition = format!("attachment; filename=\"{}\"", safe_filename);
+    let disposition = crate::routes::files::build_content_disposition(&attachment.filename, false);
 
     Ok((
-        [
-            (
-                axum::http::header::CONTENT_TYPE,
-                axum::http::header::HeaderValue::from_str(&content_type).unwrap_or(
-                    axum::http::header::HeaderValue::from_static("application/octet-stream"),
-                ),
-            ),
-            (
-                axum::http::header::CONTENT_DISPOSITION,
-                axum::http::header::HeaderValue::from_str(&disposition)
-                    .unwrap_or(axum::http::header::HeaderValue::from_static("attachment")),
-            ),
-            (
-                axum::http::header::X_CONTENT_TYPE_OPTIONS,
-                axum::http::header::HeaderValue::from_static("nosniff"),
-            ),
-        ],
+        crate::routes::files::download_response_headers(&content_type, &disposition),
         data,
     ))
 }

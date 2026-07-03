@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useServerListStore } from '../stores/serverListStore';
 import { gateway } from '../gateway/manager';
-import { setStoredServerUrl } from '../lib/apiBaseUrl';
+import { setStoredServerUrl } from '../lib/config/apiBaseUrl';
 import { isPortableLink, decodePortableLink } from '../lib/portableLinks';
 import { confirm } from '../stores/confirmStore';
 import { OnboardingWizard, hasCompletedOnboarding } from '../components/onboarding/OnboardingWizard';

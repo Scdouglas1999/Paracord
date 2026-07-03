@@ -25,6 +25,7 @@ pub mod invites;
 pub mod members;
 pub mod messages;
 pub mod mfa;
+pub mod migrate_export;
 pub mod moderation_templates;
 pub mod onboarding;
 pub mod password_reset;
@@ -406,7 +407,39 @@ fn is_hex_sha256(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
+/// Settings marker recording that the one-time webhook-token backfill has run.
+/// Once present, boot no longer rescans the whole `webhooks` table.
+const WEBHOOK_TOKEN_BACKFILL_MARKER: &str = "webhook_token_backfill_v1";
+
+async fn webhook_token_backfill_completed(pool: &DbPool) -> Result<bool, sqlx::Error> {
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM server_settings WHERE key = $1")
+            .bind(WEBHOOK_TOKEN_BACKFILL_MARKER)
+            .fetch_optional(pool)
+            .await?;
+    Ok(existing.is_some())
+}
+
+async fn mark_webhook_token_backfill_completed(pool: &DbPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ($1, 'true')
+         ON CONFLICT (key) DO UPDATE SET value = 'true'",
+    )
+    .bind(WEBHOOK_TOKEN_BACKFILL_MARKER)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn backfill_webhook_token_hashes(pool: &DbPool) -> Result<(), sqlx::Error> {
+    // One-time migration: once the marker is set, skip the full-table scan on
+    // every subsequent boot. The scan itself stays idempotent (it re-hashes only
+    // plaintext tokens, preserving the is_hex_sha256 skip) so re-running before
+    // the marker exists is always safe.
+    if webhook_token_backfill_completed(pool).await? {
+        return Ok(());
+    }
+
     let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, token FROM webhooks")
         .fetch_all(pool)
         .await?;
@@ -423,6 +456,8 @@ async fn backfill_webhook_token_hashes(pool: &DbPool) -> Result<(), sqlx::Error>
             .execute(pool)
             .await?;
     }
+
+    mark_webhook_token_backfill_completed(pool).await?;
 
     Ok(())
 }
@@ -487,6 +522,15 @@ mod tests {
         .await
         .expect("insert webhook");
 
+        // run_migrations already sets the completion marker (backfill runs at the
+        // end of migrations against an empty table). Clear it to exercise the
+        // scan-and-hash path as it would run on a pre-marker database.
+        sqlx::query("DELETE FROM server_settings WHERE key = $1")
+            .bind(super::WEBHOOK_TOKEN_BACKFILL_MARKER)
+            .execute(&pool)
+            .await
+            .expect("clear marker");
+
         backfill_webhook_token_hashes(&pool)
             .await
             .expect("backfill webhook hashes");
@@ -497,6 +541,58 @@ mod tests {
             .expect("load webhook");
         assert_eq!(stored.len(), 64);
         assert_ne!(stored, "plaintext-token");
+    }
+
+    #[tokio::test]
+    async fn webhook_token_backfill_is_gated_after_completion() {
+        let pool = create_pool("sqlite::memory:", 1).await.expect("pool");
+        run_migrations(&pool).await.expect("migrations");
+
+        // Fresh migrations set the marker against an empty webhooks table.
+        assert!(
+            super::webhook_token_backfill_completed(&pool)
+                .await
+                .expect("marker check"),
+            "migrations should mark the backfill complete"
+        );
+
+        sqlx::query(
+            "INSERT INTO users (id, username, discriminator, email, password_hash)
+             VALUES (1, 'u', 1, 'u@example.com', 'hash')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert user");
+        sqlx::query("INSERT INTO spaces (id, name, owner_id) VALUES (2, 'space', 1)")
+            .execute(&pool)
+            .await
+            .expect("insert space");
+        sqlx::query(
+            "INSERT INTO channels (id, space_id, name, channel_type, position)
+             VALUES (3, 2, 'general', 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert channel");
+        sqlx::query(
+            "INSERT INTO webhooks (id, space_id, channel_id, creator_id, name, token)
+             VALUES (5, 2, 3, 1, 'hook', 'still-plaintext')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert webhook");
+
+        // Marker present -> the scan is skipped and the plaintext token is left
+        // untouched, proving the whole-table rescan no longer runs every boot.
+        backfill_webhook_token_hashes(&pool)
+            .await
+            .expect("gated backfill");
+
+        let stored: String = sqlx::query_scalar("SELECT token FROM webhooks WHERE id = 5")
+            .fetch_one(&pool)
+            .await
+            .expect("load webhook");
+        assert_eq!(stored, "still-plaintext");
     }
 
     #[tokio::test]

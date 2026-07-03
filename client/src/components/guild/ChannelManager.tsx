@@ -22,7 +22,7 @@ import { guildApi } from '../../api/guilds';
 import { channelApi, type ChannelFeatureSettings } from '../../api/channels';
 import { extractApiError } from '../../api/client';
 import { useChannelStore } from '../../stores/channelStore';
-import { buildChannelGroups, isVirtualGroup, type ChannelGroup } from '../../lib/channelGroups';
+import { buildChannelGroups, isVirtualGroup, type ChannelGroup } from '../../lib/features/channelGroups';
 import { cn } from '../../lib/utils';
 import { ChannelPermissionsEditor } from './ChannelPermissionsEditor';
 import { confirm } from '../../stores/confirmStore';

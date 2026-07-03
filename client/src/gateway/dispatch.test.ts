@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock leaf side-effect modules so dispatch stays unit-scoped.
-vi.mock('../lib/notifications', () => ({
+vi.mock('../lib/features/notifications', () => ({
   isEnabled: vi.fn(() => false),
   sendNotification: vi.fn(() => Promise.resolve()),
 }));
@@ -19,7 +19,7 @@ import { useChannelStore } from '../stores/channelStore';
 import { useMessageStore } from '../stores/messageStore';
 import { useAuthStore } from '../stores/authStore';
 import { useVoiceStore } from '../stores/voiceStore';
-import * as notifications from '../lib/notifications';
+import * as notifications from '../lib/features/notifications';
 import type { User } from '../types';
 
 const SERVER = '__test_server__';

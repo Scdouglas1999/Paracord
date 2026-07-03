@@ -62,7 +62,7 @@ vi.mock('../stores/serverListStore', () => ({
   },
 }));
 
-vi.mock('../lib/apiBaseUrl', () => mockApiBaseUrl);
+vi.mock('../lib/config/apiBaseUrl', () => mockApiBaseUrl);
 
 vi.mock('../lib/account', () => ({
   hasAccount: mockHasAccount,

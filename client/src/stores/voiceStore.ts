@@ -23,7 +23,7 @@ import {
   type TrackPublication,
 } from 'livekit-client';
 import { useAuthStore } from './authStore';
-import { playVoiceJoinSound, playVoiceLeaveSound } from '../lib/voiceSounds';
+import { playVoiceJoinSound, playVoiceLeaveSound } from '../lib/features/voiceSounds';
 import { startNativeSystemAudio, stopNativeSystemAudio } from '../lib/systemAudioCapture';
 import { isTauri } from '../lib/tauriEnv';
 import { NoiseGateProcessor } from '../lib/noiseGate';

@@ -23,7 +23,7 @@ vi.mock('../api/client', () => ({
     return 'An unexpected error occurred';
   }),
 }));
-vi.mock('../lib/apiBaseUrl', () => ({
+vi.mock('../lib/config/apiBaseUrl', () => ({
   resolveApiBaseUrl: () => 'http://localhost:8090/api/v1',
 }));
 

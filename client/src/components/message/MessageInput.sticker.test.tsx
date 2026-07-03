@@ -69,7 +69,7 @@ vi.mock('../../api/guilds', () => ({
   },
 }));
 
-vi.mock('../../lib/apiBaseUrl', () => ({
+vi.mock('../../lib/config/apiBaseUrl', () => ({
   resolveApiBaseUrl: () => '/api/v1',
   resolveResourceUrl: (url: string) => url,
 }));

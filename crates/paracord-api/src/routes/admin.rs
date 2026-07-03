@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -8,6 +8,7 @@ use paracord_core::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use tokio_util::io::ReaderStream;
 
 use crate::error::ApiError;
@@ -18,9 +19,11 @@ use crate::routes::security;
 
 pub async fn restart_update(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     admin: AdminUser,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
+    let peer_ip = addr.ip().to_string();
     // This endpoint intentionally does not execute shell scripts or build steps.
     // Update automation must be performed out-of-process using signed release artifacts.
     security::log_security_event(
@@ -30,6 +33,7 @@ pub async fn restart_update(
         None,
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "reason": "endpoint_disabled_for_security" })),
     )
     .await;
@@ -211,10 +215,12 @@ fn validate_setting(key: &str, value: &str) -> Result<(), String> {
 
 pub async fn update_settings(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     admin: AdminUser,
     headers: HeaderMap,
     Json(body): Json<HashMap<String, String>>,
 ) -> Result<Json<Value>, ApiError> {
+    let peer_ip = addr.ip().to_string();
     for key in body.keys() {
         if !ALLOWED_SETTINGS.contains(&key.as_str()) {
             return Err(ApiError::BadRequest(format!("unknown setting: \"{key}\"")));
@@ -278,6 +284,7 @@ pub async fn update_settings(
         None,
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "keys": changed_keys })),
     )
     .await;
@@ -354,11 +361,13 @@ pub struct UpdateUserRequest {
 
 pub async fn update_user(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     admin: AdminUser,
     headers: HeaderMap,
     Path(user_id): Path<i64>,
     Json(body): Json<UpdateUserRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let peer_ip = addr.ip().to_string();
     if let Some(flags) = body.flags {
         // Prevent admin from removing their own admin flag
         if user_id == admin.user_id && !paracord_core::is_admin(flags) {
@@ -378,6 +387,7 @@ pub async fn update_user(
             Some(user_id),
             None,
             Some(&headers),
+            Some(peer_ip.as_str()),
             Some(json!({ "flags": flags })),
         )
         .await;
@@ -399,10 +409,12 @@ pub async fn update_user(
 
 pub async fn delete_user(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     admin: AdminUser,
     headers: HeaderMap,
     Path(user_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    let peer_ip = addr.ip().to_string();
     if user_id == admin.user_id {
         return Err(ApiError::BadRequest("Cannot delete yourself".into()));
     }
@@ -415,6 +427,7 @@ pub async fn delete_user(
         Some(user_id),
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         None,
     )
     .await;
@@ -457,11 +470,13 @@ pub async fn list_guilds(
 
 pub async fn update_guild(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     admin: AdminUser,
     headers: HeaderMap,
     Path(guild_id): Path<i64>,
     Json(body): Json<UpdateGuildRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let peer_ip = addr.ip().to_string();
     let updated = paracord_core::admin::admin_update_guild(
         &state.db,
         guild_id,
@@ -491,6 +506,7 @@ pub async fn update_guild(
         None,
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "guild_id": guild_id.to_string() })),
     )
     .await;
@@ -500,10 +516,12 @@ pub async fn update_guild(
 
 pub async fn delete_guild(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     admin: AdminUser,
     headers: HeaderMap,
     Path(guild_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    let peer_ip = addr.ip().to_string();
     paracord_core::admin::admin_delete_guild(&state.db, guild_id).await?;
 
     state.member_index.remove_guild(guild_id);
@@ -520,6 +538,7 @@ pub async fn delete_guild(
         None,
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "guild_id": guild_id.to_string() })),
     )
     .await;
@@ -536,10 +555,12 @@ pub struct CreateBackupRequest {
 
 pub async fn create_backup(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     admin: AdminUser,
     headers: HeaderMap,
     Json(body): Json<Option<CreateBackupRequest>>,
 ) -> Result<Json<Value>, ApiError> {
+    let peer_ip = addr.ip().to_string();
     let include_media = body.and_then(|b| b.include_media).unwrap_or(true);
 
     let filename = paracord_core::backup::create_backup(
@@ -558,6 +579,7 @@ pub async fn create_backup(
         None,
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "filename": &filename, "include_media": include_media })),
     )
     .await;
@@ -612,10 +634,12 @@ fn validate_backup_filename(name: &str) -> Result<(), ApiError> {
 
 pub async fn restore_backup(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     admin: AdminUser,
     headers: HeaderMap,
     Json(body): Json<RestoreBackupRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let peer_ip = addr.ip().to_string();
     validate_backup_filename(&body.name)?;
 
     paracord_core::backup::restore_backup(
@@ -634,6 +658,7 @@ pub async fn restore_backup(
         None,
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "filename": &body.name })),
     )
     .await;
@@ -674,10 +699,12 @@ pub async fn download_backup(
 
 pub async fn delete_backup(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     admin: AdminUser,
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    let peer_ip = addr.ip().to_string();
     validate_backup_filename(&name)?;
 
     let path = paracord_core::backup::backup_file_path(&state.config.backup_dir, &name);
@@ -696,6 +723,7 @@ pub async fn delete_backup(
         None,
         None,
         Some(&headers),
+        Some(peer_ip.as_str()),
         Some(json!({ "filename": &name })),
     )
     .await;

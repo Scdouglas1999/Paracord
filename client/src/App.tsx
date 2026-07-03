@@ -31,7 +31,7 @@ import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
 import { useAuthStore } from './stores/authStore';
 import { hasAccount } from './lib/account';
-import { getStoredServerUrl } from './lib/apiBaseUrl';
+import { getStoredServerUrl } from './lib/config/apiBaseUrl';
 
 /**
  * Checks whether we need a server URL configured before proceeding.

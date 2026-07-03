@@ -41,7 +41,7 @@ vi.mock('../api/auth', () => ({
   },
 }));
 
-vi.mock('../lib/apiBaseUrl', () => ({
+vi.mock('../lib/config/apiBaseUrl', () => ({
   getCurrentOriginServerUrl: vi.fn(() => null),
   getStoredServerUrl: vi.fn(() => null),
   setStoredServerUrl: vi.fn(),

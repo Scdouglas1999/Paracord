@@ -23,7 +23,7 @@ import {
   setEnabled as setNotificationsEnabled,
   isPermissionGranted as checkNotificationPermission,
   requestPermission as requestNotificationPermission,
-} from '../../lib/notifications';
+} from '../../lib/features/notifications';
 import {
   getKnownActivityAppsFromStorage,
   normalizeDetectedAppId,

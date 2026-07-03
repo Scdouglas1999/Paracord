@@ -6,7 +6,7 @@ pub mod signing;
 pub mod transport;
 
 use client::FederationClient;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::SigningKey;
 use paracord_db::DbPool;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -142,8 +142,7 @@ impl FederationService {
             .signing_key
             .as_ref()
             .ok_or(FederationError::MissingSigningKey)?;
-        let signature = signing_key.sign(payload);
-        Ok(hex_encode(&signature.to_bytes()))
+        Ok(signing::sign(signing_key, payload))
     }
 
     pub fn verify_payload(
@@ -152,19 +151,7 @@ impl FederationService {
         signature_hex: &str,
         public_key_hex: &str,
     ) -> Result<(), FederationError> {
-        let signature_bytes = hex_decode(signature_hex).ok_or(FederationError::InvalidSignature)?;
-        let public_key_bytes =
-            hex_decode(public_key_hex).ok_or(FederationError::InvalidSignature)?;
-        let signature = Signature::from_slice(&signature_bytes)
-            .map_err(|_| FederationError::InvalidSignature)?;
-        let key_bytes: [u8; 32] = public_key_bytes
-            .try_into()
-            .map_err(|_| FederationError::InvalidSignature)?;
-        let verifying_key =
-            VerifyingKey::from_bytes(&key_bytes).map_err(|_| FederationError::InvalidSignature)?;
-        verifying_key
-            .verify(payload, &signature)
-            .map_err(|_| FederationError::InvalidSignature)
+        signing::verify(payload, signature_hex, public_key_hex)
     }
 
     pub async fn persist_event(
@@ -765,7 +752,11 @@ fn next_retry_ts(now_ms: i64, attempt_count: i64) -> i64 {
     now_ms.saturating_add(delay_ms.min(3_600_000))
 }
 
-/// Build the canonical bytes used for signing an envelope (excludes signatures).
+/// Build the canonical bytes used for signing and verifying an envelope
+/// (excludes signatures). This is the single source of truth for the
+/// signing-bytes encoding: both the local signer ([`FederationService::sign_payload`])
+/// and every remote-signature verifier must feed these exact bytes to
+/// [`signing::sign`] / [`signing::verify`], or signatures will not round-trip.
 pub fn canonical_envelope_bytes(envelope: &FederationEventEnvelope) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "event_id": envelope.event_id,

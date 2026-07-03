@@ -1,5 +1,5 @@
 import { isTauri } from '../../lib/tauriEnv';
-import { getStoredServerUrl, resolveApiBaseUrl } from '../../lib/apiBaseUrl';
+import { getStoredServerUrl, resolveApiBaseUrl } from '../../lib/config/apiBaseUrl';
 import { useServerListStore } from '../serverListStore';
 
 /**
