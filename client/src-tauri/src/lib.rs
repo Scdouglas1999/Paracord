@@ -11,8 +11,8 @@ mod commands;
 mod native_media;
 mod tray;
 
-use std::collections::HashSet;
-use std::sync::{LazyLock, RwLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Duration;
 
 /// Origins that the user has explicitly configured as servers. Certificate
@@ -154,22 +154,275 @@ fn configure_webview2_overrides(app: &tauri::App) {
     }
 }
 
+/// SHA-256 fingerprints of the TLS leaf certificate pinned for each non-loopback
+/// host (trust-on-first-use). Loaded from disk at startup and updated whenever a
+/// new Paracord server is verified for the very first time.
+static PINNED_CERTS: LazyLock<RwLock<HashMap<String, [u8; 32]>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Leaf-certificate fingerprints captured during an in-flight first-use
+/// handshake, awaiting promotion into [`PINNED_CERTS`] once the peer's `/health`
+/// response has been confirmed to identify as Paracord.
+static OBSERVED_CERTS: LazyLock<RwLock<HashMap<String, [u8; 32]>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
+/// Normalise the host of a URL into the key used for certificate pinning. IPv6
+/// literals are stored without their surrounding brackets so they match the
+/// form produced from a rustls [`ServerName`](rustls::pki_types::ServerName).
+fn pin_host_from_url(raw_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(raw_url).ok()?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    Some(
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string(),
+    )
+}
+
+fn sha256_fingerprint(der: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(der);
+    hasher.finalize().into()
+}
+
+fn encode_fingerprint_hex(fp: &[u8; 32]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(64);
+    for byte in fp {
+        let _ = write!(s, "{byte:02x}");
+    }
+    s
+}
+
+fn decode_fingerprint_hex(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let bytes = hex.as_bytes();
+    let mut out = [0u8; 32];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let hi = (bytes[2 * i] as char).to_digit(16)?;
+        let lo = (bytes[2 * i + 1] as char).to_digit(16)?;
+        *slot = ((hi << 4) | lo) as u8;
+    }
+    Some(out)
+}
+
+fn pinned_fingerprint(host: &str) -> Option<[u8; 32]> {
+    PINNED_CERTS.read().ok()?.get(host).copied()
+}
+
+fn set_pinned_fingerprint(host: String, fp: [u8; 32]) {
+    if let Ok(mut guard) = PINNED_CERTS.write() {
+        guard.insert(host, fp);
+    }
+}
+
+fn record_observed_fingerprint(host: &str, fp: [u8; 32]) {
+    if let Ok(mut guard) = OBSERVED_CERTS.write() {
+        guard.insert(host.to_string(), fp);
+    }
+}
+
+fn take_observed_fingerprint(host: &str) -> Option<[u8; 32]> {
+    OBSERVED_CERTS.write().ok()?.remove(host)
+}
+
+fn clear_observed_fingerprint(host: &str) {
+    if let Ok(mut guard) = OBSERVED_CERTS.write() {
+        guard.remove(host);
+    }
+}
+
+fn server_name_host(name: &rustls::pki_types::ServerName<'_>) -> String {
+    match name {
+        rustls::pki_types::ServerName::DnsName(dns) => dns.as_ref().to_ascii_lowercase(),
+        rustls::pki_types::ServerName::IpAddress(ip) => std::net::IpAddr::from(*ip).to_string(),
+        _ => String::new(),
+    }
+}
+
+fn cert_pins_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    let mut dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
+    dir.push("security");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create security directory: {e}"))?;
+    Ok(dir.join("cert_pins.json"))
+}
+
+/// Load persisted certificate pins into [`PINNED_CERTS`] at startup. A missing
+/// or malformed file is treated as "no pins yet" so that first-use capture can
+/// re-establish them; it never causes the app to fail to start.
+fn load_pinned_certs(app: &tauri::AppHandle) {
+    let Ok(path) = cert_pins_path(app) else {
+        return;
+    };
+    let Ok(data) = std::fs::read(&path) else {
+        return;
+    };
+    let Ok(parsed) = serde_json::from_slice::<HashMap<String, String>>(&data) else {
+        return;
+    };
+    let mut map = HashMap::new();
+    for (host, hex) in parsed {
+        if let Some(fp) = decode_fingerprint_hex(&hex) {
+            map.insert(host.to_ascii_lowercase(), fp);
+        }
+    }
+    if let Ok(mut guard) = PINNED_CERTS.write() {
+        *guard = map;
+    }
+}
+
+/// Durably persist the current set of certificate pins next to the other
+/// security state in the app data directory.
+fn persist_pinned_certs(app: &tauri::AppHandle) -> Result<(), String> {
+    let path = cert_pins_path(app)?;
+    let serializable: HashMap<String, String> = {
+        let guard = PINNED_CERTS
+            .read()
+            .map_err(|_| "certificate pin store poisoned".to_string())?;
+        guard
+            .iter()
+            .map(|(host, fp)| (host.clone(), encode_fingerprint_hex(fp)))
+            .collect()
+    };
+    let json = serde_json::to_vec_pretty(&serializable)
+        .map_err(|e| format!("failed to serialize certificate pins: {e}"))?;
+    std::fs::write(&path, &json).map_err(|e| format!("failed to write certificate pins: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// TLS certificate verifier implementing trust-on-first-use (TOFU) pinning.
+///
+/// SAFETY / TRUST MODEL: self-hosted Paracord servers usually present
+/// self-signed certificates, so neither the public CA hierarchy nor hostname
+/// (SAN) validation can be relied upon. Instead:
+///   * Loopback hosts are trusted unconditionally (local dev / same machine).
+///   * The FIRST time a non-loopback host is reached, the SHA-256 fingerprint of
+///     its leaf certificate is captured into [`OBSERVED_CERTS`].
+///     `update_trusted_server_hosts` promotes that fingerprint to a durable pin
+///     only after the `/health` response identifies the peer as Paracord.
+///   * On EVERY later handshake the presented leaf MUST match the pinned
+///     fingerprint; a mismatch aborts the handshake. A MITM or re-issued
+///     certificate is rejected outright and is never silently re-trusted.
+///
+/// The handshake signature is always verified against the presented leaf key, so
+/// a captured certificate cannot be replayed without its private key. The sole
+/// unavoidable exposure is the very first contact with a new host — the inherent
+/// TOFU trade-off — after which the connection is cryptographically pinned.
+#[derive(Debug)]
+struct TofuPinningVerifier {
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for TofuPinningVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let host = server_name_host(server_name);
+        if host.is_empty() {
+            return Err(rustls::Error::General(
+                "unsupported server name for certificate pinning".to_string(),
+            ));
+        }
+        if is_loopback_host(&host) {
+            return Ok(rustls::client::danger::ServerCertVerified::assertion());
+        }
+        let fingerprint = sha256_fingerprint(end_entity.as_ref());
+        match pinned_fingerprint(&host) {
+            Some(expected) if expected == fingerprint => {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+            Some(_) => Err(rustls::Error::General(format!(
+                "TLS certificate pin mismatch for {host}"
+            ))),
+            None => {
+                // Trust-on-first-use: record for the caller to promote to a pin
+                // once the peer's identity has been confirmed.
+                record_observed_fingerprint(&host, fingerprint);
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
 /// Update the set of trusted server origins for TLS certificate override.
 /// Called from JS whenever the server list changes. Non-loopback origins are
 /// trusted only after Rust verifies their `/health` endpoint identifies as a
-/// Paracord server, so renderer code cannot directly whitelist arbitrary TLS
-/// targets for the permissive native HTTP client.
+/// Paracord server AND its TLS certificate matches (or, on first contact,
+/// establishes) the pin recorded for that host, so renderer code cannot
+/// whitelist arbitrary or MITM'd TLS targets for the native HTTP client.
 #[tauri::command]
-async fn update_trusted_server_hosts(server_urls: Vec<String>) {
+async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<String>) {
     let mut origins = HashSet::new();
-    let client = match tls_permissive_client_with_timeout(Duration::from_secs(5)) {
+    let client = match tls_pinning_client_with_timeout(Duration::from_secs(5)) {
         Ok(client) => client,
         Err(_) => return,
     };
+    let mut pins_changed = false;
     for raw_url in &server_urls {
         let Some(origin) = trusted_origin_from_url(raw_url) else {
             continue;
         };
+        // Loopback (and origins already trusted this session) need no probe.
         if is_trusted_cert_origin(raw_url) {
             origins.insert(origin);
             continue;
@@ -177,34 +430,65 @@ async fn update_trusted_server_hosts(server_urls: Vec<String>) {
         let Ok(health_url) = health_url_for_server(raw_url) else {
             continue;
         };
+        let Some(host) = pin_host_from_url(raw_url) else {
+            continue;
+        };
+        clear_observed_fingerprint(&host);
+        // A pin mismatch aborts the TLS handshake, so `send` fails and the
+        // origin is left untrusted (never silently re-trusted).
         let Ok(resp) = client.get(&health_url).send().await else {
             continue;
         };
         if !resp.status().is_success() {
             continue;
         }
-        if let Ok(body) = resp.json::<serde_json::Value>().await {
-            if body.get("service").and_then(|value| value.as_str()) == Some("paracord") {
-                origins.insert(origin);
+        let Ok(body) = resp.json::<serde_json::Value>().await else {
+            continue;
+        };
+        if body.get("service").and_then(|value| value.as_str()) != Some("paracord") {
+            continue;
+        }
+        // Identity confirmed. On first contact, promote the captured fingerprint
+        // to a durable pin; on later probes the pin already matched above.
+        if pinned_fingerprint(&host).is_none() {
+            if let Some(observed) = take_observed_fingerprint(&host) {
+                set_pinned_fingerprint(host.clone(), observed);
+                pins_changed = true;
             }
         }
+        origins.insert(origin);
     }
     if let Ok(mut guard) = TRUSTED_SERVER_ORIGINS.write() {
         *guard = origins;
     }
+    if pins_changed {
+        if let Err(err) = persist_pinned_certs(&app) {
+            eprintln!("failed to persist certificate pins: {err}");
+        }
+    }
 }
 
-/// Build a shared reqwest client that accepts self-signed certs.
-fn tls_permissive_client_with_timeout(timeout: Duration) -> Result<reqwest::Client, String> {
+/// Build a reqwest client whose TLS layer enforces trust-on-first-use pinning
+/// (see [`TofuPinningVerifier`]). Unlike a fully permissive client, self-signed
+/// certificates are accepted only for loopback or on first contact with a host;
+/// a host with an established pin must present the recorded certificate.
+fn tls_pinning_client_with_timeout(timeout: Duration) -> Result<reqwest::Client, String> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let tls_config = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("Failed to configure TLS: {e}"))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(TofuPinningVerifier { provider }))
+        .with_no_client_auth();
     reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
+        .use_preconfigured_tls(tls_config)
         .timeout(timeout)
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))
 }
 
-fn tls_permissive_client() -> Result<reqwest::Client, String> {
-    tls_permissive_client_with_timeout(Duration::from_secs(15))
+fn tls_pinning_client() -> Result<reqwest::Client, String> {
+    tls_pinning_client_with_timeout(Duration::from_secs(15))
 }
 
 fn map_reqwest_error(e: reqwest::Error) -> String {
@@ -218,10 +502,12 @@ fn map_reqwest_error(e: reqwest::Error) -> String {
 }
 
 /// Probe a server's /health endpoint from the Rust side, bypassing WebView2's
-/// TLS restrictions. Accepts self-signed certs so self-hosted servers work.
+/// TLS restrictions. Self-signed certs are accepted only for loopback or on
+/// first contact; hosts with an established pin are enforced (see
+/// [`TofuPinningVerifier`]).
 #[tauri::command]
 async fn probe_server(server_url: String) -> Result<serde_json::Value, String> {
-    let client = tls_permissive_client()?;
+    let client = tls_pinning_client()?;
     let url = health_url_for_server(&server_url)?;
     ensure_native_fetch_target_is_trusted(&url)?;
     let resp = client.get(&url).send().await.map_err(map_reqwest_error)?;
@@ -234,8 +520,9 @@ async fn probe_server(server_url: String) -> Result<serde_json::Value, String> {
 }
 
 /// Generic HTTP fetch via Rust for trusted Paracord servers.
-/// The reqwest client accepts self-signed certs, so requests are restricted to
-/// loopback or origins that the user explicitly added to the server list.
+/// Requests are restricted to loopback or origins the user added to the server
+/// list, and the TLS layer enforces the certificate pin recorded for each host
+/// so a MITM against an already-trusted server is rejected.
 #[derive(serde::Deserialize)]
 struct NativeFetchRequest {
     url: String,
@@ -253,7 +540,7 @@ struct NativeFetchResponse {
 #[tauri::command]
 async fn native_fetch(req: NativeFetchRequest) -> Result<NativeFetchResponse, String> {
     ensure_native_fetch_target_is_trusted(&req.url)?;
-    let client = tls_permissive_client()?;
+    let client = tls_pinning_client()?;
     let method = req.method.as_deref().unwrap_or("GET");
     let mut builder = match method.to_uppercase().as_str() {
         "POST" => client.post(&req.url),
@@ -297,6 +584,9 @@ pub fn run() {
             if let Err(err) = commands::append_client_log(app.handle().clone(), startup_line) {
                 eprintln!("failed to write startup diagnostics log line: {err}");
             }
+            // Restore durably pinned server certificates so pin enforcement
+            // survives restarts even before the server list is re-synced.
+            load_pinned_certs(app.handle());
             #[cfg(windows)]
             configure_webview2_overrides(app);
             tray::setup_tray(app.handle())?;
@@ -331,6 +621,8 @@ pub fn run() {
         native_media::commands::voice_set_deaf,
         native_media::commands::voice_switch_input_device,
         native_media::commands::voice_switch_output_device,
+        native_media::commands::voice_list_output_devices,
+        native_media::commands::voice_list_input_devices,
         native_media::commands::voice_enable_video,
         native_media::commands::voice_start_screen_share,
         native_media::commands::voice_stop_screen_share,
@@ -463,6 +755,52 @@ mod tests {
         );
         assert_eq!(trusted_origin_from_url("ftp://chat.example"), None);
         assert_eq!(trusted_origin_from_url("/api/v1"), None);
+    }
+
+    #[test]
+    fn fingerprint_hex_round_trips() {
+        let mut fp = [0u8; 32];
+        for (i, byte) in fp.iter_mut().enumerate() {
+            *byte = (i * 7) as u8;
+        }
+        let hex = encode_fingerprint_hex(&fp);
+        assert_eq!(hex.len(), 64);
+        assert_eq!(decode_fingerprint_hex(&hex), Some(fp));
+        assert_eq!(decode_fingerprint_hex("zz"), None);
+        assert_eq!(decode_fingerprint_hex(&"g".repeat(64)), None);
+    }
+
+    #[test]
+    fn loopback_hosts_are_recognised() {
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.5.6.7"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("[::1]"));
+        assert!(!is_loopback_host("chat.example"));
+        assert!(!is_loopback_host("203.0.113.5"));
+    }
+
+    #[test]
+    fn pin_host_strips_ipv6_brackets_and_lowercases() {
+        assert_eq!(
+            pin_host_from_url("https://Chat.Example:8443/api"),
+            Some("chat.example".to_string())
+        );
+        assert_eq!(
+            pin_host_from_url("https://[2001:db8::1]:8443/api"),
+            Some("2001:db8::1".to_string())
+        );
+        assert_eq!(pin_host_from_url("/relative"), None);
+    }
+
+    #[test]
+    fn pinned_fingerprint_enforces_recorded_value() {
+        let fp = [42u8; 32];
+        set_pinned_fingerprint("pin-test.example".to_string(), fp);
+        assert_eq!(pinned_fingerprint("pin-test.example"), Some(fp));
+        assert_ne!(pinned_fingerprint("pin-test.example"), Some([0u8; 32]));
+        assert_eq!(pinned_fingerprint("absent.example"), None);
     }
 
     #[test]

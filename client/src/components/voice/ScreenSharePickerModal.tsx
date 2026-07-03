@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useMemo, useState } from 'react';
 import { AppWindow, ImageOff, Monitor, RefreshCw, Volume2, X } from 'lucide-react';
 
 import type { ScreenShareSource } from '../../lib/media/mediaEngine';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { Modal } from '../ui/Modal';
 import { logVoiceDiagnostic } from '../../lib/desktopDiagnostics';
 import { isSafeImageDataUrl, safeClientResourceUrl } from '../../lib/security';
 
@@ -123,9 +122,7 @@ export function ScreenSharePickerModal({
   onSelect,
   loadThumbnail,
 }: ScreenSharePickerModalProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, string | null | undefined>>({});
-  useFocusTrap(dialogRef, true, onClose);
 
   const groupedSources = useMemo(() => {
     const displays = sources.filter((source) => source.kind !== 'window');
@@ -169,21 +166,14 @@ export function ScreenSharePickerModal({
     };
   }, [sources, loadThumbnail]);
 
-  const modal = (
-    <div
-      className="modal-overlay"
-      onClick={onClose}
-      style={{ position: 'fixed', inset: 0, width: '100vw', height: '100dvh' }}
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      labelledBy="screen-share-picker-title"
+      panelClassName="w-[min(94vw,56rem)] rounded-3xl"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="screen-share-picker-title"
-        tabIndex={-1}
-        className="glass-modal modal-content max-h-[min(88dvh,48rem)] w-[min(94vw,56rem)] overflow-auto rounded-3xl border"
-        onClick={(event) => event.stopPropagation()}
-      >
+      <div className="max-h-[min(88dvh,48rem)] overflow-auto">
         <div
           className="sticky top-0 z-10 border-b px-6 py-5 backdrop-blur-xl sm:px-7"
           style={{
@@ -276,8 +266,6 @@ export function ScreenSharePickerModal({
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
-
-  return createPortal(modal, document.body);
 }

@@ -20,6 +20,8 @@ pub type ChannelItem = (
 #[cfg(not(target_os = "macos"))]
 pub type ChannelItem = Frame;
 
+// `options` is consumed only by the macOS/Windows arms; the Linux stub ignores it.
+#[cfg_attr(target_os = "linux", allow(unused_variables))]
 pub fn get_output_frame_size(options: &Options) -> [u32; 2] {
     #[cfg(target_os = "macos")]
     {

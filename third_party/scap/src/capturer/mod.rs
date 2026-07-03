@@ -26,6 +26,8 @@ pub enum Resolution {
 }
 
 impl Resolution {
+    // Called only by the macOS/Windows capture engines.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     fn value(&self, aspect_ratio: f32) -> [u32; 2] {
         match *self {
             Resolution::_480p => [640, (640_f32 / aspect_ratio).floor() as u32],

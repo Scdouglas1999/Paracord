@@ -8,14 +8,14 @@
      Line height ... --leading-tight|snug|normal|relaxed|loose
      Font weight ... --font-weight-normal|medium|semibold|bold
      Elevation ..... --shadow-sm|md|lg|xl
-     Text .......... --text-primary|secondary|muted|link
+     Text .......... --text-primary|secondary|muted|link --text-on-accent
      Surfaces ...... --bg-primary|secondary|tertiary|accent|floating (+ mods)
      Border ........ --border-subtle|strong|glow
      Accent/state .. --accent(-primary|-hover) --accent-success|danger|warning
      Presence ...... --status-online|idle|dnd|offline|streaming
 
-   The --text-*/--leading-*/--font-weight-*/--radius-* values intentionally match
-   Tailwind v4 defaults so `var(--text-sm)` and the `text-sm` utility agree.
+   The --text-, --leading-, --font-weight-, and --radius- scales intentionally
+   match Tailwind v4 defaults so `var(--text-sm)` and the `text-sm` utility agree.
 
    NORMALIZING/ADDITIVE ONLY. Aliases (kept for back-compat, do not remove):
      --line-height-tight|normal|relaxed → --leading-*
@@ -35,6 +35,9 @@
   --color-text-secondary: #b6c2d9;
   --color-text-muted: #8190ab;
   --color-text-link: #7ecbff;
+  /* Foreground for text/icons sitting on a saturated accent/danger fill. White on
+     every dark/light theme (accents stay saturated); high-contrast overrides to black. */
+  --color-text-on-accent: #ffffff;
 
   --color-accent-primary: #6f86ff;
   --color-accent-primary-hover: #8a9dff;
@@ -177,6 +180,7 @@
   --text-secondary: var(--color-text-secondary);
   --text-muted: var(--color-text-muted);
   --text-link: var(--color-text-link);
+  --text-on-accent: var(--color-text-on-accent);
 
   --accent: var(--accent-primary);
   --accent-primary: var(--color-accent-primary);
@@ -383,6 +387,9 @@
   --text-secondary: #e0e0e0;
   --text-muted: #b0b0b0;
   --text-link: #66ccff;
+  /* Accents are bright here (#66b3ff/#33ff99/#ffdd00/#ff4d4d); black foreground
+     clears WCAG AA on all of them where white would not. */
+  --text-on-accent: #000000;
 
   --accent-primary: #66b3ff;
   --accent-primary-hover: #99ccff;

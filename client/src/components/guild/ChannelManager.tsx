@@ -751,7 +751,7 @@ function CategoryGroupSection({
               <option value="voice">Voice</option>
             </select>
             <button
-              className="rounded-md bg-accent-primary px-3 py-1 text-xs font-semibold text-white hover:bg-accent-primary/80"
+              className="rounded-md bg-accent-primary px-3 py-1 text-xs font-semibold text-on-accent hover:bg-accent-primary/80"
               onClick={() => void onInlineCreate(parentIdForCreate)}
             >
               Create

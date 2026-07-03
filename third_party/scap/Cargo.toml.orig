@@ -15,6 +15,10 @@ documentation = "https://docs.rs/scap"
 keywords = ["screen", "recording", "video", "capture", "media"]
 categories = ["graphics", "multimedia", "multimedia::video"]
 
+[[example]]
+name = "linux_capture_probe"
+path = "examples/linux_capture_probe.rs"
+
 [dependencies]
 futures = "0.3.31"
 sysinfo = "0.30.0"

@@ -53,8 +53,24 @@ export function GuildHub() {
 
     if (!guild) {
         return (
-            <div className="flex h-full flex-col items-center justify-center p-8 text-center">
-                <div className="text-text-muted">Loading Hub...</div>
+            <div
+                role="status"
+                aria-label="Loading server hub"
+                className="flex h-full flex-col overflow-hidden rounded-2xl bg-bg-primary"
+            >
+                <div className="h-[160px] shrink-0 animate-pulse bg-bg-mod-subtle/60 sm:h-[180px] md:h-[200px]" />
+                <div className="grid flex-1 grid-cols-1 gap-5 p-5 sm:gap-6 sm:p-6 lg:p-8 xl:grid-cols-[2fr_1fr]">
+                    <div className="flex flex-col gap-4">
+                        <div className="h-5 w-40 animate-pulse rounded-md bg-bg-mod-subtle/60" />
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            {Array.from({ length: 2 }, (_, i) => (
+                                <div key={i} className="h-40 animate-pulse rounded-[16px] border border-border-subtle bg-bg-mod-subtle/40" />
+                            ))}
+                        </div>
+                    </div>
+                    <div className="h-48 animate-pulse rounded-[16px] border border-border-subtle bg-bg-mod-subtle/40" />
+                </div>
+                <span className="sr-only">Loading server hub…</span>
             </div>
         );
     }
@@ -98,10 +114,10 @@ export function GuildHub() {
                 )}
 
                 <div className="absolute bottom-5 left-5 right-5 sm:bottom-6 sm:left-8 sm:right-8 z-10">
-                    <h1 className="truncate text-2xl font-extrabold tracking-tight text-white drop-shadow-md sm:text-3xl">
+                    <h1 className="truncate text-2xl font-extrabold leading-tight tracking-tight text-text-primary drop-shadow-md sm:text-3xl">
                         {guild.hub_settings?.welcome_text || `Welcome to ${guild.name}`}
                     </h1>
-                    <p className="mt-1 line-clamp-2 max-w-xl text-[14px] font-medium text-white/80 sm:mt-2 sm:text-[15px]">
+                    <p className="mt-1 line-clamp-2 max-w-xl text-sm font-medium leading-normal text-text-secondary sm:mt-2 sm:text-base">
                         {guild.hub_settings?.description || (guildServerHost ? `Federated server on ${guildServerHost}. Jump into an active voice channel or catch up on the latest discussions.` : 'Local community server. Jump into an active voice channel or catch up on the latest discussions.')}
                     </p>
                 </div>
@@ -111,7 +127,7 @@ export function GuildHub() {
                 <div className="flex flex-col gap-8">
                     {/* Active Voice */}
                     <section>
-                        <h2 className="mb-4 flex items-center gap-2 text-[17px] font-bold text-text-primary">
+                        <h2 className="mb-4 flex items-center gap-2 text-lg font-bold leading-snug text-text-primary">
                             <Volume2 className="text-accent-success" size={20} />
                             Happening Now
                         </h2>
@@ -142,7 +158,7 @@ export function GuildHub() {
                                                     displayParticipants.map((p, i: number) => (
                                                         <Tooltip key={p.user_id} content={p.username || p.user_id} side="top">
                                                             <div
-                                                                className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-bg-mod-subtle bg-accent-primary text-[11px] font-bold text-white transition-transform group-hover:scale-105"
+                                                                className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-bg-mod-subtle bg-accent-primary text-[11px] font-bold text-text-on-accent transition-transform group-hover:scale-105"
                                                                 style={{ marginLeft: i > 0 ? '-8px' : '0' }}
                                                             >
                                                                 {(p.username || p.user_id).charAt(0).toUpperCase()}
@@ -160,7 +176,7 @@ export function GuildHub() {
                                             </div>
 
                                             <button
-                                                className="mt-auto w-full rounded-xl bg-white/10 py-2 text-[13px] font-bold text-white transition-colors hover:bg-accent-primary"
+                                                className="mt-auto w-full rounded-xl bg-bg-mod-strong py-2 text-sm font-bold text-text-primary transition-colors duration-150 hover:bg-accent-primary hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
                                                 onClick={() => navigate(`/app/guilds/${guild.id}/channels/${vc.id}`)}
                                             >
                                                 Join Voice
@@ -178,7 +194,7 @@ export function GuildHub() {
 
                     {/* Recent Discussions / Pinned */}
                     <section>
-                        <h2 className="mb-4 flex items-center gap-2 text-[17px] font-bold text-text-primary">
+                        <h2 className="mb-4 flex items-center gap-2 text-lg font-bold leading-snug text-text-primary">
                             <MessageSquare className="text-text-primary" size={20} />
                             {pinnedChannelIds.length > 0 ? "Featured Channels" : "Recent Discussions"}
                         </h2>
@@ -190,7 +206,7 @@ export function GuildHub() {
                                         key={tc.id}
                                         onClick={() => navigate(`/app/guilds/${guild.id}/channels/${tc.id}`)}
                                         className={cn(
-                                            "flex w-full items-start gap-4 p-4 text-left transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary",
+                                            "flex w-full items-start gap-4 p-4 text-left transition-colors duration-150 hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary",
                                             idx !== displayThreads.length - 1 && "border-b border-border-subtle"
                                         )}
                                     >
@@ -202,7 +218,7 @@ export function GuildHub() {
                                                 <span className="font-bold text-text-primary">#{tc.name}</span>
                                                 {tc.topic && <span className="text-[13px] text-text-muted line-clamp-1">{tc.topic}</span>}
                                             </div>
-                                            <p className="text-[14px] text-text-secondary line-clamp-2">
+                                            <p className="text-sm text-text-secondary line-clamp-2">
                                                 Click to view the latest messages in this channel and join the conversation.
                                             </p>
                                         </div>
@@ -221,8 +237,8 @@ export function GuildHub() {
                 <div className="flex flex-col gap-6">
                     <section>
                         <div className="rounded-[16px] border border-border-subtle bg-bg-mod-subtle p-5">
-                            <h3 className="mb-2 text-[15px] font-bold text-text-primary">About this Server</h3>
-                            <p className="mb-4 text-[14px] leading-relaxed text-text-secondary">
+                            <h3 className="mb-2 text-base font-bold text-text-primary">About this Server</h3>
+                            <p className="mb-4 text-sm leading-relaxed text-text-secondary">
                                 A federated community powered by Paracord. This hub provides a quick overview of what's happening right now.
                             </p>
                             <div className="flex flex-col gap-3 text-[14px]">
@@ -236,15 +252,15 @@ export function GuildHub() {
 
                     <section>
                         <div className="flex flex-col items-center gap-3 rounded-[16px] border border-accent-primary/30 bg-accent-primary/10 p-5 text-center">
-                            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent-primary text-white">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent-primary text-text-on-accent">
                                 <Plus size={24} />
                             </div>
                             <div>
-                                <h3 className="mb-1 text-[15px] font-bold text-text-primary">Invite Friends</h3>
+                                <h3 className="mb-1 text-base font-bold text-text-primary">Invite Friends</h3>
                                 <p className="text-[13px] text-text-secondary">Grow the community by inviting others to join.</p>
                             </div>
                             <button
-                                className="mt-2 w-full rounded-xl bg-accent-primary py-2.5 text-[14px] font-bold text-white transition-colors hover:bg-accent-primary-hover"
+                                className="mt-2 w-full rounded-xl bg-accent-primary py-2.5 text-sm font-bold text-text-on-accent transition-colors duration-150 hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
                                 onClick={() => {
                                     const firstVoice = voiceChannels[0]?.id;
                                     const firstText = textChannels[0]?.id;

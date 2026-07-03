@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { X, Upload, FileText, Hash, Volume2, Folder } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Upload, FileText, Hash, Volume2, Folder } from 'lucide-react';
+import { Modal, ModalTitle } from '../ui/Modal';
 import { useAuthStore } from '../../stores/authStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
@@ -10,7 +10,6 @@ import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { useNavigate } from 'react-router-dom';
 import { isAllowedImageMimeType } from '../../lib/security';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 interface GuildTemplate {
   id: string;
@@ -31,7 +30,6 @@ interface CreateGuildModalProps {
 }
 
 export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
   const user = useAuthStore(s => s.user);
   const navigate = useNavigate();
   const [tab, setTab] = useState<'create' | 'join' | 'template'>('create');
@@ -66,8 +64,6 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
         .finally(() => setTemplatesLoading(false));
     }
   }, [tab]);
-
-  useFocusTrap(dialogRef, true, onClose);
 
   const handleIconChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -183,29 +179,20 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
         ? 'Enter an invite below to join an existing server.'
         : 'Start with a pre-made server structure.';
 
-  const modal = (
-    <div
-      className="modal-overlay"
-      onClick={onClose}
-      style={{ position: 'fixed', inset: 0, width: '100vw', height: '100dvh' }}
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      labelledBy="create-guild-modal-title"
+      showCloseButton
+      panelClassName="w-[min(92vw,32rem)]"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-guild-modal-title"
-        tabIndex={-1}
-        className="glass-modal modal-content max-h-[min(86dvh,42rem)] w-[min(92vw,32rem)] overflow-auto rounded-2xl border"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="max-h-[min(86dvh,42rem)] overflow-auto">
         {/* Header */}
-        <div className="relative px-8 pb-5 pt-8 text-center sm:px-8 sm:pb-5 sm:pt-8">
-          <button onClick={onClose} className="icon-btn absolute right-3 top-3 sm:right-5 sm:top-5" aria-label="Close">
-            <X size={20} />
-          </button>
-          <h2 id="create-guild-modal-title" className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
+        <div className="px-8 pb-5 pt-8 text-center">
+          <ModalTitle id="create-guild-modal-title" className="text-xl">
             {tabTitle}
-          </h2>
+          </ModalTitle>
           <p className="mt-1 text-sm" style={{ color: 'var(--text-muted)' }}>
             {tabSubtitle}
           </p>
@@ -452,8 +439,6 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
-
-  return createPortal(modal, document.body);
 }

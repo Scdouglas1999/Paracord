@@ -379,7 +379,7 @@ export function BotStoreSection({ guildId, canManage, onBotSettingsChanged }: Bo
           className={cn(
             'flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
             activeTab === 'built-in'
-              ? 'bg-accent-primary text-white shadow-sm'
+              ? 'bg-accent-primary text-on-accent shadow-sm'
               : 'text-text-secondary hover:text-text-primary'
           )}
         >
@@ -390,7 +390,7 @@ export function BotStoreSection({ guildId, canManage, onBotSettingsChanged }: Bo
           className={cn(
             'flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
             activeTab === 'public'
-              ? 'bg-accent-primary text-white shadow-sm'
+              ? 'bg-accent-primary text-on-accent shadow-sm'
               : 'text-text-secondary hover:text-text-primary'
           )}
         >

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag } from 'lucide-react';
 import type { User } from '../../types/index';
@@ -30,7 +30,7 @@ import {
   parseIdentityVerificationPayload,
 } from '../../lib/keyVerification';
 import { writeClipboardText } from '../../lib/clipboard';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { Modal } from '../ui/Modal';
 import QRCode from 'qrcode';
 
 interface MutualGuild {
@@ -116,10 +116,6 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   const [showIdentityVerifyModal, setShowIdentityVerifyModal] = useState(false);
   const [identityVerifyPayload, setIdentityVerifyPayload] = useState('');
   const [identityQrDataUrl, setIdentityQrDataUrl] = useState<string | null>(null);
-  const reportDialogRef = useRef<HTMLDivElement>(null);
-  const identityDialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(reportDialogRef, showReportDialog, () => { setShowReportDialog(false); setActionError(null); });
-  useFocusTrap(identityDialogRef, showIdentityVerifyModal, () => setShowIdentityVerifyModal(false));
   const verificationPayload = useMemo(
     () =>
       identityFingerprint
@@ -739,19 +735,13 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
         )}
       </div>
       {showReportDialog && (
-        <>
-          <div
-            className="fixed inset-0 z-[60] modal-backdrop"
-            onClick={() => { setShowReportDialog(false); setActionError(null); }}
-          />
-          <div
-            ref={reportDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="report-user-title"
-            tabIndex={-1}
-            className="glass-modal fixed left-1/2 top-1/2 z-[61] w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-5"
-          >
+        <Modal
+          open
+          onClose={() => { setShowReportDialog(false); setActionError(null); }}
+          labelledBy="report-user-title"
+          panelClassName="w-full max-w-md p-5"
+        >
+          <div>
             <h3 id="report-user-title" className="text-base font-semibold text-text-primary">Report User</h3>
             <p className="mt-1 text-xs text-text-muted">
               Reports are reviewed by moderators. Include concise evidence when possible.
@@ -805,23 +795,17 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               </button>
             </div>
           </div>
-        </>
+        </Modal>
       )}
 
       {showIdentityVerifyModal && identityFingerprint && (
-        <>
-          <div
-            className="fixed inset-0 z-[60] modal-backdrop"
-            onClick={() => setShowIdentityVerifyModal(false)}
-          />
-          <div
-            ref={identityDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="identity-verification-title"
-            tabIndex={-1}
-            className="glass-modal fixed left-1/2 top-1/2 z-[61] w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-5"
-          >
+        <Modal
+          open
+          onClose={() => setShowIdentityVerifyModal(false)}
+          labelledBy="identity-verification-title"
+          panelClassName="w-full max-w-md p-5"
+        >
+          <div>
             <div id="identity-verification-title" className="mb-3 text-sm font-semibold text-text-primary">Cross-Device Identity Verification</div>
             <div className="mb-3 text-xs text-text-muted">
               Scan this QR code on your other device, compare fingerprints, then confirm verification.
@@ -872,7 +856,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               </button>
             </div>
           </div>
-        </>
+        </Modal>
       )}
     </>
   );

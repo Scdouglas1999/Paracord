@@ -50,6 +50,10 @@ path = "src/lib.rs"
 name = "scap"
 path = "src/main.rs"
 
+[[example]]
+name = "linux_capture_probe"
+path = "examples/linux_capture_probe.rs"
+
 [dependencies.futures]
 version = "0.3.31"
 

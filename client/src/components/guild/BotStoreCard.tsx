@@ -80,7 +80,7 @@ export function BotStoreCard({ bot, onAdd, adding, canManage }: BotStoreCardProp
           disabled={!canManage || adding}
           className={cn(
             'inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-colors disabled:opacity-70 disabled:cursor-not-allowed',
-            'bg-accent-primary hover:bg-accent-primary-hover text-white shadow-sm shadow-accent-primary/20 hover:shadow-accent-primary/40',
+            'bg-accent-primary hover:bg-accent-primary-hover text-on-accent shadow-sm shadow-accent-primary/20 hover:shadow-accent-primary/40',
           )}
         >
           {adding ? 'Adding...' : 'Add to Server'}

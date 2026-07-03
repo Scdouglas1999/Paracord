@@ -1,3 +1,4 @@
+pub mod audio_actor;
 pub mod audio_pipeline;
 pub mod capabilities;
 pub mod commands;

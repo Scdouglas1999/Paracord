@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Calendar, Clock, MapPin, Users, Plus, X, Check, Sparkles, Download, Repeat } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Calendar, Clock, MapPin, Users, Plus, Check, Sparkles, Download, Repeat } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { useAuthStore } from '../../stores/authStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { Permissions, hasPermission } from '../../types';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { Modal, ModalTitle } from '../ui/Modal';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
 import { confirm } from '../../stores/confirmStore';
@@ -98,7 +97,6 @@ function toReminderSelectValue(
 }
 
 function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
   const [name, setName] = useState(event?.name ?? '');
   const [description, setDescription] = useState(event?.description ?? '');
   const [scheduledStart, setScheduledStart] = useState(toDateTimeLocalValue(event?.scheduled_start));
@@ -116,8 +114,6 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const isEditing = Boolean(event);
-
-  useFocusTrap(dialogRef, true, onClose);
 
   const handleSubmit = async () => {
     if (!name.trim() || !scheduledStart) return;
@@ -152,28 +148,19 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
     }
   };
 
-  const modal = (
-    <div
-      className="modal-overlay"
-      onClick={onClose}
-      style={{ position: 'fixed', inset: 0, width: '100vw', height: '100dvh' }}
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      labelledBy="event-form-title"
+      showCloseButton
+      panelClassName="w-[min(92vw,32rem)]"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="event-form-title"
-        tabIndex={-1}
-        className="glass-modal modal-content max-h-[min(86dvh,42rem)] w-[min(92vw,32rem)] overflow-auto rounded-2xl border"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="relative px-8 pb-4 pt-8">
-          <button onClick={onClose} className="icon-btn absolute right-3 top-3" aria-label="Close">
-            <X size={20} />
-          </button>
-          <h2 id="event-form-title" className="text-xl font-bold text-text-primary">
+      <div className="max-h-[min(86dvh,42rem)] overflow-auto">
+        <div className="px-8 pb-4 pt-8">
+          <ModalTitle id="event-form-title" className="text-xl">
             {isEditing ? 'Edit Event' : 'Create Event'}
-          </h2>
+          </ModalTitle>
           <p className="mt-1 text-sm text-text-muted">
             {isEditing ? 'Update the event details for your server.' : 'Schedule a new event for your server.'}
           </p>
@@ -337,10 +324,8 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
-
-  return createPortal(modal, document.body);
 }
 
 interface EventListProps {

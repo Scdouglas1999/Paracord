@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Shield, Trash2, Plus, User, X } from 'lucide-react';
 import { channelApi } from '../../api/channels';
 import { extractApiError } from '../../api/client';
@@ -7,8 +7,8 @@ import { Permissions } from '../../types';
 import { cn } from '../../lib/utils';
 import { useMemberStore } from '../../stores/memberStore';
 import { LoadingSpinner } from '../ui/Feedback';
+import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 interface ChannelPermissionsEditorProps {
   channelId: string;
@@ -90,8 +90,6 @@ export function ChannelPermissionsEditor({
   const [addTargetId, setAddTargetId] = useState('');
   const [targetMode, setTargetMode] = useState<'role' | 'member'>('role');
   const [memberSearch, setMemberSearch] = useState('');
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef, true, onClose);
 
   const { getMembersForGuild, fetchMembers, membersLoaded } = useMemberStore();
   const guildMembers = getMembersForGuild(guildId);
@@ -264,15 +262,13 @@ export function ChannelPermissionsEditor({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="channel-permissions-title"
-        tabIndex={-1}
-        className="w-full max-w-2xl rounded-2xl border border-border-subtle bg-bg-primary shadow-2xl"
-      >
+    <Modal
+      open
+      onClose={onClose}
+      labelledBy="channel-permissions-title"
+      panelClassName="w-full max-w-2xl"
+    >
+      <div>
         {/* Header */}
         <div className="flex items-center gap-3 border-b border-border-subtle px-6 py-4">
           <Shield size={18} className="text-accent-primary" />
@@ -371,7 +367,7 @@ export function ChannelPermissionsEditor({
                       ))}
                     </select>
                     <button
-                      className="flex w-full items-center justify-center gap-1 rounded-md bg-accent-primary px-2 py-1.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                      className="flex w-full items-center justify-center gap-1 rounded-md bg-accent-primary px-2 py-1.5 text-xs font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
                       onClick={() => void handleAddTarget(addTargetId, 0)}
                       disabled={!addTargetId || saving}
                     >
@@ -466,7 +462,7 @@ export function ChannelPermissionsEditor({
                             className={cn(
                               'h-5 w-5 rounded border transition-all',
                               state === 'allow'
-                                ? 'border-accent-success bg-accent-success text-white'
+                                ? 'border-accent-success bg-accent-success text-on-accent'
                                 : 'border-border-subtle bg-transparent hover:border-accent-success/50'
                             )}
                             title="Allow"
@@ -495,7 +491,7 @@ export function ChannelPermissionsEditor({
                             className={cn(
                               'h-5 w-5 rounded border transition-all',
                               state === 'deny'
-                                ? 'border-accent-danger bg-accent-danger text-white'
+                                ? 'border-accent-danger bg-accent-danger text-on-accent'
                                 : 'border-border-subtle bg-transparent hover:border-accent-danger/50'
                             )}
                             title="Deny"
@@ -542,6 +538,6 @@ export function ChannelPermissionsEditor({
           </div>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

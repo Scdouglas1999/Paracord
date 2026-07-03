@@ -506,8 +506,8 @@ export function Sidebar() {
                           className={cn(
                             'absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full border-2 border-bg-secondary',
                             connectionStatus === 'reconnecting'
-                              ? 'animate-pulse bg-[#faa61a]'
-                              : 'bg-[#ed4245]'
+                              ? 'animate-pulse bg-accent-warning'
+                              : 'bg-accent-danger'
                           )}
                         />
                       )}

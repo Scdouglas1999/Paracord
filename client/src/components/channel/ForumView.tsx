@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowDownUp,
@@ -18,7 +18,13 @@ import { cn } from '../../lib/utils';
 import { toast } from '../../stores/toastStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { EmptyState, ErrorBanner, LoadingSpinner } from '../ui/Feedback';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import {
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  ModalTitle,
+} from '../ui/Modal';
 
 interface ForumViewProps {
   channelId: string;
@@ -562,8 +568,6 @@ function TagManagerModal({
   const [emoji, setEmoji] = useState('');
   const [creating, setCreating] = useState(false);
   const [deletingTagId, setDeletingTagId] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef, true, onClose);
 
   const createTag = async () => {
     const trimmed = name.trim();
@@ -599,31 +603,19 @@ function TagManagerModal({
   };
 
   return (
-    <>
-      <div
-        className="fixed inset-0 z-50 modal-backdrop"
-        onClick={onClose}
-      />
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="forum-tag-manager-title"
-        tabIndex={-1}
-        className="glass-modal fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl"
-      >
-        <div className="flex items-center justify-between border-b border-border-subtle px-5 py-4">
-          <h2 id="forum-tag-manager-title" className="text-lg font-semibold text-text-primary">Manage Forum Tags</h2>
-          <button
-            onClick={onClose}
-            aria-label="Close tag manager"
-            className="rounded-lg p-1.5 text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="space-y-4 p-5">
+    <Modal
+      open
+      onClose={onClose}
+      size="auto"
+      panelClassName="w-full max-w-lg"
+      labelledBy="forum-tag-manager-title"
+      showCloseButton
+      closeLabel="Close tag manager"
+    >
+      <ModalHeader>
+        <ModalTitle id="forum-tag-manager-title">Manage Forum Tags</ModalTitle>
+      </ModalHeader>
+      <ModalBody className="space-y-4 pb-6">
           <div className="grid gap-2 sm:grid-cols-[1fr_8rem_auto]">
             <input
               type="text"
@@ -644,7 +636,7 @@ function TagManagerModal({
             <button
               onClick={() => void createTag()}
               disabled={creating || !name.trim()}
-              className="rounded-xl border border-accent-primary/50 bg-accent-primary px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-xl border border-accent-primary/50 bg-accent-primary px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary disabled:cursor-not-allowed disabled:opacity-50"
             >
               {creating ? 'Creating...' : 'Create'}
             </button>
@@ -665,7 +657,7 @@ function TagManagerModal({
                   <button
                     onClick={() => void deleteTag(tag.id)}
                     disabled={deletingTagId === tag.id}
-                    className="rounded-lg px-2.5 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/12 disabled:opacity-50"
+                    className="rounded-lg px-2.5 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger disabled:opacity-50"
                   >
                     {deletingTagId === tag.id ? 'Deleting...' : 'Delete'}
                   </button>
@@ -673,9 +665,8 @@ function TagManagerModal({
               ))
             )}
           </div>
-        </div>
-      </div>
-    </>
+      </ModalBody>
+    </Modal>
   );
 }
 
@@ -694,8 +685,6 @@ function NewPostModal({
   const [content, setContent] = useState('');
   const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef, true, onClose);
 
   const toggleTag = (tagId: string) => {
     setSelectedTagIds((prev) => {
@@ -727,31 +716,19 @@ function NewPostModal({
   };
 
   return (
-    <>
-      <div
-        className="fixed inset-0 z-50 modal-backdrop"
-        onClick={onClose}
-      />
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="forum-new-post-title"
-        tabIndex={-1}
-        className="glass-modal fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl"
-      >
-        <div className="flex items-center justify-between border-b border-border-subtle px-5 py-4">
-          <h2 id="forum-new-post-title" className="text-lg font-semibold text-text-primary">New Post</h2>
-          <button
-            onClick={onClose}
-            aria-label="Close new post dialog"
-            className="rounded-lg p-1.5 text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="space-y-4 p-5">
+    <Modal
+      open
+      onClose={onClose}
+      size="auto"
+      panelClassName="w-full max-w-lg"
+      labelledBy="forum-new-post-title"
+      showCloseButton
+      closeLabel="Close new post dialog"
+    >
+      <ModalHeader>
+        <ModalTitle id="forum-new-post-title">New Post</ModalTitle>
+      </ModalHeader>
+      <ModalBody className="space-y-4">
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-text-muted">
               Title
@@ -809,24 +786,22 @@ function NewPostModal({
               </div>
             </div>
           )}
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-border-subtle px-5 py-4">
-          <button
-            onClick={onClose}
-            className="rounded-xl border border-border-subtle px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => void handleSubmit()}
-            disabled={!title.trim() || submitting}
-            className="rounded-xl border border-accent-primary/50 bg-accent-primary px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {submitting ? 'Creating...' : 'Create Post'}
-          </button>
-        </div>
-      </div>
-    </>
+      </ModalBody>
+      <ModalFooter className="border-t border-border-subtle mt-2">
+        <button
+          onClick={onClose}
+          className="rounded-xl border border-border-subtle px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => void handleSubmit()}
+          disabled={!title.trim() || submitting}
+          className="rounded-xl border border-accent-primary/50 bg-accent-primary px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {submitting ? 'Creating...' : 'Create Post'}
+        </button>
+      </ModalFooter>
+    </Modal>
   );
 }

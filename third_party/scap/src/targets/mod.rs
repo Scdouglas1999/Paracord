@@ -52,6 +52,8 @@ pub fn get_all_targets() -> Vec<Target> {
     return linux::get_all_targets();
 }
 
+// Used by the macOS/Windows capture engines; dead + `target` unused on Linux.
+#[cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 pub fn get_scale_factor(target: &Target) -> f64 {
     #[cfg(target_os = "macos")]
     return mac::get_scale_factor(target);
@@ -74,6 +76,8 @@ pub fn get_main_display() -> Display {
     unreachable!();
 }
 
+// Used by the macOS/Windows capture engines; dead + `target` unused on Linux.
+#[cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 pub fn get_target_dimensions(target: &Target) -> (u64, u64) {
     #[cfg(target_os = "macos")]
     return mac::get_target_dimensions(target);

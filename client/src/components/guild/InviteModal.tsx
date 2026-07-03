@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
-import { X, Copy, Check, Link, RefreshCw } from 'lucide-react';
-import { createPortal } from 'react-dom';
+import { useState, useEffect } from 'react';
+import { Copy, Check, Link, RefreshCw } from 'lucide-react';
 import { inviteApi } from '../../api/invites';
 import { getStoredServerUrl } from '../../lib/config/apiBaseUrl';
 import { toPortableUri } from '../../lib/portableLinks';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { Modal, ModalTitle } from '../ui/Modal';
+import { ErrorBanner } from '../ui/Feedback';
 import { extractApiError } from '../../api/client';
 import { writeClipboardText } from '../../lib/clipboard';
 
@@ -37,7 +37,6 @@ function resolveServerBaseUrl(): string {
 }
 
 export function InviteModal({ guildName, channelId, onClose }: InviteModalProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
   const [copiedPortable, setCopiedPortable] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [expiration, setExpiration] = useState('7days');
@@ -104,8 +103,6 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
     void generateInvite(inviteCode || undefined);
   };
 
-  useFocusTrap(dialogRef, true, onClose);
-
   const handleCopyPortable = async () => {
     try {
       setCopyError(null);
@@ -128,50 +125,27 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
     }
   };
 
-  const modal = (
-    <div
-      className="modal-overlay"
-      onClick={onClose}
-      style={{ position: 'fixed', inset: 0, width: '100vw', height: '100dvh' }}
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      labelledBy="invite-modal-title"
+      showCloseButton
+      panelClassName="w-[min(92vw,32rem)]"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="invite-modal-title"
-        tabIndex={-1}
-        className="glass-modal modal-content max-h-[min(86dvh,42rem)] w-[min(92vw,32rem)] overflow-auto rounded-2xl border"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="max-h-[min(86dvh,42rem)] overflow-auto">
         {/* Header */}
-        <div className="relative px-8 pb-5 pt-8 sm:px-8 sm:pt-8">
-          <button onClick={onClose} className="icon-btn absolute right-3 top-3 sm:right-5 sm:top-5" aria-label="Close">
-            <X size={20} />
-          </button>
-          <h2 id="invite-modal-title" className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
+        <div className="px-8 pb-5 pt-8">
+          <ModalTitle id="invite-modal-title" className="text-2xl font-semibold">
             Invite friends to {guildName}
-          </h2>
+          </ModalTitle>
         </div>
 
         {/* Body */}
-        <div className="space-y-7 px-8 pb-8 sm:px-8 sm:pb-8">
-          {inviteError && (
-            <div
-              role="alert"
-              className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger"
-            >
-              {inviteError}
-            </div>
-          )}
+        <div className="space-y-7 px-8 pb-8">
+          {inviteError && <ErrorBanner message={inviteError} />}
 
-          {copyError && (
-            <div
-              role="alert"
-              className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger"
-            >
-              {copyError}
-            </div>
-          )}
+          {copyError && <ErrorBanner message={copyError} />}
 
           {/* Portable invite link (primary) */}
           <div>
@@ -318,8 +292,6 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
           </div>
         </div>
       </div>
-    </div>
+    </Modal>
   );
-
-  return createPortal(modal, document.body);
 }

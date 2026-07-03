@@ -8,10 +8,16 @@ use std::time::Duration;
 #[cfg(not(target_os = "linux"))]
 use std::time::Instant;
 
+// base64 + image are only used by the non-Linux thumbnail encode path below.
+#[cfg(not(target_os = "linux"))]
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+#[cfg(not(target_os = "linux"))]
 use base64::Engine;
+#[cfg(not(target_os = "linux"))]
 use image::codecs::jpeg::JpegEncoder;
+#[cfg(not(target_os = "linux"))]
 use image::ColorType;
+#[cfg(not(target_os = "linux"))]
 use image::ImageEncoder;
 use serde::Serialize;
 use tauri::Emitter;
@@ -29,8 +35,11 @@ use paracord_transport::stream::{
 const EVENT_EVENT: &str = "native_screen_share_event";
 const SCREEN_AUDIO_SAMPLE_RATE: u32 = 48_000;
 const SCREEN_AUDIO_FRAME_SIZE: usize = 960;
+#[cfg(not(target_os = "linux"))]
 const PICKER_THUMBNAIL_MAX_WIDTH: u32 = 320;
+#[cfg(not(target_os = "linux"))]
 const PICKER_THUMBNAIL_MAX_HEIGHT: u32 = 180;
+#[cfg(not(target_os = "linux"))]
 const THUMBNAIL_JPEG_QUALITY: u8 = 74;
 
 #[derive(Debug, Clone, Serialize)]
@@ -763,6 +772,7 @@ fn source_from_target(target: &scap::Target) -> Option<ScreenShareSource> {
     })
 }
 
+#[cfg(not(target_os = "linux"))]
 fn guess_app_name(title: &str) -> Option<String> {
     let trimmed = title.trim();
     if let Some((_, app_name)) = trimmed.rsplit_once(" - ") {
@@ -847,6 +857,7 @@ fn rgb_to_bgra(data: &[u8]) -> Vec<u8> {
     out
 }
 
+#[cfg(not(target_os = "linux"))]
 fn encode_bgra_as_jpeg_data_url(
     bgra: &[u8],
     width: u32,
@@ -876,6 +887,7 @@ fn encode_bgra_as_jpeg_data_url(
     ))
 }
 
+#[cfg(not(target_os = "linux"))]
 fn resize_bgra(
     src: &[u8],
     src_width: u32,

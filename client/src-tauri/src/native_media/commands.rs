@@ -171,6 +171,51 @@ pub async fn stop_voice_session(state: State<'_, MediaState>) -> Result<(), Stri
     Ok(())
 }
 
+/// A single enumerated audio device exposed to the renderer.
+///
+/// `index` is the cpal host enumeration index and is exactly what the
+/// `voice_switch_{input,output}_device` commands consume. Host indices are
+/// assigned by iterating the device list at enumeration time, so they can shift
+/// when devices are added or removed. The renderer must therefore re-enumerate
+/// (via `voice_list_*_devices`) and switch as a paired operation rather than
+/// caching an index across device-topology changes.
+#[derive(Serialize)]
+pub struct AudioDeviceInfo {
+    pub index: usize,
+    pub name: String,
+    pub is_default: bool,
+}
+
+#[tauri::command]
+pub async fn voice_list_output_devices() -> Result<Vec<AudioDeviceInfo>, String> {
+    use paracord_codec::audio::playback::list_output_devices;
+
+    let devices = list_output_devices().map_err(|e| format!("list output devices: {e}"))?;
+    Ok(devices
+        .into_iter()
+        .map(|(index, name, is_default)| AudioDeviceInfo {
+            index,
+            name,
+            is_default,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn voice_list_input_devices() -> Result<Vec<AudioDeviceInfo>, String> {
+    use paracord_codec::audio::capture::list_input_devices;
+
+    let devices = list_input_devices().map_err(|e| format!("list input devices: {e}"))?;
+    Ok(devices
+        .into_iter()
+        .map(|(index, name, is_default)| AudioDeviceInfo {
+            index,
+            name,
+            is_default,
+        })
+        .collect())
+}
+
 // ── Mute / deaf / device switching ──────────────────────────────────────────
 
 #[tauri::command]
@@ -202,23 +247,15 @@ pub async fn voice_switch_input_device(
     device_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    use paracord_codec::audio::capture::AudioCapture;
-
     let mut guard = state.session.lock().await;
     let session = guard.as_mut().ok_or("no active session")?;
 
-    // Stop existing capture
-    if let Some(old) = session.audio_capture.take() {
-        old.stop();
-    }
-
-    // Start capture on new device
+    // Start capture on the new device (the actor stops and drops the previous
+    // capture stream on its own thread).
     let index: usize = device_id
         .parse()
         .map_err(|_| "invalid device index".to_string())?;
-    let (capture, rx) =
-        AudioCapture::start_device(index).map_err(|e| format!("capture device: {e}"))?;
-    session.audio_capture = Some(capture);
+    let rx = session.audio_actor.start_capture(Some(index)).await?;
     session.pcm_rx = Some(rx);
 
     Ok(())
@@ -229,8 +266,6 @@ pub async fn voice_switch_output_device(
     device_id: String,
     state: State<'_, MediaState>,
 ) -> Result<(), String> {
-    use paracord_codec::audio::playback::AudioPlayback;
-
     let index: usize = device_id
         .parse()
         .map_err(|_| "invalid output device index".to_string())?;
@@ -238,20 +273,26 @@ pub async fn voice_switch_output_device(
     let mut guard = state.session.lock().await;
     let session = guard.as_mut().ok_or("no active session")?;
 
-    let replacement =
-        AudioPlayback::start_device(index).map_err(|e| format!("output device: {e}"))?;
+    // Snapshot the live remote SSRCs so the actor can re-attach them to the new
+    // output device. The actor builds the replacement device before tearing
+    // down the current one and falls back to the system default on a stale
+    // index, so a failed switch never leaves the user with no audio output.
+    let ssrcs: Vec<u32> = {
+        let remote = session.remote_audio.lock().await;
+        remote.keys().copied().collect()
+    };
+    let mut new_senders = session
+        .audio_actor
+        .switch_output_device(index, ssrcs)
+        .await?;
 
     {
         let mut remote = session.remote_audio.lock().await;
         for (ssrc, remote_state) in remote.iter_mut() {
-            remote_state.playback_tx = replacement.add_source(*ssrc);
+            if let Some(tx) = new_senders.remove(ssrc) {
+                remote_state.playback_tx = tx;
+            }
         }
-    }
-
-    {
-        let mut playback = session.audio_playback.lock().await;
-        playback.stop();
-        *playback = replacement;
     }
 
     tracing::debug!(device_index = index, "switched audio output device");
@@ -528,7 +569,7 @@ pub async fn media_get_stream_diagnostics(
                             .video_simulcast
                             .as_ref()
                             .map(|state| ActiveVideoBackend {
-                                codec: format!("{:?}", state.codec).to_lowercase(),
+                                codec: super::video_pipeline::codec_label(state.codec).to_string(),
                                 backend: state.backend_name.to_string(),
                                 hardware_accelerated: state.hardware_accelerated,
                             }),
@@ -536,7 +577,7 @@ pub async fn media_get_stream_diagnostics(
                             .screen_simulcast
                             .as_ref()
                             .map(|state| ActiveVideoBackend {
-                                codec: format!("{:?}", state.codec).to_lowercase(),
+                                codec: super::video_pipeline::codec_label(state.codec).to_string(),
                                 backend: state.backend_name.to_string(),
                                 hardware_accelerated: state.hardware_accelerated,
                             }),
@@ -680,17 +721,9 @@ pub async fn media_send_track_key_announce(
     let guard = state.session.lock().await;
     let session = guard.as_ref().ok_or("no active session")?;
     let payload = parse_encrypted_key_recipients(encrypted_keys)?;
-    let codec = match codec
+    let codec = codec
         .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some("av1") => Some(paracord_transport::stream::VideoCodec::Av1),
-        Some("h264") => Some(paracord_transport::stream::VideoCodec::H264),
-        Some("vp9") => Some(paracord_transport::stream::VideoCodec::Vp9),
-        Some(_) => None,
-        None => None,
-    };
+        .and_then(super::capabilities::video_codec_from_label);
     session
         .send_control_message(&ControlMessage::StreamKeyAnnounce {
             stream_id: StreamId::new(stream_id),

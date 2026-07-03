@@ -249,7 +249,7 @@ export function OverviewSection({
               />
               <div className="flex gap-2.5">
                 <button
-                  className="rounded-lg border border-accent-danger/40 bg-accent-danger px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-danger/85 disabled:opacity-50"
+                  className="rounded-lg border border-accent-danger/40 bg-accent-danger px-4 py-2 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-danger/85 disabled:opacity-50"
                   onClick={onDeleteGuild}
                   disabled={deletingGuild || deleteGuildConfirmName !== guild.name}
                 >
@@ -542,7 +542,7 @@ export function MembersSection({
         {filteredMembers.map((member) => (
           <div key={member.user.id}>
             <div className="card-surface flex flex-wrap items-center gap-2.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-3.5 py-3">
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold" style={{ backgroundColor: 'var(--accent-primary)' }}>
+              <div className="w-8 h-8 rounded-full flex items-center justify-center text-on-accent text-xs font-semibold" style={{ backgroundColor: 'var(--accent-primary)' }}>
                 {member.user.username.charAt(0).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
@@ -1361,7 +1361,7 @@ export function BansSection({ bans, onUnban }: BansSectionProps) {
             key={ban.user.id}
             className="card-surface flex flex-wrap items-center gap-2.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-3.5 py-3"
           >
-            <div className="h-8 w-8 shrink-0 rounded-full bg-accent-danger text-center text-xs font-semibold leading-8 text-white">
+            <div className="h-8 w-8 shrink-0 rounded-full bg-accent-danger text-center text-xs font-semibold leading-8 text-on-accent">
               {ban.user.username.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">

@@ -11,6 +11,8 @@ pub struct AudioFrame {
 }
 
 impl AudioFrame {
+    // Constructed only by the macOS/Windows capture engines.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) fn new(
         format: AudioFormat,
         channels: u16,

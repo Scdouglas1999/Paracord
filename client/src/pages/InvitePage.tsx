@@ -79,7 +79,7 @@ export function InvitePage() {
           <Sparkles size={14} />
           Invite Link
         </div>
-        <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-3xl border border-border-subtle bg-accent-primary text-3xl font-bold text-white shadow-[0_16px_40px_rgba(78,102,232,0.38)]">
+        <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-3xl border border-border-subtle bg-accent-primary text-3xl font-bold text-text-on-accent shadow-[0_16px_40px_rgba(78,102,232,0.38)]">
           <Users size={30} />
         </div>
         <h1 className="mb-1 text-2xl font-bold text-text-primary">You've been invited</h1>

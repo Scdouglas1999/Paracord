@@ -1,0 +1,5 @@
+@import "tailwindcss";
+@theme {
+  --color-bg-mod-subtle: rgba(255,255,255,0.04);
+  --color-text-primary: #f2f6ff;
+}

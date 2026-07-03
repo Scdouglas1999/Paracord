@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Compass, Search, Users, ArrowLeft } from 'lucide-react';
-import { apiClient, extractApiError } from '../api/client';
+import { extractApiError } from '../api/client';
+import { getApi } from '../api/activeClient';
 import { useGuildStore } from '../stores/guildStore';
 import { useChannelStore } from '../stores/channelStore';
 import { inviteApi } from '../api/invites';
@@ -58,7 +59,7 @@ export function DiscoveryPage() {
       if (searchQuery?.trim()) params.set('search', searchQuery.trim());
       if (tag) params.set('tag', tag);
       params.set('limit', '50');
-      const { data } = await apiClient.get<DiscoveryResponse>(
+      const { data } = await getApi().get<DiscoveryResponse>(
         `/discovery/guilds?${params.toString()}`
       );
       setGuilds(data.guilds);
@@ -102,7 +103,7 @@ export function DiscoveryPage() {
       // If that fails, we look for any public invites.
       let inviteError: unknown = null;
       try {
-        const invitesRes = await apiClient.get(`/guilds/${guild.id}/invites`);
+        const invitesRes = await getApi().get(`/guilds/${guild.id}/invites`);
         const invites = invitesRes.data as Array<{ code: string }>;
         if (invites.length > 0) {
           const { data } = await inviteApi.accept(invites[0].code);

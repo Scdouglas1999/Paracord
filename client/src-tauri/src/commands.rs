@@ -54,7 +54,7 @@ pub fn get_update_target() -> UpdateTargetInfo {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ForegroundApplication {
     pid: u32,
@@ -492,36 +492,89 @@ fn get_process_executable_path(pid: u32) -> Option<String> {
     }
 }
 
+/// How long a foreground probe is reused before `osascript` is invoked again.
+/// The renderer polls on a short interval; without this each poll would spawn
+/// an `osascript` process, which is comparatively expensive to launch.
+#[cfg(target_os = "macos")]
+const MACOS_FOREGROUND_CACHE_TTL: std::time::Duration = std::time::Duration::from_millis(500);
+
 #[cfg(target_os = "macos")]
 fn detect_foreground_application_macos() -> Option<ForegroundApplication> {
-    let app_name = run_command_capture(
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+
+    // Short-lived cache so a burst of polls reuses a single probe. Storing the
+    // full `Option` (including a `None` result) means "no foreground app" is
+    // cached too, not just successful probes.
+    static CACHE: OnceLock<Mutex<Option<(Instant, Option<ForegroundApplication>)>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+
+    if let Ok(guard) = cache.lock() {
+        if let Some((fetched_at, cached)) = guard.as_ref() {
+            if fetched_at.elapsed() < MACOS_FOREGROUND_CACHE_TTL {
+                return cached.clone();
+            }
+        }
+    }
+
+    let fresh = probe_foreground_application_macos();
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((Instant::now(), fresh.clone()));
+    }
+
+    fresh
+}
+
+/// Run a single `osascript` pass that returns the frontmost process name, its
+/// unix pid, and the front-window title (newline-separated, in that order),
+/// collapsing what used to be three separate `osascript` launches into one.
+#[cfg(target_os = "macos")]
+fn probe_foreground_application_macos() -> Option<ForegroundApplication> {
+    let combined = run_command_capture(
         "osascript",
         &[
             "-e",
-            "tell application \"System Events\" to get name of first application process whose frontmost is true",
+            "tell application \"System Events\"",
+            "-e",
+            "set frontApp to first application process whose frontmost is true",
+            "-e",
+            "set appName to name of frontApp",
+            "-e",
+            "set appPid to (unix id of frontApp) as text",
+            "-e",
+            "set winName to \"\"",
+            "-e",
+            "try",
+            "-e",
+            "set winName to name of front window of frontApp",
+            "-e",
+            "end try",
+            "-e",
+            "end tell",
+            "-e",
+            "return appName & linefeed & appPid & linefeed & winName",
         ],
     )?;
 
-    let pid = run_command_capture(
-        "osascript",
-        &[
-            "-e",
-            "tell application \"System Events\" to get unix id of first application process whose frontmost is true",
-        ],
-    )
-    .and_then(|value| parse_first_u32(&value))?;
+    // `splitn(3, ..)` keeps the (rare) case of a newline inside a window title
+    // intact by treating everything past the second newline as the title.
+    let mut lines = combined.splitn(3, '\n');
+    let app_name = lines
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let pid = lines.next().and_then(parse_first_u32)?;
+    let window_title = lines
+        .next()
+        .map(|title| title.trim().to_string())
+        .filter(|title| !title.is_empty());
 
     if pid == std::process::id() {
         return None;
     }
-
-    let window_title = run_command_capture(
-        "osascript",
-        &[
-            "-e",
-            "tell application \"System Events\" to tell (first application process whose frontmost is true) to get name of front window",
-        ],
-    );
 
     let executable_path = run_command_capture("ps", &["-p", &pid.to_string(), "-o", "comm="]);
     let process_name = executable_path
@@ -560,23 +613,63 @@ fn parse_xprop_string_value(raw: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Outcome of a Linux foreground-window probe. `Unsupported` is deliberately
+/// distinct from `NoApp`: xprop can only see X11 windows, so on a Wayland
+/// session it would silently report "nothing" even when an app is focused.
+/// Distinguishing the two lets the caller skip the (futile) xprop shell-outs and
+/// surface the limitation instead of pretending nothing is focused.
 #[cfg(target_os = "linux")]
-fn detect_foreground_application_linux() -> Option<ForegroundApplication> {
-    // X11 path via xprop. On Wayland this may return nothing depending on compositor.
-    let active_window_raw = run_command_capture("xprop", &["-root", "_NET_ACTIVE_WINDOW"])?;
-    let window_id = active_window_raw
-        .split_whitespace()
-        .last()
-        .map(|token| token.trim().to_string())?;
-    if window_id == "0x0" {
-        return None;
+enum LinuxForegroundProbe {
+    Detected(ForegroundApplication),
+    NoApp,
+    Unsupported,
+}
+
+/// Whether the current session is Wayland, in which case xprop-based foreground
+/// detection cannot work. Split from environment reads so it is unit-testable.
+#[cfg(target_os = "linux")]
+fn is_wayland_session(session_type: Option<&str>, wayland_display: Option<&str>) -> bool {
+    if session_type.is_some_and(|value| value.eq_ignore_ascii_case("wayland")) {
+        return true;
+    }
+    // Some compositors leave XDG_SESSION_TYPE unset but always export the
+    // Wayland socket name.
+    wayland_display.is_some_and(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn detect_foreground_application_linux() -> LinuxForegroundProbe {
+    if is_wayland_session(
+        std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+        std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+    ) {
+        return LinuxForegroundProbe::Unsupported;
     }
 
-    let pid_raw = run_command_capture("xprop", &["-id", &window_id, "_NET_WM_PID"])?;
-    let pid = parse_first_u32(&pid_raw)?;
-    if pid == 0 || pid == std::process::id() {
-        return None;
+    // X11 path via xprop.
+    let Some(active_window_raw) = run_command_capture("xprop", &["-root", "_NET_ACTIVE_WINDOW"])
+    else {
+        return LinuxForegroundProbe::NoApp;
+    };
+    let Some(window_id) = active_window_raw
+        .split_whitespace()
+        .last()
+        .map(|token| token.trim().to_string())
+    else {
+        return LinuxForegroundProbe::NoApp;
+    };
+    if window_id == "0x0" {
+        return LinuxForegroundProbe::NoApp;
     }
+
+    let Some(pid) =
+        run_command_capture("xprop", &["-id", &window_id, "_NET_WM_PID"]).and_then(|raw| {
+            let pid = parse_first_u32(&raw)?;
+            (pid != 0 && pid != std::process::id()).then_some(pid)
+        })
+    else {
+        return LinuxForegroundProbe::NoApp;
+    };
 
     let window_title = run_command_capture("xprop", &["-id", &window_id, "_NET_WM_NAME"])
         .and_then(|raw| parse_xprop_string_value(&raw))
@@ -597,10 +690,10 @@ fn detect_foreground_application_linux() -> Option<ForegroundApplication> {
         .unwrap_or_else(|| format!("pid-{pid}"));
 
     if process_name.to_lowercase().contains("paracord") {
-        return None;
+        return LinuxForegroundProbe::NoApp;
     }
 
-    Some(ForegroundApplication {
+    LinuxForegroundProbe::Detected(ForegroundApplication {
         pid,
         display_name: readable_process_name(&process_name),
         process_name,
@@ -661,11 +754,51 @@ pub fn get_foreground_application() -> Option<ForegroundApplication> {
 
     #[cfg(target_os = "linux")]
     {
-        detect_foreground_application_linux()
+        match detect_foreground_application_linux() {
+            LinuxForegroundProbe::Detected(app) => Some(app),
+            LinuxForegroundProbe::NoApp => None,
+            LinuxForegroundProbe::Unsupported => {
+                // Log the limitation once rather than on every poll: on Wayland
+                // there is no portable way to read the focused window, so
+                // activity detection is unavailable there.
+                static WARNED: AtomicBool = AtomicBool::new(false);
+                if !WARNED.swap(true, Ordering::Relaxed) {
+                    tracing::info!(
+                        "foreground application detection is unsupported on Wayland; activity sharing will report no app"
+                    );
+                }
+                None
+            }
+        }
     }
 
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         None
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::is_wayland_session;
+
+    #[test]
+    fn wayland_detected_via_session_type() {
+        assert!(is_wayland_session(Some("wayland"), None));
+        assert!(is_wayland_session(Some("Wayland"), None));
+    }
+
+    #[test]
+    fn wayland_detected_via_display_socket() {
+        assert!(is_wayland_session(None, Some("wayland-0")));
+        // Session type wins even when it disagrees with an empty socket var.
+        assert!(is_wayland_session(Some("wayland"), Some("")));
+    }
+
+    #[test]
+    fn x11_session_is_not_wayland() {
+        assert!(!is_wayland_session(Some("x11"), None));
+        assert!(!is_wayland_session(None, None));
+        assert!(!is_wayland_session(Some("tty"), Some("")));
     }
 }

@@ -171,7 +171,7 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
 pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
     let shutdown = session.shutdown.clone();
     let remote_audio = session.remote_audio.clone();
-    let audio_playback = session.audio_playback.clone();
+    let audio_actor = session.audio_actor.clone();
     let deafened = session.deafened.clone();
     let conn_inner = session.connection.inner().clone();
     let frame_decryptor = session.frame_decryptor.clone();
@@ -247,9 +247,9 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                             // Slow path: first datagram from a new remote SSRC.
                             // Lazily build its decoder + playout source. The
                             // `remote_audio` guard is intentionally not held
-                            // across `audio_playback.lock().await` because
-                            // `OpusDecoder` is not `Sync` and would make the task
-                            // future non-`Send`.
+                            // across the `audio_actor` await because `OpusDecoder`
+                            // is not `Sync` and would make the task future
+                            // non-`Send`.
                             let decoder = match OpusDecoder::new() {
                                 Ok(decoder) => decoder,
                                 Err(e) => {
@@ -260,8 +260,19 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                                     continue;
                                 }
                             };
-                            let playback_tx =
-                                audio_playback.lock().await.add_source(header.ssrc);
+                            let playback_tx = match audio_actor
+                                .add_playback_source(header.ssrc)
+                                .await
+                            {
+                                Some(tx) => tx,
+                                None => {
+                                    tracing::warn!(
+                                        ssrc = header.ssrc,
+                                        "audio playback unavailable; dropping remote audio source"
+                                    );
+                                    continue;
+                                }
+                            };
                             let mut state = RemoteAudioState {
                                 decoder,
                                 jitter_buffer: JitterBuffer::new(),
@@ -446,5 +457,108 @@ mod tests {
         assert!((primary[0] - 0.6).abs() < 1e-6);
         // Second sample mixes against a zero-padded overlay value.
         assert!((primary[1] - 0.3).abs() < 1e-6);
+    }
+
+    /// End-to-end loopback over the exact wire path a datagram travels: Opus
+    /// encode → frame encrypt → serialized datagram → parse header → frame
+    /// decrypt → Opus decode. Exercises the header-as-AAD contract and the
+    /// per-SSRC/epoch key routing that the send/recv tasks rely on.
+    #[test]
+    fn audio_frame_round_trips_encode_encrypt_datagram_decrypt_decode() {
+        use paracord_codec::audio::opus::OpusEncoder;
+        use paracord_codec::crypto::{FrameDecryptor, FrameEncryptor, KEY_SIZE};
+
+        const SSRC: u32 = 0x1234_5678;
+        const EPOCH: u8 = 7;
+        let key = [0x5au8; KEY_SIZE];
+
+        // A non-trivial 20ms mono frame so Opus produces real payload bytes.
+        let pcm: Vec<f32> = (0..FRAME_SIZE)
+            .map(|n| (n as f32 * 0.05).sin() * 0.5)
+            .collect();
+
+        let mut encoder = OpusEncoder::new().expect("opus encoder");
+        let opus_data = encoder.encode(&pcm).expect("opus encode");
+        assert!(!opus_data.is_empty(), "opus must produce a payload");
+
+        let mut encryptor = FrameEncryptor::new();
+        encryptor.set_peer_key(SSRC, EPOCH, &key);
+
+        let seq: u16 = 42;
+        let mut header = MediaHeader::new(TrackType::Audio, SSRC);
+        header.sequence = seq;
+        header.timestamp = 960;
+        header.audio_level = compute_audio_level(&pcm);
+        header.key_epoch = EPOCH;
+
+        let mut header_buf = BytesMut::with_capacity(HEADER_SIZE);
+        header.encode(&mut header_buf);
+        let header_bytes: [u8; HEADER_SIZE] = header_buf[..HEADER_SIZE]
+            .try_into()
+            .expect("16-byte header");
+
+        let encrypted = encryptor
+            .encrypt(&header_bytes, SSRC, EPOCH, seq, &opus_data)
+            .expect("frame encrypt");
+
+        // The 16-byte header is AES-GCM additional-authenticated data, so the
+        // header on the wire must be byte-identical to the one bound at encrypt
+        // time. Datagram framing slices at `HEADER_SIZE` and ignores the
+        // `payload_length` field, so the header is emitted verbatim here.
+        let mut datagram = BytesMut::with_capacity(HEADER_SIZE + encrypted.len());
+        datagram.put_slice(&header_bytes);
+        datagram.put_slice(&encrypted);
+        let datagram = datagram.freeze();
+
+        // Receive side: parse the header back off the wire.
+        assert!(datagram.len() >= HEADER_SIZE);
+        let mut cursor = &datagram[..];
+        let recv_header = MediaHeader::decode(&mut cursor).expect("decode header");
+        assert_eq!(recv_header.ssrc, SSRC);
+        assert_eq!(recv_header.key_epoch, EPOCH);
+        assert_eq!(recv_header.sequence, seq);
+        let recv_header_bytes: [u8; HEADER_SIZE] =
+            datagram[..HEADER_SIZE].try_into().expect("16-byte header");
+        let payload = &datagram[HEADER_SIZE..];
+
+        let mut decryptor = FrameDecryptor::new();
+        // A datagram whose epoch has no key must fail rather than silently decode.
+        decryptor.set_peer_key(SSRC, EPOCH.wrapping_add(1), &key);
+        assert!(
+            decryptor
+                .decrypt(
+                    &recv_header_bytes,
+                    recv_header.ssrc,
+                    recv_header.key_epoch,
+                    recv_header.sequence,
+                    payload,
+                )
+                .is_err(),
+            "decrypt must fail without the matching epoch key"
+        );
+
+        // Install the correct epoch key and recover the Opus payload.
+        decryptor.set_peer_key(SSRC, EPOCH, &key);
+        let decrypted = decryptor
+            .decrypt(
+                &recv_header_bytes,
+                recv_header.ssrc,
+                recv_header.key_epoch,
+                recv_header.sequence,
+                payload,
+            )
+            .expect("frame decrypt");
+        assert_eq!(
+            decrypted, opus_data,
+            "decrypted payload must match encoder output"
+        );
+
+        let mut decoder = OpusDecoder::new().expect("opus decoder");
+        let out_pcm = decoder.decode(&decrypted).expect("opus decode");
+        assert_eq!(
+            out_pcm.len(),
+            FRAME_SIZE,
+            "one 20ms frame must decode back to a full mono frame"
+        );
     }
 }

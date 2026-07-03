@@ -32,25 +32,29 @@ pub enum CaptureError {
     Resampler(String),
 }
 
-/// Information about an available audio input device.
-#[derive(Debug, Clone)]
-pub struct AudioInputDevice {
-    /// Human-readable device name.
-    pub name: String,
-    /// Index for selection (used internally).
-    pub index: usize,
-}
-
-/// Enumerate available audio input devices.
-pub fn list_input_devices() -> Result<Vec<AudioInputDevice>, CaptureError> {
+/// Enumerate available audio input devices as `(index, name, is_default)`.
+///
+/// The `index` is the device's position in cpal's `input_devices()` iterator
+/// and is exactly what [`AudioCapture::start_device`] consumes via `.nth(index)`.
+/// These indices are enumeration-order only: they are assigned by iterating the
+/// host's device list at call time and can shift if devices are added or removed
+/// between calls (e.g. a USB microphone plugged in). Callers must therefore treat
+/// an enumeration result and a subsequent switch as a paired operation — never
+/// cache an index across device topology changes.
+pub fn list_input_devices() -> Result<Vec<(usize, String, bool)>, CaptureError> {
     let host = cpal::default_host();
-    let mut devices = Vec::new();
+    // The default device name is used to flag the default entry. cpal exposes no
+    // stable device identity, so name comparison is the only portable signal.
+    let default_name = host
+        .default_input_device()
+        .and_then(|device| device.name().ok());
 
+    let mut devices = Vec::new();
     for (index, device) in host.input_devices()?.enumerate() {
         let name = device.name().unwrap_or_else(|_| format!("Device {index}"));
-        devices.push(AudioInputDevice { name, index });
+        let is_default = default_name.as_deref() == Some(name.as_str());
+        devices.push((index, name, is_default));
     }
-
     Ok(devices)
 }
 

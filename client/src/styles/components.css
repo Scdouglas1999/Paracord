@@ -11,7 +11,7 @@
   min-height: 2.625rem;
   padding: 0 1.1rem;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border: 1px solid color-mix(in srgb, var(--accent-primary) 80%, #ffffff 20%);
   border-radius: 0.88rem;
   font-weight: 600;
@@ -87,7 +87,7 @@
   min-height: 2.5rem;
   padding: 0 0.95rem;
   background-color: var(--accent-danger);
-  color: #fff;
+  color: var(--text-on-accent);
   border: 1px solid color-mix(in srgb, var(--accent-danger) 78%, #ffffff 22%);
   border-radius: 0.72rem;
   font-weight: 600;
@@ -380,7 +380,7 @@
 
 .context-menu-item:hover {
   background-color: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 .context-menu-item.danger {
@@ -389,7 +389,7 @@
 
 .context-menu-item.danger:hover {
   background-color: var(--accent-danger);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 /* Friend list item row */

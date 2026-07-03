@@ -33,6 +33,10 @@ uuid = { workspace = true }
 quinn = { workspace = true }
 url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Direct rustls handle for the trust-on-first-use certificate-pinning verifier
+# wired into reqwest via `use_preconfigured_tls`. Must match reqwest's rustls
+# major (0.23) and its `ring` crypto provider so the config downcasts correctly.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12", "logging"] }
 scap = "0.1.0-beta.1"
 
 [target.'cfg(windows)'.dependencies]

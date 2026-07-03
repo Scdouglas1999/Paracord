@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserPlus, Plus, Compass, Users, ChevronRight, Volume2, MessageSquare, FileText } from 'lucide-react';
 
@@ -35,26 +35,48 @@ export function HomePage() {
   const channelParticipants = useVoiceStore((s) => s.channelParticipants);
   const activeServerId = useServerListStore((s) => s.activeServerId);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const loadedGuildsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     void fetchRelationships();
-    guilds.forEach(g => {
+  }, [fetchRelationships]);
+
+  useEffect(() => {
+    // Fetch each guild's channels once; a new `guilds` array reference (e.g. a
+    // presence-driven store update) must not trigger a refetch of every guild.
+    guilds.forEach((g) => {
+      if (loadedGuildsRef.current.has(g.id)) return;
+      loadedGuildsRef.current.add(g.id);
       void fetchChannels(g.id);
     });
-  }, [fetchRelationships, guilds, fetchChannels]);
+  }, [guilds, fetchChannels]);
 
   const friends = useMemo(
     () => relationships.filter((r) => r.type === 1),
     [relationships],
   );
 
-  const onlineFriends = useMemo(
+  const presenceScope = activeServerId ?? undefined;
+
+  // Recomputes when the presences Map reference changes. getPresence keeps the
+  // scope-drift fallback a plain Map lookup would lose.
+  const onlineFlags = useMemo(
     () =>
-      friends.filter(
-        (r) =>
-          (getPresence(r.user.id, activeServerId ?? undefined)?.status || 'offline') !== 'offline',
+      friends.map(
+        (r) => (getPresence(r.user.id, presenceScope)?.status || 'offline') !== 'offline',
       ),
-    [friends, presences, getPresence, activeServerId],
+    [friends, presences, getPresence, presenceScope],
+  );
+
+  // Primitive signature: changes only when the set of friends or one of their
+  // online states flips, giving `onlineFriends` a stable identity across the
+  // unrelated presence writes that constantly swap the presences Map.
+  const onlineKey = friends.map((r, i) => `${r.user.id}:${onlineFlags[i] ? 1 : 0}`).join('|');
+
+  const onlineFriends = useMemo(
+    () => friends.filter((_, i) => onlineFlags[i]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onlineKey captures friends + onlineFlags
+    [onlineKey],
   );
 
   const activeVoiceChannels = useMemo(() => {
@@ -116,10 +138,10 @@ export function HomePage() {
       >
         <div className="absolute inset-0 bg-gradient-to-t from-bg-primary via-bg-primary/40 to-transparent opacity-80" />
         <div className="absolute bottom-5 left-5 right-5 sm:bottom-6 sm:left-8 sm:right-8 z-10">
-          <h1 className="truncate text-2xl font-extrabold tracking-tight text-white drop-shadow-md sm:text-3xl">
+          <h1 className="truncate text-2xl font-extrabold leading-tight tracking-tight text-text-primary drop-shadow-md sm:text-3xl">
             Welcome to Paracord, {user?.username}
           </h1>
-          <p className="mt-1 line-clamp-2 max-w-xl text-[14px] font-medium text-white/80 sm:mt-2 sm:text-[15px]">
+          <p className="mt-1 line-clamp-2 max-w-xl text-sm font-medium leading-normal text-text-secondary sm:mt-2 sm:text-base">
             Your global dashboard. Manage servers, discover new communities, and quickly drop into active voice channels.
           </p>
         </div>
@@ -131,7 +153,7 @@ export function HomePage() {
         <div className="flex flex-col gap-8">
           {/* Global Happening Now */}
           <section>
-            <h2 className="mb-4 flex items-center gap-2 text-[17px] font-bold text-text-primary">
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-bold leading-snug text-text-primary">
               <Volume2 className="text-accent-success" size={20} />
               Global Happening Now
             </h2>
@@ -166,7 +188,7 @@ export function HomePage() {
                         {displayParticipants.map((p, i: number) => (
                           <Tooltip key={p.user_id} content={p.username || p.user_id} side="top">
                             <div
-                              className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-bg-mod-subtle bg-accent-primary text-[11px] font-bold text-white transition-transform group-hover:scale-105"
+                              className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-bg-mod-subtle bg-accent-primary text-[11px] font-bold text-text-on-accent transition-transform group-hover:scale-105"
                               style={{ marginLeft: i > 0 ? '-8px' : '0' }}
                             >
                               {(p.username || p.user_id).charAt(0).toUpperCase()}
@@ -181,7 +203,7 @@ export function HomePage() {
                       </div>
 
                       <button
-                        className="mt-auto w-full rounded-xl bg-white/10 py-2 text-[13px] font-bold text-white transition-colors hover:bg-accent-primary"
+                        className="mt-auto w-full rounded-xl bg-bg-mod-strong py-2 text-sm font-bold text-text-primary transition-colors duration-150 hover:bg-accent-primary hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
                         onClick={() => navigate(`/app/guilds/${guild?.id}/channels/${channel.id}`)}
                       >
                         Join Voice
@@ -199,7 +221,7 @@ export function HomePage() {
 
           {/* Activity Feed (DMs) */}
           <section>
-            <h2 className="mb-4 flex items-center gap-2 text-[17px] font-bold text-text-primary">
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-bold leading-snug text-text-primary">
               <MessageSquare className="text-text-primary" size={20} />
               Recent Activity
             </h2>
@@ -216,11 +238,11 @@ export function HomePage() {
                         useChannelStore.getState().selectChannel(dm.id);
                         navigate(`/app/dms/${dm.id}`);
                       }}
-                      className={`flex w-full items-start justify-between gap-4 p-4 text-left transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary ${idx !== recentDms.length - 1 ? "border-b border-border-subtle" : ""}`}
+                      className={`group flex w-full items-start justify-between gap-4 p-4 text-left transition-colors duration-150 hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary ${idx !== recentDms.length - 1 ? "border-b border-border-subtle" : ""}`}
                     >
                       <div className="flex items-center gap-3">
                         <div className="relative shrink-0">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-primary text-sm font-semibold text-white">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-primary text-sm font-semibold text-text-on-accent">
                             {username.charAt(0).toUpperCase()}
                           </div>
                           {isOnline && (
@@ -232,14 +254,14 @@ export function HomePage() {
                           <span className="text-[13px] text-text-muted text-left">Direct Message</span>
                         </div>
                       </div>
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/20 text-text-muted hover:bg-black/40 transition-colors">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-bg-mod-subtle text-text-muted transition-colors duration-150 group-hover:bg-bg-mod-strong group-hover:text-text-secondary">
                         <ChevronRight size={16} />
                       </div>
                     </button>
                   );
                 })
               ) : (
-                <div className="p-8 text-center text-text-muted text-[14px]">
+                <div className="p-8 text-center text-sm text-text-muted">
                   No recent activity found.
                 </div>
               )}
@@ -253,35 +275,35 @@ export function HomePage() {
           <section className="grid grid-cols-2 gap-3">
             <button
               onClick={() => navigate('/app/friends')}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-colors hover:bg-bg-mod-strong/55"
+              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
             >
               <UserPlus size={20} className="text-text-muted" />
               <span className="text-xs font-semibold text-text-secondary">Add Friend</span>
             </button>
             <button
               onClick={() => setShowCreateModal(true)}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-colors hover:bg-bg-mod-strong/55"
+              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
             >
               <Plus size={20} className="text-text-muted" />
               <span className="text-xs font-semibold text-text-secondary">New Server</span>
             </button>
             <button
               onClick={() => navigate('/app/discovery')}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-colors hover:bg-bg-mod-strong/55"
+              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
             >
               <Compass size={20} className="text-text-muted" />
               <span className="text-xs font-semibold text-text-secondary">Explore</span>
             </button>
             <button
               onClick={() => navigate('/app/friends')}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-colors hover:bg-bg-mod-strong/55"
+              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
             >
               <Users size={20} className="text-text-muted" />
               <span className="text-xs font-semibold text-text-secondary">Friends</span>
             </button>
             <button
               onClick={() => navigate('/app/templates')}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-colors hover:bg-bg-mod-strong/55"
+              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
             >
               <FileText size={20} className="text-text-muted" />
               <span className="text-xs font-semibold text-text-secondary">Templates</span>
@@ -305,10 +327,10 @@ export function HomePage() {
                     type="button"
                     key={rel.user.id}
                     onClick={() => void handleMessageFriend(rel.user.id)}
-                    className="flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-white/5 w-full text-left"
+                    className="flex w-full items-center gap-3 rounded-lg p-2 text-left transition-colors duration-150 hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60"
                   >
                     <div className="relative shrink-0">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-primary text-[12px] font-semibold text-white">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-primary text-[12px] font-semibold text-text-on-accent">
                         {rel.user.username.charAt(0).toUpperCase()}
                       </div>
                       <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-[2px] border-bg-mod-subtle bg-status-online" />
@@ -335,7 +357,7 @@ export function HomePage() {
                     <button
                       key={guild.id}
                       onClick={() => void handleGuildClick(guild)}
-                      className="group flex items-center gap-3 rounded-xl border border-border-subtle bg-bg-primary/30 p-2 transition-colors hover:border-border-strong hover:bg-bg-mod-strong"
+                      className="group flex items-center gap-3 rounded-xl border border-border-subtle bg-bg-primary/30 p-2 transition-colors duration-150 hover:border-border-strong hover:bg-bg-mod-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60"
                     >
                       <div
                         className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[10px] transition-transform group-hover:scale-105"

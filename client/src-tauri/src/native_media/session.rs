@@ -13,13 +13,12 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
 
+use super::audio_actor::AudioActor;
 use super::capabilities::{detect_media_stream_capabilities, MediaStreamCapabilities};
 use super::stream_registry::StreamRegistry;
-use paracord_codec::audio::capture::AudioCapture;
 use paracord_codec::audio::jitter::JitterBuffer;
 use paracord_codec::audio::noise::NoiseSuppressor;
 use paracord_codec::audio::opus::{OpusDecoder, OpusEncoder};
-use paracord_codec::audio::playback::AudioPlayback;
 use paracord_codec::crypto::{FrameDecryptor, FrameEncryptor};
 use paracord_transport::connection::MediaConnection;
 use paracord_transport::control::ControlMessage;
@@ -63,17 +62,18 @@ pub struct NativeMediaSession {
     pub endpoint: MediaEndpoint,
     pub connection: MediaConnection,
 
-    // Audio capture
-    pub audio_capture: Option<AudioCapture>,
+    // Audio capture. The cpal-backed capture/playback streams live on the
+    // audio actor's dedicated thread (see `AudioActor`); this session only ever
+    // holds the actor handle and the PCM frame receiver it hands back.
     pub pcm_rx: Option<mpsc::Receiver<Vec<f32>>>,
     pub screen_audio_rx: Option<mpsc::Receiver<Vec<f32>>>,
     pub screen_audio_tx: mpsc::Sender<Vec<f32>>,
     pub screen_audio_enabled: Arc<AtomicBool>,
 
-    // Audio playback. Shared behind a mutex so the datagram receive task can
-    // lazily register new remote SSRCs while `voice_switch_output_device` can
-    // swap the whole engine underneath it.
-    pub audio_playback: Arc<tokio::sync::Mutex<AudioPlayback>>,
+    // Audio capture/playback owner. Shared with the datagram receive task so it
+    // can lazily register new remote SSRCs, while `voice_switch_output_device`
+    // can swap the whole output device underneath it.
+    pub audio_actor: Arc<AudioActor>,
 
     // Opus codec
     pub opus_encoder: OpusEncoder,
@@ -158,12 +158,19 @@ pub struct NativeMediaSession {
     pub screen_encoder_started_at: Option<Instant>,
 }
 
-// SAFETY: NativeMediaSession is always accessed through a tokio::Mutex<Option<..>>
-// which guarantees exclusive access. The !Send/!Sync inner types (cpal::Stream via
-// AudioPlayback/AudioCapture, audiopus raw pointers in OpusEncoder/OpusDecoder,
-// nnnoiseless DenoiseState) all hold independent per-instance state that is safe
-// to move between threads.
-unsafe impl Send for NativeMediaSession {}
+// SAFETY: `NativeMediaSession` is `Send` automatically now that the cpal
+// audio streams live on the `AudioActor`'s dedicated thread rather than inside
+// this struct — the drop-on-wrong-thread hazard (macOS CoreAudio) is gone.
+//
+// It is not automatically `Sync`, because a few owned codec-state fields are
+// `Send` but not `Sync`: the boxed `dyn VideoEncoder` trait objects (the trait
+// is `: Send` only) and the audiopus-backed `OpusEncoder`. The session is only
+// ever reached through the `tokio::Mutex<Option<NativeMediaSession>>` that owns
+// it, so any `&NativeMediaSession` a command handler holds across an `.await` is
+// still covered by the mutex's exclusive access — no two threads touch this
+// codec state concurrently. Remote-participant `OpusDecoder`s already sit behind
+// their own `tokio::Mutex` (`remote_audio`). This asserts that shared-reference
+// access to the struct is sound under that exclusivity.
 unsafe impl Sync for NativeMediaSession {}
 
 impl NativeMediaSession {
@@ -277,11 +284,12 @@ impl NativeMediaSession {
         // Set up audio components
         let opus_encoder = OpusEncoder::new().map_err(|e| format!("opus encoder: {e}"))?;
         let noise_suppressor = NoiseSuppressor::new();
-        let audio_playback = AudioPlayback::start().map_err(|e| format!("audio playback: {e}"))?;
 
-        // Start audio capture
-        let (audio_capture, pcm_rx) =
-            AudioCapture::start().map_err(|e| format!("audio capture: {e}"))?;
+        // The cpal streams are owned by a dedicated thread; create it, start
+        // playback, then start capture (which hands back the PCM receiver).
+        let audio_actor = Arc::new(AudioActor::spawn());
+        audio_actor.start_playback(None).await?;
+        let pcm_rx = audio_actor.start_capture(None).await?;
         let (screen_audio_tx, screen_audio_rx) = mpsc::channel::<Vec<f32>>(64);
 
         // Deterministic SSRCs avoid the need for a separate native
@@ -300,12 +308,11 @@ impl NativeMediaSession {
         Ok(Self {
             endpoint,
             connection,
-            audio_capture: Some(audio_capture),
             pcm_rx: Some(pcm_rx),
             screen_audio_rx: Some(screen_audio_rx),
             screen_audio_tx,
             screen_audio_enabled: Arc::new(AtomicBool::new(false)),
-            audio_playback: Arc::new(tokio::sync::Mutex::new(audio_playback)),
+            audio_actor,
             opus_encoder,
             noise_suppressor,
             frame_encryptor: Arc::new(std::sync::Mutex::new(frame_encryptor)),
@@ -404,13 +411,10 @@ impl NativeMediaSession {
             h.abort();
         }
 
-        // Stop audio capture
-        if let Some(capture) = self.audio_capture.take() {
-            capture.stop();
-        }
-
-        // Stop audio playback
-        self.audio_playback.lock().await.stop();
+        // Stop capture and silence playback. The cpal streams are fully torn
+        // down on the actor thread when the last `AudioActor` handle drops.
+        self.audio_actor.stop_capture();
+        self.audio_actor.stop_playback();
 
         // Close QUIC connection
         self.connection.close("session ended");

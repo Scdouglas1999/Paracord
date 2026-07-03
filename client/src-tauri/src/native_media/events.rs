@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use paracord_codec::crypto::{FrameDecryptor, KEY_SIZE};
 use paracord_transport::control::SessionParticipant;
@@ -9,6 +9,58 @@ use tokio::time::interval;
 use super::session::NativeMediaSession;
 use paracord_transport::control::ControlMessage;
 use paracord_transport::stream::{StreamId, TrackId};
+
+/// Audio levels run 0 (loudest) to [`AUDIO_LEVEL_SILENCE`] (silence); see
+/// `audio_pipeline::compute_audio_level`. A speaker turns "on" only once clearly
+/// loud (level below [`SPEAKING_LEVEL_ON`]) and stays "on" until clearly quiet
+/// (level at/above [`SPEAKING_LEVEL_OFF`]). The gap between the two thresholds is
+/// the hysteresis band that stops a level hovering near one threshold from
+/// flickering the indicator on and off.
+const SPEAKING_LEVEL_ON: u8 = 95;
+const SPEAKING_LEVEL_OFF: u8 = 110;
+/// Once speaking, keep the indicator lit for at least this long after the level
+/// goes quiet, so brief gaps between words do not drop it.
+const SPEAKING_HOLD: Duration = Duration::from_millis(300);
+/// Maximum value of the audio-level scale (silence), used to normalize the
+/// reported speaking intensity into `0.0..=1.0`.
+const AUDIO_LEVEL_SILENCE: u8 = 127;
+
+/// Per-speaker hysteresis state for the speaking detector. Debounces the raw
+/// audio level into a stable speaking/not-speaking signal.
+struct SpeakerHysteresis {
+    speaking: bool,
+    /// Last time the level was above the "on" loudness while speaking; the hold
+    /// timer is measured from here so short quiet gaps do not drop the state.
+    last_loud: Instant,
+}
+
+impl SpeakerHysteresis {
+    fn new(now: Instant) -> Self {
+        Self {
+            speaking: false,
+            last_loud: now,
+        }
+    }
+
+    /// Fold one audio-level sample into the debounced state and return whether
+    /// the speaker is currently considered speaking.
+    fn update(&mut self, level: u8, now: Instant) -> bool {
+        let is_loud = level < SPEAKING_LEVEL_ON;
+        let is_quiet = level >= SPEAKING_LEVEL_OFF;
+        if self.speaking {
+            if is_loud {
+                self.last_loud = now;
+            }
+            if is_quiet && now.duration_since(self.last_loud) >= SPEAKING_HOLD {
+                self.speaking = false;
+            }
+        } else if is_loud {
+            self.speaking = true;
+            self.last_loud = now;
+        }
+        self.speaking
+    }
+}
 
 /// Spawn a task that periodically checks audio levels and emits speaking change events.
 pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: tauri::AppHandle) {
@@ -19,7 +71,7 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: tauri::App
         use tauri::Emitter;
 
         let mut tick = interval(Duration::from_millis(100));
-        let mut prev_speaking: HashMap<u32, bool> = HashMap::new();
+        let mut hysteresis: HashMap<u32, SpeakerHysteresis> = HashMap::new();
 
         loop {
             tokio::select! {
@@ -28,21 +80,28 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: tauri::App
                     let remote = remote_audio.lock().await;
                     let mut speakers: HashMap<String, f64> = HashMap::new();
                     let mut changed = false;
+                    let now = Instant::now();
 
                     for (&ssrc, state) in remote.iter() {
-                        let is_speaking = state.audio_level < 100;
-                        let level = 1.0 - (state.audio_level as f64 / 127.0);
-
-                        let was_speaking = prev_speaking.get(&ssrc).copied().unwrap_or(false);
+                        let entry = hysteresis
+                            .entry(ssrc)
+                            .or_insert_with(|| SpeakerHysteresis::new(now));
+                        let was_speaking = entry.speaking;
+                        let is_speaking = entry.update(state.audio_level, now);
                         if is_speaking != was_speaking {
                             changed = true;
                         }
-                        prev_speaking.insert(ssrc, is_speaking);
 
                         if is_speaking {
+                            let level =
+                                1.0 - (state.audio_level as f64 / AUDIO_LEVEL_SILENCE as f64);
                             speakers.insert(ssrc.to_string(), level);
                         }
                     }
+
+                    // Forget speakers that dropped out so their stale hysteresis
+                    // state does not linger for the life of the session.
+                    hysteresis.retain(|ssrc, _| remote.contains_key(ssrc));
 
                     if changed || !speakers.is_empty() {
                         let _ = app.emit("media_speaking_change", &speakers);
@@ -957,5 +1016,39 @@ mod tests {
         // Published but never subscribed: leaving must not emit an unsubscribe.
         registry.publish_track(video_track(42, "stream-a", "screen"));
         assert!(unsubscribe_messages_for_participant(&registry, 42).is_empty());
+    }
+
+    #[test]
+    fn speaking_hysteresis_needs_loud_to_start_and_quiet_hold_to_stop() {
+        let t0 = Instant::now();
+        let mut h = SpeakerHysteresis::new(t0);
+
+        // A level inside the hysteresis band never starts speaking.
+        assert!(!h.update((SPEAKING_LEVEL_ON + SPEAKING_LEVEL_OFF) / 2, t0));
+        // Clearly loud (below the "on" threshold) starts speaking.
+        assert!(h.update(SPEAKING_LEVEL_ON - 1, t0));
+        // A mid-band level holds the speaking state.
+        assert!(h.update((SPEAKING_LEVEL_ON + SPEAKING_LEVEL_OFF) / 2, t0));
+        // Quiet but still within the hold window keeps it lit.
+        assert!(h.update(AUDIO_LEVEL_SILENCE, t0 + Duration::from_millis(50)));
+        // Quiet past the hold window finally drops it.
+        assert!(!h.update(
+            AUDIO_LEVEL_SILENCE,
+            t0 + SPEAKING_HOLD + Duration::from_millis(1)
+        ));
+    }
+
+    #[test]
+    fn speaking_hysteresis_hold_resets_when_loud_again() {
+        let t0 = Instant::now();
+        let mut h = SpeakerHysteresis::new(t0);
+
+        assert!(h.update(SPEAKING_LEVEL_ON - 1, t0));
+        // Quiet within the hold window, then loud again refreshes `last_loud`.
+        assert!(h.update(AUDIO_LEVEL_SILENCE, t0 + Duration::from_millis(200)));
+        assert!(h.update(SPEAKING_LEVEL_ON - 1, t0 + Duration::from_millis(250)));
+        // The hold window is now measured from the refreshed instant, so a quiet
+        // sample that would have exceeded the original hold still keeps speaking.
+        assert!(h.update(AUDIO_LEVEL_SILENCE, t0 + Duration::from_millis(400)));
     }
 }

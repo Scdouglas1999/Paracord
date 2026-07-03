@@ -217,7 +217,7 @@ export function VoiceControlBar({
                             className={cn(
                                 'flex h-12 items-center gap-2 px-4 transition-all group',
                                 selfStream
-                                    ? 'bg-accent-primary text-white hover:bg-accent-primary/90'
+                                    ? 'bg-accent-primary text-on-accent hover:bg-accent-primary/90'
                                     : 'text-text-primary'
                             )}
                         >
@@ -269,7 +269,7 @@ export function VoiceControlBar({
                                     className={cn(
                                         "flex items-center justify-between rounded-xl px-3 py-2 text-sm font-medium transition-colors",
                                         captureQuality === q.value
-                                            ? "bg-accent-primary text-white"
+                                            ? "bg-accent-primary text-on-accent"
                                             : "text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary"
                                     )}
                                 >
@@ -329,7 +329,7 @@ export function VoiceControlBar({
                 <button
                     aria-label="Disconnect from voice"
                     onClick={() => void leaveChannel()}
-                    className="flex h-12 items-center justify-center gap-2 rounded-full bg-accent-danger px-5 text-white shadow-lg transition-all hover:bg-accent-danger/90 group"
+                    className="flex h-12 items-center justify-center gap-2 rounded-full bg-accent-danger px-5 text-on-accent shadow-lg transition-all hover:bg-accent-danger/90 group"
                 >
                     <PhoneOff size={20} className="group-hover:scale-110 transition-transform" />
                     <span className="font-semibold text-[15px] hidden sm:block">Disconnect</span>

@@ -202,7 +202,7 @@ fn make_track_key(stream_id: &str, track_id: &str) -> String {
 }
 
 #[cfg(feature = "vpx")]
-fn codec_label(codec: VideoCodec) -> &'static str {
+pub(super) fn codec_label(codec: VideoCodec) -> &'static str {
     match codec {
         VideoCodec::Vp9 => "vp9",
         VideoCodec::Av1 => "av1",
@@ -527,14 +527,13 @@ pub fn start_screen_share(
 ) -> Result<(), String> {
     #[cfg(feature = "vpx")]
     {
-        use paracord_codec::video::{EncoderConfig, PixelFormat, VideoCodec, VideoContentHint};
+        use paracord_codec::video::{EncoderConfig, PixelFormat, VideoContentHint};
 
         let codec = match preferred_codec {
-            Some("av1") => VideoCodec::Av1,
-            Some("h264") => VideoCodec::H264,
-            Some("vp9") => VideoCodec::Vp9,
+            Some(label) => super::capabilities::video_codec_from_label(label)
+                .map(transport_codec_to_native)
+                .ok_or_else(|| format!("unsupported preferred video codec: {label}"))?,
             None => choose_best_publish_codec(session, default_screen_codec()),
-            Some(other) => return Err(format!("unsupported preferred video codec: {other}")),
         };
 
         let config = EncoderConfig {

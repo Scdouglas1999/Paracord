@@ -327,7 +327,7 @@ export function FriendsPage() {
                         key={rel.id}
                         className="card-surface flex flex-wrap items-center gap-5 rounded-xl border border-border-subtle/70 bg-bg-mod-subtle/45 px-4 py-4 transition-colors hover:border-border-strong hover:bg-bg-mod-strong/55 sm:flex-nowrap sm:gap-5 sm:px-5 sm:py-5"
                       >
-                        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-accent-primary text-sm font-semibold text-white">
+                        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-accent-primary text-sm font-semibold text-text-on-accent">
                           {rel.user.username.charAt(0).toUpperCase()}
                         </div>
 

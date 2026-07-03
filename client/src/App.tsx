@@ -31,7 +31,8 @@ import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
 import { useAuthStore } from './stores/authStore';
 import { hasAccount } from './lib/account';
-import { getStoredServerUrl } from './lib/config/apiBaseUrl';
+import { getStoredServerUrl, resolveApiBaseUrl, resolveServerRootUrl } from './lib/config/apiBaseUrl';
+import { isTauri } from './lib/tauriEnv';
 
 /**
  * Checks whether we need a server URL configured before proceeding.
@@ -49,8 +50,19 @@ function useServerStatus() {
   useEffect(() => {
     if (status !== 'loading') return;
 
+    // Under Tauri the app is served from a local bundle (tauri://localhost), so
+    // a same-origin `/health` probe would target the desktop shell rather than a
+    // Paracord server. Resolve the API base first; when it is only the relative
+    // fallback there is no server origin to probe, so require an explicit connect.
+    const base = resolveApiBaseUrl();
+    if (isTauri() && !base.startsWith('http')) {
+      setStatus('needed');
+      return;
+    }
+    const healthUrl = resolveServerRootUrl('/health');
+
     let cancelled = false;
-    fetch('/health', { signal: AbortSignal.timeout(5_000) })
+    fetch(healthUrl, { signal: AbortSignal.timeout(5_000) })
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
