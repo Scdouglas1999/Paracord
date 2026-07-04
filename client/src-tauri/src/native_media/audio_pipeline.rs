@@ -27,11 +27,7 @@ fn stream_audio_publisher_for_ssrc(
         if track.track_id.0.as_str() != "screen-audio" {
             continue;
         }
-        if track
-            .layers
-            .iter()
-            .any(|layer| layer.ssrc == ssrc)
-        {
+        if track.layers.iter().any(|layer| layer.ssrc == ssrc) {
             return Some(track.publisher_user_id);
         }
     }

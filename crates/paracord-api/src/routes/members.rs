@@ -173,12 +173,7 @@ pub async fn update_member(
                 if role.position >= actor_top_role_pos {
                     return Err(ApiError::Forbidden);
                 }
-                validate_member_role_assignment(
-                    guild.owner_id,
-                    auth.user_id,
-                    actor_perms,
-                    role,
-                )?;
+                validate_member_role_assignment(guild.owner_id, auth.user_id, actor_perms, role)?;
             }
         }
 

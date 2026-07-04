@@ -112,11 +112,7 @@ fn verify_pubkey_challenge_proof(
         return Err(ApiError::Unauthorized);
     }
 
-    let server_origin = resolve_server_origin(
-        state.config.public_url.as_deref(),
-        headers,
-        peer_ip,
-    );
+    let server_origin = resolve_server_origin(state.config.public_url.as_deref(), headers, peer_ip);
 
     let valid = paracord_core::auth::verify_challenge(
         public_key,
@@ -1706,7 +1702,13 @@ pub async fn refresh(
         })
         .ok_or(ApiError::Unauthorized)?;
     let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, new_raw_refresh) =
-        rotate_auth_session(&state, &refresh_token, Some(&headers), Some(peer_ip.as_str())).await?;
+        rotate_auth_session(
+            &state,
+            &refresh_token,
+            Some(&headers),
+            Some(peer_ip.as_str()),
+        )
+        .await?;
     security::log_security_event(
         &state,
         "auth.refresh",

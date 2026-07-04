@@ -259,10 +259,8 @@ pub async fn create_scheduled_message(
         .transpose()
         .map_err(|_| ApiError::BadRequest("Invalid e2ee payload".into()))?;
 
-    let reference_id = parse_optional_i64(
-        body.reference_message_id.as_deref(),
-        "reference_message_id",
-    )?;
+    let reference_id =
+        parse_optional_i64(body.reference_message_id.as_deref(), "reference_message_id")?;
     if let Some(ref_id) = reference_id {
         let referenced = paracord_db::messages::get_message(&state.db, ref_id)
             .await

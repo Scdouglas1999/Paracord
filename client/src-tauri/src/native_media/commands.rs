@@ -454,10 +454,12 @@ pub async fn voice_set_screen_audio_enabled(
                     registry.unpublish_track(&track.stream_id, &track.track_id);
                 }
                 let _ = session
-                    .send_control_message(&paracord_transport::control::ControlMessage::TrackUnpublish {
-                        stream_id: track.stream_id.clone(),
-                        track_id: track.track_id.clone(),
-                    })
+                    .send_control_message(
+                        &paracord_transport::control::ControlMessage::TrackUnpublish {
+                            stream_id: track.stream_id.clone(),
+                            track_id: track.track_id.clone(),
+                        },
+                    )
                     .await;
             }
         }

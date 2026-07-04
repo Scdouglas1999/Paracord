@@ -18,7 +18,9 @@ pub async fn ensure_actor_can_moderate_target(
         .ok_or(CoreError::NotFound)?;
 
     if target_id == guild.owner_id {
-        return Err(CoreError::BadRequest("Cannot moderate the guild owner".into()));
+        return Err(CoreError::BadRequest(
+            "Cannot moderate the guild owner".into(),
+        ));
     }
 
     if actor_id != guild.owner_id {

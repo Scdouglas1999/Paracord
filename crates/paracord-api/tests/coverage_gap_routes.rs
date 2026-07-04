@@ -310,7 +310,8 @@ async fn upload_policy_uses_active_content_downgraded_type() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn custom_emoji_images_require_membership_and_support_download_tickets() -> anyhow::Result<()> {
+async fn custom_emoji_images_require_membership_and_support_download_tickets() -> anyhow::Result<()>
+{
     let ctx = TestContext::new().await?;
     let guild_id = create_guild(&ctx, "Emoji Image Auth").await?;
     let png_bytes: &[u8] = &[

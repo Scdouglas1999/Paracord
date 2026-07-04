@@ -1155,7 +1155,10 @@ async fn guild_has_federated_read_access(
         else {
             continue;
         };
-        if !channel_map.origin_server.eq_ignore_ascii_case(origin_server) {
+        if !channel_map
+            .origin_server
+            .eq_ignore_ascii_case(origin_server)
+        {
             continue;
         }
         has_origin_channel_map = true;
@@ -1213,7 +1216,8 @@ pub async fn download_federated_file(
                 mapping.local_guild_id,
                 &origin_server,
             )
-            .await? {
+            .await?
+            {
                 authorized.push(mapping);
             }
         }
@@ -1231,7 +1235,10 @@ pub async fn download_federated_file(
         authorized[0]
     };
 
-    let room_id = federated_room_id(&selected_mapping.remote_space_id, &selected_mapping.origin_server);
+    let room_id = federated_room_id(
+        &selected_mapping.remote_space_id,
+        &selected_mapping.origin_server,
+    );
 
     let server = paracord_db::federation::get_federated_server(&state.db, &origin_server)
         .await

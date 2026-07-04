@@ -452,12 +452,11 @@ impl RelayForwarder {
                     .update_from_connection(user_id, conn);
                 let available_kbps = forwarder.bandwidth_estimator.available_kbps(user_id);
 
-                let materially_changed = last_sent_kbps == 0
-                    || {
-                        let delta = available_kbps.abs_diff(last_sent_kbps) as f64;
-                        let baseline = last_sent_kbps.max(1) as f64;
-                        delta / baseline >= BANDWIDTH_FEEDBACK_CHANGE_RATIO
-                    };
+                let materially_changed = last_sent_kbps == 0 || {
+                    let delta = available_kbps.abs_diff(last_sent_kbps) as f64;
+                    let baseline = last_sent_kbps.max(1) as f64;
+                    delta / baseline >= BANDWIDTH_FEEDBACK_CHANGE_RATIO
+                };
                 let stale = last_feedback_at.elapsed() >= BANDWIDTH_FEEDBACK_MAX_INTERVAL;
 
                 if materially_changed || stale {
@@ -906,8 +905,9 @@ impl RelayForwarder {
                 let path_kbps = self.bandwidth_estimator.available_kbps(user_id);
                 let budget_kbps =
                     receiver_budget_kbps(estimated_bitrate_kbps, packet_loss_ppm, path_kbps);
-                let congestion_layer =
-                    track.as_ref().and_then(|t| suggest_layer_for_budget(t, budget_kbps));
+                let congestion_layer = track
+                    .as_ref()
+                    .and_then(|t| suggest_layer_for_budget(t, budget_kbps));
                 let effective_active_layer = match active_layer {
                     Some(layer) if packet_loss_ppm < HIGH_PACKET_LOSS_PPM => Some(layer),
                     _ => active_layer.or(congestion_layer),

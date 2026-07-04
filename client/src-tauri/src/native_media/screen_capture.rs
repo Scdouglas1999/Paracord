@@ -25,9 +25,9 @@ use tauri::Emitter;
 use super::{session::NativeMediaSession, video_pipeline, MediaState};
 use paracord_transport::control::{ControlMessage, TrackKind};
 use paracord_transport::stream::PublishedTrack;
-use paracord_transport::stream::{PublishedLayer, StreamId, TrackId};
 #[cfg(feature = "vpx")]
 use paracord_transport::stream::VideoCodec as TransportVideoCodec;
+use paracord_transport::stream::{PublishedLayer, StreamId, TrackId};
 
 const EVENT_EVENT: &str = "native_screen_share_event";
 const SCREEN_AUDIO_SAMPLE_RATE: u32 = 48_000;

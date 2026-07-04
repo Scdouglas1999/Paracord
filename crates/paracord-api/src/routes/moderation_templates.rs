@@ -234,13 +234,8 @@ pub async fn apply_template(
             action_result["until"] = json!(until.to_rfc3339());
         }
         ACTION_KICK => {
-            paracord_core::admin::kick_member(
-                &state.db,
-                guild_id,
-                auth.user_id,
-                target_user_id,
-            )
-            .await?;
+            paracord_core::admin::kick_member(&state.db, guild_id, auth.user_id, target_user_id)
+                .await?;
             state.member_index.remove_member(guild_id, target_user_id);
             state.event_bus.dispatch(
                 "GUILD_MEMBER_REMOVE",
