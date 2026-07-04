@@ -275,20 +275,23 @@ html[data-theme='high-contrast'] #root {
 }
 
 /* ─── Crystalline Depth System ──────────────────────────────────
-   Depth levels: dock/rail (closest, heaviest blur) → panels → modals/tooltips (lightest blur, sharper borders)
+   Depth levels: dock/rail → panels → modals/tooltips.
+   backdrop-filter is reserved for TRANSIENT overlays (modals, menus,
+   tooltips) only. WebKitGTK (the Linux Tauri webview) renders
+   backdrop-filter on the CPU, so persistent full-height chrome with blur
+   repaints constantly and tanks the app framerate. The rail/sidebar/panels
+   sit beside — not over — moving content, so blur added nothing visually.
    Active panels receive a subtle accent glow on box-shadow keyed to keyboard focus. */
 
 .glass-rail {
   background: var(--bg-nav, rgba(10, 14, 23, 0.65));
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(28px) saturate(150%);
 }
 
 .glass-sidebar {
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
-  backdrop-filter: blur(28px) saturate(160%);
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
 }
 
@@ -300,7 +303,6 @@ html[data-theme='high-contrast'] #root {
   background: var(--bg-panel, var(--bg-secondary));
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-md);
-  backdrop-filter: blur(18px) saturate(130%);
 }
 
 /* Active panel glow — applied to the focused panel */
@@ -324,8 +326,12 @@ html[data-theme='high-contrast'] #root {
   backdrop-filter: blur(12px) saturate(115%);
 }
 
-:root[data-theme='amoled'] :where(.glass-rail, .glass-panel, .glass-modal) {
+:root[data-theme='amoled'] :where(.glass-modal) {
   backdrop-filter: blur(10px) saturate(105%);
+}
+
+:root[data-theme='amoled'] :where(.glass-rail, .glass-panel) {
+  backdrop-filter: none;
 }
 
 :root[data-theme='amoled'] .glass-panel:focus-within {

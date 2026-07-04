@@ -1296,6 +1296,9 @@ function detachRemoteAudioTrack(
 function setSpeakingForIdentity(identity: string, speaking: boolean): void {
   if (!identity) return;
   useVoiceStore.setState((state) => {
+    // This runs on a 100ms analyser tick; bail without publishing a new Set
+    // when membership is unchanged so subscribers don't re-render 10x/sec.
+    if (state.speakingUsers.has(identity) === speaking) return state;
     const next = new Set(state.speakingUsers);
     if (speaking) next.add(identity);
     else next.delete(identity);
