@@ -536,6 +536,17 @@ pub fn start_screen_share(
             None => choose_best_publish_codec(session, default_screen_codec()),
         };
 
+        // Portal/window captures report arbitrary sizes (often odd); I420
+        // requires even dimensions. The frame path crops to even the same way,
+        // so seed the config with the cropped size rather than rejecting.
+        let width = width & !1;
+        let height = height & !1;
+        if width == 0 || height == 0 {
+            return Err(format!(
+                "screen encoder config: capture too small: {width}x{height}"
+            ));
+        }
+
         let config = EncoderConfig {
             width,
             height,

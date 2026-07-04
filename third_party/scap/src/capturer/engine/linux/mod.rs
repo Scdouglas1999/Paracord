@@ -106,15 +106,61 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
 
             let n_datas = unsafe { (*buffer).n_datas };
             if n_datas < 1 {
-                return;
+                break 'outside;
             }
             let frame_size = user_data.format.size();
+            let width = frame_size.width as usize;
+            let height = frame_size.height as usize;
+            if width == 0 || height == 0 {
+                break 'outside;
+            }
+            let bytes_per_pixel = match user_data.format.format() {
+                VideoFormat::RGB => 3usize,
+                _ => 4usize,
+            };
+            let row_bytes = width * bytes_per_pixel;
+            // Use the chunk's valid size/stride, not `maxsize` (the allocation
+            // size): compositors may pad rows or over-allocate, and consumers
+            // expect tightly packed width*height*bpp buffers.
             let frame_data: Vec<u8> = unsafe {
-                std::slice::from_raw_parts(
-                    (*(*buffer).datas).data as *mut u8,
-                    (*(*buffer).datas).maxsize as usize,
-                )
-                .to_vec()
+                let data_ptr = (*(*buffer).datas).data as *const u8;
+                if data_ptr.is_null() {
+                    break 'outside;
+                }
+                let chunk = (*(*buffer).datas).chunk;
+                let maxsize = (*(*buffer).datas).maxsize as usize;
+                let (offset, valid_size, stride) = if chunk.is_null() {
+                    (0usize, maxsize, row_bytes)
+                } else {
+                    let stride = (*chunk).stride.max(0) as usize;
+                    (
+                        (*chunk).offset as usize,
+                        (*chunk).size as usize,
+                        if stride == 0 { row_bytes } else { stride },
+                    )
+                };
+                if offset >= maxsize {
+                    break 'outside;
+                }
+                let available = valid_size.min(maxsize - offset);
+                let src = std::slice::from_raw_parts(data_ptr.add(offset), available);
+                if stride == row_bytes && available >= row_bytes * height {
+                    src[..row_bytes * height].to_vec()
+                } else if stride >= row_bytes && available >= stride * (height - 1) + row_bytes {
+                    // Compact stride-padded rows into a tightly packed buffer.
+                    let mut packed = Vec::with_capacity(row_bytes * height);
+                    for row in 0..height {
+                        let start = row * stride;
+                        packed.extend_from_slice(&src[start..start + row_bytes]);
+                    }
+                    packed
+                } else {
+                    eprintln!(
+                        "scap: dropping undersized pipewire frame ({}x{}, stride {}, {} bytes)",
+                        width, height, stride, available
+                    );
+                    break 'outside;
+                }
             };
 
             if let Err(e) = match user_data.format.format() {

@@ -251,22 +251,24 @@ impl SimulcastEncoder {
             }
         };
 
-        // Step 2: For each layer, downscale and encode.
+        // Step 2: For each layer, downscale to the layer's configured
+        // dimensions and encode.
         let mut results = Vec::new();
-        for (layer, encoder) in &mut self.layers {
-            let (lw, lh) = layer.resolution();
+        for layer_enc in &mut self.layers {
+            let (lw, lh) = (layer_enc.width, layer_enc.height);
 
-            let frame_data = if lw == self.input_width && lh == self.input_height {
-                // No downscaling needed.
-                i420_full.to_vec()
+            let scaled;
+            let frame_data: &[u8] = if lw == self.input_width && lh == self.input_height {
+                i420_full
             } else {
-                downscale_i420(i420_full, self.input_width, self.input_height, lw, lh)
+                scaled = downscale_i420(i420_full, self.input_width, self.input_height, lw, lh);
+                &scaled
             };
 
-            let mut encoded = encoder.encode(pts, &frame_data, force_keyframe)?;
+            let mut encoded = layer_enc.encoder.encode(pts, frame_data, force_keyframe)?;
             // Tag each frame with the layer.
             for frame in &mut encoded {
-                frame.layer = Some(*layer);
+                frame.layer = Some(layer_enc.layer);
             }
             results.extend(encoded);
         }
@@ -277,10 +279,10 @@ impl SimulcastEncoder {
     /// Flush all layer encoders.
     pub fn flush(&mut self) -> Result<Vec<EncodedFrame>, VideoError> {
         let mut results = Vec::new();
-        for (layer, encoder) in &mut self.layers {
-            let mut flushed = encoder.flush()?;
+        for layer_enc in &mut self.layers {
+            let mut flushed = layer_enc.encoder.flush()?;
             for frame in &mut flushed {
-                frame.layer = Some(*layer);
+                frame.layer = Some(layer_enc.layer);
             }
             results.extend(flushed);
         }
@@ -858,6 +860,62 @@ mod tests {
         assert_eq!(encoded[0].height, 180);
         assert_eq!(encoded[1].width, 640);
         assert_eq!(encoded[1].height, 360);
+    }
+
+    #[test]
+    fn simulcast_layers_use_config_dimensions_not_presets() {
+        // Regression: layer configs are aspect-fitted to the real capture
+        // (here 2:1, e.g. an ultrawide/portal window), so they differ from
+        // SimulcastLayer::resolution() presets. Downscaling must target the
+        // config dimensions or the per-layer encoders reject the frame.
+        let input_w = 960u32;
+        let input_h = 480u32;
+        let configs = [
+            (
+                SimulcastLayer::Low,
+                EncoderConfig {
+                    width: 240, // fitted 2:1, not the 320x180 preset
+                    height: 120,
+                    fps: 15,
+                    bitrate_kbps: 300,
+                    pixel_format: PixelFormat::I420,
+                    keyframe_interval: 15,
+                    content_hint: VideoContentHint::Default,
+                },
+            ),
+            (
+                SimulcastLayer::High,
+                EncoderConfig {
+                    width: input_w,
+                    height: input_h,
+                    fps: 30,
+                    bitrate_kbps: 2_000,
+                    pixel_format: PixelFormat::I420,
+                    keyframe_interval: 30,
+                    content_hint: VideoContentHint::Default,
+                },
+            ),
+        ];
+
+        let mut sim = SimulcastEncoder::new_with_configs(
+            input_w,
+            input_h,
+            PixelFormat::I420,
+            &configs,
+            |cfg| Ok(Box::new(NullEncoder::new(cfg)?)),
+        )
+        .unwrap();
+
+        let frame = make_i420_frame(input_w, input_h, 128);
+        let encoded = sim.encode(0, &frame, false).unwrap();
+
+        assert_eq!(encoded.len(), 2);
+        assert_eq!(encoded[0].layer, Some(SimulcastLayer::Low));
+        assert_eq!(encoded[0].width, 240);
+        assert_eq!(encoded[0].height, 120);
+        assert_eq!(encoded[1].layer, Some(SimulcastLayer::High));
+        assert_eq!(encoded[1].width, input_w);
+        assert_eq!(encoded[1].height, input_h);
     }
 
     #[test]
