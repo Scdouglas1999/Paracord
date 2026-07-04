@@ -354,6 +354,58 @@ class ConnectionManager {
     return candidates.some((candidate) => this.sameServerUrl(url, candidate));
   }
 
+  private isLoopbackServerUrl(url: string): boolean {
+    try {
+      const { hostname } = new URL(url);
+      const normalized = hostname.toLowerCase();
+      return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+    } catch {
+      return false;
+    }
+  }
+
+  private promoteLocalAuthSession(token: string, refreshToken?: string | null): void {
+    setAccessToken(token);
+    useAuthStore.setState({ token });
+    if (refreshToken) {
+      setRefreshToken(refreshToken);
+    }
+  }
+
+  private async refreshServerSession(
+    serverId: string,
+    client: AxiosInstance,
+    refreshToken: string | null,
+    promoteToLocalAuth: boolean,
+  ): Promise<string | null> {
+    if (!refreshToken) return null;
+
+    try {
+      const { data } = await client.post<{ token?: string; refresh_token?: string }>(
+        '/auth/refresh',
+        { refresh_token: refreshToken },
+        { timeout: 10_000 },
+      );
+      const nextToken = data.token;
+      if (!nextToken) return null;
+      useServerListStore.getState().updateToken(serverId, nextToken);
+      if (data.refresh_token) {
+        useServerListStore.getState().updateRefreshToken(serverId, data.refresh_token);
+      }
+      if (promoteToLocalAuth) {
+        this.promoteLocalAuthSession(nextToken, data.refresh_token);
+      }
+      logVoiceDiagnostic('[gateway] refreshed saved server session', { server: serverId });
+      return nextToken;
+    } catch (err) {
+      logVoiceDiagnostic('[gateway] saved server refresh failed', {
+        server: serverId,
+        error: String(err),
+      });
+      return null;
+    }
+  }
+
   private async verifyLocalSessionForServer(
     serverId: string,
     apiBaseUrl: string,
@@ -370,11 +422,7 @@ class ConnectionManager {
         if (nextRefreshToken) {
           verifiedRefreshToken = nextRefreshToken;
         }
-        setAccessToken(nextToken);
-        useAuthStore.setState({ token: nextToken });
-        if (nextRefreshToken) {
-          setRefreshToken(nextRefreshToken);
-        }
+        this.promoteLocalAuthSession(nextToken, nextRefreshToken);
       },
       undefined,
       (reachable) => useServerListStore.getState().setApiReachable(serverId, reachable),
@@ -390,6 +438,7 @@ class ConnectionManager {
       if (data?.id) {
         useServerListStore.getState().updateServerInfo(serverId, { userId: data.id });
       }
+      this.promoteLocalAuthSession(verifiedToken, verifiedRefreshToken);
       logVoiceDiagnostic('[gateway] verified local auth token for saved server', { server: serverId });
       return verifiedToken;
     } catch (err) {
@@ -547,6 +596,21 @@ class ConnectionManager {
         isLocalServerEntry = true;
         localSessionToken = verifiedToken;
         serverToken = verifiedToken;
+      }
+    }
+
+    if (!serverToken && !localSessionToken) {
+      const refreshedToken = await this.refreshServerSession(
+        serverId,
+        client,
+        useServerListStore.getState().getServer(serverId)?.refreshToken ?? null,
+        isLocalServerEntry || this.isLoopbackServerUrl(effectiveUrl),
+      );
+      if (refreshedToken) {
+        if (isLocalServerEntry || this.isLoopbackServerUrl(effectiveUrl)) {
+          localSessionToken = refreshedToken;
+        }
+        serverToken = refreshedToken;
       }
     }
 
@@ -1294,7 +1358,15 @@ class ConnectionManager {
       this.syncUiConnectionStatus();
       return;
     }
-    const servers = useServerListStore.getState().servers;
+    const serverState = useServerListStore.getState();
+    if (!serverState.hydrated || !serverState.tokensHydrated) {
+      logVoiceDiagnostic('[gateway] connectAll: server store not hydrated, skipping', {
+        hydrated: serverState.hydrated,
+        tokensHydrated: serverState.tokensHydrated,
+      });
+      return;
+    }
+    const servers = serverState.servers;
     const localToken = useAuthStore.getState().token;
     logVoiceDiagnostic('[gateway] connectAll', { serverCount: servers.length, useRealtimeV2: this.useRealtimeV2, hasAuthToken: !!localToken, serverIds: servers.map(s => s.id) });
 

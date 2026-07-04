@@ -212,8 +212,8 @@ export function TemplateGalleryPage() {
                 {templates.length === 0 ? (
                   <EmptyState
                     icon={<FileText size={20} />}
-                    title="No templates yet."
-                    description="Save one of your servers as a template and it'll show up here, ready to spin up again in seconds."
+                    title="You haven't saved a template yet"
+                    description="Turn one of your servers into a template and it'll show up here, ready to spin up again — channels, roles, and all — in seconds."
                   />
                 ) : visibleTemplates.length === 0 ? (
                   <EmptyState

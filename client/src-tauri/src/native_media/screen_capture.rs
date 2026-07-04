@@ -243,15 +243,21 @@ pub async fn start_capture(
         )?;
         let [capture_width, capture_height] =
             scap::capturer::get_output_frame_size(&capture_options);
-        video_pipeline::start_screen_share(
-            session,
-            capture_width,
-            capture_height,
-            request.max_frame_rate.max(1),
-            request.max_bitrate_bps,
-            request.content_hint.as_deref(),
-            request.preferred_codec.as_deref(),
-        )?;
+        // Linux's portal-backed PipeWire capturer may not know the selected
+        // stream dimensions until the first frame arrives. Do not initialize or
+        // publish a 0x0 encoder configuration; the capture worker will seed the
+        // encoder from the first real frame before signalling startup success.
+        if capture_width > 0 && capture_height > 0 {
+            video_pipeline::start_screen_share(
+                session,
+                capture_width,
+                capture_height,
+                request.max_frame_rate.max(1),
+                request.max_bitrate_bps,
+                request.content_hint.as_deref(),
+                request.preferred_codec.as_deref(),
+            )?;
+        }
         if request.capture_audio && integrated_audio_capture() {
             session.screen_audio_enabled.store(true, Ordering::SeqCst);
         } else {
@@ -270,6 +276,9 @@ pub async fn start_capture(
     let max_frame_rate = request.max_frame_rate;
     let max_width = request.max_width;
     let max_height = request.max_height;
+    let max_bitrate_bps = request.max_bitrate_bps;
+    let content_hint = request.content_hint.clone();
+    let preferred_codec = request.preferred_codec.clone();
     let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
 
     let worker = thread::spawn(move || {
@@ -282,6 +291,9 @@ pub async fn start_capture(
             max_frame_rate,
             max_width,
             max_height,
+            max_bitrate_bps,
+            content_hint,
+            preferred_codec,
             request.capture_audio,
             screen_audio_tx,
             screen_audio_enabled,
@@ -483,6 +495,9 @@ fn run_capture_loop(
     max_frame_rate: u32,
     max_width: Option<u32>,
     max_height: Option<u32>,
+    max_bitrate_bps: Option<u32>,
+    content_hint: Option<String>,
+    preferred_codec: Option<String>,
     capture_audio: bool,
     screen_audio_tx: tokio::sync::mpsc::Sender<Vec<f32>>,
     screen_audio_enabled: Arc<AtomicBool>,
@@ -531,6 +546,17 @@ fn run_capture_loop(
             let encode_result = encoder_runtime.block_on(async {
                 let mut guard = encoder_session.lock().await;
                 if let Some(session) = guard.as_mut() {
+                    if session.screen_encoder_config.is_none() {
+                        video_pipeline::start_screen_share(
+                            session,
+                            frame.width,
+                            frame.height,
+                            max_frame_rate.max(1),
+                            max_bitrate_bps,
+                            content_hint.as_deref(),
+                            preferred_codec.as_deref(),
+                        )?;
+                    }
                     video_pipeline::encode_and_send_video_frame(
                         session,
                         frame.width,

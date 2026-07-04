@@ -141,6 +141,8 @@ describe('DMPage group-member states', () => {
     await user.click(screen.getByRole('button', { name: 'Show Members' }));
     await user.click(screen.getByRole('button', { name: 'Add' }));
 
-    expect(screen.getByText('No eligible friends to add.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Everyone on your friends list is already in this conversation.'),
+    ).toBeInTheDocument();
   });
 });

@@ -22,6 +22,7 @@ const STATUS_COLORS: Record<string, string> = {
   online: 'bg-status-online',
   idle: 'bg-status-idle',
   dnd: 'bg-status-dnd',
+  streaming: 'bg-status-streaming',
   offline: 'bg-status-offline',
 };
 

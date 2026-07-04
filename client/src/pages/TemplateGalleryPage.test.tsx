@@ -177,7 +177,7 @@ describe('TemplateGalleryPage', () => {
       });
       expect(templateApi.remove).toHaveBeenCalledWith('tpl-1');
     });
-    expect(await screen.findByText('No templates yet.')).toBeInTheDocument();
+    expect(await screen.findByText("You haven't saved a template yet")).toBeInTheDocument();
   });
 
   it('keeps selection valid after deleting a selected template', async () => {

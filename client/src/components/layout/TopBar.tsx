@@ -481,7 +481,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
         {/* Connection latency indicator */}
         {connectionStatus === 'connected' && (
           <Tooltip content={`Latency: ${connectionLatency}ms`} side="bottom">
-            <div className="ml-1 hidden items-center gap-1.5 rounded-sm border border-border-subtle px-2 py-1 md:flex">
+            <div className="ml-1 hidden items-center gap-1.5 rounded-sm bg-bg-mod-subtle px-2 py-1 md:flex">
               <Wifi size={12} className={cn(
                 connectionLatency < 100
                   ? 'text-accent-success'

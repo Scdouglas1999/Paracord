@@ -107,8 +107,12 @@ pub fn create_encoder(
 /// and encodes all layers in parallel (sequentially for now; parallel encoding
 /// can be added later with `rayon` or `tokio::task::spawn_blocking`).
 pub struct SimulcastEncoder {
-    /// (layer, encoder) pairs ordered from lowest to highest quality.
-    layers: Vec<(SimulcastLayer, Box<dyn VideoEncoder>)>,
+    /// Per-layer encoders ordered from lowest to highest quality, each with
+    /// the exact dimensions its encoder was configured for. Downscaling must
+    /// target these — not `SimulcastLayer::resolution()` presets — because
+    /// layer configs are aspect-fitted to the actual input and only match the
+    /// presets when the input happens to be 16:9.
+    layers: Vec<LayerEncoder>,
     /// Pixel format of the input frames.
     input_format: PixelFormat,
     /// Width of the input frames (must match the highest layer or be provided externally).
@@ -121,6 +125,13 @@ pub struct SimulcastEncoder {
     backend_name: &'static str,
     /// Whether the underlying encoder backend is hardware accelerated.
     hardware_accelerated: bool,
+}
+
+struct LayerEncoder {
+    layer: SimulcastLayer,
+    width: u32,
+    height: u32,
+    encoder: Box<dyn VideoEncoder>,
 }
 
 impl SimulcastEncoder {
@@ -144,12 +155,18 @@ impl SimulcastEncoder {
                 ..config.clone()
             };
             config.validate()?;
+            let (width, height) = (config.width, config.height);
             let enc = factory(config)?;
             if layer_encoders.is_empty() {
                 backend_name = enc.backend_name();
                 hardware_accelerated = enc.is_hardware_accelerated();
             }
-            layer_encoders.push((*layer, enc));
+            layer_encoders.push(LayerEncoder {
+                layer: *layer,
+                width,
+                height,
+                encoder: enc,
+            });
         }
 
         let i420_size = PixelFormat::I420.frame_size(input_width, input_height);

@@ -179,7 +179,7 @@ export function DMPage() {
                   </button>
                 ))}
                 {eligibleFriends.length === 0 && (
-                  <div className="px-2 py-3 text-meta leading-relaxed text-text-muted">No eligible friends to add.</div>
+                  <div className="px-2 py-3 text-meta leading-relaxed text-text-muted">Everyone on your friends list is already in this conversation.</div>
                 )}
               </div>
             )}

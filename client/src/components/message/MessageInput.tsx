@@ -753,10 +753,12 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
       <div
         className={cn(
-          'group relative flex min-h-[52px] items-end gap-1 rounded-md border px-2 py-1.5 transition-colors duration-[140ms] ease-[var(--ease-out)]',
+          // Constant 1px border so the drop state never reflows the composer (§7 Input,
+          // no outer glow); focus-within paints the emerald edge + inset focus ring.
+          'group relative flex min-h-[52px] items-end gap-1 rounded-md border px-2 py-1.5 transition-[background-color,border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]',
           isDragOver
-            ? 'border-2 border-dashed border-accent-primary bg-accent-tint'
-            : 'border-border-subtle bg-bg-tertiary shadow-sm focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]',
+            ? 'border-accent-primary bg-accent-tint'
+            : 'border-border-subtle bg-bg-tertiary shadow-sm',
         )}
       >
         {nearLimit && (

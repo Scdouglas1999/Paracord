@@ -19,6 +19,7 @@ const mockServerListState = vi.hoisted(() => ({
   getServerByUrl: vi.fn(),
   addServer: vi.fn(),
   updateToken: vi.fn(),
+  updateRefreshToken: vi.fn(),
 }));
 
 const mockApiBaseUrl = vi.hoisted(() => ({

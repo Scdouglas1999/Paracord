@@ -490,7 +490,7 @@ async fn update_trusted_server_hosts(app: tauri::AppHandle, server_urls: Vec<Str
 /// (see [`TofuPinningVerifier`]). Unlike a fully permissive client, self-signed
 /// certificates are accepted only for loopback or on first contact with a host;
 /// a host with an established pin must present the recorded certificate.
-fn tls_pinning_client_with_timeout(timeout: Duration) -> Result<reqwest::Client, String> {
+fn tls_pinning_client_builder() -> Result<reqwest::ClientBuilder, String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let tls_config = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
@@ -498,8 +498,11 @@ fn tls_pinning_client_with_timeout(timeout: Duration) -> Result<reqwest::Client,
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(TofuPinningVerifier { provider }))
         .with_no_client_auth();
-    reqwest::Client::builder()
-        .use_preconfigured_tls(tls_config)
+    Ok(reqwest::Client::builder().use_preconfigured_tls(tls_config))
+}
+
+fn tls_pinning_client_with_timeout(timeout: Duration) -> Result<reqwest::Client, String> {
+    tls_pinning_client_builder()?
         .timeout(timeout)
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))
@@ -507,6 +510,16 @@ fn tls_pinning_client_with_timeout(timeout: Duration) -> Result<reqwest::Client,
 
 fn tls_pinning_client() -> Result<reqwest::Client, String> {
     tls_pinning_client_with_timeout(Duration::from_secs(15))
+}
+
+fn tls_pinning_stream_client() -> Result<reqwest::Client, String> {
+    // SSE is intentionally a long-lived request. Keep the same TOFU certificate
+    // pinning as native fetches, but do not apply a total request timeout that
+    // would terminate a healthy idle stream at the timeout boundary.
+    tls_pinning_client_builder()?
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))
 }
 
 fn map_reqwest_error(e: reqwest::Error) -> String {
@@ -643,7 +656,7 @@ async fn start_native_sse_stream(
         }
     }
 
-    let client = tls_pinning_client()?;
+    let client = tls_pinning_stream_client()?;
     let task_stream_id = stream_id.clone();
     let task = tokio::spawn(async move {
         let emit_error = |message: String, app: &tauri::AppHandle, stream_id: &str| {
@@ -792,7 +805,27 @@ fn get_default_connect_target() -> String {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn configure_linux_gstreamer_audio_backend() {
+    // WebKitGTK uses GStreamer for media playback. On PipeWire desktops, letting
+    // autoaudiosink probe every legacy backend produces noisy JACK/OSS failures
+    // before it reaches a usable sink. Prefer the native PipeWire sink, keep
+    // PulseAudio as a practical secondary path, and demote the unavailable
+    // legacy sinks that otherwise spam startup/voice logs.
+    const PARACORD_GST_RANKS: &str =
+        "pipewiresink:PRIMARY,pulsesink:SECONDARY,jackaudiosink:NONE,osssink:NONE";
+
+    if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
+        std::env::set_var("GST_PLUGIN_FEATURE_RANK", PARACORD_GST_RANKS);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_linux_gstreamer_audio_backend() {}
+
 pub fn run() {
+    configure_linux_gstreamer_audio_backend();
+
     let builder = tauri::Builder::default()
         // Register single-instance FIRST so a second launch (how Linux/Windows
         // deliver a paracord:// link to a running app) focuses the existing

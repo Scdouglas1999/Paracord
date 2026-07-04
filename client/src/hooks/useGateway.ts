@@ -9,13 +9,18 @@ export function useGateway() {
   const serverSyncKey = useServerListStore((s) =>
     s.servers.map((server) => `${server.id}:${server.url}:${server.token ?? ''}`).join('|')
   );
+  const diagnosticServerSyncKey = useServerListStore((s) =>
+    s.servers
+      .map((server) => `${server.id}:${server.url}:${server.token ? '[token-present]' : '[no-token]'}`)
+      .join('|')
+  );
   const storesHydrated = useServerListStore((s) => s.hydrated && s.tokensHydrated);
 
   useEffect(() => {
     logVoiceDiagnostic('[gateway] useGateway effect fired', {
       storesHydrated,
       hasToken: !!token,
-      serverSyncKey: serverSyncKey.substring(0, 80),
+      serverSyncKey: diagnosticServerSyncKey.substring(0, 160),
       hydrated: useServerListStore.getState().hydrated,
       tokensHydrated: useServerListStore.getState().tokensHydrated,
     });
@@ -37,7 +42,7 @@ export function useGateway() {
     void gateway.syncServers().catch((err) => {
       logVoiceDiagnostic('[gateway] useGateway: syncServers error', { error: String(err) });
     });
-  }, [token, storesHydrated, serverSyncKey]);
+  }, [token, storesHydrated, serverSyncKey, diagnosticServerSyncKey]);
 
   useEffect(
     () => () => {

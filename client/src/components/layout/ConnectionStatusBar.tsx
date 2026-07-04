@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { Wifi, WifiOff, RefreshCw } from 'lucide-react';
 import { useUIStore } from '../../stores/uiStore';
 import { useVoiceStore } from '../../stores/voiceStore';
@@ -35,14 +35,17 @@ export function ConnectionStatusBar() {
   }, [voiceConnected, connectionStatus]);
 
   const visible = connectionStatus === 'reconnecting' || connectionStatus === 'disconnected' || showConnected;
+  const reduceMotion = useReducedMotion();
 
   return (
     <AnimatePresence>
       {visible && (
         <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
+          // Slide in from above (design-spec §5, 180ms ease-out); reduced-motion
+          // keeps the height/opacity reveal but drops the transform (§8).
+          initial={reduceMotion ? { height: 0, opacity: 0 } : { height: 0, opacity: 0, y: -8 }}
+          animate={reduceMotion ? { height: 'auto', opacity: 1 } : { height: 'auto', opacity: 1, y: 0 }}
+          exit={reduceMotion ? { height: 0, opacity: 0 } : { height: 0, opacity: 0, y: -8 }}
           transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
           className="overflow-hidden"
         >
