@@ -160,6 +160,6 @@ describe('OverviewSection ownership transfer', () => {
 
   it('disables the transfer button while a transfer is in flight', () => {
     renderOverview({ transferringOwnership: true });
-    expect(screen.getByRole('button', { name: 'Transferring...' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Transfer' })).toBeDisabled();
   });
 });

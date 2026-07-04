@@ -11,14 +11,14 @@ interface EphemeralMessageProps {
  */
 export function EphemeralMessage({ children }: EphemeralMessageProps) {
   return (
-    <div className="rounded-lg border border-border-subtle/50 bg-bg-mod-subtle/40 px-2 py-1.5">
+    <div className="rounded-sm border-l-2 border-border-strong bg-bg-mod-subtle px-3 py-1.5">
       <div className="mb-1 flex items-center gap-1.5">
-        <Eye size={12} className="shrink-0 text-text-muted" />
-        <span className="text-[11px] font-medium italic text-text-muted">
-          Only visible to you
+        <Eye size={13} className="shrink-0 text-text-muted" />
+        <span className="text-meta font-medium text-text-muted">
+          Only you can see this
         </span>
       </div>
-      <div className="italic">{children}</div>
+      <div>{children}</div>
     </div>
   );
 }

@@ -19,6 +19,8 @@ import { useUnreadCounts } from '../../hooks/useUnreadCounts';
 import { VoiceParticipants } from './VoiceParticipants';
 import { UserPanel } from './UserPanel';
 import { Tooltip } from '../ui/Tooltip';
+import { Button } from '../ui/Button';
+import { EmptyState } from '../ui/Feedback';
 import { cn } from '../../lib/utils';
 import { toast } from '../../stores/toastStore';
 import { writeClipboardText } from '../../lib/clipboard';
@@ -248,28 +250,28 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
 
   return (
     <div className="flex h-full flex-col bg-transparent text-text-secondary">
-      <div className="panel-divider shrink-0 border-b border-white/8 px-5 pb-5 pt-6">
+      <div className="panel-divider shrink-0 border-b px-4 pb-4 pt-5">
         <div className="flex items-start justify-between gap-3">
           <button
-            className="min-w-0 text-left"
+            className="min-w-0 rounded-sm text-left outline-none focus-visible:shadow-[var(--focus-ring)]"
             onClick={() => setShowGuildMenu(!showGuildMenu)}
           >
-            <div className="architect-eyebrow">
+            <div className="text-section uppercase text-text-muted">
               {(() => {
                 if (!currentGuild.server_url) return 'Current Server';
                 try { return new URL(currentGuild.server_url).host; } catch { return 'Current Server'; }
               })()}
             </div>
-            <div className="mt-1.5 truncate text-[1.42rem] font-bold leading-[1.15] tracking-tight text-text-primary">
+            <div className="mt-1 truncate text-heading text-text-primary">
               {currentGuild.name}
             </div>
           </button>
           <button
-            className="architect-top-icon mt-0.5"
+            className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
             onClick={() => setShowGuildMenu(!showGuildMenu)}
             aria-label="Open server menu"
           >
-            <ChevronDown size={16} className="text-text-muted" />
+            <ChevronDown size={16} />
           </button>
         </div>
       </div>
@@ -364,47 +366,52 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
       )}
 
       <div
-        className="flex-1 overflow-y-auto px-3 pt-4 scrollbar-thin"
+        className="flex-1 overflow-y-auto px-2 pt-3 scrollbar-thin"
         role="tree"
         aria-label={`${currentGuild.name} channels`}
         onKeyDown={handleTreeContainerKeyDown}
       >
-        <button
-          role="treeitem"
-          aria-level={1}
-          onClick={() => navigate(`/app/guilds/${currentGuild.id}`)}
-          onKeyDown={(e) => {
-            if (handleTreeNavigation(e)) return;
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              navigate(`/app/guilds/${currentGuild.id}`);
-            }
-          }}
-          className={cn(
-            'architect-nav-item group relative mb-4 mt-1 cursor-pointer px-3.5 py-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary rounded-xl',
-            location.pathname === `/app/guilds/${currentGuild.id}`
-              ? 'architect-nav-item-active text-black'
-              : 'text-text-secondary hover:text-text-primary'
-          )}
-        >
-          <Home size={16} className={cn('mr-1.5', location.pathname === `/app/guilds/${currentGuild.id}` ? 'text-black/70' : 'text-text-muted group-hover:text-text-secondary')} />
-          <span className={cn(
-            'truncate text-[15px]',
-            location.pathname === `/app/guilds/${currentGuild.id}` ? 'text-black font-bold' : 'font-semibold text-text-secondary group-hover:text-text-primary'
-          )}>
-            Server Hub
-          </span>
-        </button>
+        {(() => {
+          const isHubActive = location.pathname === `/app/guilds/${currentGuild.id}`;
+          return (
+            <button
+              role="treeitem"
+              aria-level={1}
+              onClick={() => navigate(`/app/guilds/${currentGuild.id}`)}
+              onKeyDown={(e) => {
+                if (handleTreeNavigation(e)) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  navigate(`/app/guilds/${currentGuild.id}`);
+                }
+              }}
+              className={cn(
+                'group relative mb-3 mt-0.5 flex h-[34px] w-full cursor-pointer items-center gap-2 rounded-sm px-2 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                isHubActive
+                  ? 'bg-accent-tint text-text-primary'
+                  : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
+              )}
+            >
+              {isHubActive && (
+                <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-secondary" />
+              )}
+              <Home size={18} className={isHubActive ? 'text-accent-primary' : 'text-channel-icon'} />
+              <span className={cn('truncate text-label', isHubActive ? 'font-semibold' : 'font-medium')}>
+                Server Hub
+              </span>
+            </button>
+          );
+        })()}
 
         {categoryGroups.map((cat) => (
-          <div key={cat.id} className="mb-4">
+          <div key={cat.id} className="mb-3">
             {cat.id !== '__uncategorized__' && (
-              <div className="group/cat flex w-full items-center gap-1 px-2 py-2 mt-3.5">
+              <div className="group/cat flex w-full items-center gap-1 px-2 pb-0.5 pt-4">
                 {(() => {
                   const isExpanded = !collapsedCategories.has(cat.id);
                   return (
                 <button
-                  className="flex min-w-0 flex-1 items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.07em] text-text-muted transition-colors hover:text-text-secondary"
+                  className="flex min-w-0 flex-1 items-center gap-1 rounded-sm text-section uppercase text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
                   onClick={() => toggleCategory(cat.id)}
                   role="treeitem"
                   aria-level={1}
@@ -442,7 +449,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
                 {cat.isReal && canManageChannels && (
                   <Tooltip content="Create Channel" side="top">
                     <button
-                      className="rounded p-0.5 text-text-muted opacity-0 transition-all group-hover/cat:opacity-100 hover:text-text-primary"
+                      className="flex h-5 w-5 items-center justify-center rounded-sm text-text-muted opacity-0 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover/cat:opacity-100"
                       aria-label={`Create channel in ${cat.name}`}
                       title={`Create channel in ${cat.name}`}
                       onClick={() => {
@@ -458,13 +465,13 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
               </div>
             )}
             {createInCategoryId === cat.id && (
-              <div className="mx-2 mb-2 rounded-lg border border-border-subtle bg-bg-mod-subtle p-2.5 space-y-2">
+              <div className="mx-2 mb-2 mt-1 space-y-2 rounded-md border border-border-subtle bg-bg-mod-subtle p-2.5">
                 <label htmlFor={`channel-name-${cat.id}`} className="sr-only">
                   Channel name
                 </label>
                 <input
                   id={`channel-name-${cat.id}`}
-                  className="w-full rounded-md border border-border-subtle bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-border-strong disabled:opacity-50"
+                  className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-1.5 text-body text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)] disabled:opacity-50"
                   placeholder="Channel name"
                   value={inlineName}
                   onChange={(e) => setInlineName(e.target.value)}
@@ -478,7 +485,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
                   </label>
                   <select
                     id={`channel-type-${cat.id}`}
-                    className="rounded-md border border-border-subtle bg-bg-primary px-2 py-1 text-xs text-text-secondary disabled:opacity-50"
+                    className="rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-meta text-text-secondary outline-none focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)] disabled:opacity-50"
                     value={inlineType}
                     onChange={(e) => setInlineType(e.target.value as 'text' | 'voice')}
                     disabled={isInlineCreating}
@@ -488,7 +495,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
                   </select>
                   <button
                     type="button"
-                    className="flex items-center gap-1.5 rounded-md bg-accent-primary px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-accent-primary/80 disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="flex items-center gap-1.5 rounded-sm bg-accent-primary px-3 py-1.5 text-meta font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                     onClick={() => void handleInlineCreate(cat.id)}
                     disabled={isInlineCreating}
                   >
@@ -497,7 +504,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
                   </button>
                   <button
                     type="button"
-                    className="rounded-md px-2 py-1 text-xs text-text-muted hover:text-text-primary disabled:opacity-50"
+                    className="rounded-sm px-2 py-1.5 text-meta text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-primary focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
                     onClick={() => setCreateInCategoryId(null)}
                     disabled={isInlineCreating}
                   >
@@ -549,32 +556,35 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
                           setChannelContextMenu({ x: e.clientX, y: e.clientY, channelId: ch.id });
                         }}
                         className={cn(
-                          'architect-nav-item group relative mb-1.5 cursor-pointer px-3.5 py-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary rounded-xl',
+                          'group relative mb-0.5 flex h-[34px] cursor-pointer items-center gap-2 rounded-sm px-2 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                           isSelected
-                            ? 'architect-nav-item-active text-black'
-                            : 'text-text-secondary hover:text-text-primary'
+                            ? 'bg-accent-tint text-text-primary'
+                            : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
                         )}
                       >
+                        {isSelected && (
+                          <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-secondary" />
+                        )}
                         {hasUnread && (
-                          <div className="absolute -left-1 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full bg-text-primary" />
+                          <span className="absolute -left-0.5 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full bg-accent-primary" />
                         )}
                         {isVoice ? (
-                          <Volume2 size={16} className={cn('mr-1.5', isSelected ? 'text-black/70' : 'text-text-muted group-hover:text-text-secondary')} />
+                          <Volume2 size={18} className={cn('shrink-0', isSelected ? 'text-accent-primary' : 'text-channel-icon')} />
                         ) : isForum ? (
-                          <MessageSquare size={16} className={cn('mr-1.5', isSelected ? 'text-black/70' : 'text-text-muted group-hover:text-text-secondary')} />
+                          <MessageSquare size={18} className={cn('shrink-0', isSelected ? 'text-accent-primary' : 'text-channel-icon')} />
                         ) : isAnnouncement ? (
-                          <Bell size={16} className={cn('mr-1.5', isSelected ? 'text-black/70' : 'text-text-muted group-hover:text-text-secondary')} />
+                          <Bell size={18} className={cn('shrink-0', isSelected ? 'text-accent-primary' : 'text-channel-icon')} />
                         ) : (
-                          <Hash size={16} className={cn('mr-1.5', isSelected ? 'text-black/70' : 'text-text-muted group-hover:text-text-secondary')} />
+                          <Hash size={18} className={cn('shrink-0', isSelected ? 'text-accent-primary' : 'text-channel-icon')} />
                         )}
                         <span className={cn(
-                          'truncate text-[15px]',
-                          isSelected ? 'text-black' : hasUnread ? 'font-bold text-text-primary' : 'font-semibold text-text-secondary group-hover:text-text-primary'
+                          'truncate text-label',
+                          isSelected ? 'font-semibold' : hasUnread ? 'font-semibold text-text-primary' : 'font-medium'
                         )}>
                           {ch.name || 'unknown'}
                         </span>
                         {mentionCount > 0 && (
-                          <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-danger px-1 text-[10px] font-bold text-white">
+                          <span className="ml-auto flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-accent-primary px-1 text-[11px] font-semibold tabular-nums text-text-on-accent">
                             {mentionCount}
                           </span>
                         )}
@@ -585,8 +595,8 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
                                 role="button"
                                 tabIndex={0}
                                 className={cn(
-                                  'inline-flex rounded p-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
-                                  isSelected ? 'text-black/70 hover:bg-black/10 hover:text-black' : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-primary'
+                                  'inline-flex rounded-sm p-1 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)]',
+                                  isSelected ? 'text-accent-primary hover:bg-accent-tint-strong' : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-primary'
                                 )}
                                 aria-label={`Edit ${ch.name || 'channel'}`}
                                 title={`Edit ${ch.name || 'channel'}`}
@@ -625,14 +635,27 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
         ))}
 
         {channels.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-8 px-4">
-            <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle">
-              <Hash size={24} className="text-text-muted" />
-            </div>
-            <p className="text-xs text-center text-text-muted">
-              No channels yet.
-            </p>
-          </div>
+          <EmptyState
+            className="px-2"
+            icon={<Hash size={20} />}
+            title="No channels yet"
+            description={
+              canManageChannels
+                ? 'Create your first channel to give this server a place to talk.'
+                : 'An admin hasn’t set up any channels here yet — check back soon.'
+            }
+            action={
+              canManageChannels ? (
+                <Button
+                  size="sm"
+                  onClick={() => useUIStore.getState().openGuildSettings(guildId, 'channels')}
+                >
+                  <Plus size={16} className="mr-1.5" />
+                  Create a channel
+                </Button>
+              ) : undefined
+            }
+          />
         )}
       </div>
 

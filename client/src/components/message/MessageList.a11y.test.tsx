@@ -249,7 +249,7 @@ describe('MessageList keyboard accessibility and error state', () => {
 
     const banner = await screen.findByRole('alert');
     expect(banner).toHaveTextContent('Failed to load messages.');
-    expect(screen.queryByText('Welcome to the channel!')).toBeNull();
+    expect(screen.queryByText('#general is ready when you are')).toBeNull();
 
     const retry = screen.getByRole('button', { name: /retry/i });
     fireEvent.click(retry);
@@ -267,7 +267,7 @@ describe('MessageList keyboard accessibility and error state', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Welcome to the channel!')).toBeInTheDocument();
+    expect(await screen.findByText('#general is ready when you are')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

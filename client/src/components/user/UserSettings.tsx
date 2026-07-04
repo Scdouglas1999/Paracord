@@ -1,6 +1,26 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, ArrowLeft } from 'lucide-react';
+import {
+  X,
+  ArrowLeft,
+  ChevronRight,
+  User,
+  Palette,
+  Mic,
+  Bell,
+  Eye,
+  Keyboard,
+  Fingerprint,
+  Server,
+  Info,
+  Code2,
+  LogOut,
+  CheckCircle2,
+  ShieldAlert,
+  Download,
+  RefreshCw,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { useUIStore } from '../../stores/uiStore';
@@ -19,6 +39,8 @@ import { confirm } from '../../stores/confirmStore';
 import { toast } from '../../stores/toastStore';
 import { ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
+import { Input, Textarea, Select } from '../ui/Input';
+import { Skeleton } from '../ui/Skeleton';
 import {
   isEnabled as isNotificationsEnabled,
   setEnabled as setNotificationsEnabled,
@@ -52,17 +74,33 @@ type SettingsSection =
   | 'about'
   | 'server';
 
-const NAV_ITEMS: { id: SettingsSection; label: string; adminOnly?: boolean }[] = [
-  { id: 'account', label: 'My Account' },
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'voice', label: 'Voice & Video' },
-  { id: 'notifications', label: 'Notifications' },
-  { id: 'activity', label: 'Activity Privacy' },
-  { id: 'keybinds', label: 'Keybinds' },
-  { id: 'identity', label: 'Identity' },
-  { id: 'server', label: 'Server', adminOnly: true },
-  { id: 'about', label: 'About' },
+type NavItem = { id: SettingsSection; label: string; icon: LucideIcon; adminOnly?: boolean };
+
+// Sectioned nav (design-spec §7 nav item + section groups). Icons keep the rail
+// legible and consistent; grouping gives rhythm instead of one flat list.
+const NAV_GROUPS: { label?: string; items: NavItem[] }[] = [
+  { items: [{ id: 'account', label: 'My Account', icon: User }] },
+  {
+    label: 'Preferences',
+    items: [
+      { id: 'appearance', label: 'Appearance', icon: Palette },
+      { id: 'voice', label: 'Voice & Video', icon: Mic },
+      { id: 'notifications', label: 'Notifications', icon: Bell },
+      { id: 'activity', label: 'Activity Privacy', icon: Eye },
+      { id: 'keybinds', label: 'Keybinds', icon: Keyboard },
+    ],
+  },
+  {
+    label: 'Advanced',
+    items: [
+      { id: 'identity', label: 'Identity', icon: Fingerprint },
+      { id: 'server', label: 'Server', icon: Server, adminOnly: true },
+      { id: 'about', label: 'About', icon: Info },
+    ],
+  },
 ];
+
+const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 export function UserSettings({ onClose }: UserSettingsProps) {
   const navigate = useNavigate();
@@ -125,6 +163,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [accountNewEmail, setAccountNewEmail] = useState('');
   const [accountActionLoading, setAccountActionLoading] = useState(false);
   const [accountDataExporting, setAccountDataExporting] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   // MFA state
   const [mfaEnabled, setMfaEnabled] = useState(false);
@@ -581,6 +620,30 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     }
   };
 
+  const handleDeleteAccount = useCallback(async () => {
+    const ok = await confirm({
+      title: 'Delete your account?',
+      description:
+        'This permanently erases your profile, messages, and memberships on this server. It cannot be undone.',
+      confirmLabel: 'Delete account',
+      cancelLabel: 'Keep account',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setDeletingAccount(true);
+    clearStatus();
+    try {
+      // Backend requires an explicit confirmation header (users::delete_me).
+      await getApi().delete('/users/@me', { headers: { 'x-confirm-delete': 'DELETE' } });
+      toast.success('Your account has been deleted.');
+      await logout();
+      onClose();
+    } catch (err) {
+      setErrorStatus(`Failed to delete account: ${extractApiError(err)}`);
+      setDeletingAccount(false);
+    }
+  }, [clearStatus, logout, onClose, setErrorStatus]);
+
   const saveSettings = async () => {
     setSaving(true);
     clearStatus();
@@ -756,23 +819,26 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     }
   }, [importPreview]);
 
+  const activeLabel = NAV_ITEMS.find((i) => i.id === activeSection)?.label ?? activeSection;
+  const maskedEmail = user?.email ? user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : '***@***';
+  const voiceInputMode = (mergedNotifications['voiceInputMode'] ?? 'voice_activity') as
+    | 'voice_activity'
+    | 'push_to_talk';
+
   return (
     <div
       className={cn(
-        'relative h-full min-h-0 overflow-hidden rounded-[1.5rem] border border-border-subtle/70 bg-bg-primary/90 backdrop-blur-sm',
+        'relative h-full min-h-0 overflow-hidden rounded-lg border border-border-subtle bg-bg-primary',
         isMobile ? 'flex flex-col' : 'flex'
       )}
       onKeyDown={handleKeyDown}
       tabIndex={-1}
     >
-      <div className="pointer-events-none absolute -left-20 top-0 h-72 w-72 rounded-full blur-[120px]" style={{ backgroundColor: 'var(--ambient-glow-primary)' }} />
-      <div className="pointer-events-none absolute bottom-0 right-0 h-80 w-80 rounded-full blur-[140px]" style={{ backgroundColor: 'var(--ambient-glow-success)' }} />
-
       {!isMobile && (
         <div className="absolute right-6 top-6 z-50 flex flex-col items-center gap-1">
           <button
             onClick={onClose}
-            className="command-icon-btn rounded-full border border-border-strong bg-bg-secondary/75 hover:bg-bg-mod-subtle"
+            className="flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-secondary text-interactive-normal shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
             aria-label="Close user settings"
             title="Close user settings"
           >
@@ -784,61 +850,75 @@ export function UserSettings({ onClose }: UserSettingsProps) {
 
       {isMobile ? (
         mobileShowNav ? (
-          <div className="relative z-10 flex flex-1 flex-col overflow-y-auto bg-bg-secondary/70 pt-[calc(var(--safe-top)+0.75rem)]">
+          <div className="relative z-10 flex flex-1 flex-col overflow-y-auto bg-bg-secondary pt-[calc(var(--safe-top)+0.75rem)]">
             <div className="flex items-center justify-between px-4 pb-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">User Settings</div>
+              <div className="text-section uppercase text-text-muted">User settings</div>
               <button
                 onClick={onClose}
-                className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
+                className="flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-secondary text-interactive-normal"
                 aria-label="Close user settings"
                 title="Close user settings"
               >
                 <X size={17} />
               </button>
             </div>
-            <div className="flex flex-col px-2 pb-[calc(var(--safe-bottom)+1rem)]">
-              {NAV_ITEMS.filter(item => !item.adminOnly || userIsAdmin).map(item => (
-                <button
-                  key={item.id}
-                  onClick={() => selectMobileSection(item.id)}
-                  className="flex w-full items-center justify-between rounded-xl px-4 py-3.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
-                >
-                  {item.label}
-                  <ArrowLeft size={14} className="rotate-180 text-text-muted" />
-                </button>
-              ))}
-              <div className="mx-2 my-2 h-px bg-border-subtle" />
+            <div className="flex flex-col gap-4 px-2 pb-[calc(var(--safe-bottom)+1rem)]">
+              {NAV_GROUPS.map((group, gi) => {
+                const items = group.items.filter((item) => !item.adminOnly || userIsAdmin);
+                if (items.length === 0) return null;
+                return (
+                  <div key={group.label ?? `group-${gi}`}>
+                    {group.label && (
+                      <div className="px-3 pb-1.5 text-section uppercase text-text-muted">{group.label}</div>
+                    )}
+                    {items.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => selectMobileSection(item.id)}
+                          className="flex w-full items-center gap-3 rounded-sm px-3 py-3 text-label text-text-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
+                        >
+                          <Icon size={18} className="shrink-0 text-text-muted" />
+                          <span className="flex-1 text-left">{item.label}</span>
+                          <ChevronRight size={16} className="text-text-muted" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+              <div className="mx-3 h-px bg-border-subtle" />
               <button
                 onClick={() => { onClose(); navigate('/app/developers'); }}
-                className="flex w-full items-center justify-between rounded-xl px-4 py-3.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
+                className="flex w-full items-center gap-3 rounded-sm px-3 py-3 text-label text-text-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
               >
-                Developer Portal
-                <ArrowLeft size={14} className="rotate-180 text-text-muted" />
+                <Code2 size={18} className="shrink-0 text-text-muted" />
+                <span className="flex-1 text-left">Developer Portal</span>
+                <ChevronRight size={16} className="text-text-muted" />
               </button>
-              <div className="mx-2 my-2 h-px bg-border-subtle" />
               <button
                 onClick={() => { void logout(); onClose(); }}
-                className="flex w-full items-center rounded-xl px-4 py-3.5 text-sm font-medium text-accent-danger transition-colors hover:bg-accent-danger/10"
+                className="flex w-full items-center gap-3 rounded-sm px-3 py-3 text-label text-accent-danger transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint"
               >
-                Log Out
+                <LogOut size={18} className="shrink-0" />
+                <span className="flex-1 text-left">Log Out</span>
               </button>
             </div>
           </div>
         ) : (
-          <div className="relative z-10 flex items-center gap-2 border-b border-border-subtle/70 bg-bg-secondary/70 px-3 pb-2.5 pt-[calc(var(--safe-top)+0.75rem)]">
+          <div className="relative z-10 flex items-center gap-2 border-b border-border-subtle bg-bg-secondary px-3 pb-2.5 pt-[calc(var(--safe-top)+0.75rem)]">
             <button
               onClick={() => setMobileShowNav(true)}
-              className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
+              className="flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-secondary text-interactive-normal"
               aria-label="Back to settings menu"
             >
               <ArrowLeft size={17} />
             </button>
-            <div className="flex-1 text-sm font-semibold text-text-primary">
-              {NAV_ITEMS.find(i => i.id === activeSection)?.label ?? activeSection}
-            </div>
+            <div className="flex-1 text-subhead text-text-primary">{activeLabel}</div>
             <button
               onClick={onClose}
-              className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
+              className="flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-secondary text-interactive-normal"
               aria-label="Close user settings"
               title="Close user settings"
             >
@@ -847,794 +927,821 @@ export function UserSettings({ onClose }: UserSettingsProps) {
           </div>
         )
       ) : (
-        <div className="relative z-10 w-72 shrink-0 overflow-y-auto border-r border-border-subtle/70 bg-bg-secondary/65 px-4 py-10">
-          <div className="ml-auto w-full max-w-[236px]">
-            <button
-              onClick={onClose}
-              className="group mb-3 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
-            >
-              <ArrowLeft size={14} className="transition-transform group-hover:-translate-x-0.5" />
-              Back
-            </button>
-            <div className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
-              User Settings
-            </div>
-            {NAV_ITEMS.filter(item => !item.adminOnly || userIsAdmin).map(item => (
-              <button
-                key={item.id}
-                onClick={() => setActiveSection(item.id)}
-                aria-current={activeSection === item.id ? 'page' : undefined}
-                className={`settings-nav-item ${activeSection === item.id ? 'active' : ''}`}
-              >
-                {item.label}
-              </button>
-            ))}
-            <div className="mx-2 my-2 h-px bg-border-subtle" />
-            <button
-              onClick={() => { onClose(); navigate('/app/developers'); }}
-              className="settings-nav-item"
-            >
-              Developer Portal
-            </button>
-            <div className="mx-2 my-2 h-px bg-border-subtle" />
-            <button
-              onClick={() => { void logout(); onClose(); }}
-              className="settings-nav-item"
-              style={{ color: 'var(--accent-danger)', borderColor: 'transparent' }}
-            >
-              Log Out
-            </button>
+        <nav
+          aria-label="User settings"
+          className="relative z-10 flex w-64 shrink-0 flex-col overflow-y-auto border-r border-border-subtle bg-bg-secondary px-3 py-6"
+        >
+          <button
+            onClick={onClose}
+            className="group mb-4 flex items-center gap-2 self-start rounded-sm px-2.5 py-1.5 text-label text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          >
+            <ArrowLeft size={15} className="transition-transform group-hover:-translate-x-0.5" />
+            Back
+          </button>
+          <div className="flex flex-col gap-5">
+            {NAV_GROUPS.map((group, gi) => {
+              const items = group.items.filter((item) => !item.adminOnly || userIsAdmin);
+              if (items.length === 0) return null;
+              return (
+                <div key={group.label ?? `group-${gi}`}>
+                  {group.label && (
+                    <div className="mb-1.5 px-2.5 text-section uppercase text-text-muted">{group.label}</div>
+                  )}
+                  <div className="flex flex-col gap-0.5">
+                    {items.map((item) => (
+                      <NavButton
+                        key={item.id}
+                        item={item}
+                        active={activeSection === item.id}
+                        onClick={() => setActiveSection(item.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </div>
+          <div className="my-5 h-px bg-border-subtle" />
+          <button
+            onClick={() => { onClose(); navigate('/app/developers'); }}
+            className="flex items-center gap-2.5 rounded-sm px-2.5 py-2 text-label text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+          >
+            <Code2 size={17} className="shrink-0 text-text-muted" />
+            Developer Portal
+          </button>
+          <button
+            onClick={() => { void logout(); onClose(); }}
+            className="mt-0.5 flex items-center gap-2.5 rounded-sm px-2.5 py-2 text-label text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)]"
+          >
+            <LogOut size={17} className="shrink-0" />
+            Log Out
+          </button>
+        </nav>
       )}
 
       {/* Content area */}
-      {(!isMobile || !mobileShowNav) && <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-3 pb-[calc(var(--safe-bottom)+1rem)] pt-3' : 'px-6 py-8')}>
-        <div className="w-full">
-          {!isMobile && (
-            <nav className="mb-4 flex items-center gap-1.5 text-xs text-text-muted" aria-label="Breadcrumb">
-              <span className="font-medium">Settings</span>
-              <span aria-hidden>/</span>
-              <span className="font-semibold text-text-secondary">
-                {NAV_ITEMS.find(i => i.id === activeSection)?.label ?? activeSection}
-              </span>
-            </nav>
-          )}
-          {statusText && statusKind === 'error' && (
-            <div className="mb-10">
-              <ErrorBanner message={statusText} />
-            </div>
-          )}
-          {statusText && statusKind === 'success' && (
-            <div
-              className="card-surface mb-10 inline-flex max-w-full items-center rounded-xl border border-accent-success/35 bg-accent-success/10 px-4 py-3 text-sm font-medium text-accent-success"
-              role="status"
-              aria-live="polite"
-            >
-              {statusText}
-            </div>
-          )}
+      {(!isMobile || !mobileShowNav) && (
+        <div className={cn('relative z-10 flex-1 overflow-y-auto', isMobile ? 'px-4 pb-[calc(var(--safe-bottom)+1.5rem)] pt-4' : 'px-10 py-10')}>
+          <div className="mx-auto w-full max-w-3xl">
+            {!isMobile && (
+              <nav className="mb-6 flex items-center gap-1.5 text-meta text-text-muted" aria-label="Breadcrumb">
+                <span>Settings</span>
+                <ChevronRight size={13} aria-hidden className="text-text-muted" />
+                <span className="font-medium text-text-secondary">{activeLabel}</span>
+              </nav>
+            )}
 
-          {activeSection === 'account' && (
-            <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)] !p-0 overflow-hidden">
-              <div className="p-8 pb-0">
-                <h2 className="settings-section-title mb-8">My Account</h2>
+            {statusText && statusKind === 'error' && (
+              <div className="mb-6">
+                <ErrorBanner message={statusText} />
               </div>
+            )}
+            {statusText && statusKind === 'success' && (
+              <div
+                className="mb-6 flex items-center gap-2.5 rounded-md border border-border-subtle bg-bg-accent px-4 py-3 shadow-sm"
+                role="status"
+                aria-live="polite"
+              >
+                <CheckCircle2 size={18} className="shrink-0 text-accent-success" />
+                <span className="text-label text-text-primary">{statusText}</span>
+              </div>
+            )}
+
+            {activeSection === 'account' && (
               <div>
-                <div
-                  className="h-28"
-                  style={{ background: 'linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-primary-hover) 100%)' }}
-                />
-                <div className="px-8 pb-8">
-                  <div className="-mt-9 mb-12 flex items-end">
-                    <div
-                      className="flex h-20 w-20 items-center justify-center rounded-full border-4 text-2xl font-bold text-white"
-                      style={{ backgroundColor: 'var(--accent-primary)', borderColor: 'var(--bg-secondary)' }}
-                    >
-                      {user?.username?.charAt(0).toUpperCase() || 'U'}
-                    </div>
-                    <span className="ml-3 text-xl font-bold text-text-primary">
-                      {user?.username || 'User'}
-                    </span>
+                <header className="mb-8 flex items-center gap-4">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-accent-tint font-display text-2xl font-bold text-accent-primary ring-1 ring-inset ring-border-strong">
+                    {user?.username?.charAt(0).toUpperCase() || 'U'}
                   </div>
-                  <div className="card-stack-roomy">
-                    <div
-                      className="card-surface card-stack-relaxed rounded-2xl border border-border-subtle bg-bg-tertiary/80 p-8"
-                    >
-                      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Username</div>
-                        <div className="text-sm font-medium text-text-primary">{user?.username || 'Unknown'}</div>
+                  <div className="min-w-0">
+                    <h2 className="truncate text-heading text-text-primary">{user?.username || 'My Account'}</h2>
+                    <p className="mt-0.5 text-sm text-text-secondary">
+                      Manage your profile, security, and how you sign in.
+                    </p>
+                  </div>
+                </header>
+
+                {/* Public profile */}
+                <section>
+                  <h3 className="text-section uppercase text-text-muted">Public profile</h3>
+                  <div className="mt-2 divide-y divide-border-subtle">
+                    <div className="flex flex-wrap items-center justify-between gap-4 py-4">
+                      <div className="min-w-0">
+                        <div className="text-label text-text-primary">Username</div>
+                        <p className="mt-0.5 text-meta text-text-secondary">Your unique handle across the server.</p>
                       </div>
-                      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Display Name</div>
-                        <input className="input-field" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-                      </div>
-                      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Bio</div>
-                        <textarea className="input-field resize-none" rows={3} value={bio} onChange={(e) => setBio(e.target.value)} />
-                      </div>
-                      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Pronouns</div>
-                        <input
-                          className="input-field"
-                          value={pronouns}
-                          onChange={(e) => setPronouns(e.target.value)}
-                          placeholder="e.g. they/them"
+                      <span className="font-code text-sm text-text-secondary">{user?.username || 'unknown'}</span>
+                    </div>
+
+                    <div className="py-4">
+                      <label htmlFor="acct-display" className="text-label text-text-primary">Display name</label>
+                      <p className="mt-0.5 text-meta text-text-secondary">Shown to other members instead of your username.</p>
+                      <Input
+                        id="acct-display"
+                        className="mt-2.5 max-w-md"
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        placeholder="Add a friendly name"
+                      />
+                    </div>
+
+                    <div className="py-4">
+                      <label htmlFor="acct-pronouns" className="text-label text-text-primary">Pronouns</label>
+                      <p className="mt-0.5 text-meta text-text-secondary">A short note that appears on your profile.</p>
+                      <Input
+                        id="acct-pronouns"
+                        className="mt-2.5 max-w-xs"
+                        value={pronouns}
+                        onChange={(e) => setPronouns(e.target.value)}
+                        placeholder="e.g. they/them"
+                      />
+                    </div>
+
+                    <div className="py-4">
+                      <label htmlFor="acct-bio" className="text-label text-text-primary">About me</label>
+                      <p className="mt-0.5 text-meta text-text-secondary">A sentence or two the rest of the community will see.</p>
+                      <Textarea
+                        id="acct-bio"
+                        className="mt-2.5 max-w-xl resize-none"
+                        rows={3}
+                        value={bio}
+                        onChange={(e) => setBio(e.target.value)}
+                        placeholder="Tell people what you're into."
+                      />
+                    </div>
+
+                    <div className="py-4">
+                      <label htmlFor="acct-links" className="text-label text-text-primary">Linked accounts</label>
+                      <p className="mt-0.5 text-meta text-text-secondary">
+                        One per line as <code className="font-code text-text-secondary">Label|https://url</code>. Up to eight.
+                      </p>
+                      <Textarea
+                        id="acct-links"
+                        className="mt-2.5 max-w-xl resize-none font-code text-sm"
+                        rows={4}
+                        value={linkedAccountsInput}
+                        onChange={(e) => setLinkedAccountsInput(e.target.value)}
+                        placeholder={'GitHub|https://github.com/username\nWebsite|https://example.com'}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-5">
+                    <Button loading={saving} onClick={() => void saveProfile()}>Save Profile</Button>
+                  </div>
+                </section>
+
+                {/* Security & sign-in */}
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Security &amp; sign-in</h3>
+
+                  <div className="mt-5">
+                    <div className="text-label text-text-primary">Email address</div>
+                    <p className="mt-0.5 text-meta text-text-secondary">
+                      Current: <span className="font-code text-text-secondary">{maskedEmail}</span>. Changing it signs out your other sessions.
+                    </p>
+                    <div className="mt-3 grid max-w-xl gap-3 sm:grid-cols-2">
+                      <label className="block">
+                        <span className="text-meta text-text-secondary">New email</span>
+                        <Input
+                          className="mt-1.5"
+                          type="email"
+                          value={accountNewEmail}
+                          onChange={(e) => setAccountNewEmail(e.target.value)}
+                          autoComplete="email"
                         />
-                      </div>
-                      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Linked Accounts</div>
-                        <div className="mb-3 text-xs text-text-muted">
-                          One per line in the format <code>Label|https://url</code>.
-                        </div>
-                        <textarea
-                          className="input-field resize-none"
-                          rows={4}
-                          value={linkedAccountsInput}
-                          onChange={(e) => setLinkedAccountsInput(e.target.value)}
-                          placeholder={'GitHub|https://github.com/username\nWebsite|https://example.com'}
+                      </label>
+                      <label className="block">
+                        <span className="text-meta text-text-secondary">Current password</span>
+                        <Input
+                          className="mt-1.5"
+                          type="password"
+                          value={emailCurrentPassword}
+                          onChange={(e) => setEmailCurrentPassword(e.target.value)}
+                          autoComplete="current-password"
                         />
+                      </label>
+                    </div>
+                    <div className="mt-3">
+                      <Button
+                        variant="secondary"
+                        loading={accountActionLoading}
+                        onClick={() => void submitEmailChange()}
+                        disabled={!emailCurrentPassword.trim() || !accountNewEmail.trim()}
+                      >
+                        Update Email
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-7">
+                    <div className="text-label text-text-primary">Password</div>
+                    <p className="mt-0.5 text-meta text-text-secondary">
+                      Pick something you don't use elsewhere. Other sessions are signed out on change.
+                    </p>
+                    <div className="mt-3 grid max-w-xl gap-3 sm:grid-cols-3">
+                      <label className="block">
+                        <span className="text-meta text-text-secondary">Current</span>
+                        <Input
+                          className="mt-1.5"
+                          type="password"
+                          value={passwordCurrentPassword}
+                          onChange={(e) => setPasswordCurrentPassword(e.target.value)}
+                          autoComplete="current-password"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-meta text-text-secondary">New</span>
+                        <Input
+                          className="mt-1.5"
+                          type="password"
+                          value={accountNewPassword}
+                          onChange={(e) => setAccountNewPassword(e.target.value)}
+                          autoComplete="new-password"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-meta text-text-secondary">Confirm</span>
+                        <Input
+                          className="mt-1.5"
+                          type="password"
+                          value={accountConfirmPassword}
+                          onChange={(e) => setAccountConfirmPassword(e.target.value)}
+                          autoComplete="new-password"
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-3">
+                      <Button
+                        variant="secondary"
+                        loading={accountActionLoading}
+                        onClick={() => void submitPasswordChange()}
+                        disabled={
+                          !passwordCurrentPassword.trim() ||
+                          !accountNewPassword.trim() ||
+                          !accountConfirmPassword.trim()
+                        }
+                      >
+                        Update Password
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Two-factor authentication */}
+                  <div className="mt-7">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-label text-text-primary">Two-factor authentication</div>
+                        <p className="mt-0.5 text-meta text-text-secondary">
+                          {mfaEnabled
+                            ? `Enabled. ${mfaBackupCodesRemaining} backup code${mfaBackupCodesRemaining !== 1 ? 's' : ''} remaining.`
+                            : 'Require a rotating code from your authenticator app when you sign in.'}
+                        </p>
                       </div>
-                      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Email</div>
-                        <div className="text-sm font-medium text-text-primary">
-                          {user?.email ? user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : '***@***'}
+                      {mfaView === 'idle' && (
+                        mfaEnabled ? (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => { setMfaView('disable'); setMfaStatus(null); }}
+                            disabled={mfaLoading}
+                          >
+                            Disable 2FA
+                          </Button>
+                        ) : (
+                          <Button size="sm" loading={mfaLoading} onClick={() => void startMfaSetup()}>
+                            Enable 2FA
+                          </Button>
+                        )
+                      )}
+                    </div>
+
+                    {mfaStatus && (
+                      <div
+                        className={cn(
+                          'mt-3 rounded-md border px-4 py-3 text-sm font-medium',
+                          mfaStatus.includes('enabled') || mfaStatus.includes('disabled')
+                            ? 'border-accent-success/30 bg-success-tint text-accent-success'
+                            : 'border-accent-danger/30 bg-danger-tint text-accent-danger'
+                        )}
+                        role={mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'status' : 'alert'}
+                        aria-live={mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'polite' : 'assertive'}
+                      >
+                        {mfaStatus}
+                      </div>
+                    )}
+
+                    {mfaBackupCodes.length > 0 && (
+                      <div className="mt-4 max-w-md">
+                        <div className="text-section uppercase text-accent-warning">Save these backup codes</div>
+                        <div className="mt-2 rounded-md border border-border-subtle bg-bg-tertiary p-3 font-code text-sm leading-relaxed text-text-primary">
+                          {mfaBackupCodes.map((code) => (
+                            <div key={code}>{code}</div>
+                          ))}
                         </div>
-                      </div>
-                      <div className="settings-action-row">
-                        <Button onClick={() => void saveProfile()} disabled={saving}>
-                          {saving ? 'Saving...' : 'Save Profile'}
+                        <p className="mt-2 text-meta text-text-secondary">
+                          Each code works once. Store them somewhere only you can reach.
+                        </p>
+                        <Button variant="ghost" size="sm" className="-ml-2 mt-1" onClick={() => setMfaBackupCodes([])}>
+                          I've saved my codes
                         </Button>
                       </div>
-                    </div>
+                    )}
 
-                    <div className="card-surface rounded-2xl border border-border-subtle bg-bg-tertiary/80 p-8">
-                      <div className="card-stack-relaxed">
-                        <div className="text-base font-semibold text-text-primary">Account Security</div>
-                        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-                          <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                            Change Email
-                          </div>
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <label className="block">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">New Email</span>
-                              <input
-                                className="input-field mt-2"
-                                type="email"
-                                value={accountNewEmail}
-                                onChange={(e) => setAccountNewEmail(e.target.value)}
-                                autoComplete="email"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Current Password</span>
-                              <input
-                                className="input-field mt-2"
-                                type="password"
-                                value={emailCurrentPassword}
-                                onChange={(e) => setEmailCurrentPassword(e.target.value)}
-                                autoComplete="current-password"
-                              />
-                            </label>
-                          </div>
-                          <div className="settings-action-row">
-                            <Button
-                              onClick={() => void submitEmailChange()}
-                              disabled={accountActionLoading || !emailCurrentPassword.trim() || !accountNewEmail.trim()}
-                            >
-                              {accountActionLoading ? 'Updating...' : 'Update Email'}
-                            </Button>
-                          </div>
+                    {mfaView === 'setup' && mfaSetupData && (
+                      <div className="mt-4 max-w-md space-y-4">
+                        <p className="text-sm text-text-secondary">
+                          1. Scan this QR code with your authenticator app (Google Authenticator, Authy, and friends), or enter the secret by hand.
+                        </p>
+                        <div className="flex justify-center rounded-md border border-border-subtle bg-bg-tertiary p-4">
+                          <img src={mfaSetupData.qr_code} alt="TOTP QR code" className="h-40 w-40 rounded-sm" />
                         </div>
-
-                        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-                          <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                            Change Password
-                          </div>
-                          <div className="grid gap-3 sm:grid-cols-3">
-                            <label className="block">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Current</span>
-                              <input
-                                className="input-field mt-2"
-                                type="password"
-                                value={passwordCurrentPassword}
-                                onChange={(e) => setPasswordCurrentPassword(e.target.value)}
-                                autoComplete="current-password"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">New</span>
-                              <input
-                                className="input-field mt-2"
-                                type="password"
-                                value={accountNewPassword}
-                                onChange={(e) => setAccountNewPassword(e.target.value)}
-                                autoComplete="new-password"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Confirm</span>
-                              <input
-                                className="input-field mt-2"
-                                type="password"
-                                value={accountConfirmPassword}
-                                onChange={(e) => setAccountConfirmPassword(e.target.value)}
-                                autoComplete="new-password"
-                              />
-                            </label>
-                          </div>
-                          <div className="settings-action-row">
-                            <Button
-                              onClick={() => void submitPasswordChange()}
-                              disabled={
-                                accountActionLoading ||
-                                !passwordCurrentPassword.trim() ||
-                                !accountNewPassword.trim() ||
-                                !accountConfirmPassword.trim()
-                              }
-                            >
-                              {accountActionLoading ? 'Updating...' : 'Update Password'}
-                            </Button>
-                          </div>
+                        <div className="rounded-md border border-border-subtle bg-bg-tertiary p-3 font-code text-sm break-all text-text-primary">
+                          {mfaSetupData.secret}
                         </div>
-
-                        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                                Data Export
-                              </div>
-                              <div className="mt-1 text-sm text-text-muted">
-                                Download a JSON export of your account data.
-                              </div>
-                            </div>
-                            <Button
-                              onClick={() => void downloadAccountData()}
-                              disabled={accountDataExporting}
-                            >
-                              {accountDataExporting ? 'Exporting...' : 'Download Data'}
-                            </Button>
-                          </div>
+                        <p className="text-sm text-text-secondary">2. Enter the 6-digit code the app shows.</p>
+                        <Input
+                          type="text"
+                          aria-label="Authenticator code"
+                          inputMode="numeric"
+                          maxLength={6}
+                          placeholder="000000"
+                          className="max-w-[12rem] font-code tracking-[0.35em]"
+                          value={mfaVerifyCode}
+                          onChange={(e) => setMfaVerifyCode(e.target.value.replace(/\D/g, ''))}
+                        />
+                        <div className="flex gap-3">
+                          <Button loading={mfaLoading} disabled={mfaVerifyCode.length < 6} onClick={() => void verifyMfaSetup()}>
+                            Confirm &amp; Enable
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            onClick={() => { setMfaView('idle'); setMfaSetupData(null); setMfaVerifyCode(''); setMfaStatus(null); }}
+                          >
+                            Cancel
+                          </Button>
                         </div>
-
-                        {/* Two-Factor Authentication */}
-                        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-                          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                                Two-Factor Authentication (2FA)
-                              </div>
-                              <div className="mt-1 text-sm text-text-muted">
-                                {mfaEnabled
-                                  ? `Enabled. ${mfaBackupCodesRemaining} backup code${mfaBackupCodesRemaining !== 1 ? 's' : ''} remaining.`
-                                  : 'Add an extra layer of security to your account.'}
-                              </div>
-                            </div>
-                            {mfaView === 'idle' && (
-                              mfaEnabled ? (
-                                <button
-                                  className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-1.5 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15 disabled:opacity-60"
-                                  onClick={() => { setMfaView('disable'); setMfaStatus(null); }}
-                                  disabled={mfaLoading}
-                                >
-                                  Disable 2FA
-                                </button>
-                              ) : (
-                                <Button
-                                  size="sm"
-                                  onClick={() => void startMfaSetup()}
-                                  disabled={mfaLoading}
-                                >
-                                  {mfaLoading ? 'Loading...' : 'Enable 2FA'}
-                                </Button>
-                              )
-                            )}
-                          </div>
-
-                          {mfaStatus && (
-                            <div
-                              className={`mb-4 rounded-lg px-4 py-3 text-sm font-medium ${mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'border border-accent-success/35 bg-accent-success/10 text-accent-success' : 'border border-accent-danger/35 bg-accent-danger/10 text-accent-danger'}`}
-                              role={mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'status' : 'alert'}
-                              aria-live={mfaStatus.includes('enabled') || mfaStatus.includes('disabled') ? 'polite' : 'assertive'}
-                            >
-                              {mfaStatus}
-                            </div>
-                          )}
-
-                          {mfaBackupCodes.length > 0 && (
-                            <div className="mb-4">
-                              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-accent-warning">
-                                Save These Backup Codes
-                              </div>
-                              <div className="rounded-lg border border-border-subtle bg-bg-tertiary/70 p-3 font-mono text-xs text-text-primary">
-                                {mfaBackupCodes.map((code) => (
-                                  <div key={code}>{code}</div>
-                                ))}
-                              </div>
-                              <div className="mt-2 text-xs text-text-muted">
-                                Each code can only be used once. Store them somewhere safe.
-                              </div>
-                              <button
-                                className="mt-2 text-xs font-semibold text-text-link hover:underline"
-                                onClick={() => setMfaBackupCodes([])}
-                              >
-                                I have saved my codes
-                              </button>
-                            </div>
-                          )}
-
-                          {mfaView === 'setup' && mfaSetupData && (
-                            <div className="space-y-4">
-                              <div className="text-sm text-text-muted">
-                                1. Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.), or manually enter the secret.
-                              </div>
-                              <div className="flex justify-center">
-                                <img src={mfaSetupData.qr_code} alt="TOTP QR Code" className="h-40 w-40 rounded-lg" />
-                              </div>
-                              <div className="rounded-lg border border-border-subtle bg-bg-tertiary/70 p-3 font-mono text-xs text-text-primary break-all">
-                                {mfaSetupData.secret}
-                              </div>
-                              <div className="text-sm text-text-muted">
-                                2. Enter the 6-digit code from your authenticator app:
-                              </div>
-                              <input
-                                className="input-field"
-                                type="text"
-                                aria-label="Authenticator code"
-                                inputMode="numeric"
-                                maxLength={6}
-                                placeholder="000000"
-                                value={mfaVerifyCode}
-                                onChange={(e) => setMfaVerifyCode(e.target.value.replace(/\D/g, ''))}
-                              />
-                              <div className="flex gap-3">
-                                <Button
-                                  onClick={() => void verifyMfaSetup()}
-                                  disabled={mfaLoading || mfaVerifyCode.length < 6}
-                                >
-                                  {mfaLoading ? 'Verifying...' : 'Confirm & Enable'}
-                                </Button>
-                                <button
-                                  className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary hover:text-text-primary"
-                                  onClick={() => { setMfaView('idle'); setMfaSetupData(null); setMfaVerifyCode(''); setMfaStatus(null); }}
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          )}
-
-                          {mfaView === 'disable' && (
-                            <div className="space-y-4">
-                              <div className="text-sm text-text-muted">
-                                Enter your current TOTP code or a backup code to disable 2FA:
-                              </div>
-                              <input
-                                className="input-field"
-                                type="text"
-                                aria-label="Current TOTP or backup code"
-                                placeholder="6-digit code or backup code"
-                                value={mfaDisableCode}
-                                onChange={(e) => setMfaDisableCode(e.target.value)}
-                              />
-                              <div className="flex gap-3">
-                                <button
-                                  className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-4 py-2 text-sm font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15 disabled:opacity-60"
-                                  onClick={() => void disableMfa()}
-                                  disabled={mfaLoading || !mfaDisableCode.trim()}
-                                >
-                                  {mfaLoading ? 'Disabling...' : 'Disable 2FA'}
-                                </button>
-                                <button
-                                  className="rounded-lg border border-border-subtle px-4 py-2 text-sm text-text-secondary hover:text-text-primary"
-                                  onClick={() => { setMfaView('idle'); setMfaDisableCode(''); setMfaStatus(null); }}
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-                          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                            <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                              Active Sessions
-                            </div>
-                            <button
-                              className="rounded-lg px-3 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-                              onClick={() => void loadSessions()}
-                              disabled={sessionsLoading}
-                            >
-                              {sessionsLoading ? 'Refreshing...' : 'Refresh'}
-                            </button>
-                          </div>
-                          <div className="space-y-2.5">
-                            {sessions.map((session) => (
-                              <div
-                                key={session.id}
-                                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle bg-bg-tertiary/70 px-3 py-2.5"
-                              >
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className="truncate text-sm font-medium text-text-primary">
-                                      {session.user_agent || session.device_id || 'Unknown device'}
-                                    </span>
-                                    {session.current && (
-                                      <span className="rounded-full border border-accent-success/35 bg-accent-success/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-success">
-                                        Current
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="mt-0.5 text-xs text-text-muted">
-                                    {session.ip_address || 'No IP'} - Last seen {new Date(session.last_seen_at).toLocaleString()}
-                                  </div>
-                                </div>
-                                <button
-                                  className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-2.5 py-1.5 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15 disabled:opacity-60"
-                                  onClick={() => void revokeSession(session.id)}
-                                  disabled={sessionBusyId === session.id}
-                                >
-                                  {sessionBusyId === session.id ? 'Revoking...' : 'Revoke'}
-                                </button>
-                              </div>
-                            ))}
-                            {!sessionsLoading && sessions.length === 0 && (
-                              <div className="rounded-lg border border-border-subtle bg-bg-tertiary/70 px-3 py-2.5 text-sm text-text-muted">
-                                No active sessions found.
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="card-surface rounded-2xl border border-border-subtle bg-bg-tertiary/80 p-4 sm:p-5">
-                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                        <div className="card-surface min-h-[5.25rem] rounded-xl border border-border-subtle bg-bg-mod-subtle/80 px-6 py-5">
-                          <div className="text-sm font-semibold uppercase tracking-wide text-text-secondary">Theme</div>
-                          <div className="mt-1 text-base font-semibold text-text-primary">{theme.toUpperCase()}</div>
-                        </div>
-                        <div className="card-surface min-h-[5.25rem] rounded-xl border border-border-subtle bg-bg-mod-subtle/80 px-6 py-5">
-                          <div className="text-sm font-semibold uppercase tracking-wide text-text-secondary">Locale</div>
-                          <div className="mt-1 text-base font-semibold text-text-primary">{locale}</div>
-                        </div>
-                        <div className="card-surface min-h-[5.25rem] rounded-xl border border-border-subtle bg-bg-mod-subtle/80 px-6 py-5">
-                          <div className="text-sm font-semibold uppercase tracking-wide text-text-secondary">Message Density</div>
-                          <div className="mt-1 text-base font-semibold text-text-primary">
-                            {messageCompact ? 'Compact' : 'Comfortable'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="card-surface rounded-2xl border border-border-subtle bg-bg-tertiary/80 p-8">
-                      <div className="card-stack-relaxed">
-                        <div className="card-surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                          <div>
-                            <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                              Device Crypto Security (Optional)
-                            </div>
-                            <div className="mt-1 text-sm text-text-muted">
-                              When enabled, this account can use local key unlock and challenge-response sign-in.
-                            </div>
-                          </div>
-                          <ToggleSwitch
-                            on={cryptoAuthEnabled}
-                            onToggle={() => handleCryptoSecurityToggle(!cryptoAuthEnabled)}
-                            disabled={!localCryptoAccountReady || saving}
-                          />
-                        </div>
-
-                        {!localCryptoAccountReady && (
-                          <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-                            <div className="text-sm text-text-muted">
-                              You have not set up a local crypto identity for this account yet.
-                            </div>
-                            <div className="settings-action-row">
-                              <Button
-                                onClick={() => {
-                                  onClose();
-                                  navigate('/setup?migrate=1');
-                                }}
-                              >
-                                Set Up Local Identity
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-
-                        {localCryptoAccountReady && (
-                          <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6 text-sm">
-                            {cryptoAuthEnabled ? (
-                              <span className="text-text-primary">
-                                Security mode is enabled. {accountUnlocked ? 'Identity is currently unlocked.' : 'Identity is currently locked.'}
-                              </span>
-                            ) : (
-                              <span className="text-text-muted">
-                                Security mode is disabled. This account signs in with username/password only.
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeSection === 'appearance' && (
-            <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)]">
-              <h2 className="settings-section-title mb-8">Appearance</h2>
-              <div className="mb-8">
-                <ThemeSelector
-                  currentTheme={theme}
-                  onThemeChange={(t) => handleThemeChange(t)}
-                />
-              </div>
-              <div className="card-stack-relaxed">
-                <label className="block">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Locale</span>
-                  <input className="input-field mt-3" value={locale} onChange={(e) => setLocale(e.target.value)} />
-                </label>
-                <div className="card-surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">Compact Message Display</div>
-                  </div>
-                  <ToggleSwitch on={messageCompact} onToggle={() => setMessageCompact(!messageCompact)} />
-                </div>
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                  <CustomCSS
-                    initialCSS={customCss}
-                    onSave={(css) => setCustomCss(css)}
-                  />
-                </div>
-              </div>
-              <div className="settings-action-row">
-                <Button onClick={() => void saveSettings()} disabled={saving}>
-                  {saving ? 'Saving...' : 'Save Appearance'}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {activeSection === 'voice' && (
-            <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)]">
-              <h2 className="settings-section-title mb-8">Voice & Video</h2>
-              <div className="card-stack">
-                <label className="card-surface block rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Input Device</span>
-                  <select
-                    className="select-field mt-3"
-                    value={selectedAudioInput || ''}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      const previous = selectedAudioInput || '';
-                      selectAudioInput(value);
-                      void applyAudioInputDevice(value || null).then((ok) => {
-                        if (!ok) {
-                          selectAudioInput(previous);
-                          toast.error('Could not switch microphone. It may be in use or unavailable.');
-                        }
-                      });
-                    }}
-                  >
-                    <option value="">Default</option>
-                    {audioInputDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label || `Microphone ${device.deviceId.slice(0, 6)}`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="card-surface block rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Output Device</span>
-                  <select
-                    className="select-field mt-3"
-                    value={selectedAudioOutput || ''}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      const previous = selectedAudioOutput || '';
-                      selectAudioOutput(value);
-                      void applyAudioOutputDevice(value || null).then((ok) => {
-                        if (!ok) {
-                          selectAudioOutput(previous);
-                          toast.error('Could not switch speaker. It may be unavailable.');
-                        }
-                      });
-                    }}
-                  >
-                    <option value="">Default</option>
-                    {audioOutputDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label || `Speaker ${device.deviceId.slice(0, 6)}`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/55 px-6 py-5">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Input Mode</span>
-                  <div className="mt-3 flex gap-2">
-                    {(['voice_activity', 'push_to_talk'] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        onClick={() => setNotifications((prev) => ({ ...prev, voiceInputMode: mode }))}
-                        className={cn(
-                          'flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
-                          (mergedNotifications['voiceInputMode'] ?? 'voice_activity') === mode
-                            ? 'border-accent-primary bg-accent-primary/10 text-accent-primary'
-                            : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-border-strong hover:text-text-primary'
-                        )}
-                      >
-                        {mode === 'voice_activity' ? 'Voice Activity' : 'Push to Talk'}
-                      </button>
-                    ))}
-                  </div>
-                  {(mergedNotifications['voiceInputMode'] ?? 'voice_activity') === 'push_to_talk' && (
-                    <p className="mt-2 text-xs text-text-muted">
-                      Set your Push to Talk key in the Keybinds section. You will be muted by default — hold the key to speak.
-                    </p>
-                  )}
-                </div>
-                <div className="card-surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">Noise Suppression</div>
-                    <div className="text-xs text-text-muted">Reduces background noise</div>
-                  </div>
-                  <ToggleSwitch
-                    on={Boolean(mergedNotifications['noiseSuppression'] ?? true)}
-                    onToggle={() => setNotifications((prev) => ({ ...prev, noiseSuppression: !Boolean(prev['noiseSuppression'] ?? true) }))}
-                  />
-                </div>
-                <div className="card-surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">Echo Cancellation</div>
-                    <div className="text-xs text-text-muted">Reduces echo from speakers</div>
-                  </div>
-                  <ToggleSwitch
-                    on={Boolean(mergedNotifications['echoCancellation'] ?? true)}
-                    onToggle={() => setNotifications((prev) => ({ ...prev, echoCancellation: !Boolean(prev['echoCancellation'] ?? true) }))}
-                  />
-                </div>
-                <div className="card-surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">Automatic Gain Control</div>
-                    <div className="text-xs text-text-muted">Normalizes mic volume (can add noise on some setups)</div>
-                  </div>
-                  <ToggleSwitch
-                    on={Boolean(mergedNotifications['autoGainControl'] ?? false)}
-                    onToggle={() => setNotifications((prev) => ({ ...prev, autoGainControl: !Boolean(prev['autoGainControl'] ?? false) }))}
-                  />
-                </div>
-              </div>
-              <div className="settings-action-row">
-                <Button onClick={() => {
-                  void saveSettings().then(() => {
-                    // Re-acquire the microphone with updated noise suppression /
-                    // echo cancellation / auto gain constraints so changes take effect
-                    // immediately without requiring a mute/unmute cycle.
-                    void useVoiceStore.getState().reapplyAudioConstraints();
-                  });
-                }} disabled={saving}>
-                  {saving ? 'Saving...' : 'Save Voice Settings'}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {activeSection === 'notifications' && (
-            <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)]">
-              <h2 className="settings-section-title mb-8">Notifications</h2>
-              <div className="card-stack">
-                <div className="card-surface flex items-center justify-between rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">Desktop Notifications</div>
-                    <div className="text-xs text-text-muted">Show desktop notifications for new messages</div>
-                    {notifPermission === 'denied' && notifEnabled && (
-                      <div className="mt-1 text-xs text-accent-warning">
-                        Notification permission denied by the system. Click the toggle to request permission again.
                       </div>
                     )}
-                    {notifPermission === 'granted' && notifEnabled && (
-                      <div className="mt-1 text-xs text-accent-success">Permission granted</div>
+
+                    {mfaView === 'disable' && (
+                      <div className="mt-4 max-w-md space-y-4">
+                        <p className="text-sm text-text-secondary">
+                          Enter a current authenticator code or one of your backup codes to turn two-factor off.
+                        </p>
+                        <Input
+                          type="text"
+                          aria-label="Current TOTP or backup code"
+                          placeholder="6-digit code or backup code"
+                          className="font-code"
+                          value={mfaDisableCode}
+                          onChange={(e) => setMfaDisableCode(e.target.value)}
+                        />
+                        <div className="flex gap-3">
+                          <Button
+                            variant="destructive"
+                            loading={mfaLoading}
+                            disabled={!mfaDisableCode.trim()}
+                            onClick={() => void disableMfa()}
+                          >
+                            Disable 2FA
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            onClick={() => { setMfaView('idle'); setMfaDisableCode(''); setMfaStatus(null); }}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
                     )}
                   </div>
-                  <ToggleSwitch
-                    on={notifEnabled}
-                    onToggle={() => {
-                      const next = !notifEnabled;
-                      if (next) {
-                        void requestNotificationPermission().then((granted) => {
-                          setNotifPermission(granted ? 'granted' : 'denied');
-                          setNotifEnabled(granted);
-                          setNotificationsEnabled(granted);
-                          setNotifications((prev) => ({ ...prev, desktop: granted }));
-                        });
-                      } else {
-                        setNotifEnabled(false);
-                        setNotificationsEnabled(false);
-                        setNotifications((prev) => ({ ...prev, desktop: false }));
-                      }
-                    }}
-                  />
-                </div>
-                <div className="card-surface flex items-center justify-between rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">Message Sound</div>
-                    <div className="text-xs text-text-muted">Play a sound for incoming messages</div>
-                  </div>
-                  <ToggleSwitch
-                    on={Boolean(mergedNotifications.messageSound)}
-                    onToggle={() => setNotifications((prev) => ({ ...prev, messageSound: !Boolean(prev.messageSound) }))}
-                  />
-                </div>
-                <div className="card-surface flex items-center justify-between rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">Low Bandwidth Mode</div>
-                    <div className="text-xs text-text-muted">
-                      Hide heavy image previews and reduce automatic media loading.
+
+                  {/* Active sessions */}
+                  <div className="mt-7">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-label text-text-primary">Active sessions</div>
+                        <p className="mt-0.5 text-meta text-text-secondary">Devices currently signed in to your account.</p>
+                      </div>
+                      <Button variant="ghost" size="sm" disabled={sessionsLoading} onClick={() => void loadSessions()}>
+                        <RefreshCw size={15} className={cn('mr-1.5', sessionsLoading && 'animate-spin')} />
+                        Refresh
+                      </Button>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {sessionsLoading && sessions.length === 0 && (
+                        <>
+                          <Skeleton height={58} borderRadius="var(--radius-md)" />
+                          <Skeleton height={58} borderRadius="var(--radius-md)" />
+                        </>
+                      )}
+                      {sessions.map((session) => (
+                        <div
+                          key={session.id}
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-label text-text-primary">
+                                {session.user_agent || session.device_id || 'Unknown device'}
+                              </span>
+                              {session.current && (
+                                <span className="rounded-xs bg-success-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-success">
+                                  Current
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-0.5 text-meta text-text-muted">
+                              {session.ip_address || 'No IP'} &middot; Last seen {new Date(session.last_seen_at).toLocaleString()}
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-accent-danger hover:bg-danger-tint hover:text-accent-danger"
+                            disabled={sessionBusyId === session.id}
+                            onClick={() => void revokeSession(session.id)}
+                          >
+                            {sessionBusyId === session.id ? 'Revoking…' : 'Revoke'}
+                          </Button>
+                        </div>
+                      ))}
+                      {!sessionsLoading && sessions.length === 0 && (
+                        <p className="rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3 text-sm text-text-secondary">
+                          No other devices are signed in right now.
+                        </p>
+                      )}
                     </div>
                   </div>
-                  <ToggleSwitch
-                    on={Boolean(mergedNotifications.lowBandwidthMode)}
-                    onToggle={() => {
-                      const next = !Boolean(mergedNotifications.lowBandwidthMode);
-                      setLowBandwidthModeUI(next);
-                      setNotifications((prev) => ({ ...prev, lowBandwidthMode: next }));
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="settings-action-row">
-                <Button onClick={() => void saveSettings()} disabled={saving}>
-                  {saving ? 'Saving...' : 'Save Notifications'}
-                </Button>
-              </div>
-            </div>
-          )}
+                </section>
 
-          {activeSection === 'activity' && (
-            <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)]">
-              <h2 className="settings-section-title mb-8">Activity Privacy</h2>
-              <div className="card-stack">
-                <div className="card-surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">Display current activity</div>
-                    <div className="text-xs text-text-muted">
-                      Show the game/app you are currently using in presence.
+                {/* Your data */}
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Your data</h3>
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-label text-text-primary">Download your data</div>
+                      <p className="mt-0.5 text-meta text-text-secondary">A JSON export of your account, profile, and settings.</p>
                     </div>
+                    <Button variant="secondary" loading={accountDataExporting} onClick={() => void downloadAccountData()}>
+                      {!accountDataExporting && <Download size={16} className="mr-1.5" />}
+                      Download data
+                    </Button>
                   </div>
-                  <ToggleSwitch
-                    on={Boolean(activityDetectionEnabled)}
-                    onToggle={() => setActivityDetectionEnabled(!Boolean(activityDetectionEnabled))}
-                  />
-                </div>
+                </section>
 
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-                  <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                    Detected Apps
+                {/* Device security */}
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Device security</h3>
+                  <div className="mt-2 divide-y divide-border-subtle">
+                    <ToggleRow
+                      title="Device crypto security"
+                      description="Use local key unlock and challenge-response sign-in on this device."
+                      on={cryptoAuthEnabled}
+                      onToggle={() => handleCryptoSecurityToggle(!cryptoAuthEnabled)}
+                      disabled={!localCryptoAccountReady || saving}
+                    />
                   </div>
-                  <div className="mb-3 text-xs text-text-muted">
-                    Disable any detected app to prevent Paracord from reporting it.
-                  </div>
-                  {visibleKnownActivityApps.length === 0 ? (
-                    <div className="rounded-lg border border-border-subtle bg-bg-tertiary/70 px-3 py-2.5 text-sm text-text-muted">
-                      No apps detected yet. Launch a game/app while Paracord is open.
+                  {!localCryptoAccountReady ? (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3">
+                      <p className="min-w-0 text-meta text-text-secondary">
+                        You haven't set up a local crypto identity for this account yet.
+                      </p>
+                      <Button variant="secondary" size="sm" onClick={() => { onClose(); navigate('/setup?migrate=1'); }}>
+                        Set up local identity
+                      </Button>
                     </div>
                   ) : (
-                    <div className="space-y-2">
+                    <p className="mt-3 text-meta text-text-secondary">
+                      {cryptoAuthEnabled
+                        ? `Enabled. ${accountUnlocked ? 'Your identity is currently unlocked.' : 'Your identity is currently locked.'}`
+                        : 'Disabled. This account signs in with username and password only.'}
+                    </p>
+                  )}
+                </section>
+
+                {/* Danger zone */}
+                <section className="mt-10">
+                  <div className="rounded-md border border-accent-danger/30 bg-danger-tint p-5">
+                    <div className="flex items-start gap-3">
+                      <ShieldAlert size={18} className="mt-0.5 shrink-0 text-accent-danger" />
+                      <div className="min-w-0">
+                        <h3 className="text-subhead text-text-primary">Delete account</h3>
+                        <p className="mt-1 max-w-xl text-sm leading-relaxed text-text-secondary">
+                          Permanently erase your profile, messages, and memberships on this server. Friends lose the
+                          connection and your username is freed. This can't be undone.
+                        </p>
+                        <div className="mt-4">
+                          <Button variant="destructive" loading={deletingAccount} onClick={() => void handleDeleteAccount()}>
+                            Delete my account
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {activeSection === 'appearance' && (
+              <div>
+                <SettingsHeader
+                  title="Appearance"
+                  description="Tune the look and density of Paracord to match how you read."
+                />
+                <section>
+                  <h3 className="text-section uppercase text-text-muted">Theme</h3>
+                  <div className="mt-3">
+                    <ThemeSelector currentTheme={theme} onThemeChange={(t) => handleThemeChange(t)} />
+                  </div>
+                </section>
+
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Display</h3>
+                  <div className="mt-2 divide-y divide-border-subtle">
+                    <div className="flex flex-wrap items-center justify-between gap-4 py-4">
+                      <div className="min-w-0">
+                        <div className="text-label text-text-primary">Message density</div>
+                        <p className="mt-0.5 text-meta text-text-secondary">
+                          Comfortable gives each message room to breathe; compact fits more on screen.
+                        </p>
+                      </div>
+                      <Segmented
+                        value={messageCompact ? 'compact' : 'comfortable'}
+                        onChange={(v) => setMessageCompact(v === 'compact')}
+                        options={[
+                          { value: 'comfortable', label: 'Comfortable' },
+                          { value: 'compact', label: 'Compact' },
+                        ]}
+                      />
+                    </div>
+                    <div className="py-4">
+                      <label htmlFor="appearance-locale" className="text-label text-text-primary">Language &amp; region</label>
+                      <p className="mt-0.5 text-meta text-text-secondary">
+                        BCP-47 locale used for dates, numbers, and translations.
+                      </p>
+                      <Input
+                        id="appearance-locale"
+                        className="mt-2.5 max-w-[12rem]"
+                        value={locale}
+                        onChange={(e) => setLocale(e.target.value)}
+                        placeholder="en-US"
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Custom CSS</h3>
+                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                    For power users — inject your own styles. Applies instantly on save.
+                  </p>
+                  <div className="mt-3 rounded-md border border-border-subtle bg-bg-tertiary p-4">
+                    <CustomCSS initialCSS={customCss} onSave={(css) => setCustomCss(css)} />
+                  </div>
+                </section>
+
+                <div className="mt-8">
+                  <Button loading={saving} onClick={() => void saveSettings()}>Save Appearance</Button>
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'voice' && (
+              <div>
+                <SettingsHeader
+                  title="Voice & Video"
+                  description="Choose your devices and how your mic behaves in calls."
+                />
+                <section>
+                  <h3 className="text-section uppercase text-text-muted">Devices</h3>
+                  <div className="mt-2 divide-y divide-border-subtle">
+                    <div className="py-4">
+                      <label htmlFor="voice-input" className="text-label text-text-primary">Input device</label>
+                      <p className="mt-0.5 text-meta text-text-secondary">The microphone others hear you through.</p>
+                      <Select
+                        id="voice-input"
+                        className="mt-2.5 max-w-md"
+                        value={selectedAudioInput || ''}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          const previous = selectedAudioInput || '';
+                          selectAudioInput(value);
+                          void applyAudioInputDevice(value || null).then((ok) => {
+                            if (!ok) {
+                              selectAudioInput(previous);
+                              toast.error('Could not switch microphone. It may be in use or unavailable.');
+                            }
+                          });
+                        }}
+                      >
+                        <option value="">Default</option>
+                        {audioInputDevices.map((device) => (
+                          <option key={device.deviceId} value={device.deviceId}>
+                            {device.label || `Microphone ${device.deviceId.slice(0, 6)}`}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    <div className="py-4">
+                      <label htmlFor="voice-output" className="text-label text-text-primary">Output device</label>
+                      <p className="mt-0.5 text-meta text-text-secondary">Where call audio plays back.</p>
+                      <Select
+                        id="voice-output"
+                        className="mt-2.5 max-w-md"
+                        value={selectedAudioOutput || ''}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          const previous = selectedAudioOutput || '';
+                          selectAudioOutput(value);
+                          void applyAudioOutputDevice(value || null).then((ok) => {
+                            if (!ok) {
+                              selectAudioOutput(previous);
+                              toast.error('Could not switch speaker. It may be unavailable.');
+                            }
+                          });
+                        }}
+                      >
+                        <option value="">Default</option>
+                        {audioOutputDevices.map((device) => (
+                          <option key={device.deviceId} value={device.deviceId}>
+                            {device.label || `Speaker ${device.deviceId.slice(0, 6)}`}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Input mode</h3>
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-label text-text-primary">How your mic activates</div>
+                      <p className="mt-0.5 text-meta text-text-secondary">
+                        {voiceInputMode === 'push_to_talk'
+                          ? 'Set your Push to Talk key under Keybinds. You start muted — hold the key to speak.'
+                          : 'Your mic opens automatically when you speak.'}
+                      </p>
+                    </div>
+                    <Segmented
+                      value={voiceInputMode}
+                      onChange={(mode) => setNotifications((prev) => ({ ...prev, voiceInputMode: mode }))}
+                      options={[
+                        { value: 'voice_activity', label: 'Voice Activity' },
+                        { value: 'push_to_talk', label: 'Push to Talk' },
+                      ]}
+                    />
+                  </div>
+                </section>
+
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Processing</h3>
+                  <div className="mt-2 divide-y divide-border-subtle">
+                    <ToggleRow
+                      title="Noise suppression"
+                      description="Filters out steady background noise like fans and keyboards."
+                      on={Boolean(mergedNotifications['noiseSuppression'] ?? true)}
+                      onToggle={() => setNotifications((prev) => ({ ...prev, noiseSuppression: !Boolean(prev['noiseSuppression'] ?? true) }))}
+                    />
+                    <ToggleRow
+                      title="Echo cancellation"
+                      description="Stops your speakers from bleeding back into your mic."
+                      on={Boolean(mergedNotifications['echoCancellation'] ?? true)}
+                      onToggle={() => setNotifications((prev) => ({ ...prev, echoCancellation: !Boolean(prev['echoCancellation'] ?? true) }))}
+                    />
+                    <ToggleRow
+                      title="Automatic gain control"
+                      description="Levels your mic volume. Can add hiss on some setups."
+                      on={Boolean(mergedNotifications['autoGainControl'] ?? false)}
+                      onToggle={() => setNotifications((prev) => ({ ...prev, autoGainControl: !Boolean(prev['autoGainControl'] ?? false) }))}
+                    />
+                  </div>
+                </section>
+
+                <div className="mt-8">
+                  <Button
+                    loading={saving}
+                    onClick={() => {
+                      void saveSettings().then(() => {
+                        // Re-acquire the microphone with updated noise suppression /
+                        // echo cancellation / auto gain constraints so changes take effect
+                        // immediately without requiring a mute/unmute cycle.
+                        void useVoiceStore.getState().reapplyAudioConstraints();
+                      });
+                    }}
+                  >
+                    Save Voice Settings
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'notifications' && (
+              <div>
+                <SettingsHeader
+                  title="Notifications"
+                  description="Decide when Paracord should reach out and how loud it gets."
+                />
+                <section>
+                  <div className="divide-y divide-border-subtle">
+                    <ToggleRow
+                      title="Desktop notifications"
+                      description="Surface new messages as system notifications."
+                      on={notifEnabled}
+                      onToggle={() => {
+                        const next = !notifEnabled;
+                        if (next) {
+                          void requestNotificationPermission().then((granted) => {
+                            setNotifPermission(granted ? 'granted' : 'denied');
+                            setNotifEnabled(granted);
+                            setNotificationsEnabled(granted);
+                            setNotifications((prev) => ({ ...prev, desktop: granted }));
+                          });
+                        } else {
+                          setNotifEnabled(false);
+                          setNotificationsEnabled(false);
+                          setNotifications((prev) => ({ ...prev, desktop: false }));
+                        }
+                      }}
+                    >
+                      {notifPermission === 'denied' && notifEnabled && (
+                        <p className="mt-1.5 text-meta text-accent-warning">
+                          Your system blocked notification permission. Toggle again to ask once more.
+                        </p>
+                      )}
+                      {notifPermission === 'granted' && notifEnabled && (
+                        <p className="mt-1.5 text-meta text-accent-success">Permission granted.</p>
+                      )}
+                    </ToggleRow>
+                    <ToggleRow
+                      title="Message sound"
+                      description="Play a soft chime when a new message arrives."
+                      on={Boolean(mergedNotifications.messageSound)}
+                      onToggle={() => setNotifications((prev) => ({ ...prev, messageSound: !Boolean(prev.messageSound) }))}
+                    />
+                    <ToggleRow
+                      title="Low bandwidth mode"
+                      description="Hide heavy image previews and cut back on automatic media loading."
+                      on={Boolean(mergedNotifications.lowBandwidthMode)}
+                      onToggle={() => {
+                        const next = !Boolean(mergedNotifications.lowBandwidthMode);
+                        setLowBandwidthModeUI(next);
+                        setNotifications((prev) => ({ ...prev, lowBandwidthMode: next }));
+                      }}
+                    />
+                  </div>
+                </section>
+
+                <div className="mt-8">
+                  <Button loading={saving} onClick={() => void saveSettings()}>Save Notifications</Button>
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'activity' && (
+              <div>
+                <SettingsHeader
+                  title="Activity Privacy"
+                  description="Control what Paracord shares about the apps and games you use."
+                />
+                <section>
+                  <div className="divide-y divide-border-subtle">
+                    <ToggleRow
+                      title="Display current activity"
+                      description="Show the game or app you're using in your presence."
+                      on={Boolean(activityDetectionEnabled)}
+                      onToggle={() => setActivityDetectionEnabled(!Boolean(activityDetectionEnabled))}
+                    />
+                  </div>
+                </section>
+
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Detected apps</h3>
+                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                    Turn off any app you'd rather keep private. Paracord stops reporting it right away.
+                  </p>
+                  {visibleKnownActivityApps.length === 0 ? (
+                    <div className="mt-4 flex items-start gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-4">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-text-muted">
+                        <Eye size={18} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-label text-text-primary">Nothing detected yet</div>
+                        <p className="mt-0.5 text-meta text-text-secondary">
+                          Launch a game or app while Paracord is open and it'll appear here to manage.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 divide-y divide-border-subtle">
                       {visibleKnownActivityApps.map((appId) => {
                         const enabled = !disabledActivityApps.has(appId);
                         return (
-                          <div
-                            key={appId}
-                            className="flex items-center justify-between rounded-lg border border-border-subtle bg-bg-tertiary/70 px-3 py-2.5"
-                          >
-                            <div>
-                              <div className="text-sm font-medium text-text-primary">{readableAppName(appId)}</div>
-                              <div className="text-xs text-text-muted">{appId}</div>
+                          <div key={appId} className="flex items-center justify-between gap-4 py-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-label text-text-primary">{readableAppName(appId)}</div>
+                              <div className="truncate font-code text-meta text-text-muted">{appId}</div>
                             </div>
                             <ToggleSwitch on={enabled} onToggle={() => toggleActivityApp(appId)} />
                           </div>
@@ -1642,322 +1749,375 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       })}
                     </div>
                   )}
+                </section>
+
+                <div className="mt-8">
+                  <Button loading={saving} onClick={() => void saveActivitySettings()}>Save Activity Privacy</Button>
                 </div>
               </div>
-              <div className="settings-action-row">
-                <Button onClick={() => void saveActivitySettings()} disabled={saving}>
-                  {saving ? 'Saving...' : 'Save Activity Privacy'}
-                </Button>
-              </div>
-            </div>
-          )}
+            )}
 
-          {activeSection === 'keybinds' && (
-            <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)]">
-              <h2 className="settings-section-title mb-8">Keybinds</h2>
-              <div className="card-stack">
-                {[
-                  { key: 'toggleMute' as const, action: 'Toggle Mute' },
-                  { key: 'toggleDeafen' as const, action: 'Toggle Deafen' },
-                  { key: 'pushToTalk' as const, action: 'Push to Talk' },
-                ].map(kb => (
-                  <div
-                    key={kb.key}
-                    className="card-surface flex flex-col items-stretch gap-2 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <span className="text-sm font-medium text-text-primary">{kb.action}</span>
-                    <input
-                      className="h-10 w-full rounded-lg border border-border-subtle bg-bg-tertiary px-3 py-2 text-sm font-mono text-text-muted outline-none focus:border-accent-primary sm:w-48"
-                      value={capturingKeybind === kb.key ? 'Press keys...' : String(mergedKeybinds[kb.key] ?? '')}
-                      onFocus={() => setCapturingKeybind(kb.key)}
-                      onBlur={() => setCapturingKeybind(null)}
-                      onKeyDown={(e) => {
-                        e.preventDefault();
-                        const keys: string[] = [];
-                        if (e.ctrlKey) keys.push('Ctrl');
-                        if (e.shiftKey) keys.push('Shift');
-                        if (e.altKey) keys.push('Alt');
-                        if (e.metaKey) keys.push('Meta');
-                        const base = e.key.length === 1 ? e.key.toUpperCase() : e.key;
-                        if (!['Control', 'Shift', 'Alt', 'Meta'].includes(base)) {
-                          keys.push(base);
-                        }
-                        if (keys.length > 0) {
-                          setKeybinds((prev) => ({ ...prev, [kb.key]: keys.join('+') }));
-                          setCapturingKeybind(null);
-                        }
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="settings-action-row">
-                <Button onClick={() => void saveSettings()} disabled={saving}>
-                  {saving ? 'Saving...' : 'Save Keybinds'}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {activeSection === 'identity' && (
-            <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)]">
-              <h2 className="settings-section-title mb-8">Identity Portability</h2>
-
-              {identityStatus && (
-                <div
-                  className="card-surface mb-8 inline-flex max-w-full items-center rounded-xl border border-border-subtle bg-bg-mod-subtle px-4 py-3 text-sm font-medium"
-                  style={{ color: identityStatus.includes('failed') || identityStatus.includes('Failed') ? 'var(--accent-danger)' : 'var(--accent-success)' }}
-                >
-                  {identityStatus}
-                </div>
-              )}
-
-              <div className="card-stack-roomy">
-                <div className="card-surface rounded-2xl border border-border-subtle bg-bg-tertiary/80 p-8">
-                  <div className="mb-6">
-                    <div className="text-base font-semibold text-text-primary">Current Identity Key</div>
-                    <div className="mt-1 text-sm text-text-muted">
-                      Share and verify this fingerprint with trusted contacts.
-                    </div>
-                  </div>
-                  {ownIdentityFingerprint ? (
-                    <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-4 py-3">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Fingerprint</div>
-                      <div className="break-all font-mono text-xs text-text-primary">{ownIdentityFingerprint}</div>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-4 py-3 text-sm text-text-muted">
-                      No public identity key attached to this account yet.
-                    </div>
-                  )}
-                </div>
-
-                {/* Export Section */}
-                <div className="card-surface rounded-2xl border border-border-subtle bg-bg-tertiary/80 p-8">
-                  <div className="mb-6">
-                    <div className="text-base font-semibold text-text-primary">Export Identity</div>
-                    <div className="mt-1 text-sm text-text-muted">
-                      Export your identity as a signed bundle that can be imported to another Paracord server.
-                    </div>
-                  </div>
-                  <div className="card-stack">
-                    <div className="card-surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                      <div>
-                        <div className="text-sm font-medium text-text-primary">Include Messages</div>
-                        <div className="text-xs text-text-muted">Export your message history (can be large)</div>
-                      </div>
-                      <ToggleSwitch on={exportIncludeMessages} onToggle={() => setExportIncludeMessages(!exportIncludeMessages)} />
-                    </div>
-                    <div className="card-surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                      <div>
-                        <div className="text-sm font-medium text-text-primary">Include Relationships</div>
-                        <div className="text-xs text-text-muted">Export your friend and block list</div>
-                      </div>
-                      <ToggleSwitch on={exportIncludeRelationships} onToggle={() => setExportIncludeRelationships(!exportIncludeRelationships)} />
-                    </div>
-                  </div>
-                  <div className="settings-action-row">
-                    <Button
-                      onClick={() => void handleExportIdentity()}
-                      disabled={exporting}
-                    >
-                      {exporting ? 'Exporting...' : 'Export Identity'}
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Import Section */}
-                <div className="card-surface rounded-2xl border border-border-subtle bg-bg-tertiary/80 p-8">
-                  <div className="mb-6">
-                    <div className="text-base font-semibold text-text-primary">Import Identity</div>
-                    <div className="mt-1 text-sm text-text-muted">
-                      Import an identity bundle from another Paracord server. This will merge the imported data with your current account.
-                    </div>
-                  </div>
-                  <div className="card-stack">
-                    <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                      <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Select Bundle File</div>
-                      <input
-                        type="file"
-                        accept=".json"
-                        onChange={handleImportFileSelect}
-                        className="block w-full text-sm text-text-muted file:mr-3 file:rounded-lg file:border file:border-border-subtle file:bg-bg-secondary file:px-3 file:py-2 file:text-sm file:font-medium file:text-text-primary hover:file:bg-bg-mod-subtle"
-                      />
-                      {importFile && (
-                        <div className="mt-2 text-xs text-text-muted">
-                          Selected: {importFile.name}
-                        </div>
-                      )}
-                    </div>
-
-                    {importPreview && (
-                      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-5">
-                        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Import Preview</div>
-                        <div className="space-y-2 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Origin Server</span>
-                            <span className="font-medium text-text-primary">{String(importPreview.origin_server ?? 'Unknown')}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Username</span>
-                            <span className="font-medium text-text-primary">
-                              {(importPreview.user as Record<string, unknown>)?.username
-                                ? String((importPreview.user as Record<string, unknown>).username)
-                                : 'Unknown'}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Messages</span>
-                            <span className="font-medium text-text-primary">
-                              {Array.isArray(importPreview.messages) ? importPreview.messages.length : 0}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Attachments</span>
-                            <span className="font-medium text-text-primary">
-                              {Array.isArray(importPreview.attachments) ? importPreview.attachments.length : 0}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Prekeys</span>
-                            <span className="font-medium text-text-primary">
-                              {Array.isArray((importPreview.prekeys as Record<string, unknown> | undefined)?.one_time_prekeys)
-                                ? ((importPreview.prekeys as Record<string, unknown>).one_time_prekeys as unknown[]).length
-                                : 0}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Relationships</span>
-                            <span className="font-medium text-text-primary">
-                              {Array.isArray(importPreview.relationships) ? importPreview.relationships.length : 0}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Guild Memberships</span>
-                            <span className="font-medium text-text-primary">
-                              {Array.isArray(importPreview.guilds) ? importPreview.guilds.length : 0}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Exported At</span>
-                            <span className="font-medium text-text-primary">
-                              {importPreview.exported_at ? new Date(String(importPreview.exported_at)).toLocaleString() : 'Unknown'}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="mt-4 rounded-lg border border-accent-warning/30 bg-accent-warning/10 px-4 py-3 text-xs text-accent-warning">
-                          This will merge the imported identity with your current account. Profile fields will be overwritten.
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="settings-action-row">
-                    <Button
-                      onClick={() => void handleImportIdentity()}
-                      disabled={importing || !importPreview}
-                    >
-                      {importing ? 'Importing...' : 'Import Identity'}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeSection === 'server' && userIsAdmin && (
-            <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)]">
-              <h2 className="settings-section-title mb-8">Server</h2>
-              <div className="card-stack">
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Update & Restart</div>
-                  <div className="mt-2 text-sm text-text-muted">
-                    Pull the latest code from git, rebuild the client and server, then restart. All connected users will be temporarily disconnected.
-                  </div>
-                  <div className="mt-4">
-                    {!restartConfirm ? (
-                      <Button
-                        style={{ backgroundColor: 'var(--accent-warning, #f59e0b)' }}
-                        onClick={() => setRestartConfirm(true)}
-                        disabled={restarting}
-                      >
-                        Update & Restart Server
-                      </Button>
-                    ) : (
-                      <div className="flex flex-wrap items-center gap-3">
-                        <span className="text-sm font-medium text-text-primary">Are you sure?</span>
-                        <Button
-                          style={{ backgroundColor: 'var(--accent-danger)' }}
-                          disabled={restarting}
-                          onClick={async () => {
-                            setRestarting(true);
-                            try {
-                              await adminApi.restartUpdate();
-                            } catch {
-                              setRestarting(false);
-                              setRestartConfirm(false);
-                              setErrorStatus('Failed to trigger restart.');
+            {activeSection === 'keybinds' && (
+              <div>
+                <SettingsHeader
+                  title="Keybinds"
+                  description="Global shortcuts for voice controls. Focus a field and press the combination."
+                />
+                <section>
+                  <div className="divide-y divide-border-subtle">
+                    {[
+                      { key: 'toggleMute' as const, action: 'Toggle mute' },
+                      { key: 'toggleDeafen' as const, action: 'Toggle deafen' },
+                      { key: 'pushToTalk' as const, action: 'Push to talk' },
+                    ].map((kb) => (
+                      <div key={kb.key} className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="text-label text-text-primary">{kb.action}</span>
+                        <input
+                          className="h-10 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 font-code text-sm text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)] sm:w-52"
+                          value={capturingKeybind === kb.key ? 'Press keys…' : String(mergedKeybinds[kb.key] ?? '')}
+                          readOnly
+                          onFocus={() => setCapturingKeybind(kb.key)}
+                          onBlur={() => setCapturingKeybind(null)}
+                          onKeyDown={(e) => {
+                            e.preventDefault();
+                            const keys: string[] = [];
+                            if (e.ctrlKey) keys.push('Ctrl');
+                            if (e.shiftKey) keys.push('Shift');
+                            if (e.altKey) keys.push('Alt');
+                            if (e.metaKey) keys.push('Meta');
+                            const base = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+                            if (!['Control', 'Shift', 'Alt', 'Meta'].includes(base)) {
+                              keys.push(base);
+                            }
+                            if (keys.length > 0) {
+                              setKeybinds((prev) => ({ ...prev, [kb.key]: keys.join('+') }));
+                              setCapturingKeybind(null);
                             }
                           }}
-                        >
-                          {restarting ? 'Restarting...' : 'Yes, restart now'}
-                        </Button>
-                        <Button
-                          style={{ backgroundColor: 'var(--bg-tertiary)' }}
-                          onClick={() => setRestartConfirm(false)}
-                          disabled={restarting}
-                        >
-                          Cancel
-                        </Button>
+                        />
                       </div>
+                    ))}
+                  </div>
+                </section>
+
+                <div className="mt-8">
+                  <Button loading={saving} onClick={() => void saveSettings()}>Save Keybinds</Button>
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'identity' && (
+              <div>
+                <SettingsHeader
+                  title="Identity Portability"
+                  description="Verify your key, or move your identity between Paracord servers."
+                />
+
+                {identityStatus && (
+                  <div
+                    className={cn(
+                      'mb-6 rounded-md border px-4 py-3 text-sm font-medium',
+                      identityStatus.toLowerCase().includes('failed')
+                        ? 'border-accent-danger/30 bg-danger-tint text-accent-danger'
+                        : 'border-accent-success/30 bg-success-tint text-accent-success'
+                    )}
+                    role={identityStatus.toLowerCase().includes('failed') ? 'alert' : 'status'}
+                  >
+                    {identityStatus}
+                  </div>
+                )}
+
+                <section>
+                  <h3 className="text-section uppercase text-text-muted">Current identity key</h3>
+                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                    Share this fingerprint with trusted contacts so they can confirm it's really you.
+                  </p>
+                  {ownIdentityFingerprint ? (
+                    <div className="mt-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3">
+                      <div className="text-section uppercase text-text-muted">Fingerprint</div>
+                      <div className="mt-1.5 break-all font-code text-sm text-text-primary">{ownIdentityFingerprint}</div>
+                    </div>
+                  ) : (
+                    <p className="mt-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3 text-sm text-text-secondary">
+                      No public identity key is attached to this account yet.
+                    </p>
+                  )}
+                </section>
+
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Export identity</h3>
+                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                    Download a signed bundle you can import into another Paracord server.
+                  </p>
+                  <div className="mt-2 divide-y divide-border-subtle">
+                    <ToggleRow
+                      title="Include messages"
+                      description="Bundle your message history. This can get large."
+                      on={exportIncludeMessages}
+                      onToggle={() => setExportIncludeMessages(!exportIncludeMessages)}
+                    />
+                    <ToggleRow
+                      title="Include relationships"
+                      description="Bundle your friends and block list."
+                      on={exportIncludeRelationships}
+                      onToggle={() => setExportIncludeRelationships(!exportIncludeRelationships)}
+                    />
+                  </div>
+                  <div className="mt-5">
+                    <Button loading={exporting} onClick={() => void handleExportIdentity()}>
+                      {!exporting && <Download size={16} className="mr-1.5" />}
+                      Export Identity
+                    </Button>
+                  </div>
+                </section>
+
+                <section className="mt-9 border-t border-border-subtle pt-8">
+                  <h3 className="text-section uppercase text-text-muted">Import identity</h3>
+                  <p className="mt-2 max-w-xl text-sm text-text-secondary">
+                    Bring in a bundle from another server. Imported data is merged with this account.
+                  </p>
+                  <div className="mt-4">
+                    <label htmlFor="identity-file" className="text-label text-text-primary">Bundle file</label>
+                    <input
+                      id="identity-file"
+                      type="file"
+                      accept=".json"
+                      onChange={handleImportFileSelect}
+                      className="mt-2.5 block w-full max-w-md text-sm text-text-muted file:mr-3 file:rounded-sm file:border file:border-border-subtle file:bg-bg-secondary file:px-3 file:py-2 file:text-sm file:font-medium file:text-text-primary hover:file:bg-bg-mod-subtle"
+                    />
+                    {importFile && (
+                      <p className="mt-2 text-meta text-text-secondary">Selected: {importFile.name}</p>
                     )}
                   </div>
-                </div>
-              </div>
-            </div>
-          )}
 
-          {activeSection === 'about' && (
-            <div className="settings-surface-card w-full min-h-[calc(100dvh-13.5rem)]">
-              <h2 className="settings-section-title mb-8">About</h2>
-              <div className="card-stack">
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-                  <div className="text-sm font-semibold text-text-primary">{APP_NAME}</div>
-                  <div className="mt-1 text-xs text-text-muted">Version 0.4.0</div>
-                </div>
-                <div className="text-sm leading-6 text-text-muted">
-                  A decentralized, self-hostable Discord alternative built with Rust, Tauri, and React.
-                </div>
+                  {importPreview && (
+                    <div className="mt-5 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-4">
+                      <div className="text-section uppercase text-text-muted">Import preview</div>
+                      <dl className="mt-3 space-y-2 text-sm">
+                        {([
+                          ['Origin server', String(importPreview.origin_server ?? 'Unknown')],
+                          ['Username', (importPreview.user as Record<string, unknown>)?.username ? String((importPreview.user as Record<string, unknown>).username) : 'Unknown'],
+                          ['Messages', String(Array.isArray(importPreview.messages) ? importPreview.messages.length : 0)],
+                          ['Attachments', String(Array.isArray(importPreview.attachments) ? importPreview.attachments.length : 0)],
+                          ['Prekeys', String(Array.isArray((importPreview.prekeys as Record<string, unknown> | undefined)?.one_time_prekeys) ? ((importPreview.prekeys as Record<string, unknown>).one_time_prekeys as unknown[]).length : 0)],
+                          ['Relationships', String(Array.isArray(importPreview.relationships) ? importPreview.relationships.length : 0)],
+                          ['Guild memberships', String(Array.isArray(importPreview.guilds) ? importPreview.guilds.length : 0)],
+                          ['Exported at', importPreview.exported_at ? new Date(String(importPreview.exported_at)).toLocaleString() : 'Unknown'],
+                        ] as [string, string][]).map(([label, value]) => (
+                          <div key={label} className="flex justify-between gap-4">
+                            <dt className="text-text-muted">{label}</dt>
+                            <dd className="text-right font-medium text-text-primary">{value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                      <div className="mt-4 flex items-start gap-2.5 rounded-md border border-accent-warning/30 bg-warning-tint px-3.5 py-3 text-meta text-accent-warning">
+                        <ShieldAlert size={15} className="mt-0.5 shrink-0" />
+                        <span>This merges the imported identity into your account. Profile fields will be overwritten.</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-5">
+                    <Button variant="secondary" loading={importing} disabled={!importPreview} onClick={() => void handleImportIdentity()}>
+                      Import Identity
+                    </Button>
+                  </div>
+                </section>
               </div>
-            </div>
-          )}
+            )}
+
+            {activeSection === 'server' && userIsAdmin && (
+              <div>
+                <SettingsHeader
+                  title="Server"
+                  description="Administrative controls for this Paracord instance."
+                />
+                <section>
+                  <div className="rounded-md border border-accent-warning/30 bg-warning-tint p-5">
+                    <div className="flex items-start gap-3">
+                      <ShieldAlert size={18} className="mt-0.5 shrink-0 text-accent-warning" />
+                      <div className="min-w-0">
+                        <h3 className="text-subhead text-text-primary">Update &amp; restart</h3>
+                        <p className="mt-1 max-w-xl text-sm leading-relaxed text-text-secondary">
+                          Pull the latest code, rebuild the client and server, then restart. Everyone connected is
+                          briefly disconnected.
+                        </p>
+                        <div className="mt-4">
+                          {!restartConfirm ? (
+                            <Button variant="secondary" disabled={restarting} onClick={() => setRestartConfirm(true)}>
+                              Update &amp; restart server
+                            </Button>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-3">
+                              <span className="text-label text-text-primary">Are you sure?</span>
+                              <Button
+                                variant="destructive"
+                                loading={restarting}
+                                onClick={async () => {
+                                  setRestarting(true);
+                                  try {
+                                    await adminApi.restartUpdate();
+                                  } catch {
+                                    setRestarting(false);
+                                    setRestartConfirm(false);
+                                    setErrorStatus('Failed to trigger restart.');
+                                  }
+                                }}
+                              >
+                                Yes, restart now
+                              </Button>
+                              <Button variant="ghost" disabled={restarting} onClick={() => setRestartConfirm(false)}>
+                                Cancel
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {activeSection === 'about' && (
+              <div>
+                <SettingsHeader title="About" description="What you're running and who built it." />
+                <section>
+                  <div className="flex items-baseline justify-between gap-4 border-b border-border-subtle pb-4">
+                    <div className="font-display text-title text-text-primary">{APP_NAME}</div>
+                    <div className="font-code text-meta text-text-muted">Version 0.4.0</div>
+                  </div>
+                  <p className="mt-5 max-w-xl text-body text-text-secondary">
+                    A decentralized, self-hostable Discord alternative built with Rust, Tauri, and React — with its own
+                    end-to-end-encrypted media engine.
+                  </p>
+                </section>
+              </div>
+            )}
+          </div>
         </div>
-      </div>}
+      )}
     </div>
   );
 }
 
-function ToggleSwitch({ on, onToggle, disabled = false }: { on: boolean; onToggle: () => void; disabled?: boolean }) {
+function NavButton({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
+  const Icon = item.icon;
   return (
     <button
-      onClick={onToggle}
-      disabled={disabled}
-      className="relative h-6 w-11 rounded-full border transition-colors"
-      style={{
-        backgroundColor: disabled
-          ? 'var(--interactive-muted)'
-          : on
-            ? 'var(--accent-success)'
-            : 'var(--interactive-muted)',
-        borderColor: on ? 'color-mix(in srgb, var(--accent-success) 75%, white 25%)' : 'var(--border-subtle)',
-        opacity: disabled ? 0.6 : 1,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-      }}
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'group relative flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-label outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+        active
+          ? 'bg-accent-tint text-text-primary'
+          : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
+      )}
     >
-      <div
-        className="absolute top-0.5 h-[18px] w-[18px] rounded-full bg-white transition-all"
-        style={{ left: on ? '18px' : '2px' }}
+      {active && (
+        <span aria-hidden className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-accent-secondary" />
+      )}
+      <Icon
+        size={17}
+        className={cn('shrink-0', active ? 'text-accent-primary' : 'text-text-muted group-hover:text-text-secondary')}
       />
+      <span className="truncate">{item.label}</span>
     </button>
   );
 }
 
+function SettingsHeader({ title, description }: { title: string; description?: string }) {
+  return (
+    <header className="mb-8">
+      <h2 className="text-heading text-text-primary">{title}</h2>
+      {description && (
+        <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-text-secondary">{description}</p>
+      )}
+    </header>
+  );
+}
+
+function ToggleRow({
+  title,
+  description,
+  on,
+  onToggle,
+  disabled = false,
+  children,
+}: {
+  title: string;
+  description?: string;
+  on: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-4">
+      <div className="min-w-0">
+        <div className="text-label text-text-primary">{title}</div>
+        {description && <p className="mt-0.5 text-meta leading-relaxed text-text-secondary">{description}</p>}
+        {children}
+      </div>
+      <ToggleSwitch on={on} onToggle={onToggle} disabled={disabled} />
+    </div>
+  );
+}
+
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (value: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  return (
+    <div className="inline-flex shrink-0 rounded-sm border border-border-subtle bg-bg-tertiary p-0.5">
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              'rounded-[6px] px-3 py-1.5 text-label outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+              selected
+                ? 'bg-accent-primary text-text-on-accent shadow-sm'
+                : 'text-text-secondary hover:text-text-primary'
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Toggle track ramps --bg-mod-strong (off) → --accent-primary (on) per design-spec
+// §7; the knob is the only pill, focus renders the layered ring.
+function ToggleSwitch({ on, onToggle, disabled = false }: { on: boolean; onToggle: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={onToggle}
+      disabled={disabled}
+      className={cn(
+        'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
+        on ? 'bg-accent-primary' : 'bg-bg-mod-strong'
+      )}
+    >
+      <span
+        className={cn(
+          'inline-block h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform duration-[140ms] ease-[var(--ease-out)]',
+          on ? 'translate-x-[23px]' : 'translate-x-[3px]'
+        )}
+      />
+    </button>
+  );
+}

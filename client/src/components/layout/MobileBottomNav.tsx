@@ -76,7 +76,7 @@ export function MobileBottomNav() {
           <button
             key={id}
             onClick={() => handleTabPress(id)}
-            className="flex flex-1 flex-col items-center gap-0.5 py-2 transition-colors"
+            className="flex min-h-[44px] flex-1 flex-col items-center justify-center gap-1 rounded-sm py-1.5 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]"
             aria-label={label}
             aria-current={isActive ? 'page' : undefined}
             style={{
@@ -84,7 +84,7 @@ export function MobileBottomNav() {
             }}
           >
             <Icon size={20} strokeWidth={isActive ? 2.2 : 1.8} />
-            <span className="text-[10px] font-semibold leading-tight">{label}</span>
+            <span className="text-meta font-semibold leading-none">{label}</span>
           </button>
         );
       })}

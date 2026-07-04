@@ -21,31 +21,31 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="group mt-1.5 flex max-w-[480px] overflow-hidden rounded-xl border border-border-subtle bg-bg-mod-subtle/60 transition-colors hover:bg-bg-mod-subtle"
+      className="group mt-1.5 flex max-w-[480px] overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
     >
-      {/* Accent bar */}
-      <div className="w-1 shrink-0 rounded-l-xl" style={{ backgroundColor: accentColor }} />
+      {/* Accent bar — the source's own color, a single meaning marker */}
+      <div className="w-1 shrink-0" style={{ backgroundColor: accentColor }} />
 
-      <div className="flex min-w-0 flex-1 gap-3 px-3 py-2.5">
+      <div className="flex min-w-0 flex-1 gap-3 px-3.5 py-3">
         <div className="min-w-0 flex-1">
           {embed.site_name && (
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+            <div className="text-section uppercase text-text-muted">
               {embed.site_name}
             </div>
           )}
           {embed.title && (
-            <div className="mt-0.5 text-sm font-semibold leading-snug text-accent-primary group-hover:underline">
+            <div className="mt-0.5 text-label font-semibold leading-snug text-accent-primary group-hover:underline">
               {embed.title}
             </div>
           )}
           {embed.description && (
-            <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-text-secondary">
+            <div className="mt-1 line-clamp-2 text-meta leading-relaxed text-text-secondary">
               {embed.description}
             </div>
           )}
           {!embed.title && !embed.description && (
-            <div className="flex items-center gap-1.5 text-xs text-text-muted">
-              <ExternalLink size={12} />
+            <div className="flex items-center gap-1.5 text-meta text-text-muted">
+              <ExternalLink size={13} />
               <span className="truncate">{url}</span>
             </div>
           )}
@@ -55,12 +55,12 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
           <img
             src={imageUrl ?? undefined}
             alt=""
-            className="h-16 w-16 shrink-0 rounded-lg object-cover"
+            className="h-16 w-16 shrink-0 rounded-sm object-cover"
             loading="lazy"
           />
         )}
         {!hasImage && lowBandwidthMode && imageUrl && (
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-border-subtle bg-bg-mod-subtle text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-sm border border-border-subtle bg-bg-tertiary text-section uppercase text-text-muted">
             Image
           </div>
         )}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { RotateCcw, Save } from 'lucide-react';
+import { RotateCcw, Save, ShieldAlert, Code2, AlertTriangle } from 'lucide-react';
 import { sanitizeCustomCss } from '../../lib/security';
+import { toast } from '../../stores/toastStore';
 
 // Shared with useTheme(): the single <style> element that owns rendered custom CSS.
 const CUSTOM_CSS_STYLE_ID = 'paracord-custom-css';
@@ -86,6 +87,7 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
   const handleSave = () => {
     onSave?.(sanitizeCustomCss(css));
     setSaved(true);
+    toast.success('Custom CSS saved');
     setTimeout(() => setSaved(false), 2000);
   };
 
@@ -93,71 +95,95 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
     setCss('');
   };
 
+  const FOCUS_RING =
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-secondary';
+
   return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="text-xs font-bold uppercase" style={{ color: 'var(--text-secondary)' }}>
-            Custom CSS
-          </div>
-          <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-            Changes are previewed live. Save to persist.
-          </div>
+          <h3 className="font-display text-heading text-text-primary">Custom CSS</h3>
+          <p className="mt-1 text-meta text-text-muted">
+            Previewed live as you type. Save to keep it across sessions.
+          </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <button
             onClick={handleReset}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors"
-            style={{
-              backgroundColor: 'var(--bg-accent)',
-              color: 'var(--text-secondary)',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text-primary)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            className={`inline-flex items-center gap-1.5 rounded-sm border border-border-subtle px-3 py-2 text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
           >
-            <RotateCcw size={14} />
+            <RotateCcw size={15} />
             Reset
           </button>
           <button
             onClick={handleSave}
             aria-label={saved ? 'Custom CSS saved' : 'Save custom CSS'}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium text-on-accent transition-colors"
-            style={{ backgroundColor: saved ? 'var(--accent-success)' : 'var(--accent-primary)' }}
+            className={cnSaveButton(saved, FOCUS_RING)}
           >
-            <Save size={14} />
-            {saved ? 'Saved!' : 'Save'}
+            <Save size={15} />
+            {saved ? 'Saved' : 'Save'}
           </button>
         </div>
       </div>
 
-      <textarea
-        value={css}
-        onChange={(e) => setCss(e.target.value)}
-        placeholder={`/* Enter custom CSS here */\n\n/* Example: Change background color */\n:root {\n  --bg-primary: #1a1a2e;\n}`}
-        rows={16}
-        className="w-full rounded-lg p-4 text-sm outline-none resize-y"
-        style={{
-          backgroundColor: 'var(--bg-tertiary)',
-          color: 'var(--text-primary)',
-          border: '1px solid var(--border-subtle)',
-          fontFamily: 'var(--font-code)',
-          lineHeight: '1.5',
-          tabSize: 2,
-          minHeight: '200px',
-        }}
-        onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent-primary)'; }}
-        onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
-        spellCheck={false}
-      />
-
-      <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-        Note: Server administrators can also set server-wide CSS that applies to all members in that server.
+      <div
+        className="flex gap-2.5 rounded-md px-3.5 py-3"
+        style={{ background: 'var(--warning-tint)' }}
+        role="note"
+      >
+        <ShieldAlert size={16} className="mt-px shrink-0 text-accent-warning" />
+        <p className="text-meta leading-relaxed">
+          <span className="font-semibold text-accent-warning">Only paste CSS you trust. </span>
+          <span className="text-text-secondary">
+            Custom styles run against the whole interface. Unsafe directives (<code className="font-code">@import</code>,
+            {' '}
+            <code className="font-code">url()</code>, <code className="font-code">behavior</code>,
+            {' '}
+            <code className="font-code">expression</code>) are stripped automatically — but a theme you
+            didn't write can still hide or restyle real controls.
+          </span>
+        </p>
       </div>
+
+      <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-tertiary transition-colors duration-150 focus-within:border-accent-primary">
+        <div className="flex items-center gap-2 border-b border-border-subtle px-3.5 py-2">
+          <Code2 size={13} className="text-text-muted" />
+          <span className="font-code text-[11px] text-text-muted">custom.css</span>
+        </div>
+        <textarea
+          value={css}
+          onChange={(e) => setCss(e.target.value)}
+          placeholder={`/* Restyle Paracord with your own CSS. */\n\n:root {\n  --accent-primary: #24d196;\n}`}
+          rows={16}
+          className="block w-full resize-y bg-transparent p-4 font-code text-sm text-text-primary outline-none placeholder:text-text-muted"
+          style={{ lineHeight: '1.6', tabSize: 2, minHeight: '260px' }}
+          spellCheck={false}
+        />
+      </div>
+
       {sanitized && (
-        <div className="mt-1 text-xs" style={{ color: 'var(--accent-danger)' }}>
+        <div
+          className="flex items-center gap-2 rounded-md px-3.5 py-2.5 text-meta font-medium text-accent-danger"
+          style={{ background: 'var(--danger-tint)' }}
+          role="alert"
+        >
+          <AlertTriangle size={15} className="shrink-0" />
           Unsafe CSS directives were removed from preview and save output.
         </div>
       )}
+
+      <p className="text-meta text-text-muted">
+        Server administrators can also apply server-wide CSS that reaches every member of that server.
+      </p>
     </div>
   );
+}
+
+function cnSaveButton(saved: boolean, focusRing: string): string {
+  const base =
+    'inline-flex items-center gap-1.5 rounded-sm px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-sm transition-[transform,background-color] duration-150 active:scale-[.97]';
+  const color = saved
+    ? 'bg-accent-success'
+    : 'bg-accent-primary hover:bg-accent-primary-hover active:bg-accent-primary-active';
+  return `${base} ${color} ${focusRing}`;
 }

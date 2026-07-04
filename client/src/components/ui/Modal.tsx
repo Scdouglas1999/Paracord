@@ -13,7 +13,7 @@ import { cn } from '../../lib/utils';
 
 /**
  * Single base modal/dialog primitive for the app. Owns the portal, backdrop,
- * enter/exit motion (~180ms, matching --duration-normal/--ease-out), ARIA
+ * enter/exit motion (~240ms, matching --duration-slow/--ease-out), ARIA
  * wiring, focus trap and Escape handling. Complex consumers that already manage
  * their own focus trap can opt out with `manageFocus={false}` and pass their own
  * `panelRef`.
@@ -37,12 +37,12 @@ const PLACEMENT_CLASS: Record<ModalPlacement, string> = {
   top: 'items-start justify-center px-4 pt-[12vh]',
 };
 
-// Enter/exit sits in the 150–200ms design-system band.
+// Modal enter (design-spec §5): 240ms ease-out, scale(.96→1) + translateY(8→0) + fade.
 const PANEL_MOTION = {
   center: {
-    initial: { opacity: 0, scale: 0.95, y: 10 },
+    initial: { opacity: 0, scale: 0.96, y: 8 },
     animate: { opacity: 1, scale: 1, y: 0 },
-    exit: { opacity: 0, scale: 0.95, y: 10 },
+    exit: { opacity: 0, scale: 0.96, y: 8 },
   },
   top: {
     initial: { opacity: 0, scale: 0.96, y: -12 },
@@ -51,7 +51,7 @@ const PANEL_MOTION = {
   },
 } as const;
 
-const MODAL_TRANSITION = { duration: 0.18, ease: [0.22, 1, 0.36, 1] as const };
+const MODAL_TRANSITION = { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const };
 
 export interface ModalProps {
   open: boolean;
@@ -147,7 +147,7 @@ export function Modal({
             exit={PANEL_MOTION[placement].exit}
             transition={MODAL_TRANSITION}
             className={cn(
-              'glass-modal relative overflow-hidden rounded-2xl',
+              'relative overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl',
               SIZE_CLASS[size],
               panelClassName,
             )}
@@ -176,7 +176,7 @@ export function ModalCloseButton({ className }: { className?: string }) {
       onClick={ctx.onClose}
       aria-label={ctx.closeLabel}
       className={cn(
-        'absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
+        'absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]',
         className,
       )}
     >
@@ -215,7 +215,7 @@ export function ModalTitle({
     <h2
       id={id}
       className={cn(
-        'text-lg font-bold leading-snug text-text-primary',
+        'font-display text-title text-text-primary',
         className,
       )}
     >
@@ -237,7 +237,7 @@ export function ModalDescription({
     <p
       id={id}
       className={cn(
-        'mt-2 text-sm leading-relaxed text-text-secondary',
+        'mt-2 text-body text-text-secondary',
         className,
       )}
     >

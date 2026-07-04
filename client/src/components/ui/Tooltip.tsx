@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useState, useRef, useCallback, useLayoutEffect, useId } from "react";
 import { createPortal } from "react-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { cn } from "../../lib/utils";
 
 interface TooltipProps {
@@ -23,6 +23,7 @@ export function Tooltip({
 }: TooltipProps) {
     const [isVisible, setIsVisible] = useState(false);
     const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+    const reduceMotion = useReducedMotion();
     const tooltipId = useId();
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const triggerRef = useRef<HTMLDivElement>(null);
@@ -107,18 +108,17 @@ export function Tooltip({
                             ref={tooltipRef}
                             id={tooltipId}
                             role="tooltip"
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                            transition={{ duration: 0.1 }}
+                            initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94 }}
+                            animate={reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+                            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
+                            transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
                             className={cn(
-                                "fixed z-[9999] px-2.5 py-1.5 text-xs font-semibold text-text-primary bg-bg-floating backdrop-blur-md border border-white/5 rounded-lg shadow-lg whitespace-nowrap pointer-events-none",
+                                "pointer-events-none fixed z-[9999] whitespace-nowrap rounded-sm border border-border-subtle bg-bg-floating px-2.5 py-1.5 text-meta font-semibold text-text-primary shadow-lg backdrop-blur-md",
                                 className
                             )}
                             style={{
                                 top: coords?.top ?? -9999,
                                 left: coords?.left ?? -9999,
-                                boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                             }}
                         >
                             {content}

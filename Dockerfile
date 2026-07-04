@@ -36,6 +36,7 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libsqlite3-0 \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user
@@ -44,6 +45,8 @@ RUN groupadd -r paracord && useradd -r -g paracord -m paracord
 WORKDIR /app
 
 COPY --from=server-builder /src/target/release/paracord-server /app/paracord-server
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Create default data directories
 RUN mkdir -p /data/uploads /data/files /data/certs /data/backups \
@@ -58,9 +61,20 @@ ENV PARACORD_STORAGE_PATH=/data/uploads
 ENV PARACORD_MEDIA_STORAGE_PATH=/data/files
 ENV PARACORD_BACKUP_DIR=/data/backups
 ENV PARACORD_TLS_ENABLED=false
+# Native QUIC/WebTransport media is the default voice path (no LiveKit needed).
+ENV PARACORD_VOICE_NATIVE_MEDIA=true
 
+# TCP HTTP(S) API/gateway and UDP native media (raw QUIC + browser WebTransport).
 EXPOSE 8090
+EXPOSE 8443/udp
+
+# Report container health from the HTTP /health endpoint.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- http://localhost:8090/health || exit 1
 
 VOLUME ["/data"]
 
+# The entrypoint only ensures /data exists, then execs the CMD. The server owns
+# first-run secret generation, so no secret needs to be injected from outside.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["/app/paracord-server", "--config", "/data/paracord.toml"]

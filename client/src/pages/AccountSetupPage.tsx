@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Check, Copy, KeyRound, ShieldAlert } from 'lucide-react';
 import { useAccountStore } from '../stores/accountStore';
 import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { getStoredServerUrl, getCurrentOriginServerUrl, setStoredServerUrl } from '../lib/config/apiBaseUrl';
 import { authApi } from '../api/auth';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
+import { ErrorBanner } from '../components/ui/Feedback';
+import { Button } from '../components/ui/Button';
+import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
 
 export function AccountSetupPage() {
   const [searchParams] = useSearchParams();
@@ -31,7 +35,16 @@ export function AccountSetupPage() {
   const [loading, setLoading] = useState(false);
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
   const [savedPhrase, setSavedPhrase] = useState(false);
+  const [copied, setCopied] = useState(false);
   const navigate = useNavigate();
+
+  const handleCopyPhrase = () => {
+    if (!navigator.clipboard) return;
+    void navigator.clipboard.writeText(recoveryPhrase).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
   const createAccount = useAccountStore((s) => s.create);
   const getRecoveryPhrase = useAccountStore((s) => s.getRecoveryPhrase);
 
@@ -106,177 +119,190 @@ export function AccountSetupPage() {
   if (step === 'recovery') {
     const words = recoveryPhrase.split(' ');
     return (
-      <div className="auth-shell">
-        <div className="auth-card mx-auto w-full max-w-lg">
-          <div className="mb-6 text-center">
-            <h1 className="text-3xl font-bold leading-tight text-text-primary">Recovery Phrase</h1>
-            <p className="mt-2 text-sm text-text-muted">
-              Write these words down and keep them safe. This is the <strong>only way</strong> to recover your account if you lose access.
-            </p>
-          </div>
+      <AuthCanvas>
+        <AuthCard className="max-w-lg">
+          <div className="flex flex-col gap-6 p-8">
+            <div>
+              <p className="text-section uppercase text-accent-primary">Step 2 of 2</p>
+              <AuthHeading
+                mark={false}
+                title="Recovery Phrase"
+                subtitle={
+                  <>
+                    These 24 words are the <strong className="font-semibold text-text-primary">only</strong> way to
+                    recover your account if you lose this device. Write them down and store them somewhere safe.
+                  </>
+                }
+              />
+            </div>
 
-          <div className="mb-6 rounded-xl border border-accent-warning/30 bg-accent-warning/10 px-4 py-3 text-sm font-medium text-accent-warning">
-            Never share your recovery phrase. Anyone with these words can access your account.
-          </div>
+            <div className="flex items-start gap-2.5 rounded-md border border-accent-warning/30 bg-warning-tint px-4 py-3 text-label text-accent-warning">
+              <ShieldAlert size={16} className="mt-px shrink-0" />
+              <span>Never share these words. Anyone who has them can take over your account.</span>
+            </div>
 
-          <div className="mb-6 grid grid-cols-4 gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/65 p-4">
-            {words.map((word, i) => (
-              <div key={i} className="card-surface flex items-center gap-1.5 rounded-lg border border-border-subtle/45 bg-bg-secondary/60 px-2 py-1.5">
-                <span className="text-xs font-bold text-text-muted">{i + 1}.</span>
-                <span className="text-sm font-medium text-text-primary">{word}</span>
+            <div>
+              <div className="grid grid-cols-2 gap-2 rounded-md border border-border-subtle bg-bg-tertiary/50 p-4 sm:grid-cols-3">
+                {words.map((word, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-2 rounded-sm bg-bg-secondary px-2.5 py-1.5"
+                  >
+                    <span className="font-code text-meta text-text-muted tabular-nums">
+                      {String(i + 1).padStart(2, '0')}
+                    </span>
+                    <span className="font-code text-label text-text-primary">{word}</span>
+                  </div>
+                ))}
               </div>
-            ))}
+              <button
+                type="button"
+                onClick={handleCopyPhrase}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-meta font-semibold text-text-link transition-colors hover:bg-accent-tint"
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                {copied ? 'Copied to clipboard' : 'Copy phrase'}
+              </button>
+            </div>
+
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border-subtle bg-bg-mod-subtle px-4 py-3.5 transition-colors hover:border-border-strong">
+              <input
+                type="checkbox"
+                checked={savedPhrase}
+                onChange={(e) => setSavedPhrase(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
+              />
+              <span className="text-label leading-relaxed text-text-secondary">
+                I\u2019ve written down my recovery phrase and stored it somewhere safe.
+              </span>
+            </label>
+
+            <Button onClick={handleContinue} disabled={!savedPhrase} className="w-full">
+              Continue
+            </Button>
           </div>
-
-          <label className="mb-6 flex cursor-pointer items-start gap-2.5 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-3.5 py-3.5">
-            <input
-              type="checkbox"
-              checked={savedPhrase}
-              onChange={(e) => setSavedPhrase(e.target.checked)}
-              className="mt-1 accent-[var(--accent-primary)]"
-            />
-            <span className="text-xs leading-5 text-text-muted">
-              I have written down my recovery phrase and stored it in a safe place.
-            </span>
-          </label>
-
-          <button
-            onClick={handleContinue}
-            disabled={!savedPhrase}
-            className="btn-primary w-full"
-          >
-            Continue
-          </button>
-        </div>
-      </div>
+        </AuthCard>
+      </AuthCanvas>
     );
   }
 
   return (
-    <div className="auth-shell">
-      <form onSubmit={handleCreate} className="auth-card mx-auto w-full max-w-md">
-        <div className="mb-7 text-center">
-          <h1 className="text-3xl font-bold leading-tight text-text-primary">
-            {isMigration ? 'Secure Your Account' : 'Set Up Local Identity'}
-          </h1>
-          <p className="mt-1.5 text-sm text-text-muted">
-            {isMigration
-              ? 'Set up a cryptographic identity for your existing account. This lets you sign in to any server without a password.'
-              : 'Optional: create a cryptographic identity on this device for challenge-response sign-in.'}
-          </p>
-        </div>
-
-        {error && (
-          <div role="alert" className="mb-4 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2.5 text-sm font-medium text-accent-danger">
-            {error}
+    <AuthCanvas>
+      <AuthCard className="max-w-md">
+        <form onSubmit={handleCreate} className="flex flex-col gap-6 p-8">
+          <div>
+            <p className="text-section uppercase text-accent-primary">Step 1 of 2</p>
+            <AuthHeading
+              mark={false}
+              title={isMigration ? 'Secure your account' : 'Set up a local identity'}
+              subtitle={
+                isMigration
+                  ? 'Create a cryptographic identity for your existing account so you can sign in to any server without a password.'
+                  : 'Create a device-held identity for passwordless, challenge-response sign-in. Optional \u2014 you can skip it.'
+              }
+            />
           </div>
-        )}
 
-        <div className="card-stack-roomy">
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Username <span className="text-accent-danger">*</span>
-            </span>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+          {error && <ErrorBanner message={error} />}
+
+          <div className="flex flex-col gap-5">
+            <Field label="Username" required>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                minLength={2}
+                maxLength={32}
+                className="input-field"
+                placeholder="ada"
+                autoComplete="username"
+                autoFocus
+              />
+            </Field>
+
+            <Field label="Display Name" hint="How others see you. You can change it later.">
+              <input
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                className="input-field"
+                placeholder="Ada Lovelace"
+              />
+            </Field>
+
+            <Field
+              label={isMigration ? 'New Encryption Password' : 'Password'}
               required
-              minLength={2}
-              maxLength={32}
-              className="input-field mt-2"
-              placeholder="Choose a username"
-              autoComplete="username"
-              autoFocus
-            />
-          </label>
+              hint={
+                isMigration
+                  ? 'Encrypts your new account key on this device \u2014 it can differ from your server password.'
+                  : 'Encrypts your account key on this device. At least 10 characters.'
+              }
+            >
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                className="input-field"
+                placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+                autoComplete="new-password"
+              />
+            </Field>
 
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Display Name</span>
-            <input
-              type="text"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              className="input-field mt-2"
-              placeholder="How others see you"
-            />
-          </label>
+            <Field label="Confirm Password" required>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                className="input-field"
+                placeholder="Type your password again"
+                autoComplete="new-password"
+              />
+            </Field>
+          </div>
 
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              {isMigration ? 'New Encryption Password' : 'Password'} <span className="text-accent-danger">*</span>
-            </span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={MIN_PASSWORD_LENGTH}
-              className="input-field mt-2"
-              placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-              autoComplete="new-password"
-            />
-            <p className="mt-1.5 text-xs text-text-muted">
-              {isMigration
-                ? 'This password encrypts your new account key on this device. It can be different from your server password.'
-                : 'This password encrypts your account key on this device.'}
+          <Button type="submit" loading={loading} disabled={loading} className="w-full">
+            <KeyRound size={16} className="mr-1.5" />
+            {isMigration ? 'Secure Account' : 'Create Identity'}
+          </Button>
+
+          {!isMigration ? (
+            <p className="text-label text-text-secondary">
+              Already have an account?{' '}
+              <button
+                type="button"
+                onClick={() => navigate('/login')}
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Sign in
+              </button>
+              {' \u00b7 '}
+              <button
+                type="button"
+                onClick={() => navigate('/recover')}
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Recover from phrase
+              </button>
             </p>
-          </label>
-
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Confirm Password <span className="text-accent-danger">*</span>
-            </span>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-              className="input-field mt-2"
-              placeholder="Type your password again"
-              autoComplete="new-password"
-            />
-          </label>
-        </div>
-
-        <button type="submit" disabled={loading} className="btn-primary mt-8 w-full min-h-[2.9rem]">
-          {loading ? 'Creating...' : isMigration ? 'Secure Account' : 'Create Identity'}
-        </button>
-
-        {!isMigration && (
-          <p className="mt-5 text-center text-sm text-text-muted">
-            Already have a server account?{' '}
-            <button
-              type="button"
-              onClick={() => navigate('/login')}
-              className="font-semibold text-text-link hover:underline"
-            >
-              Sign in
-            </button>
-            {' \u00b7 '}
-            <button
-              type="button"
-              onClick={() => navigate('/recover')}
-              className="font-semibold text-text-link hover:underline"
-            >
-              Recover
-            </button>
-          </p>
-        )}
-
-        {isMigration && (
-          <p className="mt-5 text-center text-sm text-text-muted">
-            <button
-              type="button"
-              onClick={() => navigate('/app')}
-              className="font-semibold text-text-link hover:underline"
-            >
-              Skip for now
-            </button>
-            {' \u2014 you can set this up later in Settings.'}
-          </p>
-        )}
-      </form>
-    </div>
+          ) : (
+            <p className="text-label text-text-secondary">
+              <button
+                type="button"
+                onClick={() => navigate('/app')}
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Skip for now
+              </button>
+              {' \u2014 you can set this up later in Settings.'}
+            </p>
+          )}
+        </form>
+      </AuthCard>
+    </AuthCanvas>
   );
 }

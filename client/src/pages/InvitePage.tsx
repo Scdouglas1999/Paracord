@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowRight, Sparkles, Users } from 'lucide-react';
+import { ArrowRight, Hash, Users } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { inviteApi } from '../api/invites';
 import { useGuildStore } from '../stores/guildStore';
 import { useChannelStore } from '../stores/channelStore';
 import { useUIStore } from '../stores/uiStore';
 import { extractApiError } from '../api/client';
+import { safeStoredImageDataUrl } from '../lib/security';
+import { ErrorBanner } from '../components/ui/Feedback';
+import { Button } from '../components/ui/Button';
+import { AuthCanvas, AuthCard } from './authScaffold';
 import type { Invite } from '../types';
 
 export function InvitePage() {
@@ -72,79 +76,105 @@ export function InvitePage() {
     }
   };
 
+  const guild = invitePreview?.guild;
+  const iconSrc = safeStoredImageDataUrl(guild?.icon_hash);
+  const guildInitial = (guild?.name ?? '?').trim().charAt(0).toUpperCase() || '?';
+  const memberCount = typeof guild?.member_count === 'number' ? guild.member_count : null;
+
   return (
-    <div className="auth-shell">
-      <div className="auth-card text-center">
-        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-          <Sparkles size={14} />
-          Invite Link
-        </div>
-        <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-3xl border border-border-subtle bg-accent-primary text-3xl font-bold text-text-on-accent shadow-[0_16px_40px_rgba(78,102,232,0.38)]">
-          <Users size={30} />
-        </div>
-        <h1 className="mb-1 text-2xl font-bold text-text-primary">You've been invited</h1>
-        {loadingPreview ? (
-          <p className="mb-2 text-sm text-text-secondary">Loading invite details...</p>
-        ) : (
-          <p className="mb-2 text-sm text-text-secondary">
-            {invitePreview?.guild?.name
-              ? `Join ${invitePreview.guild.name} and start chatting.`
-              : 'Join this server and chat, stream, and hang out live.'}
-          </p>
-        )}
-        <div className="mb-6 inline-flex items-center rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-xs font-semibold tracking-wide text-text-muted">
-          Code: <span className="ml-1 font-mono text-text-secondary">{code}</span>
-        </div>
-        {invitePreview?.guild && (
-          <div className="mb-4 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-4 py-3 text-sm text-text-secondary">
-            <div className="font-semibold text-text-primary">{invitePreview.guild.name}</div>
-            {typeof invitePreview.guild.member_count === 'number' && (
-              <div className="mt-1 text-xs text-text-muted">
-                {invitePreview.guild.member_count.toLocaleString()} members
+    <AuthCanvas>
+      <AuthCard className="max-w-md overflow-hidden">
+        {/* Solid framed identity header — no gradient banner, no floating circle. */}
+        <div className="border-b border-border-subtle bg-bg-tertiary/40 px-8 py-7">
+          <p className="text-section uppercase text-accent-primary">You’re invited</p>
+          <div className="mt-4 flex items-center gap-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border-subtle bg-bg-secondary">
+              {iconSrc ? (
+                <img src={iconSrc} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <span className="font-display text-heading text-text-secondary">{guildInitial}</span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <h1 className="truncate font-display text-title text-text-primary">
+                {loadingPreview ? 'Loading invite…' : guild?.name ?? 'Join this server'}
+              </h1>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-muted">
+                {memberCount !== null && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Users size={13} />
+                    {memberCount.toLocaleString()} {memberCount === 1 ? 'member' : 'members'}
+                  </span>
+                )}
+                <span className="inline-flex items-center gap-1 font-code">
+                  <Hash size={12} />
+                  {code}
+                </span>
               </div>
-            )}
+            </div>
           </div>
-        )}
-
-        {error && (
-          <div className="mb-4 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2.5 text-sm font-medium text-accent-danger">
-            {error}
-          </div>
-        )}
-
-        <div className="mb-4 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 p-3 text-left">
-          <label className="flex items-center gap-2 text-sm text-text-secondary">
-            <input
-              type="checkbox"
-              checked={verificationAck}
-              onChange={(e) => setVerificationAck(e.target.checked)}
-            />
-            I acknowledge this server's rules and verification requirements.
-          </label>
-          <textarea
-            className="input-field mt-2 min-h-[72px] text-sm"
-            placeholder="Verification answers (one per line, if required by this server)"
-            value={verificationAnswers}
-            onChange={(e) => setVerificationAnswers(e.target.value)}
-          />
         </div>
 
-        <button
-          onClick={handleAccept}
-          disabled={loading || loadingPreview || !invitePreview}
-          aria-label={loading ? 'Joining server' : 'Accept invite'}
-          className="btn-primary w-full"
-        >
-          {loading ? 'Joining...' : 'Accept Invite'}
-          {!loading && <ArrowRight size={16} />}
-        </button>
+        <div className="flex flex-col gap-5 p-8">
+          {error && (
+            <div className="flex flex-col gap-3">
+              <ErrorBanner message={error} />
+              <button
+                type="button"
+                onClick={() => navigate('/app')}
+                className="self-start text-label font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Back to Paracord
+              </button>
+            </div>
+          )}
 
-        {!token && (
-          <p className="mt-3 text-xs leading-5 text-text-muted">
-            You need to log in first to accept this invite.
-          </p>
-        )}
-      </div>
-    </div>
+          {!error && (
+            <p className="text-body text-text-secondary">
+              {guild?.name
+                ? `Join ${guild.name} to chat, hop into voice, and stream together.`
+                : 'Accept to join this community and start chatting, streaming, and hanging out.'}
+            </p>
+          )}
+
+          {invitePreview && (
+            <div className="rounded-md border border-border-subtle bg-bg-tertiary/40 p-4">
+              <label className="flex cursor-pointer items-start gap-2.5 text-label text-text-secondary">
+                <input
+                  type="checkbox"
+                  checked={verificationAck}
+                  onChange={(e) => setVerificationAck(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
+                />
+                I acknowledge this server’s rules and verification requirements.
+              </label>
+              <textarea
+                className="input-field mt-3 min-h-[72px] resize-y text-body"
+                placeholder="Verification answers (one per line, if this server requires them)"
+                value={verificationAnswers}
+                onChange={(e) => setVerificationAnswers(e.target.value)}
+              />
+            </div>
+          )}
+
+          <Button
+            onClick={handleAccept}
+            loading={loading}
+            disabled={loading || loadingPreview || !invitePreview}
+            aria-label={loading ? 'Joining server' : 'Accept invite'}
+            className="w-full"
+          >
+            {loading ? 'Joining…' : 'Accept invite'}
+            {!loading && <ArrowRight size={16} className="ml-1.5" />}
+          </Button>
+
+          {!token && (
+            <p className="text-meta leading-relaxed text-text-muted">
+              You’ll be asked to sign in first — your invite is saved and applied right after.
+            </p>
+          )}
+        </div>
+      </AuthCard>
+    </AuthCanvas>
   );
 }

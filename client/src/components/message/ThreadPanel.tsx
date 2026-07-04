@@ -70,14 +70,14 @@ export function ThreadPanel({
 
   return (
     <div className={`flex min-h-0 min-w-0 flex-1 flex-col border-l border-border-subtle bg-bg-secondary/40 ${className}`}>
-      <div className="panel-divider flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle/70 px-4 py-3.5">
+      <div className="panel-divider flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-            <MessageSquare size={15} />
+          <div className="flex items-center gap-2 text-label font-semibold text-text-primary">
+            <MessageSquare size={15} className="text-accent-primary" />
             <span className="truncate">{threadName || 'Thread'}</span>
           </div>
-          <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted">
-            <Hash size={11} />
+          <div className="mt-0.5 flex items-center gap-1.5 text-meta text-text-muted">
+            <Hash size={12} />
             <span className="truncate">{parentChannelName || 'parent channel'}</span>
           </div>
         </div>
@@ -87,7 +87,7 @@ export function ThreadPanel({
               type="button"
               onClick={() => void restoreThread()}
               disabled={restoring}
-              className="rounded-lg border border-border-subtle/70 bg-bg-mod-subtle/70 px-2.5 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:text-text-primary disabled:opacity-60"
+              className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-text-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
             >
               Restore
             </button>
@@ -96,24 +96,24 @@ export function ThreadPanel({
             type="button"
             onClick={() => void deleteThread()}
             disabled={deleting}
-            className="rounded-lg border border-border-subtle/70 bg-bg-mod-subtle/70 px-2.5 py-1.5 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/10 disabled:opacity-60"
+            className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-label font-semibold text-accent-danger shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
           >
             {deleting ? 'Deleting...' : 'Delete'}
           </button>
           <button
             onClick={onClose}
-            className="command-icon-btn h-8 w-8 rounded-lg border border-border-subtle/70 bg-bg-mod-subtle/70 text-text-secondary hover:text-text-primary"
+            className="command-icon-btn h-9 w-9 rounded-sm border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             aria-label="Close thread"
             title="Close thread"
           >
-            <X size={15} />
+            <X size={16} />
           </button>
         </div>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">
         {isArchived && (
-          <div className="mx-4 mt-3 rounded-lg border border-border-subtle bg-bg-mod-subtle/40 px-3 py-2 text-xs text-text-muted">
+          <div className="mx-4 mt-3 flex items-start gap-2 rounded-sm border-l-2 border-accent-warning bg-warning-tint px-3 py-2 text-meta text-text-secondary">
             This thread is archived. Restore it to send new messages.
           </div>
         )}

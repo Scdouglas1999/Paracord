@@ -1,6 +1,6 @@
 import { useParams } from 'react-router-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Hash, Volume2, Home, Bell, MessageSquare } from 'lucide-react';
+import { Hash, Volume2, Home, Bell, MessageSquare, Users } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useUIStore } from '../../stores/uiStore';
@@ -45,19 +45,22 @@ export function ChannelSidebar({ collapsed = false }: ChannelSidebarProps) {
   if (!currentGuild && collapsed) {
     const compactDms = dmChannels.slice(0, 32);
     return (
-      <div className="flex h-full flex-col items-center px-2 py-4">
+      <div className="flex h-full flex-col items-center px-2 py-3">
         <Tooltip content="Home" side="right">
           <button
             onClick={() => navigate('/app')}
             aria-label="Home"
             className={cn(
-              'mb-1.5 flex h-10 w-10 items-center justify-center rounded-xl border text-sm font-semibold transition-colors',
+              'relative mb-1 flex h-10 w-10 items-center justify-center rounded-md outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
               location.pathname === '/app'
-                ? 'border-accent-primary/55 bg-accent-primary/20 text-text-primary'
-                : 'border-transparent bg-bg-mod-subtle text-text-secondary hover:border-border-subtle hover:text-text-primary'
+                ? 'bg-accent-tint text-accent-primary'
+                : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary'
             )}
           >
-            <Home size={15} />
+            {location.pathname === '/app' && (
+              <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-x-1.5 -translate-y-1/2 rounded-r-full bg-accent-secondary" />
+            )}
+            <Home size={16} />
           </button>
         </Tooltip>
         <Tooltip content="Friends" side="right">
@@ -65,13 +68,16 @@ export function ChannelSidebar({ collapsed = false }: ChannelSidebarProps) {
             onClick={() => navigate('/app/friends')}
             aria-label="Friends"
             className={cn(
-              'mb-2 flex h-10 w-10 items-center justify-center rounded-xl border text-sm font-semibold transition-colors',
+              'relative mb-2 flex h-10 w-10 items-center justify-center rounded-md outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
               location.pathname === '/app/friends'
-                ? 'border-accent-primary/55 bg-accent-primary/20 text-text-primary'
-                : 'border-transparent bg-bg-mod-subtle text-text-secondary hover:border-border-subtle hover:text-text-primary'
+                ? 'bg-accent-tint text-accent-primary'
+                : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary'
             )}
           >
-            <Hash size={15} />
+            {location.pathname === '/app/friends' && (
+              <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-x-1.5 -translate-y-1/2 rounded-r-full bg-accent-secondary" />
+            )}
+            <Users size={16} />
           </button>
         </Tooltip>
 
@@ -89,10 +95,10 @@ export function ChannelSidebar({ collapsed = false }: ChannelSidebarProps) {
                     navigate(`/app/dms/${dm.id}`);
                   }}
                   className={cn(
-                    'relative flex h-9 w-9 items-center justify-center rounded-xl border text-xs font-semibold transition-colors',
+                    'relative flex h-9 w-9 items-center justify-center rounded-full text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                     isSelected
-                      ? 'border-accent-primary/55 bg-accent-primary/20 text-text-primary'
-                      : 'border-transparent bg-bg-mod-subtle text-text-secondary hover:border-border-subtle hover:text-text-primary'
+                      ? 'bg-accent-tint text-accent-primary ring-2 ring-accent-secondary'
+                      : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary'
                   )}
                 >
                   {(dm.recipient?.username || 'D').charAt(0).toUpperCase()}
@@ -119,9 +125,9 @@ export function ChannelSidebar({ collapsed = false }: ChannelSidebarProps) {
 
     return (
       <div className="flex h-full flex-col items-center px-1.5 py-3">
-        <Tooltip content={currentGuild.name} side="right">
+        <Tooltip content={`${currentGuild.name} settings`} side="right">
           <button
-            className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-mod-subtle text-xs font-bold text-text-primary transition-colors hover:bg-bg-mod-strong"
+            className="mb-2 flex h-10 w-10 items-center justify-center rounded-md bg-bg-mod-strong text-meta font-bold text-text-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint hover:text-accent-primary focus-visible:shadow-[var(--focus-ring)]"
             aria-label={`Open settings for ${currentGuild.name}`}
             onClick={() => useUIStore.getState().setGuildSettingsId(currentGuild.id)}
           >
@@ -146,20 +152,22 @@ export function ChannelSidebar({ collapsed = false }: ChannelSidebarProps) {
                     navigate(`/app/guilds/${effectiveGuildId}/channels/${ch.id}`);
                   }}
                   className={cn(
-                    'relative flex h-9 w-9 items-center justify-center rounded-xl border transition-colors',
+                    'relative flex h-9 w-9 items-center justify-center rounded-md outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                     isSelected
-                      ? 'border-accent-primary/55 bg-accent-primary/20 text-text-primary'
-                      : 'border-transparent bg-bg-mod-subtle text-text-secondary hover:border-border-subtle hover:text-text-primary'
+                      ? 'bg-accent-tint text-accent-primary'
+                      : hasUnread
+                      ? 'bg-bg-mod-subtle text-text-primary hover:bg-bg-mod-strong'
+                      : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary'
                   )}
                 >
-                  {isVoice ? <Volume2 size={14} /> : isForum ? <MessageSquare size={14} /> : isAnnouncementCompact ? <Bell size={14} /> : <Hash size={14} />}
-                  {hasUnread && (
-                    <div className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-text-primary" />
+                  {isVoice ? <Volume2 size={16} /> : isForum ? <MessageSquare size={16} /> : isAnnouncementCompact ? <Bell size={16} /> : <Hash size={16} />}
+                  {hasUnread && mentionCount === 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-accent-primary ring-2 ring-bg-secondary" />
                   )}
                   {mentionCount > 0 && (
-                    <div className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent-danger text-[8px] font-bold text-white">
-                      {mentionCount}
-                    </div>
+                    <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-primary px-0.5 text-[9px] font-semibold tabular-nums text-text-on-accent ring-2 ring-bg-secondary">
+                      {mentionCount > 9 ? '9+' : mentionCount}
+                    </span>
                   )}
                 </button>
               </Tooltip>

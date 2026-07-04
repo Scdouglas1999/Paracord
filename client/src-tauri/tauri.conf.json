@@ -39,6 +39,11 @@
     ]
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["paracord"]
+      }
+    },
     "updater": {
       "active": true,
       "endpoints": [

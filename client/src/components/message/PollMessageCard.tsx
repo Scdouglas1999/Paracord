@@ -95,18 +95,18 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
   };
 
   return (
-    <div className="mt-2 rounded-xl border border-border-subtle bg-bg-mod-subtle/45 p-3">
+    <div className="mt-2 max-w-[480px] rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="flex min-w-0 items-start gap-2">
-          <BarChart3 size={15} className="mt-0.5 shrink-0 text-accent-primary" />
-          <p className="text-sm font-semibold text-text-primary">{livePoll.question}</p>
+          <BarChart3 size={16} className="mt-0.5 shrink-0 text-accent-primary" />
+          <p className="text-subhead text-text-primary">{livePoll.question}</p>
         </div>
-        <span className="shrink-0 rounded-full border border-border-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+        <span className="shrink-0 rounded-xs bg-bg-mod-strong px-2 py-0.5 text-section uppercase text-text-secondary">
           {livePoll.allow_multiselect ? 'Multi Select' : 'Single Select'}
         </span>
       </div>
 
-      <div className="mt-3 flex flex-col gap-2">
+      <div className="mt-3.5 flex flex-col gap-2">
         {orderedOptions.map((option) => {
           const votePercent = totalVotes > 0 ? Math.round((option.vote_count / totalVotes) * 100) : 0;
           const canToggle = canVote && !isExpired;
@@ -116,21 +116,21 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
               type="button"
               disabled={!canToggle || pendingOptionId === option.id}
               onClick={() => void applyVoteChange(option)}
-              className="relative overflow-hidden rounded-lg border border-border-subtle/70 bg-bg-primary/70 px-3 py-2 text-left transition-colors hover:border-border-subtle disabled:cursor-not-allowed disabled:opacity-75"
+              className="relative overflow-hidden rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-75"
             >
               <span
-                className="pointer-events-none absolute inset-y-0 left-0 rounded-lg bg-accent-primary/16"
+                className="pointer-events-none absolute inset-y-0 left-0 bg-accent-tint"
                 style={{ width: `${votePercent}%` }}
               />
-              <span className="relative z-[1] flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-sm text-text-secondary">
+              <span className="relative z-[1] flex items-center gap-2.5">
+                <span className="min-w-0 flex-1 truncate text-label text-text-primary">
                   {option.emoji ? `${option.emoji} ` : ''}
                   {option.text}
                 </span>
-                <span className="text-xs font-semibold text-text-muted">{votePercent}%</span>
-                <span className="text-xs font-semibold text-text-secondary">{option.vote_count}</span>
+                <span className="text-meta font-semibold tabular-nums text-text-secondary">{votePercent}%</span>
+                <span className="text-meta font-semibold tabular-nums text-text-muted">{option.vote_count}</span>
                 {option.voted && (
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-accent-primary/50 bg-accent-primary/12 text-accent-primary">
+                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-tint-strong text-accent-primary">
                     <Check size={12} />
                   </span>
                 )}
@@ -140,18 +140,18 @@ export function PollMessageCard({ channelId, poll, canVote }: PollMessageCardPro
         })}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
-        <span>{totalVotes} vote{totalVotes === 1 ? '' : 's'}</span>
+      <div className="mt-3.5 flex flex-wrap items-center gap-2.5 text-meta text-text-muted">
+        <span className="tabular-nums">{totalVotes} vote{totalVotes === 1 ? '' : 's'}</span>
         <span className="inline-flex items-center gap-1">
-          <Clock3 size={11} />
+          <Clock3 size={12} />
           {formatExpiryLabel(livePoll.expires_at, nowMs)}
         </span>
         {isExpired ? (
-          <span className="rounded-full border border-border-subtle px-2 py-0.5 font-semibold uppercase tracking-wide">
+          <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-section uppercase text-text-secondary">
             Closed
           </span>
         ) : (
-          <span className="rounded-full border border-accent-success/35 bg-accent-success/10 px-2 py-0.5 font-semibold uppercase tracking-wide text-accent-success">
+          <span className="rounded-xs bg-success-tint px-2 py-0.5 text-section uppercase text-accent-success">
             Open
           </span>
         )}

@@ -1,7 +1,7 @@
 import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare } from 'lucide-react';
+import { ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useMessages } from '../../hooks/useMessages';
 import { useTypingStore } from '../../stores/typingStore';
@@ -38,6 +38,7 @@ import { PollMessageCard } from './PollMessageCard';
 import { EphemeralMessage } from './EphemeralMessage';
 import { toast } from '../../stores/toastStore';
 import { LoadingSpinner, ErrorBanner } from '../ui/Feedback';
+import { Button } from '../ui/Button';
 
 const EMPTY_TYPING: string[] = [];
 const EMPTY_CHANNELS: Channel[] = [];
@@ -200,7 +201,6 @@ export function computeReplyLayout(messages: Message[]): Map<string, ReplyLayout
 
 // Row types for the virtual list
 type VirtualRow =
-  | { type: 'welcome' }
   | { type: 'date-separator'; date: string }
   | {
       type: 'message';
@@ -598,7 +598,6 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => {
       const row = rows[index];
-      if (row.type === 'welcome') return 120;
       if (row.type === 'date-separator') return 48;
       if (row.type === 'typing') return 36;
       if (row.type === 'bottom-sentinel') return 1;
@@ -1230,32 +1229,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
   // Render a single virtual row
   const renderRow = (row: VirtualRow) => {
-    if (row.type === 'welcome') {
-      return (
-        <div className="mb-7 rounded-2xl border border-border-subtle bg-bg-mod-subtle/60 p-4">
-          <div
-            className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle"
-          >
-            <Hash size={28} style={{ color: 'var(--text-muted)' }} />
-          </div>
-          <h3 className="text-[1.35rem] font-bold leading-tight" style={{ color: 'var(--text-primary)' }}>
-            Welcome to the channel!
-          </h3>
-          <p className="mt-1 text-sm leading-6" style={{ color: 'var(--text-muted)' }}>
-            This is the beginning of the channel.
-          </p>
-        </div>
-      );
-    }
-
     if (row.type === 'date-separator') {
       return (
-        <div className="my-5 flex items-center gap-2">
-          <div className="flex-1 h-px" style={{ backgroundColor: 'var(--border-subtle)' }} />
-          <span className="rounded-full border border-border-subtle bg-bg-mod-subtle px-3 py-1 text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
+        <div className="my-5 flex items-center gap-3">
+          <div className="h-px flex-1" style={{ backgroundColor: 'var(--border-subtle)' }} />
+          <span className="text-meta font-semibold uppercase tabular-nums text-text-muted">
             {formatDate(row.date)}
           </span>
-          <div className="flex-1 h-px" style={{ backgroundColor: 'var(--border-subtle)' }} />
+          <div className="h-px flex-1" style={{ backgroundColor: 'var(--border-subtle)' }} />
         </div>
       );
     }
@@ -1275,7 +1256,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
       const names = activeTyping.map(resolveUsername);
       return (
-        <div className="px-3 py-2.5 text-sm" style={{ color: 'var(--text-muted)' }}>
+        <div className="px-4 py-2 text-meta text-text-muted" style={{ paddingLeft: '72px' }}>
           {names.length === 1 && <><strong>{names[0]}</strong> is typing...</>}
           {names.length === 2 && <><strong>{names[0]}</strong> and <strong>{names[1]}</strong> are typing...</>}
           {names.length === 3 && <><strong>{names[0]}</strong>, <strong>{names[1]}</strong>, and <strong>{names[2]}</strong> are typing...</>}
@@ -1305,6 +1286,17 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     const linkedThreads = linkedThreadsByStarterMessageId[msg.id] ?? [];
     const authorGuildMember = activeGuildMemberById.get(msg.author.id);
     const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
+    // A message that pings the reader gets the mention-line treatment (§7):
+    // a persistent emerald tint plus a 2px accent left border, hover-independent.
+    const mentionsMe = !isOwnMessage && Boolean(msg.mention_everyone);
+    const isActiveRow = hoveredMessageId === msg.id || focusedMessageId === msg.id;
+    const rowBackground = isActiveRow
+      ? mentionsMe
+        ? 'var(--accent-tint-strong)'
+        : 'var(--bg-mod-subtle)'
+      : mentionsMe
+        ? 'var(--accent-tint)'
+        : 'transparent';
 
     return (
       <div
@@ -1314,12 +1306,12 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         aria-posinset={row.messageIndex + 1}
         aria-setsize={messages.length}
         tabIndex={msg.id === activeRowMessageId ? 0 : -1}
-        className="group relative -mx-1.5 flex gap-3.5 rounded-2xl px-2.5 py-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary/60 sm:-mx-2.5 sm:gap-4 sm:px-3"
+        className="group relative -mx-2 flex gap-4 rounded-sm px-4 py-1 transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         style={{
-          marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '1.35rem',
-          paddingLeft: replyIndent > 0 ? `${replyIndent}px` : undefined,
-          backgroundColor:
-            hoveredMessageId === msg.id || focusedMessageId === msg.id ? 'var(--bg-mod-subtle)' : 'transparent',
+          marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '1.25rem',
+          paddingLeft: replyIndent > 0 ? `${16 + replyIndent}px` : undefined,
+          borderLeft: mentionsMe ? '2px solid var(--accent-primary)' : undefined,
+          backgroundColor: rowBackground,
         }}
         onMouseEnter={() => setHoveredMessageId(msg.id)}
         onMouseLeave={() => setHoveredMessageId(null)}
@@ -1351,10 +1343,10 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           </div>
         )}
         {isGrouped ? (
-          <div className="flex w-12 flex-shrink-0 items-start justify-center pt-0.5">
+          <div className="flex w-10 flex-shrink-0 items-start justify-center pt-0.5">
             <span
-              className="font-mono text-[11px] opacity-0 transition-opacity group-hover:opacity-100"
-              style={{ color: 'var(--text-muted)' }}
+              className="text-[11px] tabular-nums opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-hover:opacity-100"
+              style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}
             >
               {new Date(getTimestamp(msg)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
             </span>
@@ -1363,7 +1355,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           <button
             type="button"
             aria-label={`Open profile for ${msg.author.username}`}
-            className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl border-0 p-0 text-sm font-semibold text-white shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
+            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border-0 p-0 text-label font-semibold text-text-on-accent shadow-sm transition-transform duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             style={{ backgroundColor: 'var(--accent-primary)' }}
             onClick={(e) => openAuthorProfile(e, msg)}
           >
@@ -1393,11 +1385,10 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               <button
                 type="button"
                 onClick={() => scrollToMessage(replyParentId)}
-                className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-xs transition-colors hover:bg-bg-mod-subtle"
-                style={{ color: 'var(--text-muted)' }}
+                className="inline-flex max-w-full items-center gap-1.5 rounded-sm px-1 py-0.5 text-meta text-text-muted transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 title="Jump to replied message"
               >
-                <Reply size={11} className="shrink-0" />
+                <Reply size={12} className="shrink-0" />
                 <span className="max-w-[8rem] truncate font-semibold" style={{ color: 'var(--text-secondary)' }}>
                   {replyParentMessage?.author.username || 'Original message'}
                 </span>
@@ -1411,7 +1402,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             <div className="flex items-baseline gap-2">
               <button
                 type="button"
-                className="rounded px-0 text-left text-[15px] font-semibold hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
+                className="rounded-xs text-left text-[15px] font-semibold leading-tight hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 style={{ color: authorRoleColor ?? 'var(--text-primary)' }}
                 aria-label={`Open profile for ${msg.author.username}`}
                 onClick={(e) => openAuthorProfile(e, msg)}
@@ -1419,23 +1410,22 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 {msg.author.username}
               </button>
               {msg.anonymous?.is_anonymous && (
-                <span className="rounded-md border border-accent-warning/35 bg-accent-warning/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-warning">
+                <span className="rounded-xs bg-warning-tint px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-warning">
                   Anonymous
                 </span>
               )}
               {msg.author.bot && (
-                <span className="rounded-md border border-accent-primary/35 bg-accent-primary/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
+                <span className="rounded-xs bg-accent-tint px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
                   Bot
                 </span>
               )}
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              <span className="text-meta tabular-nums text-text-muted" style={{ fontFamily: 'var(--font-code)' }}>
                 {formatTimestamp(getTimestamp(msg))}
               </span>
               {(msg.edited_timestamp || msg.edited_at) && (
                 <button
                   type="button"
-                  className="rounded px-0 text-left text-[11px] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
-                  style={{ color: 'var(--text-muted)' }}
+                  className="rounded-xs text-left text-[11px] text-text-muted hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                   title={`Edited: ${formatTimestamp(msg.edited_timestamp || msg.edited_at || '')}`}
                   aria-label={`Show edit history for message ${msg.id}`}
                   onClick={(e) => openEditHistory(e, msg.id)}
@@ -1445,8 +1435,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               )}
               {msg.expires_at && (
                 <span
-                  className="text-[11px]"
-                  style={{ color: 'var(--text-muted)' }}
+                  className="text-[11px] text-text-muted"
                   title={`Expires ${formatTimestamp(msg.expires_at)}`}
                 >
                   expires {formatTimestamp(msg.expires_at)}
@@ -1459,8 +1448,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               <textarea
                 autoFocus
                 aria-label={`Edit message from ${msg.author.username}`}
-                className="w-full resize-none rounded-lg border border-border-subtle bg-bg-primary/80 px-3 py-2 text-[15px] leading-[1.48rem] outline-none focus:border-accent-primary/60"
-                style={{ color: 'var(--text-secondary)', minHeight: '2.5rem', maxHeight: '50vh' }}
+                className="w-full resize-none rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-body text-text-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)]"
+                style={{ minHeight: '2.5rem', maxHeight: '50vh' }}
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
                 onKeyDown={handleEditKeyDown}
@@ -1472,22 +1461,20 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                   }
                 }}
               />
-              <div className="mt-1 flex items-center gap-2">
+              <div className="mt-1.5 flex items-center gap-2">
                 <button
                   onClick={() => void saveEditMessage()}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors hover:bg-accent-primary/15"
-                  style={{ color: 'var(--accent-primary)' }}
+                  className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-meta font-semibold text-accent-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 >
-                  <Check size={12} /> Save
+                  <Check size={13} /> Save
                 </button>
                 <button
                   onClick={cancelEditing}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition-colors hover:bg-bg-mod-subtle"
-                  style={{ color: 'var(--text-muted)' }}
+                  className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-meta font-semibold text-text-muted transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 >
-                  <XIcon size={12} /> Cancel
+                  <XIcon size={13} /> Cancel
                 </button>
-                <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <span className="text-[11px] text-text-muted">
                   Enter to save, Esc to cancel
                 </span>
               </div>
@@ -1569,16 +1556,16 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                     key={thread.id}
                     type="button"
                     onClick={() => openLinkedThread(thread.id)}
-                    className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border-subtle bg-bg-mod-subtle/65 px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-border-subtle/80 hover:bg-bg-mod-strong hover:text-text-primary"
+                    className="inline-flex max-w-full items-center gap-1.5 rounded-sm border border-border-subtle bg-bg-secondary px-2.5 py-1 text-meta font-medium text-text-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                   >
-                    <MessageSquare size={12} />
+                    <MessageSquare size={13} className="text-accent-primary" />
                     <span className="max-w-[14rem] truncate">{thread.name || 'Thread'}</span>
                     {isArchived && (
-                      <span className="rounded-full border border-border-subtle px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                      <span className="rounded-xs bg-bg-mod-strong px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-text-muted">
                         Archived
                       </span>
                     )}
-                    <ArrowRight size={11} />
+                    <ArrowRight size={12} />
                   </button>
                 );
               })}
@@ -1593,11 +1580,11 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 <button
                   key={`${r.emoji}-${reactionIndex}`}
                   onClick={() => void toggleReaction(msg.id, r)}
-                  className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs transition-colors hover:bg-bg-mod-subtle"
+                  className="inline-flex items-center gap-1 rounded-sm border px-2 py-0.5 text-meta transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                   style={{
                     borderColor: r.me ? 'var(--accent-primary)' : 'var(--border-subtle)',
-                    backgroundColor: r.me ? 'rgba(111, 134, 255, 0.15)' : 'transparent',
-                    color: 'var(--text-secondary)',
+                    backgroundColor: r.me ? 'var(--accent-tint)' : 'var(--bg-mod-subtle)',
+                    color: r.me ? 'var(--accent-primary)' : 'var(--text-secondary)',
                   }}
                 >
                   <span>
@@ -1814,26 +1801,26 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
         {isCoarsePointer && canOpenMessageMenu && (
           <button
-            className="absolute right-1.5 top-1.5 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border-subtle bg-bg-floating text-text-muted md:hidden"
+            className="absolute right-1.5 top-1.5 inline-flex h-8 w-8 items-center justify-center rounded-sm border border-border-subtle bg-bg-accent text-text-secondary shadow-sm md:hidden"
             title="Message actions"
             aria-label="Message actions"
             onClick={() => setMenuMessageId((curr) => (curr === msg.id ? null : msg.id))}
           >
-            <MoreHorizontal size={14} />
+            <MoreHorizontal size={15} />
           </button>
         )}
 
         {(hoveredMessageId === msg.id || focusedMessageId === msg.id) && !isCoarsePointer && (
-          <div className="message-actions rounded-xl border border-border-subtle bg-bg-floating p-0.5">
-            <button className="hover-action-btn rounded-lg" title="Add Reaction" aria-label="Add Reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
+          <div className="absolute -top-3.5 right-2 flex items-center gap-0.5 overflow-hidden rounded-sm border border-border-subtle bg-bg-accent p-0.5 shadow-md">
+            <button className="hover-action-btn rounded-sm" title="Add Reaction" aria-label="Add Reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
               <Smile size={16} />
             </button>
-            <button className="hover-action-btn rounded-lg" title="Reply" aria-label="Reply" onClick={() => onReply?.(msg)}>
+            <button className="hover-action-btn rounded-sm" title="Reply" aria-label="Reply" onClick={() => onReply?.(msg)}>
               <Reply size={16} />
             </button>
             {canOpenMessageMenu && (
               <button
-                className="hover-action-btn rounded-lg"
+                className="hover-action-btn rounded-sm"
                 title="More actions"
                 aria-label="More actions"
                 onClick={() => setMenuMessageId((curr) => (curr === msg.id ? null : msg.id))}
@@ -1845,7 +1832,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         )}
         {menuMessageId === msg.id && canOpenMessageMenu && (
           <div
-            className="glass-modal absolute right-1 top-11 z-10 min-w-[10rem] max-w-[calc(100vw-2.75rem)] rounded-xl p-2 sm:right-2"
+            className="glass-modal absolute right-1 top-11 z-10 min-w-[10rem] max-w-[calc(100vw-2.75rem)] rounded-md p-1 sm:right-2"
           >
             <button
               className="context-menu-item w-full text-left"
@@ -1904,19 +1891,18 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           </div>
         )}
         {deleteConfirmId === msg.id && (
-          <div className="glass-modal absolute right-1 top-11 z-10 rounded-xl p-3 sm:right-2" style={{ minWidth: '220px', maxWidth: 'calc(100vw - 2.75rem)' }}>
-            <p className="mb-2 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Delete message?</p>
-            <p className="mb-3 text-xs" style={{ color: 'var(--text-muted)' }}>This action cannot be undone.</p>
+          <div className="glass-modal absolute right-1 top-11 z-10 rounded-md p-3 sm:right-2" style={{ minWidth: '220px', maxWidth: 'calc(100vw - 2.75rem)' }}>
+            <p className="mb-1 text-label font-semibold text-text-primary">Delete message?</p>
+            <p className="mb-3 text-meta text-text-muted">This can't be undone — the message is gone for everyone.</p>
             <div className="flex items-center gap-2">
               <button
-                className="rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors"
-                style={{ backgroundColor: 'var(--accent-danger)', color: '#fff' }}
+                className="rounded-sm bg-accent-danger-fill px-3 py-1.5 text-label font-semibold text-text-on-danger shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-[color-mix(in_srgb,var(--accent-danger-fill)_90%,#000)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 onClick={() => void handleDeleteMessage(msg.id)}
               >
                 Delete
               </button>
               <button
-                className="rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-subtle"
+                className="rounded-sm px-3 py-1.5 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 onClick={() => setDeleteConfirmId(null)}
               >
                 Cancel
@@ -1957,18 +1943,31 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             />
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3">
-            <div
-              className="flex h-16 w-16 items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle"
-            >
-              <Hash size={32} style={{ color: 'var(--text-muted)' }} />
+          <div className="flex h-full flex-col items-start justify-end gap-3 px-2 pb-8 sm:px-4">
+            <span className="flex h-10 w-10 items-center justify-center rounded-sm bg-accent-tint">
+              <Hash size={20} className="text-text-muted" />
+            </span>
+            <div>
+              <h3 className="text-subhead text-text-primary">
+                {activeChannel?.name ? `#${activeChannel.name} is ready when you are` : 'This is the start of your conversation'}
+              </h3>
+              <p className="mt-1 max-w-md text-label text-text-secondary">
+                {activeChannel?.name
+                  ? `No one has posted in #${activeChannel.name} yet. Kick things off — a hello, a question, or whatever's on your mind.`
+                  : 'There are no messages here yet. Say hello and get the conversation going.'}
+              </p>
             </div>
-            <h3 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
-              Welcome to the channel!
-            </h3>
-            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-              This is the start of the conversation. Say something!
-            </p>
+            <Button
+              variant="default"
+              className="mt-1 gap-2"
+              onClick={() => {
+                const composer = document.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Message "]');
+                composer?.focus();
+              }}
+            >
+              <Send size={16} />
+              Send the first message
+            </Button>
           </div>
         ) : (
           <div className="py-6" style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
@@ -1999,18 +1998,18 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg-tertiary/75 p-4 backdrop-blur-sm">
           <div
             ref={threadCreateDialogRef}
-            className="glass-modal w-full max-w-md rounded-2xl border border-border-subtle p-4 sm:p-5"
+            className="glass-modal w-full max-w-md rounded-lg border border-border-strong p-5"
             role="dialog"
             aria-modal="true"
             aria-labelledby="create-thread-dialog-title"
             tabIndex={-1}
           >
-            <h3 id="create-thread-dialog-title" className="text-base font-semibold text-text-primary">Create Thread</h3>
-            <p className="mt-1 text-xs text-text-muted">
-              Start a focused discussion from this message.
+            <h3 id="create-thread-dialog-title" className="text-heading text-text-primary">Create Thread</h3>
+            <p className="mt-1 text-meta text-text-secondary">
+              Start a focused discussion branched off this message.
             </p>
             <label className="mt-4 block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Thread Name</span>
+              <span className="text-section uppercase text-text-secondary">Thread Name</span>
               <input
                 className="input-field mt-2"
                 value={threadName}
@@ -2026,16 +2025,16 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               />
             </label>
             {threadCreateError && (
-              <div className="mt-3 rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-xs font-medium text-accent-danger">
+              <div className="mt-3 rounded-sm border-l-2 border-accent-danger bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger">
                 {threadCreateError}
               </div>
             )}
-            <div className="mt-4 flex flex-wrap items-center gap-2.5">
+            <div className="mt-5 flex flex-wrap items-center gap-2.5">
               <button className="btn-primary" onClick={() => void submitCreateThread()}>
                 Create Thread
               </button>
               <button
-                className="rounded-lg px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                className="rounded-sm px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 onClick={closeThreadCreateDialog}
               >
                 Cancel
@@ -2049,26 +2048,26 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg-tertiary/75 p-4 backdrop-blur-sm">
           <div
             ref={reportDialogRef}
-            className="glass-modal w-full max-w-lg rounded-2xl border border-border-subtle p-4 sm:p-5"
+            className="glass-modal w-full max-w-lg rounded-lg border border-border-strong p-5"
             role="dialog"
             aria-modal="true"
             aria-labelledby="report-message-dialog-title"
             tabIndex={-1}
           >
-            <h3 id="report-message-dialog-title" className="text-base font-semibold text-text-primary">Report Message</h3>
-            <p className="mt-1 text-xs text-text-muted">
-              Reports are reviewed by moderators. Include concise evidence when possible.
+            <h3 id="report-message-dialog-title" className="text-heading text-text-primary">Report Message</h3>
+            <p className="mt-1 text-meta text-text-secondary">
+              Reports go to this server's moderators. Add concise evidence when you can.
             </p>
-            <div className="mt-3 rounded-lg border border-border-subtle bg-bg-mod-subtle/50 px-3 py-2 text-xs text-text-secondary">
+            <div className="mt-3 rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-meta text-text-secondary">
               <div className="font-semibold text-text-primary">
                 {reportingMessage.author.username} ({reportingMessage.author.id})
               </div>
               <div className="mt-1 line-clamp-4 break-words">
-                {reportingMessage.content || '[No text content]'}
+                {reportingMessage.content || 'No text content'}
               </div>
             </div>
             <label className="mt-4 block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Reason</span>
+              <span className="text-section uppercase text-text-secondary">Reason</span>
               <textarea
                 className="input-field mt-2 min-h-[96px] resize-y"
                 value={reportReason}
@@ -2078,7 +2077,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               />
             </label>
             <label className="mt-3 block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Evidence (Optional)</span>
+              <span className="text-section uppercase text-text-secondary">Evidence (Optional)</span>
               <textarea
                 className="input-field mt-2 min-h-[72px] resize-y"
                 value={reportEvidence}
@@ -2086,7 +2085,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 placeholder="Add one link or note per line"
               />
             </label>
-            <div className="mt-4 flex flex-wrap items-center gap-2.5">
+            <div className="mt-5 flex flex-wrap items-center gap-2.5">
               <button
                 className="btn-primary"
                 onClick={() => void submitReport()}
@@ -2095,7 +2094,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 {reportSubmitting ? 'Submitting...' : 'Submit Report'}
               </button>
               <button
-                className="rounded-lg px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                className="rounded-sm px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 onClick={closeReportDialog}
                 disabled={reportSubmitting}
               >
@@ -2109,24 +2108,21 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       {showScrollButton && (
         <button
           onClick={scrollToBottom}
-          className="absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border-subtle bg-bg-floating px-3.5 py-2 text-xs text-text-primary shadow-lg transition-all hover:bg-bg-mod-subtle sm:gap-2 sm:px-4 sm:text-sm"
-          style={{
-            backdropFilter: 'blur(12px)',
-          }}
+          className="absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-sm border border-border-subtle bg-bg-accent px-4 py-2 text-label font-semibold text-text-primary shadow-md transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
-          <ArrowDown size={16} />
-          New Messages
+          <ArrowDown size={16} className="text-accent-primary" />
+          Jump to present
         </button>
       )}
       {bulkDeleteMode && canManageMessages && (
-        <div className="absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 z-20 flex w-[min(95%,38rem)] -translate-x-1/2 flex-wrap items-center justify-between gap-2 rounded-xl border border-border-subtle bg-bg-floating px-3 py-2.5 shadow-lg backdrop-blur-md">
-          <span className="text-xs font-semibold text-text-secondary sm:text-sm">
+        <div className="absolute bottom-[calc(var(--safe-bottom)+0.75rem)] left-1/2 z-20 flex w-[min(95%,38rem)] -translate-x-1/2 flex-wrap items-center justify-between gap-2 rounded-md border border-border-subtle bg-bg-accent px-4 py-2.5 shadow-lg">
+          <span className="text-label font-semibold tabular-nums text-text-secondary">
             {selectedMessageIds.length} selected
           </span>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="rounded-md px-2.5 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary sm:text-sm"
+              className="rounded-sm px-3 py-1.5 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               onClick={cancelBulkDelete}
               disabled={bulkDeleting}
             >
@@ -2134,7 +2130,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             </button>
             <button
               type="button"
-              className="rounded-md bg-accent-danger px-2.5 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-60 sm:text-sm"
+              className="rounded-sm bg-accent-danger-fill px-3 py-1.5 text-label font-semibold text-text-on-danger shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-[color-mix(in_srgb,var(--accent-danger-fill)_90%,#000)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
               onClick={() => void executeBulkDelete()}
               disabled={bulkDeleting || selectedMessageIds.length === 0}
             >
@@ -2191,7 +2187,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="border-b border-border-subtle px-3 py-2 text-sm font-semibold text-text-primary">
+            <div className="border-b border-border-subtle px-3 py-2 text-label font-semibold text-text-primary">
               Edit History
             </div>
             {editHistoryLoading ? (
@@ -2199,8 +2195,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 <LoadingSpinner size="sm" />
               </div>
             ) : editHistoryData.length === 0 ? (
-              <div className="px-3 py-4 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                No previous versions found
+              <div className="px-3 py-4 text-meta text-text-muted">
+                No earlier versions — this is the original text.
               </div>
             ) : (
               <div className="flex flex-col">

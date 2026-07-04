@@ -51,7 +51,7 @@ describe('EmojisSection', () => {
   it('renders read-only emoji state for members without Manage Emojis', () => {
     renderSection({ canManage: false });
 
-    expect(screen.getByText(/Manage Emojis permission is required/)).toBeInTheDocument();
+    expect(screen.getByText(/Manage Emojis permission is needed/)).toBeInTheDocument();
     expect(screen.getByText('ship_it')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Upload' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument();
@@ -81,7 +81,10 @@ describe('EmojisSection', () => {
 
   it('submits upload fields and emoji management actions', async () => {
     const user = userEvent.setup();
-    const { props } = renderSection();
+    // Upload is gated on a valid name AND a chosen file; supply both so the
+    // enabled-button submit path is exercised.
+    const chosenFile = new File(['png'], 'blob.png', { type: 'image/png' });
+    const { props } = renderSection({ newEmojiName: 'blob', newEmojiFile: chosenFile });
 
     fireEvent.change(screen.getByLabelText('New emoji name'), { target: { value: 'party_blob' } });
     await user.click(screen.getByRole('button', { name: 'Upload' }));
@@ -111,6 +114,6 @@ describe('EmojisSection', () => {
   it('shows an empty state when no custom emojis are uploaded', () => {
     renderSection({ emojis: [] });
 
-    expect(screen.getByText('No custom emojis uploaded yet.')).toBeInTheDocument();
+    expect(screen.getByText('No custom emoji yet')).toBeInTheDocument();
   });
 });

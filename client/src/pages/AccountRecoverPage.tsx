@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAccountStore } from '../stores/accountStore';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
+import { ErrorBanner } from '../components/ui/Feedback';
+import { Button } from '../components/ui/Button';
+import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
 
 export function AccountRecoverPage() {
   const [phrase, setPhrase] = useState('');
@@ -48,97 +51,81 @@ export function AccountRecoverPage() {
   };
 
   return (
-    <div className="auth-shell">
-      <form onSubmit={handleSubmit} className="auth-card mx-auto w-full max-w-md">
-        <div className="mb-7 text-center">
-          <h1 className="text-3xl font-bold leading-tight text-text-primary">Recover Account</h1>
-          <p className="mt-1.5 text-sm text-text-muted">
-            Enter your 24-word recovery phrase to restore your account.
-          </p>
-        </div>
+    <AuthCanvas>
+      <AuthCard className="max-w-md">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-8">
+          <AuthHeading
+            title="Recover your account"
+            subtitle="Enter your 24-word recovery phrase to restore your identity on this device."
+          />
 
-        {error && (
-          <div role="alert" className="mb-4 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2.5 text-sm font-medium text-accent-danger">
-            {error}
+          {error && <ErrorBanner message={error} />}
+
+          <div className="flex flex-col gap-5">
+            <Field label="Recovery Phrase" required hint="All 24 words, in order, separated by spaces.">
+              <textarea
+                value={phrase}
+                onChange={(e) => setPhrase(e.target.value)}
+                required
+                rows={4}
+                className="input-field resize-none font-code text-body"
+                placeholder="ridge harbor velvet … (24 words)"
+              />
+            </Field>
+
+            <Field label="Username" required>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                className="input-field"
+                placeholder="ada"
+                autoComplete="username"
+              />
+            </Field>
+
+            <Field label="New Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                className="input-field"
+                placeholder="Choose a strong password"
+                autoComplete="new-password"
+              />
+            </Field>
+
+            <Field label="Confirm Password" required>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                className="input-field"
+                placeholder="Type your password again"
+                autoComplete="new-password"
+              />
+            </Field>
           </div>
-        )}
 
-        <div className="card-stack-roomy">
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Recovery Phrase <span className="text-accent-danger">*</span>
-            </span>
-            <textarea
-              value={phrase}
-              onChange={(e) => setPhrase(e.target.value)}
-              required
-              rows={4}
-              className="input-field mt-2 resize-none"
-              placeholder="Enter your 24 words separated by spaces"
-            />
-          </label>
+          <Button type="submit" loading={loading} disabled={loading} className="w-full">
+            Recover Account
+          </Button>
 
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Username <span className="text-accent-danger">*</span>
-            </span>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              className="input-field mt-2"
-              placeholder="Choose a username"
-              autoComplete="username"
-            />
-          </label>
-
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              New Password <span className="text-accent-danger">*</span>
-            </span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={MIN_PASSWORD_LENGTH}
-              className="input-field mt-2"
-              placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-              autoComplete="new-password"
-            />
-          </label>
-
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Confirm Password <span className="text-accent-danger">*</span>
-            </span>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-              className="input-field mt-2"
-              placeholder="Type your password again"
-              autoComplete="new-password"
-            />
-          </label>
-        </div>
-
-        <button type="submit" disabled={loading} className="btn-primary mt-8 w-full min-h-[2.9rem]">
-          {loading ? 'Recovering...' : 'Recover Account'}
-        </button>
-
-        <p className="mt-5 text-center text-sm text-text-muted">
-          <button
-            type="button"
-            onClick={() => navigate(-1)}
-            className="font-semibold text-text-link hover:underline"
-          >
-            Go back
-          </button>
-        </p>
-      </form>
-    </div>
+          <p className="text-label text-text-secondary">
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+            >
+              Go back
+            </button>
+          </p>
+        </form>
+      </AuthCard>
+    </AuthCanvas>
   );
 }

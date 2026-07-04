@@ -10,6 +10,7 @@
     "core:tray:default",
     "os:default",
     "notification:default",
-    "updater:default"
+    "updater:default",
+    "deep-link:default"
   ]
 }

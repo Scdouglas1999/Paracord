@@ -12,8 +12,18 @@ import {
 import { hasAccount } from '../lib/account';
 import { authApi } from '../api/auth';
 import { setAccessToken, setRefreshToken } from '../lib/authToken';
+import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
+import {
+  AuthCanvas,
+  AuthCard,
+  AuthHeading,
+  AppMark,
+  BrandAside,
+  Field,
+  SuccessNote,
+} from './authScaffold';
 
 type LoginIdentifierMode = {
   allowUsernameInput: boolean;
@@ -282,28 +292,30 @@ export function LoginPage() {
 
   const identifierMode = resolveLoginIdentifierMode(allowUsernameLogin, requireEmail);
 
+  const backToLogin = (
+    <button
+      type="button"
+      onClick={() => { setError(''); setSuccessMsg(''); setMfaCode(''); setMfaTicket(''); setView('login'); }}
+      className="text-label font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+    >
+      Back to sign in
+    </button>
+  );
+
   // MFA challenge view
   if (view === 'mfa-challenge') {
     return (
-      <div className="auth-shell">
-        <form
-          onSubmit={handleMfaSubmit}
-          className="auth-card mx-auto w-full max-w-md space-y-8 p-10"
-        >
-          <div className="text-center">
-            <h1 className="text-3xl font-bold leading-tight text-text-primary">Two-Factor Authentication</h1>
-            <p className="mt-3 text-sm text-text-muted">
-              Enter the 6-digit code from your authenticator app, or use a backup code.
-            </p>
-          </div>
+      <AuthCanvas>
+        <AuthCard className="max-w-md">
+          <form onSubmit={handleMfaSubmit} className="flex flex-col gap-6 p-8">
+            <AuthHeading
+              title="Two-Factor Authentication"
+              subtitle="Enter the 6-digit code from your authenticator app, or one of your backup codes."
+            />
 
-          {error && <ErrorBanner message={error} />}
+            {error && <ErrorBanner message={error} />}
 
-          <div className="card-stack-roomy">
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Authentication Code <span className="text-accent-danger">*</span>
-              </span>
+            <Field label="Authentication Code" required>
               <input
                 type="text"
                 inputMode="numeric"
@@ -311,333 +323,276 @@ export function LoginPage() {
                 value={mfaCode}
                 onChange={(e) => setMfaCode(e.target.value)}
                 required
-                className="input-field mt-2 text-center text-2xl tracking-widest"
+                className="input-field text-center font-code text-2xl tracking-[0.4em]"
                 placeholder="000000"
                 maxLength={20}
                 autoFocus
               />
-            </label>
-          </div>
+            </Field>
 
-          <Button type="submit" disabled={loading || !mfaCode.trim()} className="mt-6 w-full">
-            {loading ? 'Verifying...' : 'Verify'}
-          </Button>
+            <Button type="submit" loading={loading} disabled={loading || !mfaCode.trim()} className="w-full">
+              Verify
+            </Button>
 
-          <p className="mt-4 text-sm text-text-muted">
-            <button
-              type="button"
-              onClick={() => { setError(''); setMfaCode(''); setMfaTicket(''); setView('login'); }}
-              className="font-semibold text-text-link hover:underline"
-            >
-              Back to Login
-            </button>
-          </p>
-        </form>
-      </div>
+            {backToLogin}
+          </form>
+        </AuthCard>
+      </AuthCanvas>
     );
   }
 
   // Forgot password view
   if (view === 'forgot-password') {
     return (
-      <div className="auth-shell">
-        <form
-          onSubmit={handleForgotPassword}
-          className="auth-card mx-auto w-full max-w-md space-y-8 p-10"
-        >
-          <div className="text-center">
-            <h1 className="text-3xl font-bold leading-tight text-text-primary">Reset Password</h1>
-            <p className="mt-3 text-sm text-text-muted">
-              Enter your email or username to request a password reset token.
-            </p>
-          </div>
+      <AuthCanvas>
+        <AuthCard className="max-w-md">
+          <form onSubmit={handleForgotPassword} className="flex flex-col gap-6 p-8">
+            <AuthHeading
+              title="Reset your password"
+              subtitle="Enter your email or username and we\u2019ll generate a reset token you can redeem below."
+            />
 
-          {error && <ErrorBanner message={error} />}
-          {successMsg && (
-            <div className="rounded-xl border border-accent-success/35 bg-accent-success/10 px-5 py-4 text-sm font-medium text-accent-success">
-              {successMsg}
-            </div>
-          )}
+            {error && <ErrorBanner message={error} />}
+            {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
-          <div className="card-stack-roomy">
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Email or Username <span className="text-accent-danger">*</span>
-              </span>
+            <Field label="Email or Username" required>
               <input
                 type="text"
                 value={resetIdentifier}
                 onChange={(e) => setResetIdentifier(e.target.value)}
                 required
-                className="input-field mt-2"
+                className="input-field"
                 placeholder="you@example.com or username"
               />
-            </label>
-          </div>
+            </Field>
 
-          <Button type="submit" disabled={loading} className="mt-6 w-full">
-            {loading ? 'Requesting...' : 'Request Reset Token'}
-          </Button>
+            <Button type="submit" loading={loading} disabled={loading} className="w-full">
+              Request Reset Token
+            </Button>
 
-          <p className="mt-4 text-sm text-text-muted">
-            Have a token?{' '}
-            <button
-              type="button"
-              onClick={() => { setError(''); setSuccessMsg(''); setView('reset-password'); }}
-              className="font-semibold text-text-link hover:underline"
-            >
-              Enter token
-            </button>
-          </p>
-          <p className="mt-2 text-sm text-text-muted">
-            <button
-              type="button"
-              onClick={() => { setError(''); setSuccessMsg(''); setView('login'); }}
-              className="font-semibold text-text-link hover:underline"
-            >
-              Back to Login
-            </button>
-          </p>
-        </form>
-      </div>
+            <div className="flex items-center justify-between text-label text-text-muted">
+              <button
+                type="button"
+                onClick={() => { setError(''); setSuccessMsg(''); setView('reset-password'); }}
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Enter token
+              </button>
+              {backToLogin}
+            </div>
+          </form>
+        </AuthCard>
+      </AuthCanvas>
     );
   }
 
   // Reset password (enter token + new password) view
   if (view === 'reset-password') {
     return (
-      <div className="auth-shell">
-        <form
-          onSubmit={handleResetPassword}
-          className="auth-card mx-auto w-full max-w-md space-y-8 p-10"
-        >
-          <div className="text-center">
-            <h1 className="text-3xl font-bold leading-tight text-text-primary">Set New Password</h1>
-            <p className="mt-3 text-sm text-text-muted">
-              Enter the reset token from your administrator and choose a new password.
-            </p>
-          </div>
+      <AuthCanvas>
+        <AuthCard className="max-w-md">
+          <form onSubmit={handleResetPassword} className="flex flex-col gap-6 p-8">
+            <AuthHeading
+              title="Set New Password"
+              subtitle="Paste the reset token from your administrator, then choose a new password."
+            />
 
-          {error && <ErrorBanner message={error} />}
-          {successMsg && (
-            <div className="rounded-xl border border-accent-success/35 bg-accent-success/10 px-5 py-4 text-sm font-medium text-accent-success">
-              {successMsg}
+            {error && <ErrorBanner message={error} />}
+            {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
+
+            <div className="flex flex-col gap-5">
+              <Field label="Reset Token" required>
+                <input
+                  type="text"
+                  value={resetToken}
+                  onChange={(e) => setResetToken(e.target.value)}
+                  required
+                  className="input-field font-code"
+                  placeholder="Paste the token from your administrator"
+                />
+              </Field>
+
+              <Field label="New Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
+                <input
+                  type="password"
+                  value={resetNewPassword}
+                  onChange={(e) => setResetNewPassword(e.target.value)}
+                  required
+                  className="input-field"
+                  placeholder="Choose a strong password"
+                  autoComplete="new-password"
+                />
+              </Field>
+
+              <Field label="Confirm Password" required>
+                <input
+                  type="password"
+                  value={resetConfirmPassword}
+                  onChange={(e) => setResetConfirmPassword(e.target.value)}
+                  required
+                  className="input-field"
+                  placeholder="Repeat your new password"
+                  autoComplete="new-password"
+                />
+              </Field>
             </div>
-          )}
 
-          <div className="card-stack-roomy">
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Reset Token <span className="text-accent-danger">*</span>
-              </span>
-              <input
-                type="text"
-                value={resetToken}
-                onChange={(e) => setResetToken(e.target.value)}
-                required
-                className="input-field mt-2"
-                placeholder="Paste the token from your administrator"
-              />
-            </label>
+            <Button type="submit" loading={loading} disabled={loading} className="w-full">
+              Set New Password
+            </Button>
 
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                New Password <span className="text-accent-danger">*</span>
-              </span>
-              <input
-                type="password"
-                value={resetNewPassword}
-                onChange={(e) => setResetNewPassword(e.target.value)}
-                required
-                className="input-field mt-2"
-                placeholder="At least 10 characters"
-              />
-            </label>
-
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Confirm Password <span className="text-accent-danger">*</span>
-              </span>
-              <input
-                type="password"
-                value={resetConfirmPassword}
-                onChange={(e) => setResetConfirmPassword(e.target.value)}
-                required
-                className="input-field mt-2"
-                placeholder="Repeat your new password"
-              />
-            </label>
-          </div>
-
-          <Button type="submit" disabled={loading} className="mt-6 w-full">
-            {loading ? 'Updating...' : 'Set New Password'}
-          </Button>
-
-          <p className="mt-4 text-sm text-text-muted">
-            <button
-              type="button"
-              onClick={() => { setError(''); setSuccessMsg(''); setView('forgot-password'); }}
-              className="font-semibold text-text-link hover:underline"
-            >
-              Request a new token
-            </button>
-            {' '}or{' '}
-            <button
-              type="button"
-              onClick={() => { setError(''); setSuccessMsg(''); setView('login'); }}
-              className="font-semibold text-text-link hover:underline"
-            >
-              Back to Login
-            </button>
-          </p>
-        </form>
-      </div>
+            <div className="flex items-center justify-between text-label text-text-muted">
+              <button
+                type="button"
+                onClick={() => { setError(''); setSuccessMsg(''); setView('forgot-password'); }}
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Request a new token
+              </button>
+              {backToLogin}
+            </div>
+          </form>
+        </AuthCard>
+      </AuthCanvas>
     );
   }
 
   if (view === 'verify-email') {
     return (
-      <div className="auth-shell">
-        <form
-          onSubmit={handleVerifyEmail}
-          className="auth-card mx-auto w-full max-w-md space-y-8 p-10"
-        >
-          <div className="text-center">
-            <h1 className="text-3xl font-bold leading-tight text-text-primary">Verify Email</h1>
-            <p className="mt-3 text-sm text-text-muted">
-              Enter your email verification token from the server administrator.
-            </p>
-          </div>
+      <AuthCanvas>
+        <AuthCard className="max-w-md">
+          <form onSubmit={handleVerifyEmail} className="flex flex-col gap-6 p-8">
+            <AuthHeading
+              title="Verify Email"
+              subtitle="Enter the verification token your server administrator issued for your account."
+            />
 
-          {error && <ErrorBanner message={error} />}
-          {successMsg && (
-            <div className="rounded-xl border border-accent-success/35 bg-accent-success/10 px-5 py-4 text-sm font-medium text-accent-success">
-              {successMsg}
-            </div>
-          )}
+            {error && <ErrorBanner message={error} />}
+            {successMsg && <SuccessNote>{successMsg}</SuccessNote>}
 
-          <div className="card-stack-roomy">
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Verification Token <span className="text-accent-danger">*</span>
-              </span>
+            <Field label="Verification Token" required>
               <input
                 type="text"
                 value={verifyEmailToken}
                 onChange={(e) => setVerifyEmailToken(e.target.value)}
                 required
-                className="input-field mt-2"
+                className="input-field font-code"
                 placeholder="Paste verification token"
               />
-            </label>
-          </div>
+            </Field>
 
-          <Button type="submit" disabled={loading || !verifyEmailToken.trim()} className="mt-6 w-full">
-            {loading ? 'Verifying...' : 'Verify Email'}
-          </Button>
+            <Button type="submit" loading={loading} disabled={loading || !verifyEmailToken.trim()} className="w-full">
+              Verify Email
+            </Button>
 
-          <p className="mt-4 text-sm text-text-muted">
-            <button
-              type="button"
-              onClick={() => { setError(''); setSuccessMsg(''); setView('login'); }}
-              className="font-semibold text-text-link hover:underline"
-            >
-              Back to Login
-            </button>
-          </p>
-        </form>
-      </div>
+            {backToLogin}
+          </form>
+        </AuthCard>
+      </AuthCanvas>
     );
   }
 
   return (
-    <div className="auth-shell">
-      <form onSubmit={handleSubmit} className="auth-card mx-auto w-full max-w-md space-y-8 p-10">
-        <div className="text-center">
-          <h1 className="text-3xl font-bold leading-tight text-text-primary">Welcome back</h1>
-          <p className="mt-3 text-sm text-text-muted">Sign in to continue to your servers.</p>
-        </div>
-
-        {error && <ErrorBanner message={error} />}
-
-        <div className="card-stack-roomy">
-          <label className="block">
-            <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              {identifierMode.label} <span className="text-accent-danger">*</span>
-            </span>
-            <input
-              type={identifierMode.inputType}
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              required
-              className="input-field mt-2"
-              placeholder={identifierMode.placeholder}
+    <AuthCanvas>
+      <AuthCard className="max-w-4xl overflow-hidden">
+        <div className="flex">
+          <BrandAside />
+          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-8 sm:p-10">
+            <div className="mb-1 lg:hidden">
+              <AppMark size={40} />
+            </div>
+            <AuthHeading
+              mark={false}
+              title="Welcome back"
+              subtitle="Sign in to pick up where you left off across your servers."
             />
-          </label>
 
-          <label className="block">
-            <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Password <span className="text-accent-danger">*</span>
-            </span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="input-field mt-2"
-              placeholder="Enter your password"
-            />
-          </label>
-        </div>
+            {error && <ErrorBanner message={error} />}
 
-        <p className="text-xs leading-5 text-text-muted">
-          <button
-            type="button"
-            onClick={() => { setError(''); setView('forgot-password'); }}
-            className="font-semibold text-text-link hover:underline"
-          >
-            Forgot your password?
-          </button>
-          {' \u00b7 '}
-          <button
-            type="button"
-            onClick={() => { setError(''); setSuccessMsg(''); setView('verify-email'); }}
-            className="font-semibold text-text-link hover:underline"
-          >
-            Verify email token
-          </button>
-        </p>
+            <div className="flex flex-col gap-5">
+              <Field label={identifierMode.label} required>
+                <input
+                  type={identifierMode.inputType}
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  required
+                  className="input-field"
+                  placeholder={identifierMode.placeholder}
+                  autoComplete="username"
+                />
+              </Field>
 
-        <Button
-          type="submit"
-          disabled={loading || Date.now() < cooldownUntil}
-          className="mt-10 w-full"
-        >
-          {loading ? 'Logging in...' : 'Log In'}
-        </Button>
+              <Field label="Password" required>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="input-field"
+                  placeholder="Enter your password"
+                  autoComplete="current-password"
+                />
+              </Field>
+            </div>
 
-        <p className="mt-8 text-sm text-text-muted">
-          Need an account?{' '}
-          <Link to="/register" className="font-semibold text-text-link hover:underline">
-            Register
-          </Link>
-        </p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-muted">
+              <button
+                type="button"
+                onClick={() => { setError(''); setView('forgot-password'); }}
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Forgot your password?
+              </button>
+              <span className="text-border-strong" aria-hidden="true">
+                &middot;
+              </span>
+              <button
+                type="button"
+                onClick={() => { setError(''); setSuccessMsg(''); setView('verify-email'); }}
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Verify email token
+              </button>
+            </div>
 
-        {serverUrl && (
-          <p className="mt-8 text-xs text-text-muted">
-            Connected to{' '}
-            <span className="font-medium text-text-secondary">{serverUrl}</span>
-            {' \u00b7 '}
-            <button
-              type="button"
-              onClick={handleChangeServer}
-              className="font-semibold text-text-link hover:underline"
+            <Button
+              type="submit"
+              loading={loading}
+              disabled={loading || Date.now() < cooldownUntil}
+              className="w-full"
             >
-              Change Server
-            </button>
-          </p>
-        )}
-      </form>
-    </div>
+              Log In
+            </Button>
+
+            <p className="text-label text-text-secondary">
+              Need an account?{' '}
+              <Link
+                to="/register"
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Create one
+              </Link>
+            </p>
+
+            {serverUrl && (
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-subtle pt-5 text-meta text-text-muted">
+                <span>Connected to</span>
+                <span className="font-code text-text-secondary">{serverUrl}</span>
+                <span className="text-border-strong" aria-hidden="true">
+                  &middot;
+                </span>
+                <button
+                  type="button"
+                  onClick={handleChangeServer}
+                  className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+                >
+                  Change server
+                </button>
+              </div>
+            )}
+          </form>
+        </div>
+      </AuthCard>
+    </AuthCanvas>
   );
 }

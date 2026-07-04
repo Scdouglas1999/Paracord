@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Compass, Search, Users, ArrowLeft } from 'lucide-react';
 import { extractApiError } from '../api/client';
@@ -10,6 +10,10 @@ import { toast } from '../stores/toastStore';
 import { cn } from '../lib/utils';
 import { safeStoredImageDataUrl } from '../lib/security';
 import { getGuildColor } from '../lib/colors';
+import { EmptyState } from '../components/ui/Feedback';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { Skeleton } from '../components/ui/Skeleton';
 
 interface DiscoverableGuild {
   id: string;
@@ -136,148 +140,145 @@ export function DiscoveryPage() {
     }
   };
 
+  const filtersActive = search.trim().length > 0 || selectedTag !== null;
+  const clearFilters = () => {
+    setSearch('');
+    setSelectedTag(null);
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {/* Header */}
-      <div className="panel-divider flex min-h-[var(--spacing-header-height)] flex-col gap-3 border-b px-4 py-3 sm:px-6 sm:py-4">
-        <div className="flex items-center gap-3.5">
+    <div className="flex h-full min-h-0 flex-col bg-bg-primary">
+      {/* Solid header — search + category pills, no gradient hero (kill-list #1) */}
+      <header className="shrink-0 border-b border-border-subtle bg-bg-secondary px-4 py-4 sm:px-6">
+        <div className="flex items-center gap-3">
           <button
             type="button"
             aria-label="Back to home"
             onClick={() => navigate('/app')}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+            className="flex h-9 w-9 items-center justify-center rounded-sm text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           >
             <ArrowLeft size={18} />
           </button>
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-mod-subtle text-text-secondary sm:h-11 sm:w-11">
-            <Compass size={18} />
-          </div>
-          <div>
-            <span className="text-lg font-semibold text-text-primary">Discover Servers</span>
-            <p className="text-xs text-text-muted">{total} public server{total !== 1 ? 's' : ''}</p>
+          <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
+            <Compass size={19} />
+          </span>
+          <div className="min-w-0">
+            <h1 className="font-display text-heading text-text-primary">Discover servers</h1>
+            <p className="text-meta text-text-muted">
+              {total} public {total === 1 ? 'community' : 'communities'} to explore
+            </p>
           </div>
         </div>
 
-        {/* Search */}
-        <div className="relative">
+        <div className="relative mt-4">
+          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
           <label htmlFor="discovery-search" className="sr-only">
             Search public servers
           </label>
-          <Search size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted" />
-          <input
+          <Input
             id="discovery-search"
             type="text"
-            placeholder="Search servers..."
+            placeholder="Search by name or topic..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-11 w-full rounded-xl border border-border-subtle bg-bg-mod-subtle py-2.5 pl-10 pr-4 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-border-strong focus:bg-bg-mod-strong"
+            className="pl-9"
           />
         </div>
 
-        {/* Category tags */}
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setSelectedTag(null)}
-            className={cn(
-              'rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors',
-              selectedTag === null
-                ? 'border-accent-primary/50 bg-accent-primary/15 text-accent-primary'
-                : 'border-border-subtle bg-bg-mod-subtle text-text-muted hover:bg-bg-mod-strong hover:text-text-secondary'
-            )}
-          >
+        <div className="mt-3 flex flex-wrap gap-2">
+          <CategoryPill active={selectedTag === null} onClick={() => setSelectedTag(null)}>
             All
-          </button>
+          </CategoryPill>
           {CATEGORIES.map((cat) => (
-            <button
-              type="button"
+            <CategoryPill
               key={cat}
+              active={selectedTag === cat}
               onClick={() => setSelectedTag(selectedTag === cat ? null : cat)}
-              className={cn(
-                'rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors',
-                selectedTag === cat
-                  ? 'border-accent-primary/50 bg-accent-primary/15 text-accent-primary'
-                  : 'border-border-subtle bg-bg-mod-subtle text-text-muted hover:bg-bg-mod-strong hover:text-text-secondary'
-              )}
             >
               {cat}
-            </button>
+            </CategoryPill>
           ))}
         </div>
-      </div>
+      </header>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-thin sm:p-6">
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }, (_, i) => (
-              <div
-                key={i}
-                className="h-48 animate-pulse rounded-2xl border border-border-subtle bg-bg-mod-subtle/40"
-              />
+              <div key={i} className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+                <Skeleton height={64} borderRadius={0} />
+                <div className="flex flex-col gap-2.5 p-4">
+                  <Skeleton width="55%" height={16} />
+                  <Skeleton width="90%" height={12} />
+                  <Skeleton width="70%" height={12} />
+                  <div className="mt-2 flex items-center justify-between">
+                    <Skeleton width={90} height={12} />
+                    <Skeleton width={64} height={28} />
+                  </div>
+                </div>
+              </div>
             ))}
           </div>
         ) : loadError ? (
-          <div
-            role="alert"
-            className="flex flex-col items-center justify-center py-20 text-center"
-          >
-            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle">
-              <Compass size={28} className="text-text-muted" />
-            </div>
-            <p className="text-sm font-semibold text-text-secondary">{loadError}</p>
-            <p className="mt-1 text-xs text-text-muted">Check your connection and try again.</p>
-            <button
-              type="button"
-              onClick={() => void fetchDiscovery(search, selectedTag)}
-              className="mt-4 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-            >
-              Retry
-            </button>
+          <div role="alert">
+            <EmptyState
+              icon={<Compass size={20} />}
+              title="We couldn't reach discovery"
+              description={loadError}
+              action={
+                <Button variant="secondary" size="sm" onClick={() => void fetchDiscovery(search, selectedTag)}>
+                  Retry
+                </Button>
+              }
+            />
           </div>
         ) : guilds.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle">
-              <Compass size={28} className="text-text-muted" />
-            </div>
-            <p className="text-sm font-semibold text-text-secondary">No servers found</p>
-            <p className="mt-1 text-xs text-text-muted">
-              {search
-                ? 'Try a different search term.'
-                : 'No public servers are available right now.'}
-            </p>
-          </div>
+          <EmptyState
+            icon={<Search size={20} />}
+            title={filtersActive ? 'No servers match your filters' : 'No public servers yet'}
+            description={
+              filtersActive
+                ? 'Nothing here matches your search and category. Widen the net by clearing filters, or try a different topic.'
+                : "There aren't any public communities listed right now. Check back soon, or spin up your own server for people to find."
+            }
+            action={
+              filtersActive ? (
+                <Button variant="secondary" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              ) : undefined
+            }
+          />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {guilds.map((guild) => {
               const isMember = myGuildIds.has(guild.id);
               const isJoining = joiningId === guild.id;
               const iconSrc = safeStoredImageDataUrl(guild.icon_hash);
+              const bannerColor = getGuildColor(guild.id);
 
               return (
                 <div
                   key={guild.id}
-                  className="group flex flex-col overflow-hidden rounded-2xl border border-border-subtle/70 bg-bg-mod-subtle/45 transition-all hover:border-border-strong hover:bg-bg-mod-strong/55 hover:shadow-lg"
+                  className="group flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong"
                 >
-                  {/* Banner area */}
+                  {/* Framed solid banner (no gradient wash — kill-list #2) */}
                   <div
-                    className="relative h-20 w-full"
-                    style={{
-                      background: `linear-gradient(135deg, ${getGuildColor(guild.id)}40, ${getGuildColor(guild.id)}15)`,
-                    }}
+                    className="relative h-16 w-full"
+                    style={{ backgroundColor: `color-mix(in srgb, ${bannerColor} 26%, var(--bg-tertiary))` }}
                   >
-                    <div className="absolute -bottom-6 left-4">
+                    <div className="absolute -bottom-5 left-4">
                       <div
-                        className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border-[3px] shadow-md"
+                        className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md"
                         style={{
-                          borderColor: 'var(--bg-secondary)',
-                          backgroundColor: iconSrc ? 'transparent' : getGuildColor(guild.id),
+                          boxShadow: '0 0 0 3px var(--bg-secondary)',
+                          backgroundColor: iconSrc ? 'transparent' : bannerColor,
                         }}
                       >
                         {iconSrc ? (
                           <img src={iconSrc} alt={guild.name} className="h-full w-full object-cover" />
                         ) : (
-                          <span className="text-sm font-bold text-white">
+                          <span className="text-label font-bold text-white">
                             {guild.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()}
                           </span>
                         )}
@@ -285,21 +286,20 @@ export function DiscoveryPage() {
                     </div>
                   </div>
 
-                  {/* Content */}
-                  <div className="flex flex-1 flex-col px-4 pb-4 pt-8">
-                    <h3 className="truncate text-sm font-semibold text-text-primary">{guild.name}</h3>
+                  <div className="flex flex-1 flex-col px-4 pb-4 pt-7">
+                    <h3 className="truncate text-subhead text-text-primary">{guild.name}</h3>
                     {guild.description && (
-                      <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-text-secondary">
+                      <p className="mt-1 line-clamp-2 text-meta leading-relaxed text-text-secondary">
                         {guild.description}
                       </p>
                     )}
 
                     {guild.tags.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
+                      <div className="mt-2.5 flex flex-wrap gap-1.5">
                         {guild.tags.slice(0, 3).map((tag) => (
                           <span
                             key={tag}
-                            className="rounded-md border border-border-subtle bg-bg-mod-subtle px-1.5 py-0.5 text-[10px] font-semibold text-text-muted"
+                            className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary"
                           >
                             {tag}
                           </span>
@@ -307,32 +307,26 @@ export function DiscoveryPage() {
                       </div>
                     )}
 
-                    <div className="mt-auto flex items-center justify-between pt-3">
-                      <div className="flex items-center gap-3 text-xs text-text-muted">
+                    <div className="mt-auto flex items-center justify-between pt-4">
+                      <div className="flex items-center gap-3 text-meta tabular-nums text-text-muted">
                         <span className="inline-flex items-center gap-1">
-                          <Users size={12} />
+                          <Users size={13} />
                           {guild.member_count}
                         </span>
-                        <span className="inline-flex items-center gap-1">
-                          <span className="h-1.5 w-1.5 rounded-full bg-accent-success" />
+                        <span className="inline-flex items-center gap-1 text-status-online">
+                          <span className="h-1.5 w-1.5 rounded-full bg-status-online" />
                           {guild.online_count} online
                         </span>
                       </div>
 
-                      <button
-                        type="button"
+                      <Button
+                        variant={isMember ? 'secondary' : 'default'}
+                        size="sm"
                         onClick={() => void handleJoin(guild)}
                         disabled={isJoining}
-                        className={cn(
-                          'rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors',
-                          isMember
-                            ? 'border-accent-success/40 bg-accent-success/10 text-accent-success hover:bg-accent-success/20'
-                            : 'border-accent-primary/50 bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25',
-                          isJoining && 'cursor-not-allowed opacity-60'
-                        )}
                       >
                         {isJoining ? 'Joining...' : isMember ? 'Visit' : 'Join'}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -342,5 +336,31 @@ export function DiscoveryPage() {
         )}
       </div>
     </div>
+  );
+}
+
+function CategoryPill({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'inline-flex h-7 items-center rounded-full px-3 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+        active
+          ? 'bg-accent-tint text-accent-primary'
+          : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
+      )}
+    >
+      {children}
+    </button>
   );
 }

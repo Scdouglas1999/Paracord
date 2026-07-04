@@ -8,10 +8,10 @@
 
 <p align="center">
   <a href="../../releases/latest">Download</a> &bull;
-  <a href="#quick-start">Quick Start</a> &bull;
-  <a href="SELF_HOSTING_DEPLOYMENT_GUIDE.md">Deployment Guide</a> &bull;
+  <a href="#run-a-server-in-one-command">One-Command Quickstart</a> &bull;
+  <a href="docs/getting-started.md">Getting Started</a> &bull;
+  <a href="docs/deployment.md">Deployment</a> &bull;
   <a href="#features">Features</a> &bull;
-  <a href="#docker">Docker</a> &bull;
   <a href="#development">Development</a> &bull;
   <a href="docs/known-limitations.md">Known Limitations</a>
 </p>
@@ -22,6 +22,62 @@
 </p>
 
 ---
+
+## Run a Server in One Command
+
+Paracord is zero-config. There are no secrets to generate, no LiveKit to wire up,
+and no database to provision. Pick one of the two paths below and you have a
+running server. The **first account you register becomes the server owner/admin**,
+and **voice/video run on Paracord's own native QUIC engine by default** — LiveKit
+is an optional add-on, not a requirement.
+
+### Path A — single self-contained executable
+
+```bash
+# Linux (from the extracted release tarball)
+./paracord-server
+```
+
+```powershell
+# Windows: just double-click paracord-server.exe, or from a terminal:
+.\paracord-server.exe
+```
+
+On first run the binary generates its config (`config/paracord.toml`), a random
+JWT secret, the SQLite database, and a self-signed TLS certificate, then prints
+the URL to open and share plus a short "Next steps" block. Open that URL, register
+the owner account, and you're live.
+
+Prefer to generate the config and read the instructions *before* starting? Run the
+one-shot initializer, then start the server:
+
+```bash
+./paracord-server init      # writes config/paracord.toml (if missing) and prints next steps, then exits
+./paracord-server           # start the server (add -c <path> to use a non-default config location)
+```
+
+### Path B — Docker Compose
+
+```bash
+git clone https://github.com/Scoduglas1999/Paracord.git
+cd Paracord
+docker compose up -d        # no .env, no secrets — the server generates and persists them
+```
+
+### One port to forward
+
+For access from outside your network, forward a **single port — `8443` over both
+TCP and UDP** — to the machine running the server. TCP `8443` carries HTTPS (the
+web UI and gateway); UDP `8443` carries the native QUIC voice/video media. That
+one port covers both browser and desktop clients.
+
+> The Docker stack instead serves the web UI over plain **HTTP on `8090`** (with
+> native media on UDP `8443`) and expects TLS to be terminated at a reverse proxy.
+> Browsers only grant mic/camera/screen-share in a secure context, so the Docker
+> path needs HTTPS in front before browser voice works — the native desktop
+> client speaks raw QUIC and is unaffected. See
+> [docs/getting-started.md](docs/getting-started.md) for the full walkthrough and
+> [docs/deployment.md](docs/deployment.md) for production notes.
 
 ## The Why
 
@@ -49,7 +105,7 @@ Dedicated forum-style channels with tag support for organizing longer-form discu
 
 ### Voice Chat
 
-WebRTC voice is available through LiveKit, with an optional native media transport under active validation. Mute, deafen, pick your mic and speakers, and toggle noise suppression, echo cancellation, and noise gate. Speaking indicators light up in real-time, and join/leave sounds play when people hop in and out of channels. Configurable keybinds for mute, deafen, and push-to-talk. Split-pane layout for viewing streams while staying in the voice channel.
+Voice runs on Paracord's own native QUIC/WebTransport media engine by default — no LiveKit or external SFU required. LiveKit remains available as an optional fallback for operators who want a traditional SFU. Mute, deafen, pick your mic and speakers, and toggle noise suppression, echo cancellation, and noise gate. Speaking indicators light up in real-time, and join/leave sounds play when people hop in and out of channels. Configurable keybinds for mute, deafen, and push-to-talk. Split-pane layout for viewing streams while staying in the voice channel.
 
 ### Live Streaming
 
@@ -195,23 +251,23 @@ chmod +x paracord-server livekit-server
 ./paracord-server
 ```
 
-That's it. For remote access, forward TCP+UDP port 8080 and TCP port 8443 (HTTPS) on your router/firewall.
+That's it. For remote access, forward a single port — **8443 (TCP + UDP)** — on your router/firewall. TCP carries HTTPS and the gateway; UDP carries native QUIC voice/video.
 
 ### Docker
 
 ```bash
 git clone https://github.com/Scoduglas1999/Paracord.git
 cd Paracord
-cp .env.example .env
-# Fill in the required secrets before starting (each must be unique + random):
-#   PARACORD_JWT_SECRET=$(openssl rand -hex 32)
-#   PARACORD_LIVEKIT_API_SECRET=$(openssl rand -hex 32)
-# Edit .env and paste the generated values. `docker compose up` intentionally
-# fails fast until both secrets are set.
 docker compose up -d
 ```
 
-This starts the Paracord server and a LiveKit SFU instance. See `docker-compose.yml` for the full list of environment variables, or check [docs/docker-setup.md](docs/docker-setup.md) for detailed configuration.
+Zero config — no `.env`, no secrets to enter. The server generates and persists a
+random `jwt_secret` into the `/data` volume on first run and reuses it on every
+restart. This starts only the Paracord server with native QUIC/WebTransport voice
+(the default media path); the optional LiveKit SFU is an opt-in profile —
+`docker compose --profile livekit up -d`. See `docker-compose.yml` for the full
+list of environment variables, or [docs/docker-setup.md](docs/docker-setup.md)
+for detailed configuration.
 
 Once running, the Docker stack serves plain **HTTP** at `http://<server-ip>:8090` (there is no TLS on 8443 in the container).
 
@@ -502,7 +558,7 @@ This is an offline maintenance-window tool, not live replication. See [docs/sqli
 | Server | Rust (axum, tokio, SQLx) |
 | Client | Tauri v2 + React 19 + TypeScript |
 | Database | SQLite (default, zero-config) or PostgreSQL + optional SQLCipher encryption |
-| Voice/Video | LiveKit SFU (bundled) |
+| Voice/Video | Native QUIC/WebTransport media engine (default) + optional LiveKit SFU |
 | State | Zustand v5 |
 | Styling | Tailwind CSS v4 |
 | Auth | Argon2 hashing, JWT sessions, Ed25519 cryptographic identity |

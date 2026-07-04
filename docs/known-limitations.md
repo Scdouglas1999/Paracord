@@ -34,7 +34,7 @@ This page documents support boundaries for the v0.9.0 release candidate. Items h
 ## Docker
 
 - The Docker quick start is HTTP-only inside the container by default (`PARACORD_TLS_ENABLED=false`). Terminate TLS at a reverse proxy for production; browsers block mic/camera/screen-share on plain HTTP, so browser voice needs HTTPS in front of the stack.
-- Docker Compose ships no secret values. `PARACORD_JWT_SECRET` and `PARACORD_LIVEKIT_API_SECRET` must be set in `.env` (see `.env.example`) — compose fails fast until they are. The LiveKit key id `paracordlocal` is not a secret; the shared secret must be unique and random before exposure.
+- Docker Compose is zero-config: no `.env` and no secrets are required. The server generates and persists a random `jwt_secret` into the `/data` volume on first run and reuses it across restarts. Native QUIC/WebTransport voice is the default; LiveKit is an opt-in profile (`docker compose --profile livekit up -d`). The LiveKit shared secret (`PARACORD_LIVEKIT_API_SECRET`) defaults to a local dev value and should be overridden in `.env` before exposing LiveKit to a network.
 
 ## Database And Upgrades
 

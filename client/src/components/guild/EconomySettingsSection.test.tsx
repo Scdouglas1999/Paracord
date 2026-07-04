@@ -47,21 +47,21 @@ describe('EconomySettingsSection', () => {
 
     render(<EconomySettingsSection guildId="guild-1" roles={roles} />);
 
-    expect(await screen.findByText('Level 3')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove level 3 mapping for Moderator' })).toBeInTheDocument();
+    expect(await screen.findByText('LVL 3')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove level 3 reward for Moderator' })).toBeInTheDocument();
     expect(screen.queryByText('@everyone')).not.toBeInTheDocument();
 
     await user.type(screen.getByLabelText('Level'), '5');
     await user.selectOptions(screen.getByLabelText('Role'), 'role-vip');
-    await user.click(screen.getByRole('button', { name: 'Add' }));
+    await user.click(screen.getByRole('button', { name: 'Add reward' }));
 
-    expect(screen.getByText('Level 5')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove level 5 mapping for VIP' })).toBeInTheDocument();
+    expect(screen.getByText('LVL 5')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove level 5 reward for VIP' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Remove level 3 mapping for Moderator' }));
-    expect(screen.queryByText('Level 3')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Remove level 3 reward for Moderator' }));
+    expect(screen.queryByText('LVL 3')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => {
       expect(economyApi.updateLevelRoles).toHaveBeenCalledWith('guild-1', [

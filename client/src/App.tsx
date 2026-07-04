@@ -1,5 +1,7 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { motion, useReducedMotion } from 'framer-motion';
+import { AppMark } from './pages/authScaffold';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ServerConnectPage } from './pages/ServerConnectPage';
@@ -130,15 +132,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }, [token, hasFetchedSettings, fetchSettings]);
 
   if (!sessionBootstrapComplete) {
-    return <AuthLoadingSpinner label="Restoring session..." />;
+    return <BrandedSplash label="Restoring session..." />;
   }
 
   if (serverStatus === 'loading') {
-    return <AuthLoadingSpinner label="Connecting..." />;
+    return <BrandedSplash label="Connecting..." />;
   }
 
   if (token && !hasFetchedSettings) {
-    return <AuthLoadingSpinner label="Loading account settings..." />;
+    return <BrandedSplash label="Loading account settings..." />;
   }
 
   // Optional crypto-auth mode (server-controlled, default false).
@@ -171,11 +173,11 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);
 
   if (!sessionBootstrapComplete) {
-    return <AuthLoadingSpinner label="Restoring session..." />;
+    return <BrandedSplash label="Restoring session..." />;
   }
 
   if (serverStatus === 'loading') {
-    return <AuthLoadingSpinner label="Connecting..." />;
+    return <BrandedSplash label="Connecting..." />;
   }
 
   if (serverStatus === 'needed') {
@@ -190,21 +192,47 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-function AuthLoadingSpinner({ label }: { label: string }) {
+/**
+ * Full-viewport branded boot state shown while auth/session resolves. A real
+ * loading moment (app mark on the deepest `--bg-tertiary` base, Fraunces
+ * wordmark, muted status line) rather than a bare spinner — and it matches the
+ * document's first-paint surface so there is no flash while the app hydrates.
+ * The mark breathes gently; `useReducedMotion` collapses it to a static mark.
+ */
+function BrandedSplash({ label }: { label: string }) {
+  const reduce = useReducedMotion();
   return (
-    <div className="auth-shell">
-      <div className="flex flex-col items-center gap-3">
-        <div className="h-7 w-7 animate-spin rounded-full border-2 border-accent-primary border-t-transparent" />
-        <p className="text-sm font-medium text-text-muted">{label}</p>
+    <div className="flex min-h-screen w-full flex-col items-center justify-center gap-5 bg-bg-tertiary px-6">
+      <motion.div
+        animate={reduce ? { opacity: 1 } : { opacity: [0.6, 1, 0.6], scale: [1, 1.04, 1] }}
+        transition={reduce ? undefined : { duration: 2.2, ease: 'easeInOut', repeat: Infinity }}
+      >
+        <AppMark size={52} />
+      </motion.div>
+      <div className="flex flex-col items-center gap-1.5">
+        <span className="font-display text-heading text-text-primary">Paracord</span>
+        <p className="text-meta text-text-muted" role="status" aria-live="polite">
+          {label}
+        </p>
       </div>
     </div>
   );
 }
 
+/**
+ * In-shell fallback while a lazily-loaded route surface streams in. Sits inside
+ * the already-painted frame, so it stays quiet: just the mark, gently fading.
+ */
 function LazyFallback() {
+  const reduce = useReducedMotion();
   return (
-    <div className="flex h-full items-center justify-center">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent-primary border-t-transparent" />
+    <div className="flex h-full w-full items-center justify-center">
+      <motion.div
+        animate={reduce ? { opacity: 0.85 } : { opacity: [0.4, 0.9, 0.4] }}
+        transition={reduce ? undefined : { duration: 1.6, ease: 'easeInOut', repeat: Infinity }}
+      >
+        <AppMark size={32} />
+      </motion.div>
     </div>
   );
 }

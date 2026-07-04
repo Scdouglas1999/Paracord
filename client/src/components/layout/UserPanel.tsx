@@ -27,12 +27,17 @@ export function UserPanel({
   const userFlags = Number(user?.flags ?? 0);
   const canOpenAdminDashboard = showAdminDashboard || (Number.isFinite(userFlags) && (userFlags & 1) !== 0);
 
+  // Icon-button recipe (design-spec §7): 36px square, radius-sm, interactive-normal
+  // icon that lifts to interactive-hover on a subtle wash, layered focus ring.
+  const iconButton =
+    'flex h-9 w-9 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]';
+
   return (
-    <div className="panel-divider shrink-0 border-t px-2.5 py-2.5">
-      <div className="flex items-center">
+    <div className="panel-divider shrink-0 border-t px-2 py-2">
+      <div className="flex items-center gap-1">
         <button
           type="button"
-          className="mr-2 flex min-w-0 flex-1 items-center rounded-xl p-2 text-left transition-colors hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-tertiary"
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm p-1.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
           aria-label={`Copy username ${user?.username || 'User'}`}
           onClick={() => {
             void writeClipboardText(user?.username || '')
@@ -40,46 +45,40 @@ export function UserPanel({
               .catch((err) => toast.error(`Failed to copy username: ${err instanceof Error ? err.message : String(err)}`));
           }}
         >
-          <div className="relative mr-2 shrink-0">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-primary text-sm font-semibold text-white shadow-sm">
+          <div className="relative shrink-0">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-text-on-accent shadow-sm">
               {user?.username?.charAt(0).toUpperCase() || 'U'}
             </div>
-            <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-status-online border-[2px] border-bg-tertiary" />
+            {/* Presence dot ringed in the surface behind the panel (bg-secondary) */}
+            <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-status-online ring-2 ring-bg-secondary" />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold leading-tight text-text-primary">
+            <div className="truncate text-label font-semibold leading-tight text-text-primary">
               {user?.username || 'User'}
             </div>
-            <div className="truncate text-[11px] leading-tight text-text-muted">
-              #{user?.id?.slice(0, 4) || '0000'}
+            <div className="truncate text-meta leading-tight text-text-muted">
+              Online
             </div>
           </div>
         </button>
 
-        <div className="flex items-center gap-1.5">
-          <Tooltip content={muted ? "Unmute" : "Mute"}>
+        <div className="flex items-center gap-0.5">
+          <Tooltip content={muted ? 'Unmute' : 'Mute'}>
             <button
               onClick={onToggleMute}
               aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
               title={muted ? 'Unmute microphone' : 'Mute microphone'}
-              className={cn(
-                'relative flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-text-secondary transition-colors hover:border-border-subtle hover:bg-bg-mod-subtle hover:text-text-primary',
-                muted && "text-accent-danger"
-              )}
+              className={cn(iconButton, muted && 'text-accent-danger hover:text-accent-danger')}
             >
               {muted ? <MicOff size={18} /> : <Mic size={18} />}
-              {muted && <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-accent-danger"><div className="w-6 h-0.5 bg-accent-danger rotate-45 transform" /></div>}
             </button>
           </Tooltip>
-          <Tooltip content={deafened ? "Undeafen" : "Deafen"}>
+          <Tooltip content={deafened ? 'Undeafen' : 'Deafen'}>
             <button
               onClick={onToggleDeaf}
               aria-label={deafened ? 'Undeafen audio' : 'Deafen audio'}
               title={deafened ? 'Undeafen audio' : 'Deafen audio'}
-              className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-text-secondary transition-colors hover:border-border-subtle hover:bg-bg-mod-subtle hover:text-text-primary',
-                deafened && "text-accent-danger"
-              )}
+              className={cn(iconButton, deafened && 'text-accent-danger hover:text-accent-danger')}
             >
               {deafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
             </button>
@@ -87,7 +86,7 @@ export function UserPanel({
           <Tooltip content="User Settings">
             <button
               onClick={() => useUIStore.getState().setUserSettingsOpen(true)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-text-secondary transition-colors hover:border-border-subtle hover:bg-bg-mod-subtle hover:text-text-primary"
+              className={iconButton}
               aria-label="Open user settings"
               title="Open user settings"
             >
@@ -99,7 +98,7 @@ export function UserPanel({
               <button
                 type="button"
                 onClick={() => navigate('/app/admin')}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-text-secondary transition-colors hover:border-border-subtle hover:bg-bg-mod-subtle hover:text-text-primary"
+                className={iconButton}
                 aria-label="Open admin dashboard"
                 title="Open admin dashboard"
               >

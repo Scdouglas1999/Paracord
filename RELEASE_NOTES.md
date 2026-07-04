@@ -1,3 +1,33 @@
+## What's New in v1.0.0
+
+The first public release focuses on making a working, private, self-hosted server
+something you can stand up in a single command — no secrets to generate, no voice
+infrastructure to wire up.
+
+- **Native QUIC media is now the default.** Voice and video run on Paracord's own
+  end-to-end-encrypted QUIC/WebTransport engine out of the box (`[voice]
+  native_media = true`). LiveKit is fully optional — enable it only if you
+  specifically need a WebRTC SFU (legacy interop or very large SFU-scale rooms).
+- **Zero-config first run.** Starting the server (or running `paracord-server
+  init`) generates the config, a random JWT secret, the SQLite database, and a
+  self-signed TLS certificate, then prints the URL to open and share. The **first
+  account you register becomes the server owner/admin**.
+- **One port to forward.** For remote access, forward a single port — `8443` over
+  both TCP and UDP. TCP carries HTTPS (web UI + gateway); UDP carries native QUIC
+  voice/video. That covers both browser and desktop clients.
+- **`docker compose up` needs no `.env` editing.** The Compose stack starts with
+  zero configuration and no secrets to enter; the server generates and persists
+  everything it needs into the data volume on first run. `.env` is entirely
+  optional and only holds overrides.
+- **New operator docs.** A one-command quickstart in the README, a step-by-step
+  [Getting Started](docs/getting-started.md) walkthrough (including native-vs-LiveKit
+  guidance and the TLS/WebTransport nuance), and production
+  [Deployment notes](docs/deployment.md) covering reverse-proxy TLS termination,
+  forwarding the native media UDP port, `PUBLIC_URL`, PostgreSQL, and backups.
+
+> Version framing: `v1.0.0` is the first public tag. The version metadata across
+> Cargo, npm, and Tauri is bumped at tag time.
+
 ## What's New in v0.9.0
 
 > Version framing: `v0.9.0` is the release-candidate line. The overhaul on

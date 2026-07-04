@@ -910,15 +910,12 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   return (
     <div
       className={cn(
-        'relative h-full min-h-0 overflow-hidden rounded-[1.5rem] border border-border-subtle/70 bg-bg-primary/90 backdrop-blur-sm',
+        'relative h-full min-h-0 overflow-hidden rounded-[1rem] border border-border-subtle bg-bg-primary',
         isMobile ? 'flex flex-col' : 'flex'
       )}
       onKeyDown={handleKeyDown}
       tabIndex={-1}
     >
-      <div className="pointer-events-none absolute -left-20 top-0 h-72 w-72 rounded-full blur-[120px]" style={{ backgroundColor: 'var(--ambient-glow-primary)' }} />
-      <div className="pointer-events-none absolute bottom-0 right-0 h-80 w-80 rounded-full blur-[140px]" style={{ backgroundColor: 'var(--ambient-glow-success)' }} />
-
       {!isMobile && (
         <div className="absolute right-6 top-6 z-50 flex flex-col items-center gap-1">
           <button
@@ -986,30 +983,39 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
           </div>
         )
       ) : (
-        <div className="relative z-10 w-72 shrink-0 overflow-y-auto border-r border-border-subtle/70 bg-bg-secondary/65 px-5 py-10">
+        <div className="relative z-10 w-72 shrink-0 overflow-y-auto border-r border-border-subtle bg-bg-secondary px-5 py-10">
           <div className="ml-auto w-full max-w-[236px]">
             <button
               onClick={onClose}
-              className="group mb-3 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+              className="group mb-4 flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-label text-text-muted outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
             >
               <ArrowLeft size={14} className="transition-transform group-hover:-translate-x-0.5" />
               Back
             </button>
-            <div className="px-2 pb-4 text-xs font-semibold uppercase tracking-wide text-text-muted">
+            <div className="px-2 pb-3 text-section uppercase text-text-muted">
               {guild?.name || guildName}
             </div>
-            <div className="flex flex-col gap-3">
-              {NAV_ITEMS.map(item => (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveSection(item.id)}
-                  aria-current={activeSection === item.id ? 'page' : undefined}
-                  className={`settings-nav-item ${activeSection === item.id ? 'active' : ''}`}
-                >
-                  {item.icon}
-                  {item.label}
-                </button>
-              ))}
+            <div className="flex flex-col gap-1">
+              {NAV_ITEMS.map(item => {
+                const active = activeSection === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveSection(item.id)}
+                    aria-current={active ? 'page' : undefined}
+                    className={`settings-nav-item relative ${active ? 'active' : ''}`}
+                  >
+                    {active && (
+                      <span
+                        aria-hidden
+                        className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-accent-secondary"
+                      />
+                    )}
+                    <span className={active ? 'text-accent-primary' : 'text-channel-icon'}>{item.icon}</span>
+                    {item.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

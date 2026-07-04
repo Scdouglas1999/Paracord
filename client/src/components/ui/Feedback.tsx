@@ -19,19 +19,19 @@ export function ErrorBanner({
     <div
       role="alert"
       className={cn(
-        'flex items-center justify-between gap-3 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-4 py-3 text-sm font-medium text-accent-danger',
+        'flex items-center justify-between gap-3 rounded-md border border-accent-danger/35 bg-danger-tint px-4 py-3 text-label text-accent-danger',
         className,
       )}
     >
       <span className="flex min-w-0 items-center gap-2">
-        <AlertCircle size={15} className="shrink-0" />
+        <AlertCircle size={16} className="shrink-0" />
         <span className="truncate">{message}</span>
       </span>
       {onRetry && (
         <button
           type="button"
           onClick={onRetry}
-          className="shrink-0 rounded-md border border-accent-danger/45 px-2 py-1 text-xs font-semibold transition-colors hover:bg-accent-danger hover:text-white"
+          className="shrink-0 rounded-sm border border-accent-danger/45 px-2.5 py-1 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)]"
         >
           {retryLabel}
         </button>
@@ -63,8 +63,8 @@ export function LoadingSpinner({
       aria-live="polite"
       aria-busy="true"
     >
-      <Loader2 className={cn('animate-spin', spinnerSizeClass[size])} />
-      {label && <span className="text-sm">{label}</span>}
+      <Loader2 className={cn('animate-spin text-accent-primary', spinnerSizeClass[size])} />
+      {label && <span className="text-label">{label}</span>}
     </div>
   );
 }
@@ -77,6 +77,9 @@ interface EmptyStateProps {
   className?: string;
 }
 
+// Recipe: design-spec §7 (Empty state) — left-aligned, never a centered
+// icon-in-circle. Line icon in a tinted well, Subhead title, warm 1–2 line copy,
+// then a primary action.
 export function EmptyState({
   title,
   description,
@@ -85,17 +88,19 @@ export function EmptyState({
   className,
 }: EmptyStateProps) {
   return (
-    <div
-      className={cn(
-        'flex flex-col items-center justify-center rounded-xl border border-border-subtle bg-bg-mod-subtle/40 px-6 py-10 text-center',
-        className,
+    <div className={cn('flex flex-col items-start px-2 py-8', className)}>
+      {icon && (
+        <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-sm bg-accent-tint text-text-muted">
+          {icon}
+        </div>
       )}
-    >
-      {icon && <div className="mb-3 text-text-muted">{icon}</div>}
-      <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
-      {description && <p className="mt-1 text-xs text-text-muted">{description}</p>}
-      {action && <div className="mt-4">{action}</div>}
+      <h3 className="text-subhead text-text-primary">{title}</h3>
+      {description && (
+        <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-text-secondary">
+          {description}
+        </p>
+      )}
+      {action && <div className="mt-5">{action}</div>}
     </div>
   );
 }
-

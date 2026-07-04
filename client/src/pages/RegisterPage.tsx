@@ -8,6 +8,9 @@ import { hasAccount } from '../lib/account';
 import { authApi } from '../api/auth';
 import { extractApiError } from '../api/client';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
+import { ErrorBanner } from '../components/ui/Feedback';
+import { Button } from '../components/ui/Button';
+import { AuthCanvas, AuthCard, AuthHeading, AppMark, BrandAside, Field } from './authScaffold';
 
 export function RegisterPage() {
   const [email, setEmail] = useState('');
@@ -106,125 +109,136 @@ export function RegisterPage() {
     }
   };
 
+  const trimmedEmail = email.trim();
+  const emailError =
+    trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)
+      ? 'That doesn’t look like an email address.'
+      : null;
+  const confirmError =
+    confirmPassword.length > 0 && password !== confirmPassword
+      ? 'These passwords don’t match yet.'
+      : null;
+
   return (
-    <div className="auth-shell">
-      <div className="flex w-full justify-center">
-        <form onSubmit={handleSubmit} className="auth-card space-y-8 p-10">
-          <div className="text-center">
-            <h1 className="text-3xl font-bold leading-tight text-text-primary">Create an account</h1>
-            <p className="mt-3 text-sm text-text-muted">Pick your username and start hanging out.</p>
-          </div>
-
-          {error && (
-            <div className="rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-5 py-4 text-sm font-medium text-accent-danger">
-              {error}
+    <AuthCanvas>
+      <AuthCard className="max-w-4xl overflow-hidden">
+        <div className="flex">
+          <BrandAside />
+          <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-8 sm:p-10">
+            <div className="mb-1 lg:hidden">
+              <AppMark size={40} />
             </div>
-          )}
-
-          <div className="card-stack-roomy">
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Email {requireEmail && <span className="text-accent-danger">*</span>}
-              </span>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required={requireEmail}
-                className="input-field mt-2"
-                placeholder={requireEmail ? 'you@example.com' : 'Optional'}
-              />
-            </label>
-
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">Display Name</span>
-              <input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="input-field mt-2"
-                placeholder="How people see you"
-              />
-            </label>
-
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Username <span className="text-accent-danger">*</span>
-              </span>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                className="input-field mt-2"
-                placeholder="Unique account handle"
-              />
-            </label>
-
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Password <span className="text-accent-danger">*</span>
-              </span>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={MIN_PASSWORD_LENGTH}
-                className="input-field mt-2"
-                placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-                autoComplete="new-password"
-              />
-            </label>
-
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Confirm Password <span className="text-accent-danger">*</span>
-              </span>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                minLength={MIN_PASSWORD_LENGTH}
-                className="input-field mt-2"
-                placeholder="Re-enter password"
-                autoComplete="new-password"
-              />
-            </label>
-          </div>
-
-          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-4 py-4">
-            <input
-              type="checkbox"
-              checked={agreed}
-              onChange={(e) => setAgreed(e.target.checked)}
-              className="mt-1 accent-[var(--accent-primary)]"
+            <AuthHeading
+              mark={false}
+              title="Create your account"
+              subtitle="Claim a username, and you’re in — you can add servers and a recovery identity next."
             />
-            <span className="text-xs leading-5 text-text-muted">
-              I have read and agree to the{' '}
-              <Link to="/terms" className="font-semibold text-text-link hover:underline">
-                Terms of Service
-              </Link>{' '}
-              and{' '}
-              <Link to="/privacy" className="font-semibold text-text-link hover:underline">
-                Privacy Policy
+
+            {error && <ErrorBanner message={error} />}
+
+            <div className="flex flex-col gap-5">
+              <Field
+                label="Email"
+                required={requireEmail}
+                error={emailError}
+                hint={requireEmail ? undefined : 'Optional — used only for password recovery.'}
+              >
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required={requireEmail}
+                  className="input-field"
+                  placeholder={requireEmail ? 'you@example.com' : 'you@example.com (optional)'}
+                  autoComplete="email"
+                />
+              </Field>
+
+              <Field label="Display Name" hint="How people see you. You can change it anytime.">
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="input-field"
+                  placeholder="Ada Lovelace"
+                />
+              </Field>
+
+              <Field label="Username" required hint="Your unique @handle on this server.">
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  className="input-field"
+                  placeholder="ada"
+                  autoComplete="username"
+                />
+              </Field>
+
+              <Field label="Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={MIN_PASSWORD_LENGTH}
+                  className="input-field"
+                  placeholder="Choose a strong password"
+                  autoComplete="new-password"
+                />
+              </Field>
+
+              <Field label="Confirm Password" required error={confirmError}>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  minLength={MIN_PASSWORD_LENGTH}
+                  className="input-field"
+                  placeholder="Re-enter your password"
+                  autoComplete="new-password"
+                />
+              </Field>
+            </div>
+
+            <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border-subtle bg-bg-mod-subtle px-4 py-3.5 transition-colors hover:border-border-strong">
+              <input
+                type="checkbox"
+                checked={agreed}
+                onChange={(e) => setAgreed(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
+              />
+              <span className="text-meta leading-relaxed text-text-secondary">
+                I have read and agree to the{' '}
+                <Link to="/terms" className="font-semibold text-text-link hover:text-accent-primary-hover">
+                  Terms of Service
+                </Link>{' '}
+                and{' '}
+                <Link to="/privacy" className="font-semibold text-text-link hover:text-accent-primary-hover">
+                  Privacy Policy
+                </Link>
+                .
+              </span>
+            </label>
+
+            <Button type="submit" loading={loading} disabled={loading} className="w-full">
+              Continue
+            </Button>
+
+            <p className="text-label text-text-secondary">
+              Already have an account?{' '}
+              <Link
+                to="/login"
+                className="font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
+              >
+                Sign in
               </Link>
-              .
-            </span>
-          </label>
-
-          <button type="submit" disabled={loading} className="btn-primary mt-10 w-full min-h-[2.9rem]">
-            {loading ? 'Creating account...' : 'Continue'}
-          </button>
-
-          <p className="mt-8 text-center text-sm text-text-muted">
-            <Link to="/login" className="font-semibold text-text-link hover:underline">
-              Already have an account?
-            </Link>
-          </p>
-        </form>
-      </div>
-    </div>
+            </p>
+          </form>
+        </div>
+      </AuthCard>
+    </AuthCanvas>
   );
 }

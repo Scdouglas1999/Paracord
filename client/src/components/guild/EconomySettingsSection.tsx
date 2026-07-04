@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, TrendingUp } from 'lucide-react';
 import { economyApi, type LevelRoleMapping } from '../../api/economy';
 import { extractApiError } from '../../api/client';
 import type { Role } from '../../types';
 import { Button } from '../ui/Button';
-import { LoadingSpinner } from '../ui/Feedback';
+import { Input, Select } from '../ui/Input';
+import { EmptyState, LoadingSpinner } from '../ui/Feedback';
 import { toast } from '../../stores/toastStore';
+import { SectionHeader, FieldLabel, GroupLabel } from './SettingsPrimitives';
 
 interface EconomySettingsSectionProps {
   guildId: string;
@@ -88,56 +90,81 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <LoadingSpinner />
+        <LoadingSpinner label="Loading economy settings…" />
       </div>
     );
   }
 
   const roleNameById = new Map(roles.map((r) => [r.id, r.name]));
+  const roleColorHex = (roleId: string) => {
+    const role = roles.find((r) => r.id === roleId);
+    if (!role?.color) return 'var(--text-muted)';
+    return `#${role.color.toString(16).padStart(6, '0')}`;
+  };
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h2 className="text-lg font-semibold text-text-primary">Economy &amp; XP</h2>
-        <p className="mt-1 text-sm text-text-muted">
-          Configure level-up role rewards for this server. XP rates and cooldowns are controlled via
-          server environment variables (<code className="text-xs">PARACORD_XP_COOLDOWN_SECONDS</code>).
-        </p>
-      </div>
+    <div className="flex flex-col gap-8">
+      <SectionHeader
+        title="Economy & XP"
+        description={
+          <>
+            Reward activity with level-up roles. XP rates and cooldowns are tuned server-side via the
+            {' '}
+            <code className="font-code text-[12px] text-text-secondary">PARACORD_XP_COOLDOWN_SECONDS</code>
+            {' '}
+            environment variable.
+          </>
+        }
+        action={
+          <Button onClick={() => void onSave()} loading={saving} disabled={saving}>
+            Save changes
+          </Button>
+        }
+      />
 
       {error && (
-        <div className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-4 py-3 text-sm text-accent-danger">
+        <div className="rounded-md border border-accent-danger/35 bg-danger-tint px-4 py-3 text-label text-accent-danger">
           {error}
         </div>
       )}
 
-      {/* Level-role mappings */}
-      <div className="settings-surface-card space-y-4">
-        <div>
-          <h3 className="font-semibold text-text-primary">Level-Up Role Rewards</h3>
-          <p className="mt-0.5 text-xs text-text-muted">
-            Assign a role that members automatically receive when they reach a given level.
-          </p>
-        </div>
+      {/* Level-role rewards */}
+      <section className="border-t border-border-subtle pt-6">
+        <GroupLabel>Level-up role rewards</GroupLabel>
+        <p className="mt-2 text-[13.5px] leading-relaxed text-text-secondary">
+          Members automatically earn the mapped role the moment they cross the given level.
+        </p>
 
         {mappings.length === 0 ? (
-          <p className="text-sm text-text-secondary">No level-role mappings configured yet.</p>
+          <EmptyState
+            className="!py-6"
+            icon={<TrendingUp size={20} />}
+            title="No level rewards yet"
+            description="Pair a level with a role below and members will unlock it as they climb."
+          />
         ) : (
-          <ul className="divide-y divide-border-subtle/60 rounded-lg border border-border-subtle">
+          <ul className="mt-4 divide-y divide-border-subtle">
             {mappings.map((m) => {
               const roleName = roleNameById.get(m.role_id) ?? m.role_id;
               return (
                 <li
                   key={`${m.level}-${m.role_id}`}
-                  className="flex items-center justify-between gap-3 px-4 py-3 text-sm"
+                  className="group flex items-center gap-3 py-2.5"
                 >
-                  <span className="font-medium text-text-primary">Level {m.level}</span>
-                  <span className="flex-1 text-text-secondary">{roleName}</span>
+                  <span className="min-w-[4.5rem] font-code text-meta tabular-nums text-text-muted">
+                    LVL {m.level}
+                  </span>
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: roleColorHex(m.role_id) }}
+                    aria-hidden
+                  />
+                  <span className="flex-1 truncate text-label text-text-primary">{roleName}</span>
                   <button
                     type="button"
                     onClick={() => removeMapping(m.level, m.role_id)}
-                    className="text-text-muted transition-colors hover:text-accent-danger"
-                    aria-label={`Remove level ${m.level} mapping for ${roleName}`}
+                    className="icon-btn opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                    aria-label={`Remove level ${m.level} reward for ${roleName}`}
                   >
                     <Trash2 size={15} />
                   </button>
@@ -148,27 +175,27 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
         )}
 
         {/* Add new mapping */}
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-text-secondary">Level</label>
-            <input
+        <div className="mt-5 flex flex-wrap items-end gap-3">
+          <label className="flex flex-col">
+            <FieldLabel>Level</FieldLabel>
+            <Input
               aria-label="Level"
               type="number"
               min={1}
               step={1}
-              placeholder="e.g. 5"
+              placeholder="5"
               value={newMappingLevel}
               onChange={(e) => setNewMappingLevel(e.target.value)}
-              className="input-field w-24"
+              className="w-24 font-code tabular-nums"
             />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-text-secondary">Role</label>
-            <select
+          </label>
+          <label className="flex flex-col">
+            <FieldLabel>Role</FieldLabel>
+            <Select
               aria-label="Role"
               value={newMappingRoleId}
               onChange={(e) => setNewMappingRoleId(e.target.value)}
-              className="select-field w-48"
+              className="w-52"
               disabled={assignableRoles.length === 0}
             >
               {assignableRoles.length === 0 ? (
@@ -180,46 +207,43 @@ export function EconomySettingsSection({ guildId, roles }: EconomySettingsSectio
                   </option>
                 ))
               )}
-            </select>
-          </div>
+            </Select>
+          </label>
           <Button
             variant="outline"
-            size="sm"
             onClick={addMapping}
             disabled={!newMappingLevel || !newMappingRoleId || assignableRoles.length === 0}
           >
-            <Plus size={14} className="mr-1" />
-            Add
+            <Plus size={15} className="mr-1.5" />
+            Add reward
           </Button>
         </div>
-      </div>
+      </section>
 
       {/* XP system info */}
-      <div className="settings-surface-card space-y-3">
-        <h3 className="font-semibold text-text-primary">XP System Info</h3>
-        <dl className="space-y-2 text-sm">
-          <div className="flex justify-between gap-4">
-            <dt className="text-text-muted">XP per message</dt>
-            <dd className="font-medium text-text-primary">15-25 XP (scales with message length)</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-text-muted">Cooldown</dt>
-            <dd className="font-medium text-text-primary">
-              Configurable via <code className="text-xs">PARACORD_XP_COOLDOWN_SECONDS</code> (default: 45s)
+      <section className="border-t border-border-subtle pt-6">
+        <GroupLabel>How XP works</GroupLabel>
+        <dl className="mt-4 divide-y divide-border-subtle text-label">
+          <div className="flex items-baseline justify-between gap-4 py-2.5">
+            <dt className="text-text-secondary">XP per message</dt>
+            <dd className="text-right text-text-primary">
+              <span className="font-code tabular-nums">15–25</span> XP, scaled by length
             </dd>
           </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-text-muted">Level formula</dt>
-            <dd className="font-medium text-text-primary">level = floor(sqrt(total_xp / 100))</dd>
+          <div className="flex items-baseline justify-between gap-4 py-2.5">
+            <dt className="text-text-secondary">Cooldown</dt>
+            <dd className="text-right text-text-primary">
+              <span className="font-code tabular-nums">45s</span> default, env-configurable
+            </dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-4 py-2.5">
+            <dt className="text-text-secondary">Level formula</dt>
+            <dd className="text-right font-code text-[12.5px] tabular-nums text-text-primary">
+              floor(sqrt(total_xp / 100))
+            </dd>
           </div>
         </dl>
-      </div>
-
-      <div className="flex justify-end">
-        <Button onClick={() => void onSave()} loading={saving} disabled={saving}>
-          Save Changes
-        </Button>
-      </div>
+      </section>
     </div>
   );
 }

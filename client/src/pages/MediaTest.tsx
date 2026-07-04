@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { Mic, Video, Users, Terminal, X } from 'lucide-react';
+import { cn } from '../lib/utils';
 import type { MediaEngine } from '../lib/media/mediaEngine';
 
 interface LogEntry {
@@ -133,229 +135,211 @@ export default function MediaTest() {
   // Audio level as a percentage (0 = loudest/127, 127 = silent/0)
   const levelPercent = (level: number) => Math.max(0, 100 - (level / 127) * 100);
 
-  const btnStyle = (active: boolean, color: string, disabledColor: string) => ({
-    padding: '0.5rem 1rem',
-    backgroundColor: active ? color : disabledColor,
-    color: 'white',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: connected ? 'pointer' : 'not-allowed',
-    marginRight: '0.5rem',
-    opacity: connected ? 1 : 0.5,
-  });
+  // Dev-tool control button. Active (muted/deafened) reads as the danger fill;
+  // idle is a quiet secondary. Consumes Emerald Commons tokens — no ad-hoc hex.
+  const ctrlBtn = (active: boolean) =>
+    cn(
+      'inline-flex h-9 items-center justify-center rounded-sm px-3.5 text-label font-semibold transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
+      active
+        ? 'bg-accent-danger-fill text-text-on-danger hover:brightness-110'
+        : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
+    );
+
+  const inputCls =
+    'h-10 rounded-sm border border-border-subtle bg-bg-tertiary px-3 font-code text-meta text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary focus:outline-none focus:[box-shadow:var(--focus-ring-input)] disabled:opacity-60';
+
+  const panelCls = 'rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm';
+  const sectionHeadCls = 'mb-3 flex items-center gap-2 text-section uppercase text-text-muted';
 
   return (
-    <div style={{ padding: '2rem', color: '#dcddde', backgroundColor: '#36393f', minHeight: '100vh', fontFamily: 'system-ui, sans-serif' }}>
-      <h1 style={{ marginBottom: '0.5rem' }}>Media Engine Test</h1>
-      <p style={{ color: '#72767d', marginBottom: '2rem' }}>
-        Standalone test page for the custom QUIC media server.
-        Connect to a running paracord-media-dev instance.
-      </p>
+    <div className="min-h-screen w-full overflow-y-auto bg-bg-primary p-8 text-text-primary">
+      <div className="mx-auto max-w-4xl">
+        <header className="mb-8">
+          <p className="mb-2 text-section uppercase text-accent-secondary">Internal · Media transport</p>
+          <h1 className="font-display text-title text-text-primary">Media engine harness</h1>
+          <p className="mt-1.5 max-w-2xl text-body text-text-secondary">
+            Drive the custom QUIC media server directly against a running
+            <span className="font-code text-text-primary"> paracord-media-dev</span> instance. This
+            bypasses the voice UI and store entirely.
+          </p>
+        </header>
 
-      {/* Connection controls */}
-      <div style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-        <div>
-          <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', color: '#b9bbbe' }}>Relay Endpoint</label>
-          <input
-            type="text"
-            value={endpoint}
-            onChange={(e) => setEndpoint(e.target.value)}
-            disabled={connected}
-            style={{
-              width: '350px',
-              padding: '0.5rem',
-              backgroundColor: '#40444b',
-              border: '1px solid #202225',
-              borderRadius: '4px',
-              color: '#dcddde',
-            }}
-          />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', color: '#b9bbbe' }}>Auth Token</label>
-          <input
-            type="text"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            disabled={connected}
-            style={{
-              width: '200px',
-              padding: '0.5rem',
-              backgroundColor: '#40444b',
-              border: '1px solid #202225',
-              borderRadius: '4px',
-              color: '#dcddde',
-            }}
-          />
-        </div>
-        <button
-          onClick={handleConnect}
-          disabled={connecting}
-          style={{
-            padding: '0.5rem 1.5rem',
-            backgroundColor: connected ? '#ed4245' : '#3ba55d',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: connecting ? 'wait' : 'pointer',
-            fontWeight: 600,
-          }}
-        >
-          {connecting ? 'Connecting...' : connected ? 'Disconnect' : 'Connect'}
-        </button>
-      </div>
-
-      {/* Status bar */}
-      <div style={{
-        marginBottom: '1.5rem',
-        padding: '0.5rem 1rem',
-        backgroundColor: connected ? '#2d4f3e' : '#2f3136',
-        borderRadius: '4px',
-        borderLeft: `3px solid ${connected ? '#3ba55d' : '#72767d'}`,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.75rem',
-      }}>
-        <div style={{
-          width: 8,
-          height: 8,
-          borderRadius: '50%',
-          backgroundColor: connected ? '#3ba55d' : '#72767d',
-        }} />
-        <span>{status}</span>
-      </div>
-
-      {/* Error display */}
-      {error && (
-        <div style={{
-          marginBottom: '1rem',
-          padding: '0.75rem 1rem',
-          backgroundColor: '#4e2326',
-          borderRadius: '4px',
-          borderLeft: '3px solid #ed4245',
-          color: '#f5a6a8',
-        }}>
-          {error}
-          <button
-            onClick={() => setError(null)}
-            style={{
-              float: 'right',
-              background: 'none',
-              border: 'none',
-              color: '#f5a6a8',
-              cursor: 'pointer',
-            }}
-          >
-            X
-          </button>
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-        {/* Audio Controls */}
-        <div style={{ padding: '1rem', backgroundColor: '#2f3136', borderRadius: '8px' }}>
-          <h3 style={{ marginBottom: '0.75rem' }}>Audio Controls</h3>
-          <button
-            disabled={!connected}
-            onClick={handleMute}
-            style={btnStyle(muted, '#ed4245', '#4f545c')}
-          >
-            {muted ? 'Unmute' : 'Mute'}
-          </button>
-          <button
-            disabled={!connected}
-            onClick={handleDeafen}
-            style={btnStyle(deafened, '#ed4245', '#4f545c')}
-          >
-            {deafened ? 'Undeafen' : 'Deafen'}
-          </button>
-        </div>
-
-        {/* Video Controls */}
-        <div style={{ padding: '1rem', backgroundColor: '#2f3136', borderRadius: '8px' }}>
-          <h3 style={{ marginBottom: '0.75rem' }}>Video Controls</h3>
-          <button disabled style={btnStyle(false, '#5865f2', '#4f545c')}>
-            Enable Video (Phase 4)
-          </button>
-          <button disabled style={btnStyle(false, '#5865f2', '#4f545c')}>
-            Share Screen (Phase 4)
-          </button>
-        </div>
-
-        {/* Participants */}
-        <div style={{ padding: '1rem', backgroundColor: '#2f3136', borderRadius: '8px' }}>
-          <h3 style={{ marginBottom: '0.75rem' }}>Participants ({participants.length})</h3>
-          {participants.length === 0 ? (
-            <p style={{ color: '#72767d', fontSize: '0.85rem' }}>No participants yet</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {participants.map((p) => (
-                <div
-                  key={p.userId}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    padding: '0.4rem 0.6rem',
-                    backgroundColor: '#36393f',
-                    borderRadius: '4px',
-                    border: p.speaking ? '1px solid #3ba55d' : '1px solid transparent',
-                  }}
-                >
-                  <div style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    backgroundColor: p.speaking ? '#3ba55d' : '#72767d',
-                  }} />
-                  <span style={{ flex: 1, fontSize: '0.85rem' }}>{p.userId}</span>
-                  {/* Audio level bar */}
-                  <div style={{
-                    width: 60,
-                    height: 6,
-                    backgroundColor: '#202225',
-                    borderRadius: 3,
-                    overflow: 'hidden',
-                  }}>
-                    <div style={{
-                      width: `${levelPercent(p.audioLevel)}%`,
-                      height: '100%',
-                      backgroundColor: p.speaking ? '#3ba55d' : '#4f545c',
-                      transition: 'width 100ms',
-                    }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Debug Log */}
-        <div style={{ padding: '1rem', backgroundColor: '#2f3136', borderRadius: '8px' }}>
-          <h3 style={{ marginBottom: '0.75rem' }}>Debug Log</h3>
-          <div style={{
-            fontSize: '0.75rem',
-            fontFamily: 'monospace',
-            maxHeight: '250px',
-            overflow: 'auto',
-            backgroundColor: '#202225',
-            borderRadius: '4px',
-            padding: '0.5rem',
-          }}>
-            {logs.length === 0 ? (
-              <span style={{ color: '#72767d' }}>Waiting for connection...</span>
-            ) : (
-              logs.map((entry, i) => (
-                <div key={i} style={{
-                  color: entry.level === 'error' ? '#ed4245' : entry.level === 'warn' ? '#faa61a' : '#72767d',
-                  marginBottom: '2px',
-                }}>
-                  <span style={{ color: '#4f545c' }}>[{entry.time}]</span> {entry.message}
-                </div>
-              ))
-            )}
-            <div ref={logEndRef} />
+        {/* Connection controls */}
+        <div className="mb-4 flex flex-wrap items-end gap-3">
+          <div className="flex flex-col">
+            <label htmlFor="mt-endpoint" className="mb-1.5 text-section uppercase text-text-muted">
+              Relay endpoint
+            </label>
+            <input
+              id="mt-endpoint"
+              type="text"
+              value={endpoint}
+              onChange={(e) => setEndpoint(e.target.value)}
+              disabled={connected}
+              className={cn(inputCls, 'w-[22rem] max-w-full')}
+            />
           </div>
+          <div className="flex flex-col">
+            <label htmlFor="mt-token" className="mb-1.5 text-section uppercase text-text-muted">
+              Auth token
+            </label>
+            <input
+              id="mt-token"
+              type="text"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              disabled={connected}
+              className={cn(inputCls, 'w-52 max-w-full')}
+            />
+          </div>
+          <button
+            onClick={handleConnect}
+            disabled={connecting}
+            className={cn(
+              'inline-flex h-10 items-center justify-center rounded-sm px-5 text-label font-semibold shadow-sm transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-wait disabled:opacity-70',
+              connected
+                ? 'bg-accent-danger-fill text-text-on-danger hover:brightness-110'
+                : 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active',
+            )}
+          >
+            {connecting ? 'Connecting…' : connected ? 'Disconnect' : 'Connect'}
+          </button>
+        </div>
+
+        {/* Status bar */}
+        <div
+          className={cn(
+            'mb-6 flex items-center gap-3 rounded-md border border-l-[3px] border-border-subtle bg-bg-secondary px-4 py-2.5',
+            connected ? 'border-l-accent-success' : 'border-l-interactive-muted',
+          )}
+        >
+          <span
+            className={cn(
+              'h-2 w-2 shrink-0 rounded-full',
+              connected ? 'bg-accent-success' : 'bg-interactive-muted',
+            )}
+          />
+          <span className="font-code text-meta text-text-secondary">{status}</span>
+        </div>
+
+        {/* Error display */}
+        {error && (
+          <div className="mb-4 flex items-start gap-3 rounded-md border border-l-[3px] border-border-subtle border-l-accent-danger bg-danger-tint px-4 py-3">
+            <p className="flex-1 font-code text-meta text-accent-danger">{error}</p>
+            <button
+              onClick={() => setError(null)}
+              aria-label="Dismiss error"
+              className="rounded-sm p-1 text-accent-danger transition-colors hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          {/* Audio Controls */}
+          <section className={panelCls}>
+            <h2 className={sectionHeadCls}>
+              <Mic size={15} /> Audio
+            </h2>
+            <div className="flex gap-2">
+              <button disabled={!connected} onClick={handleMute} className={ctrlBtn(muted)}>
+                {muted ? 'Unmute' : 'Mute'}
+              </button>
+              <button disabled={!connected} onClick={handleDeafen} className={ctrlBtn(deafened)}>
+                {deafened ? 'Undeafen' : 'Deafen'}
+              </button>
+            </div>
+          </section>
+
+          {/* Video Controls */}
+          <section className={panelCls}>
+            <h2 className={sectionHeadCls}>
+              <Video size={15} /> Video
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              <button disabled className={ctrlBtn(false)}>
+                Enable video
+              </button>
+              <button disabled className={ctrlBtn(false)}>
+                Share screen
+              </button>
+              <span className="self-center font-code text-meta text-text-muted">Phase 4</span>
+            </div>
+          </section>
+
+          {/* Participants */}
+          <section className={panelCls}>
+            <h2 className={sectionHeadCls}>
+              <Users size={15} /> Participants
+              <span className="ml-auto rounded-xs bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta tabular-nums text-text-secondary">
+                {participants.length}
+              </span>
+            </h2>
+            {participants.length === 0 ? (
+              <p className="text-meta text-text-secondary">Waiting for peers to join the room.</p>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {participants.map((p) => (
+                  <div
+                    key={p.userId}
+                    className={cn(
+                      'flex items-center gap-3 rounded-sm border px-3 py-2 transition-colors',
+                      p.speaking ? 'border-accent-success/50 bg-bg-mod-subtle' : 'border-transparent',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'h-2 w-2 shrink-0 rounded-full',
+                        p.speaking ? 'bg-status-online' : 'bg-status-offline',
+                      )}
+                    />
+                    <span className="flex-1 truncate font-code text-meta text-text-secondary">
+                      {p.userId}
+                    </span>
+                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-tertiary">
+                      <div
+                        className="h-full rounded-full transition-[width] duration-100"
+                        style={{
+                          width: `${levelPercent(p.audioLevel)}%`,
+                          backgroundColor: p.speaking ? 'var(--accent-primary)' : 'var(--interactive-muted)',
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Debug Log */}
+          <section className={panelCls}>
+            <h2 className={sectionHeadCls}>
+              <Terminal size={15} /> Trace
+            </h2>
+            <div className="max-h-64 overflow-auto rounded-sm bg-bg-tertiary p-3 font-code text-meta leading-relaxed">
+              {logs.length === 0 ? (
+                <span className="text-text-muted">No events yet — connect to start the trace.</span>
+              ) : (
+                logs.map((entry, i) => (
+                  <div
+                    key={i}
+                    className={cn(
+                      'mb-0.5',
+                      entry.level === 'error'
+                        ? 'text-accent-danger'
+                        : entry.level === 'warn'
+                          ? 'text-accent-warning'
+                          : 'text-text-secondary',
+                    )}
+                  >
+                    <span className="text-interactive-muted">[{entry.time}]</span> {entry.message}
+                  </div>
+                ))
+              )}
+              <div ref={logEndRef} />
+            </div>
+          </section>
         </div>
       </div>
     </div>

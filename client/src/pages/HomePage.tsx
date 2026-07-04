@@ -1,6 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Plus, Compass, Users, ChevronRight, Volume2, MessageSquare, FileText } from 'lucide-react';
+import {
+  UserPlus,
+  Plus,
+  Compass,
+  ChevronRight,
+  Volume2,
+  MessageSquare,
+  FileText,
+  MessagesSquare,
+  Headphones,
+} from 'lucide-react';
 
 import { useAuthStore } from '../stores/authStore';
 import { useGuildStore } from '../stores/guildStore';
@@ -12,14 +22,86 @@ import { useVoiceStore } from '../stores/voiceStore';
 import { dmApi } from '../api/dms';
 import { extractApiError } from '../api/client';
 import { CreateGuildModal } from '../components/guild/CreateGuildModal';
+import { EmptyState } from '../components/ui/Feedback';
+import { Button } from '../components/ui/Button';
 import { safeStoredImageDataUrl } from '../lib/security';
 import { getGuildColor } from '../lib/colors';
 import { Tooltip } from '../components/ui/Tooltip';
 import { toast } from '../stores/toastStore';
+import { cn } from '../lib/utils';
 
 import type { Channel } from '../types';
 
 const EMPTY_CHANNELS: Channel[] = [];
+
+const STATUS_COLOR: Record<string, string> = {
+  online: 'bg-status-online',
+  idle: 'bg-status-idle',
+  dnd: 'bg-status-dnd',
+  streaming: 'bg-status-streaming',
+  offline: 'bg-status-offline',
+};
+
+function greetingFor(hour: number): string {
+  if (hour < 5) return 'Still up';
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+// Presence dot ringed in the surface behind it (design-spec §7 Avatar). Ring
+// color is passed so a dot on the page reads cleanly against a panel or the canvas.
+function PresenceAvatar({
+  name,
+  size = 40,
+  status,
+  ring = 'var(--bg-primary)',
+}: {
+  name: string;
+  size?: number;
+  status?: string;
+  ring?: string;
+}) {
+  const dot = Math.round(size * 0.34);
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <div
+        className="flex h-full w-full items-center justify-center rounded-full bg-accent-tint font-semibold text-accent-primary"
+        style={{ fontSize: Math.round(size * 0.4) }}
+      >
+        {name.charAt(0).toUpperCase()}
+      </div>
+      {status && status !== 'offline' && (
+        <span
+          className={cn('absolute -bottom-0.5 -right-0.5 rounded-full', STATUS_COLOR[status] ?? 'bg-status-offline')}
+          style={{ width: dot, height: dot, boxShadow: `0 0 0 2.5px ${ring}` }}
+        />
+      )}
+    </div>
+  );
+}
+
+function SectionHeader({
+  icon,
+  label,
+  count,
+}: {
+  icon: ReactNode;
+  label: string;
+  count?: number;
+}) {
+  return (
+    <div className="mb-2 flex items-center gap-2 px-1 text-section uppercase text-text-muted">
+      <span className="text-text-muted">{icon}</span>
+      <span>{label}</span>
+      {count != null && count > 0 && (
+        <span className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold tabular-nums text-text-secondary">
+          {count}
+        </span>
+      )}
+    </div>
+  );
+}
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -127,109 +209,126 @@ export function HomePage() {
     navigate(`/app/guilds/${guild.id}`);
   };
 
+  const statusLine = useMemo(() => {
+    const parts: string[] = [];
+    parts.push(
+      onlineFriends.length > 0
+        ? `${onlineFriends.length} friend${onlineFriends.length === 1 ? '' : 's'} online`
+        : 'No friends online',
+    );
+    if (activeVoiceChannels.length > 0) {
+      parts.push(`${activeVoiceChannels.length} voice room${activeVoiceChannels.length === 1 ? '' : 's'} live`);
+    }
+    parts.push(`${guilds.length} server${guilds.length === 1 ? '' : 's'}`);
+    return parts.join('  ·  ');
+  }, [onlineFriends.length, activeVoiceChannels.length, guilds.length]);
+
+  const quickActions = [
+    { icon: UserPlus, label: 'Add a friend', hint: 'By username or ID', onClick: () => navigate('/app/friends') },
+    { icon: Plus, label: 'Create a server', hint: 'Start a new community', onClick: () => setShowCreateModal(true) },
+    { icon: Compass, label: 'Explore servers', hint: 'Find public communities', onClick: () => navigate('/app/discovery') },
+    { icon: FileText, label: 'Browse templates', hint: 'Launch from a blueprint', onClick: () => navigate('/app/templates') },
+  ];
+
   return (
-    <div className="flex h-full flex-col overflow-y-auto scrollbar-thin rounded-2xl bg-bg-primary">
-      {/* Personalized Header Gradient Banner */}
-      <div
-        className="relative h-[160px] shrink-0 overflow-hidden sm:h-[180px] md:h-[200px]"
-        style={{
-          background: `linear-gradient(135deg, var(--accent-primary) 0%, var(--bg-primary) 100%)`
-        }}
-      >
-        <div className="absolute inset-0 bg-gradient-to-t from-bg-primary via-bg-primary/40 to-transparent opacity-80" />
-        <div className="absolute bottom-5 left-5 right-5 sm:bottom-6 sm:left-8 sm:right-8 z-10">
-          <h1 className="truncate text-2xl font-extrabold leading-tight tracking-tight text-text-primary drop-shadow-md sm:text-3xl">
-            Welcome to Paracord, {user?.username}
-          </h1>
-          <p className="mt-1 line-clamp-2 max-w-xl text-sm font-medium leading-normal text-text-secondary sm:mt-2 sm:text-base">
-            Your global dashboard. Manage servers, discover new communities, and quickly drop into active voice channels.
-          </p>
-        </div>
-      </div>
+    <div className="flex h-full flex-col overflow-y-auto bg-bg-primary scrollbar-thin">
+      {/* Solid raised header — greeting in Fraunces, a warm-neutral status line.
+          Deliberately not a gradient hero (kill-list #1). */}
+      <header className="shrink-0 border-b border-border-subtle bg-bg-secondary px-6 py-6 sm:px-8 sm:py-7">
+        <h1 className="font-display text-title text-text-primary sm:text-display">
+          {greetingFor(new Date().getHours())}, {user?.username}
+        </h1>
+        <p className="mt-1.5 text-body text-text-secondary">{statusLine}</p>
+      </header>
 
-      {/* Spatial Grid Layout */}
-      <div className="grid flex-1 grid-cols-1 gap-5 p-5 sm:gap-6 sm:p-6 lg:p-8 xl:grid-cols-[2fr_1fr] xl:items-start">
-        {/* Left Column (Activities) */}
-        <div className="flex flex-col gap-8">
-          {/* Global Happening Now */}
+      <div className="grid flex-1 grid-cols-1 gap-8 px-6 py-6 sm:px-8 xl:grid-cols-[minmax(0,1fr)_320px]">
+        {/* Main column — activity as list rows, not tiled cards (kill-list #5) */}
+        <div className="flex min-w-0 flex-col gap-8">
           <section>
-            <h2 className="mb-4 flex items-center gap-2 text-lg font-bold leading-snug text-text-primary">
-              <Volume2 className="text-accent-success" size={20} />
-              Global Happening Now
-            </h2>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {activeVoiceChannels.length > 0 ? (
-                activeVoiceChannels.map(({ channel, guild, participants }) => {
-                  const displayParticipants = participants.slice(0, 4);
+            <SectionHeader
+              icon={<Volume2 size={15} />}
+              label="Active voice"
+              count={activeVoiceChannels.length}
+            />
+            {activeVoiceChannels.length > 0 ? (
+              <div className="divide-y divide-border-subtle rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+                {activeVoiceChannels.map(({ channel, guild, participants }) => {
+                  const shown = participants.slice(0, 4);
                   const overflow = participants.length > 4 ? participants.length - 4 : 0;
-
                   return (
                     <div
                       key={channel.id}
-                      className="group flex flex-col gap-3 rounded-[16px] border border-border-subtle bg-bg-mod-subtle p-5 transition-all hover:border-border-strong hover:bg-bg-mod-strong"
+                      className="group flex items-center gap-4 px-4 py-3 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 font-semibold text-text-primary truncate">
-                          <Volume2 size={16} className="text-text-muted shrink-0" />
-                          <span className="truncate">{channel.name}</span>
-                        </div>
-                        <span className="text-[13px] font-medium text-text-muted shrink-0">
-                          {participants.length} Active
-                        </span>
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
+                        <Volume2 size={18} />
                       </div>
-
-                      {guild && (
-                        <div className="text-[12px] text-text-muted truncate font-medium">
-                          in {guild.name}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-label font-semibold text-text-primary">{channel.name}</span>
+                          <span className="inline-flex items-center gap-1 text-meta tabular-nums text-status-online">
+                            <span className="h-1.5 w-1.5 rounded-full bg-status-online" />
+                            {participants.length}
+                          </span>
                         </div>
-                      )}
-
-                      <div className="mt-2 flex items-center">
-                        {displayParticipants.map((p, i: number) => (
+                        {guild && <div className="truncate text-meta text-text-muted">in {guild.name}</div>}
+                      </div>
+                      <div className="hidden items-center sm:flex">
+                        {shown.map((p, i) => (
                           <Tooltip key={p.user_id} content={p.username || p.user_id} side="top">
                             <div
-                              className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-bg-mod-subtle bg-accent-primary text-[11px] font-bold text-text-on-accent transition-transform group-hover:scale-105"
-                              style={{ marginLeft: i > 0 ? '-8px' : '0' }}
+                              className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-tint text-[11px] font-semibold text-accent-primary"
+                              style={{
+                                marginLeft: i > 0 ? '-8px' : '0',
+                                boxShadow: '0 0 0 2px var(--bg-secondary)',
+                              }}
                             >
                               {(p.username || p.user_id).charAt(0).toUpperCase()}
                             </div>
                           </Tooltip>
                         ))}
                         {overflow > 0 && (
-                          <div className="z-10 -ml-2 flex h-8 w-8 items-center justify-center rounded-full border-2 border-bg-mod-subtle bg-bg-accent text-[11px] font-bold text-text-primary">
+                          <div
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-bg-mod-strong text-[11px] font-semibold text-text-secondary"
+                            style={{ marginLeft: '-8px', boxShadow: '0 0 0 2px var(--bg-secondary)' }}
+                          >
                             +{overflow}
                           </div>
                         )}
                       </div>
-
-                      <button
-                        className="mt-auto w-full rounded-xl bg-bg-mod-strong py-2 text-sm font-bold text-text-primary transition-colors duration-150 hover:bg-accent-primary hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
+                      <Button
+                        size="sm"
+                        className="shrink-0"
                         onClick={() => navigate(`/app/guilds/${guild?.id}/channels/${channel.id}`)}
                       >
-                        Join Voice
-                      </button>
+                        Join
+                      </Button>
                     </div>
                   );
-                })
-              ) : (
-                <div className="col-span-full rounded-2xl border border-border-subtle border-dashed p-8 text-center text-text-muted">
-                  It's quiet. No active voice channels across your servers.
-                </div>
-              )}
-            </div>
+                })}
+              </div>
+            ) : (
+              <EmptyState
+                className="rounded-md border border-border-subtle bg-bg-secondary px-5 shadow-sm"
+                icon={<Headphones size={20} />}
+                title="No one's in voice yet"
+                description="When friends hop into a voice channel across your servers, you'll see the room here and can drop in with one click."
+                action={
+                  <Button variant="secondary" size="sm" onClick={() => navigate('/app/discovery')}>
+                    Find a community
+                  </Button>
+                }
+              />
+            )}
           </section>
 
-          {/* Activity Feed (DMs) */}
           <section>
-            <h2 className="mb-4 flex items-center gap-2 text-lg font-bold leading-snug text-text-primary">
-              <MessageSquare className="text-text-primary" size={20} />
-              Recent Activity
-            </h2>
-            <div className="rounded-[16px] border border-border-subtle bg-bg-mod-subtle">
-              {recentDms.length > 0 ? (
-                recentDms.map((dm, idx) => {
+            <SectionHeader icon={<MessageSquare size={15} />} label="Recent messages" />
+            {recentDms.length > 0 ? (
+              <div className="divide-y divide-border-subtle rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+                {recentDms.map((dm) => {
                   const username = dm.recipient?.username || 'Direct Message';
-                  const isOnline = (getPresence(dm.recipient?.id || '', activeServerId ?? undefined)?.status || 'offline') !== 'offline';
+                  const status = getPresence(dm.recipient?.id || '', presenceScope)?.status || 'offline';
                   return (
                     <button
                       type="button"
@@ -238,153 +337,125 @@ export function HomePage() {
                         useChannelStore.getState().selectChannel(dm.id);
                         navigate(`/app/dms/${dm.id}`);
                       }}
-                      className={`group flex w-full items-start justify-between gap-4 p-4 text-left transition-colors duration-150 hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary ${idx !== recentDms.length - 1 ? "border-b border-border-subtle" : ""}`}
+                      className="group flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="relative shrink-0">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-primary text-sm font-semibold text-text-on-accent">
-                            {username.charAt(0).toUpperCase()}
-                          </div>
-                          {isOnline && (
-                            <div className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-[2.5px] border-bg-mod-subtle bg-status-online" />
-                          )}
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="text-[15px] font-semibold text-text-primary">@{username}</span>
-                          <span className="text-[13px] text-text-muted text-left">Direct Message</span>
-                        </div>
+                      <PresenceAvatar name={username} status={status} ring="var(--bg-secondary)" size={38} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-label font-semibold text-text-primary">{username}</div>
+                        <div className="truncate text-meta text-text-muted">Tap to open your conversation</div>
                       </div>
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-bg-mod-subtle text-text-muted transition-colors duration-150 group-hover:bg-bg-mod-strong group-hover:text-text-secondary">
-                        <ChevronRight size={16} />
-                      </div>
+                      <ChevronRight
+                        size={16}
+                        className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary"
+                      />
                     </button>
                   );
-                })
-              ) : (
-                <div className="p-8 text-center text-sm text-text-muted">
-                  No recent activity found.
-                </div>
-              )}
-            </div>
+                })}
+              </div>
+            ) : (
+              <EmptyState
+                className="rounded-md border border-border-subtle bg-bg-secondary px-5 shadow-sm"
+                icon={<MessagesSquare size={20} />}
+                title="Your inbox is clear"
+                description="Direct messages you've been part of show up here. Start one from a friend's profile to pick up where you left off."
+                action={
+                  <Button variant="secondary" size="sm" onClick={() => navigate('/app/friends')}>
+                    Message a friend
+                  </Button>
+                }
+              />
+            )}
           </section>
         </div>
 
-        {/* Right Column (Sidebar-ish content) */}
-        <div className="flex flex-col gap-6">
-          {/* Quick Actions Grid */}
-          <section className="grid grid-cols-2 gap-3">
-            <button
-              onClick={() => navigate('/app/friends')}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
-            >
-              <UserPlus size={20} className="text-text-muted" />
-              <span className="text-xs font-semibold text-text-secondary">Add Friend</span>
-            </button>
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
-            >
-              <Plus size={20} className="text-text-muted" />
-              <span className="text-xs font-semibold text-text-secondary">New Server</span>
-            </button>
-            <button
-              onClick={() => navigate('/app/discovery')}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
-            >
-              <Compass size={20} className="text-text-muted" />
-              <span className="text-xs font-semibold text-text-secondary">Explore</span>
-            </button>
-            <button
-              onClick={() => navigate('/app/friends')}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
-            >
-              <Users size={20} className="text-text-muted" />
-              <span className="text-xs font-semibold text-text-secondary">Friends</span>
-            </button>
-            <button
-              onClick={() => navigate('/app/templates')}
-              className="glass-panel flex flex-col items-center gap-2 rounded-xl py-4 transition-all duration-150 hover:bg-bg-mod-strong/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary active:scale-[0.98]"
-            >
-              <FileText size={20} className="text-text-muted" />
-              <span className="text-xs font-semibold text-text-secondary">Templates</span>
-            </button>
-          </section>
-
-          {/* Online Friends Panel */}
-          <section className="card-surface rounded-[16px] border border-border-subtle bg-bg-mod-subtle/50 p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-text-secondary">
-                Online Now — {onlineFriends.length}
-              </h3>
+        {/* Right rail — one panel, sections split by dividers (no nested cards) */}
+        <aside className="flex flex-col gap-6">
+          <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+            <div className="px-4 pt-4">
+              <SectionHeader icon={<UserPlus size={15} />} label="Quick actions" />
+            </div>
+            <div className="px-2 pb-2">
+              {quickActions.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  onClick={action.onClick}
+                  className="group flex w-full items-center gap-3 rounded-sm px-2 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-bg-mod-subtle text-text-secondary transition-colors group-hover:bg-accent-tint group-hover:text-accent-primary">
+                    <action.icon size={17} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-label font-medium text-text-primary">{action.label}</span>
+                    <span className="block truncate text-meta text-text-muted">{action.hint}</span>
+                  </span>
+                </button>
+              ))}
             </div>
 
-            <div className="flex flex-col gap-1 max-h-[220px] overflow-y-auto scrollbar-thin">
+            <div className="border-t border-border-subtle px-4 pt-4">
+              <SectionHeader icon={<MessageSquare size={15} />} label="Online now" count={onlineFriends.length} />
+            </div>
+            <div className="max-h-[240px] overflow-y-auto px-2 pb-2 scrollbar-thin">
               {onlineFriends.length === 0 ? (
-                <p className="text-sm text-text-muted text-center py-4">No friends online.</p>
+                <p className="px-2 py-3 text-meta leading-relaxed text-text-muted">
+                  None of your friends are online right now — they'll appear here the moment they sign in.
+                </p>
               ) : (
                 onlineFriends.map((rel) => (
                   <button
                     type="button"
                     key={rel.user.id}
                     onClick={() => void handleMessageFriend(rel.user.id)}
-                    className="flex w-full items-center gap-3 rounded-lg p-2 text-left transition-colors duration-150 hover:bg-bg-mod-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60"
+                    className="flex w-full items-center gap-3 rounded-sm px-2 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                   >
-                    <div className="relative shrink-0">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-primary text-[12px] font-semibold text-text-on-accent">
-                        {rel.user.username.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-[2px] border-bg-mod-subtle bg-status-online" />
-                    </div>
-                    <span className="truncate text-sm font-medium text-text-secondary w-full">
+                    <PresenceAvatar name={rel.user.username} status="online" ring="var(--bg-secondary)" size={32} />
+                    <span className="min-w-0 flex-1 truncate text-label font-medium text-text-primary">
                       {rel.user.username}
                     </span>
+                    <MessageSquare size={15} className="shrink-0 text-text-muted" />
                   </button>
                 ))
               )}
             </div>
-          </section>
+          </div>
 
-          {/* Your Servers Panel */}
           {guilds.length > 0 && (
-            <section className="card-surface rounded-[16px] border border-border-subtle bg-bg-mod-subtle/50 p-4">
-              <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-text-secondary">
-                Your Servers
-              </h3>
-              <div className="flex flex-col gap-2 max-h-[240px] overflow-y-auto scrollbar-thin">
+            <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+              <div className="px-4 pt-4">
+                <SectionHeader icon={<MessagesSquare size={15} />} label="Your servers" count={guilds.length} />
+              </div>
+              <div className="max-h-[260px] overflow-y-auto px-2 pb-2 scrollbar-thin">
                 {guilds.map((guild) => {
                   const iconSrc = safeStoredImageDataUrl(guild.icon_hash);
                   return (
                     <button
                       key={guild.id}
                       onClick={() => void handleGuildClick(guild)}
-                      className="group flex items-center gap-3 rounded-xl border border-border-subtle bg-bg-primary/30 p-2 transition-colors duration-150 hover:border-border-strong hover:bg-bg-mod-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/60"
+                      className="group flex w-full items-center gap-3 rounded-sm px-2 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                     >
                       <div
-                        className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[10px] transition-transform group-hover:scale-105"
+                        className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md"
                         style={!iconSrc ? { backgroundColor: getGuildColor(guild.id) } : undefined}
                       >
                         {iconSrc ? (
-                          <img
-                            src={iconSrc}
-                            alt={guild.name}
-                            className="h-full w-full object-cover"
-                          />
+                          <img src={iconSrc} alt={guild.name} className="h-full w-full object-cover" />
                         ) : (
-                          <span className="text-xs font-bold text-white">
+                          <span className="text-[11px] font-bold text-white">
                             {guild.name.split(' ').map((w) => w[0]).join('').slice(0, 3).toUpperCase()}
                           </span>
                         )}
                       </div>
-                      <span className="truncate text-[13px] font-medium text-text-secondary group-hover:text-text-primary text-left flex-1">
+                      <span className="min-w-0 flex-1 truncate text-label font-medium text-text-secondary group-hover:text-text-primary">
                         {guild.name}
                       </span>
                     </button>
                   );
                 })}
               </div>
-            </section>
+            </div>
           )}
-        </div>
+        </aside>
       </div>
 
       {showCreateModal && <CreateGuildModal onClose={() => setShowCreateModal(false)} />}

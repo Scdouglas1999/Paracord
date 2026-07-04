@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag } from 'lucide-react';
-import type { User } from '../../types/index';
+import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag, Radio, BadgeCheck, StickyNote } from 'lucide-react';
+import { isAdmin, type User } from '../../types/index';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { dmApi } from '../../api/dms';
@@ -16,6 +16,7 @@ import { toast } from '../../stores/toastStore';
 import {
   formatActivityElapsed,
   formatActivityLabel,
+  getActivityType,
   getPrimaryActivity,
 } from '../../lib/activityPresence';
 import { roleColorToHex } from '../../lib/colors';
@@ -90,6 +91,19 @@ function formatDate(dateStr: string): string {
   } catch {
     return dateStr;
   }
+}
+
+// Shared focus ring against the floating popover surface.
+const FOCUS_RING =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating';
+
+// UPPERCASE category label — the Section type step, muted for hierarchy.
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-2 text-section uppercase" style={{ color: 'var(--text-muted)' }}>
+      {children}
+    </div>
+  );
 }
 
 export function UserProfilePopup({ user, position, onClose, roles = [] }: UserProfilePopupProps) {
@@ -251,6 +265,12 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
     .filter((entry): entry is { label: string; url: string } => Boolean(entry));
   const createdAt = profileData?.created_at ?? profileData?.user?.created_at ?? user.created_at;
   const isBotUser = user.bot;
+  const isStaffUser = isAdmin(profileData?.user?.flags ?? user.flags);
+  const isStreaming = activity ? getActivityType(activity) === 1 : false;
+  const avatarSrc = safeStoredImageDataUrl(
+    profileData?.user?.avatar_hash ?? user.avatar_hash ?? user.avatar,
+  );
+  const displayName = user.display_name || user.username;
 
   useEffect(() => {
     try {
@@ -381,7 +401,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
     <>
       <div className="fixed inset-0 z-50" onClick={onClose} />
       <div
-        className="glass-modal fixed z-50 overflow-hidden rounded-2xl border popup-enter"
+        className="glass-modal popup-enter fixed z-50 overflow-hidden rounded-lg"
         style={{
           left,
           top,
@@ -390,109 +410,118 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           overflowY: 'auto',
         }}
       >
-        {/* Banner */}
+        {/* Banner — a solid accent-tint strip (or the user's image), never a diagonal gradient wash */}
         {bannerSrc ? (
           <div
-            className="h-20 bg-cover bg-center"
-            style={{
-              backgroundImage: `linear-gradient(135deg, rgba(20, 24, 38, 0.2) 0%, rgba(20, 24, 38, 0.45) 100%), url(${bannerSrc})`,
-            }}
+            className="h-[76px] shrink-0 bg-cover bg-center"
+            style={{ backgroundImage: `url(${bannerSrc})` }}
           />
         ) : (
           <div
-            className="h-16"
+            className="h-[60px] shrink-0"
             style={{
-              background: 'linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-primary-hover) 100%)',
+              background: 'var(--accent-tint-strong)',
+              boxShadow: 'inset 0 -1px 0 var(--border-subtle)',
             }}
           />
         )}
 
-        {/* Avatar + name */}
-        <div className="px-7 pb-4">
-          <div className="relative -mt-8 mb-3">
+        {/* Identity header — avatar overlaps the banner */}
+        <div className="px-5 pb-4">
+          <div className="relative -mt-9 mb-3 w-max">
             <div
-              className="flex h-16 w-16 items-center justify-center rounded-full border-4 text-xl font-bold text-white"
+              className="rounded-full p-[3px]"
               style={{
-                backgroundColor: 'var(--accent-primary)',
-                borderColor: 'var(--bg-floating)',
+                background: isStreaming
+                  ? 'linear-gradient(135deg, var(--accent-secondary), var(--accent-primary))'
+                  : 'var(--bg-floating)',
               }}
             >
-              {user.username.charAt(0).toUpperCase()}
+              {avatarSrc ? (
+                <img src={avatarSrc} alt="" className="h-[72px] w-[72px] rounded-full object-cover" />
+              ) : (
+                <div
+                  className="flex h-[72px] w-[72px] items-center justify-center rounded-full font-display text-2xl font-bold"
+                  style={{ backgroundColor: 'var(--accent-tint-strong)', color: 'var(--accent-primary)' }}
+                >
+                  {user.username.charAt(0).toUpperCase()}
+                </div>
+              )}
             </div>
-            <div
-              className="absolute bottom-0 right-0 w-5 h-5 rounded-full"
-              style={{
-                backgroundColor: STATUS_COLORS[status],
-                borderColor: 'var(--bg-floating)',
-                borderWidth: '3px',
-                borderStyle: 'solid',
-              }}
+            <span
+              className="absolute bottom-0.5 right-0.5 h-[18px] w-[18px] rounded-full"
+              style={{ backgroundColor: STATUS_COLORS[status], boxShadow: '0 0 0 3px var(--bg-floating)' }}
+              title={`Status: ${status}`}
             />
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="font-bold text-lg" style={{ color: 'var(--text-primary)' }}>
-              {user.display_name || user.username}
-            </div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h2 className="font-display text-title leading-none" style={{ color: 'var(--text-primary)' }}>
+              {displayName}
+            </h2>
             {isBotUser && (
-              <span className="rounded-md border border-accent-primary/35 bg-accent-primary/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
+              <span
+                className="inline-flex items-center rounded-xs px-1.5 py-0.5 text-meta font-semibold uppercase"
+                style={{ background: 'var(--bg-mod-strong)', color: 'var(--text-secondary)' }}
+              >
                 Bot
               </span>
             )}
+            {isStaffUser && (
+              <span
+                className="inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5 text-meta font-semibold uppercase"
+                style={{ background: 'var(--accent-tint)', color: 'var(--accent-primary)' }}
+              >
+                <BadgeCheck size={11} />
+                Staff
+              </span>
+            )}
           </div>
-          <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-            {user.username}
+
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="font-code text-sm" style={{ color: 'var(--text-secondary)' }}>
+              @{user.username}
+            </span>
+            {pronouns && (
+              <span className="text-meta" style={{ color: 'var(--text-muted)' }}>
+                · {pronouns}
+              </span>
+            )}
           </div>
+
           {activityLabel && (
-            <div className="mt-1 text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-              {activityElapsed ? `${activityLabel} for ${activityElapsed}` : activityLabel}
+            <div
+              className="mt-2 inline-flex items-center gap-1.5 text-meta"
+              style={{ color: isStreaming ? 'var(--status-streaming)' : 'var(--text-secondary)' }}
+            >
+              {isStreaming && <Radio size={12} />}
+              <span>{activityElapsed ? `${activityLabel} · ${activityElapsed}` : activityLabel}</span>
             </div>
           )}
         </div>
 
-        <div className="mx-7 h-px" style={{ backgroundColor: 'var(--border-subtle)' }} />
-
-        {activityLabel && (
-          <div className="px-7 pt-4 pb-2">
-            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
-              Activity
-            </div>
-            <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              {activityLabel}
-              {activityElapsed ? ` (${activityElapsed})` : ''}
-            </div>
-          </div>
-        )}
-
-        {pronouns && (
-          <div className="px-7 pt-4 pb-2">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
-              Pronouns
-            </div>
-            <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              {pronouns}
+        {bio && (
+          <div className="px-5 pb-4">
+            <SectionLabel>About</SectionLabel>
+            <div
+              className="rounded-md px-3.5 py-3 text-body"
+              style={{
+                background: 'var(--bg-tertiary)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.02)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {parseMarkdown(bio)}
             </div>
           </div>
         )}
-
-        {/* About Me */}
-        <div className="px-7 py-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
-            About Me
-          </div>
-          <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-            {bio ? parseMarkdown(bio) : 'No bio set.'}
-          </div>
-        </div>
 
         {identityFingerprint && (
-          <div className="px-7 pb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
-              Identity Verification
-            </div>
-            <div className="rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-3">
+          <div className="px-5 pb-4">
+            <SectionLabel>Identity Verification</SectionLabel>
+            <div className="rounded-md px-3.5 py-3" style={{ background: 'var(--bg-tertiary)' }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="inline-flex items-center gap-1.5 text-xs font-semibold">
+                <div className="inline-flex items-center gap-1.5 text-meta font-semibold">
                   {identityVerified ? (
                     <>
                       <ShieldCheck size={13} className="text-accent-success" />
@@ -506,68 +535,61 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                   )}
                 </div>
                 <button
-                  className="inline-flex items-center gap-1 rounded-md border border-border-subtle bg-bg-secondary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                  className={`inline-flex items-center gap-1.5 rounded-sm bg-bg-mod-subtle px-2 py-1 text-meta font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary ${FOCUS_RING}`}
                   onClick={() => setShowIdentityVerifyModal(true)}
                 >
                   <QrCode size={12} />
                   Verify
                 </button>
               </div>
-              <div className="mt-2 break-all rounded-md border border-border-subtle bg-bg-secondary px-2 py-1.5 font-mono text-[11px] text-text-secondary">
+              <div
+                className="mt-2 break-all rounded-sm px-2 py-1.5 font-code text-[11px]"
+                style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              >
                 {identityFingerprint}
               </div>
               {identityRotationWarning && (
-                <div className="mt-2 rounded-md border border-accent-danger/35 bg-accent-danger/10 px-2 py-1.5 text-[11px] text-accent-danger">
+                <div
+                  className="mt-2 rounded-sm px-2 py-1.5 text-[11px]"
+                  style={{ background: 'var(--danger-tint)', color: 'var(--accent-danger)' }}
+                >
                   {identityRotationWarning}
                 </div>
               )}
               {!identityVerified && (
                 <button
-                  className="mt-2 inline-flex items-center gap-1 rounded-md border border-accent-success/35 bg-accent-success/10 px-2 py-1 text-xs font-medium text-accent-success transition-colors hover:bg-accent-success/20"
+                  className={`mt-2 inline-flex items-center gap-1.5 rounded-sm bg-success-tint px-2 py-1 text-meta font-medium text-accent-success transition-colors hover:bg-accent-success/20 ${FOCUS_RING}`}
                   onClick={() => void handleMarkIdentityVerified()}
                 >
                   <ShieldCheck size={12} />
-                  Mark Verified
+                  Mark verified
                 </button>
               )}
             </div>
           </div>
         )}
 
-        {/* Member Since */}
         {createdAt && (
-          <div className="px-7 pb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
-              Member Since
-            </div>
-            <div className="flex items-center gap-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-              <CalendarDays size={13} />
-              {formatDate(createdAt)}
+          <div className="px-5 pb-4">
+            <SectionLabel>Member Since</SectionLabel>
+            <div className="flex items-center gap-2 text-meta" style={{ color: 'var(--text-secondary)' }}>
+              <CalendarDays size={13} style={{ color: 'var(--text-muted)' }} />
+              <span className="font-code">{formatDate(createdAt)}</span>
             </div>
           </div>
         )}
 
-        {/* Roles */}
         {displayRoles.length > 0 && (
-          <div className="px-7 pb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
-              Roles
-            </div>
+          <div className="px-5 pb-4">
+            <SectionLabel>Roles</SectionLabel>
             <div className="flex flex-wrap gap-1.5">
-              {displayRoles.map(role => (
+              {displayRoles.map((role) => (
                 <span
                   key={role.id}
-                  className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium"
-                  style={{
-                    backgroundColor: 'var(--bg-mod-subtle)',
-                    color: roleColorToHex(role.color),
-                    border: '1px solid var(--border-subtle)',
-                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xs px-2 py-0.5 text-meta font-medium"
+                  style={{ background: 'var(--bg-mod-strong)', color: 'var(--text-secondary)' }}
                 >
-                  <span
-                    className="w-2.5 h-2.5 rounded-full"
-                    style={{ backgroundColor: roleColorToHex(role.color) }}
-                  />
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: roleColorToHex(role.color) }} />
                   {role.name}
                 </span>
               ))}
@@ -575,75 +597,72 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           </div>
         )}
 
-        {/* Mutual Servers */}
         {mutualGuilds.length > 0 && (
-          <div className="px-7 pb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
-              Mutual Servers - {mutualGuilds.length}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {mutualGuilds.slice(0, 6).map(guild => (
+          <div className="px-5 pb-4">
+            <SectionLabel>Mutual Servers — {mutualGuilds.length}</SectionLabel>
+            <div className="flex flex-col">
+              {mutualGuilds.slice(0, 5).map((guild) => (
                 <div
                   key={guild.id}
-                  className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium"
-                  style={{
-                    backgroundColor: 'var(--bg-mod-subtle)',
-                    color: 'var(--text-secondary)',
-                    border: '1px solid var(--border-subtle)',
-                  }}
+                  className="flex items-center gap-2.5 rounded-sm px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle"
                   title={guild.name}
                 >
                   <div
-                    className="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white"
-                    style={{ backgroundColor: 'var(--accent-primary)' }}
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
+                    style={{ background: 'var(--accent-tint-strong)', color: 'var(--accent-primary)' }}
                   >
                     {guild.name.charAt(0).toUpperCase()}
                   </div>
-                  <span className="max-w-[100px] truncate">{guild.name}</span>
+                  <span className="truncate text-meta" style={{ color: 'var(--text-secondary)' }}>
+                    {guild.name}
+                  </span>
                 </div>
               ))}
-              {mutualGuilds.length > 6 && (
-                <span className="self-center text-xs" style={{ color: 'var(--text-muted)' }}>
-                  +{mutualGuilds.length - 6} more
+              {mutualGuilds.length > 5 && (
+                <span className="px-1.5 pt-1 text-meta" style={{ color: 'var(--text-muted)' }}>
+                  +{mutualGuilds.length - 5} more
                 </span>
               )}
             </div>
           </div>
         )}
 
-        {/* Mutual Friends */}
         {mutualFriends.length > 0 && (
-          <div className="px-7 pb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
+          <div className="px-5 pb-4">
+            <SectionLabel>
               <span className="inline-flex items-center gap-1.5">
                 <Users size={12} />
-                Mutual Friends - {mutualFriends.length}
+                Mutual Friends — {mutualFriends.length}
               </span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {mutualFriends.slice(0, 6).map(friend => (
-                <div
-                  key={friend.id}
-                  className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium"
-                  style={{
-                    backgroundColor: 'var(--bg-mod-subtle)',
-                    color: 'var(--text-secondary)',
-                    border: '1px solid var(--border-subtle)',
-                  }}
-                  title={friend.username}
-                >
+            </SectionLabel>
+            <div className="flex flex-col">
+              {mutualFriends.slice(0, 5).map((friend) => {
+                const friendAvatar = safeStoredImageDataUrl(friend.avatar_hash);
+                return (
                   <div
-                    className="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white"
-                    style={{ backgroundColor: 'var(--accent-primary)' }}
+                    key={friend.id}
+                    className="flex items-center gap-2.5 rounded-sm px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle"
+                    title={friend.username}
                   >
-                    {friend.username.charAt(0).toUpperCase()}
+                    {friendAvatar ? (
+                      <img src={friendAvatar} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+                    ) : (
+                      <div
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
+                        style={{ background: 'var(--accent-tint-strong)', color: 'var(--accent-primary)' }}
+                      >
+                        {friend.username.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <span className="truncate text-meta" style={{ color: 'var(--text-secondary)' }}>
+                      {friend.username}
+                    </span>
                   </div>
-                  <span className="max-w-[100px] truncate">{friend.username}</span>
-                </div>
-              ))}
-              {mutualFriends.length > 6 && (
-                <span className="self-center text-xs" style={{ color: 'var(--text-muted)' }}>
-                  +{mutualFriends.length - 6} more
+                );
+              })}
+              {mutualFriends.length > 5 && (
+                <span className="px-1.5 pt-1 text-meta" style={{ color: 'var(--text-muted)' }}>
+                  +{mutualFriends.length - 5} more
                 </span>
               )}
             </div>
@@ -651,82 +670,84 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
         )}
 
         {linkedAccounts.length > 0 && (
-          <div className="px-7 pb-4">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
-              Linked Accounts
-            </div>
-            <div className="space-y-2">
+          <div className="px-5 pb-4">
+            <SectionLabel>Linked Accounts</SectionLabel>
+            <div className="flex flex-col gap-1">
               {linkedAccounts.map((account) => (
                 <a
                   key={`${account.label}-${account.url}`}
                   href={account.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex items-center justify-between rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                  className={`flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-meta text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
                 >
                   <span className="truncate">{account.label}</span>
-                  <span className="inline-flex items-center gap-1.5 text-xs text-text-muted">
-                    <Link2 size={12} />
-                    Open
-                  </span>
+                  <Link2 size={12} className="shrink-0" style={{ color: 'var(--text-muted)' }} />
                 </a>
               ))}
             </div>
           </div>
         )}
 
-        {/* Note */}
-        <div className="px-7 pb-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-primary)' }}>
-            Note
-          </div>
+        <div className="px-5 pb-4">
+          <SectionLabel>
+            <span className="inline-flex items-center gap-1.5">
+              <StickyNote size={12} />
+              Note
+            </span>
+          </SectionLabel>
           <input
             type="text"
-            placeholder="Click to add a note"
-            className="h-10 w-full rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 text-sm text-text-secondary outline-none transition-colors focus:border-border-strong focus:bg-bg-mod-strong"
+            placeholder="Add a private note — only you can see this"
+            className={`h-10 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 text-body text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary ${FOCUS_RING}`}
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
         </div>
 
-        {/* Actions */}
-        <div className="flex gap-4 px-7 pb-5">
-          <button className="btn-primary flex-1 items-center justify-center gap-1.5" onClick={() => void handleMessage()}>
-            <MessageSquare size={14} />
+        {/* Actions — primary emerald message, ghost add-friend, danger block/report */}
+        <div className="flex flex-col gap-2 px-5 pb-5 pt-1">
+          <button
+            className={`flex h-9 w-full items-center justify-center gap-2 rounded-sm bg-accent-primary text-label font-semibold text-text-on-accent shadow-sm transition-[transform,background-color] duration-150 hover:bg-accent-primary-hover active:scale-[.97] active:bg-accent-primary-active ${FOCUS_RING}`}
+            onClick={() => void handleMessage()}
+          >
+            <MessageSquare size={16} />
             Message
           </button>
-          {!isBotUser && (
+          <div className="flex items-center gap-2">
+            {!isBotUser && (
+              <button
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                aria-label={`Add ${user.username} as a friend`}
+                onClick={() => void handleAddFriend()}
+              >
+                <UserPlus size={16} />
+                Add Friend
+              </button>
+            )}
             <button
-              className="icon-btn border-border-subtle bg-bg-mod-subtle"
-              title="Add Friend"
-              aria-label={`Add ${user.username} as a friend`}
-              onClick={() => void handleAddFriend()}
+              className={`flex h-9 items-center justify-center gap-2 rounded-sm border border-accent-danger/30 px-3 text-label font-medium text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating ${isBotUser ? 'flex-1' : ''}`}
+              aria-label={`Block ${user.username}`}
+              onClick={() => void handleBlock()}
             >
-              <UserPlus size={18} />
+              <Ban size={16} />
+              Block
             </button>
-          )}
-          <button
-            className="icon-btn border-border-subtle bg-bg-mod-subtle"
-            title="Block"
-            aria-label={`Block ${user.username}`}
-            onClick={() => void handleBlock()}
-          >
-            <Ban size={18} />
-          </button>
-          {!isBotUser && activeGuildId && (
-            <button
-              className="icon-btn border-border-subtle bg-bg-mod-subtle text-accent-danger hover:border-accent-danger/40 hover:bg-accent-danger/10"
-              title="Report User"
-              aria-label={`Report ${user.username}`}
-              onClick={() => { setShowReportDialog(true); setActionError(null); }}
-            >
-              <Flag size={16} />
-            </button>
-          )}
+            {!isBotUser && activeGuildId && (
+              <button
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating"
+                title="Report user"
+                aria-label={`Report ${user.username}`}
+                onClick={() => { setShowReportDialog(true); setActionError(null); }}
+              >
+                <Flag size={16} />
+              </button>
+            )}
+          </div>
         </div>
         {actionError && !showReportDialog && (
           <div
-            className="px-7 pb-5 text-xs font-medium"
+            className="px-5 pb-5 text-meta font-medium"
             style={{ color: 'var(--accent-danger)' }}
             role="alert"
           >
@@ -742,11 +763,11 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           panelClassName="w-full max-w-md p-5"
         >
           <div>
-            <h3 id="report-user-title" className="text-base font-semibold text-text-primary">Report User</h3>
-            <p className="mt-1 text-xs text-text-muted">
-              Reports are reviewed by moderators. Include concise evidence when possible.
+            <h3 id="report-user-title" className="font-display text-heading text-text-primary">Report User</h3>
+            <p className="mt-1.5 text-meta text-text-muted">
+              Reports go to this server's moderators. Add concise, verifiable evidence to speed up review.
             </p>
-            <div className="mt-3 rounded-lg border border-border-subtle bg-bg-mod-subtle/50 px-3 py-2 text-xs text-text-secondary">
+            <div className="mt-3 rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-meta text-text-secondary">
               <span className="font-semibold text-text-primary">{user.username}</span>
               <span className="ml-1 text-text-muted">({user.id})</span>
             </div>
@@ -787,7 +808,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 {reportSubmitting ? 'Submitting...' : 'Submit Report'}
               </button>
               <button
-                className="rounded-lg px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                className={`rounded-sm px-3.5 py-2 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
                 onClick={() => { setShowReportDialog(false); setActionError(null); setReportReason(''); setReportEvidence(''); }}
                 disabled={reportSubmitting}
               >
@@ -806,23 +827,23 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
           panelClassName="w-full max-w-md p-5"
         >
           <div>
-            <div id="identity-verification-title" className="mb-3 text-sm font-semibold text-text-primary">Cross-Device Identity Verification</div>
-            <div className="mb-3 text-xs text-text-muted">
-              Scan this QR code on your other device, compare fingerprints, then confirm verification.
-            </div>
-            <div className="mb-3 flex justify-center rounded-xl border border-border-subtle bg-bg-mod-subtle p-3">
+            <h3 id="identity-verification-title" className="font-display text-heading text-text-primary">Cross-Device Identity Verification</h3>
+            <p className="mt-1.5 mb-4 text-meta text-text-muted">
+              Scan this code on your other signed-in device, confirm the fingerprints match, then mark it verified.
+            </p>
+            <div className="mb-4 flex justify-center rounded-md p-3" style={{ background: 'var(--bg-tertiary)' }}>
               {identityQrDataUrl ? (
-                <img src={identityQrDataUrl} alt="Identity verification QR code" className="h-52 w-52 rounded-lg" />
+                <img src={identityQrDataUrl} alt="Identity verification QR code" className="h-52 w-52 rounded-sm" />
               ) : (
-                <div className="flex h-52 w-52 items-center justify-center text-xs text-text-muted">Generating QR...</div>
+                <div className="flex h-52 w-52 items-center justify-center text-meta text-text-muted">Generating code…</div>
               )}
             </div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Payload</div>
-            <div className="mb-3 break-all rounded-md border border-border-subtle bg-bg-mod-subtle px-2 py-1.5 font-mono text-[11px] text-text-muted">
+            <div className="mb-2 text-section uppercase text-text-muted">Payload</div>
+            <div className="mb-3 break-all rounded-sm px-2 py-1.5 font-code text-[11px] text-text-secondary" style={{ background: 'var(--bg-tertiary)' }}>
               {verificationPayload}
             </div>
             <button
-              className="mb-4 inline-flex items-center gap-1 rounded-md border border-border-subtle bg-bg-secondary px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+              className={`mb-5 inline-flex items-center gap-1.5 rounded-sm bg-bg-mod-subtle px-2.5 py-1.5 text-meta font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary ${FOCUS_RING}`}
               onClick={() => {
                 if (!verificationPayload) return;
                 void writeClipboardText(verificationPayload)
@@ -833,23 +854,23 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
               <Copy size={12} />
               Copy payload
             </button>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Verify from scanned payload</div>
+            <div className="mb-2 text-section uppercase text-text-muted">Verify from scanned payload</div>
             <input
               type="text"
-              className="mb-3 h-10 w-full rounded-md border border-border-subtle bg-bg-mod-subtle px-3 text-sm text-text-primary outline-none focus:border-border-strong"
+              className={`mb-4 h-10 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 text-body text-text-primary transition-colors placeholder:text-text-muted focus:border-accent-primary ${FOCUS_RING}`}
               placeholder="Paste scanned payload JSON"
               value={identityVerifyPayload}
               onChange={(e) => setIdentityVerifyPayload(e.target.value)}
             />
             <div className="flex items-center justify-end gap-2">
               <button
-                className="rounded-md border border-border-subtle bg-bg-secondary px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                className={`rounded-sm px-3 py-1.5 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary ${FOCUS_RING}`}
                 onClick={() => setShowIdentityVerifyModal(false)}
               >
                 Close
               </button>
               <button
-                className="rounded-md border border-accent-success/35 bg-accent-success/10 px-3 py-1.5 text-xs font-medium text-accent-success transition-colors hover:bg-accent-success/20"
+                className={`rounded-sm bg-success-tint px-3 py-1.5 text-label font-medium text-accent-success transition-colors hover:bg-accent-success/20 ${FOCUS_RING}`}
                 onClick={() => void handleVerifyIdentityPayload()}
               >
                 Verify payload

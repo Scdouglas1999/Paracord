@@ -96,7 +96,7 @@ interface ToolbarButton {
 const TOOLBAR_BUTTONS: ToolbarButton[] = [
   {
     id: 'bold',
-    icon: <Bold size={14} />,
+    icon: <Bold size={16} />,
     label: 'Bold',
     shortcut: 'Ctrl+B',
     shortcutKey: 'b',
@@ -104,7 +104,7 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   },
   {
     id: 'italic',
-    icon: <Italic size={14} />,
+    icon: <Italic size={16} />,
     label: 'Italic',
     shortcut: 'Ctrl+I',
     shortcutKey: 'i',
@@ -112,7 +112,7 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   },
   {
     id: 'strikethrough',
-    icon: <Strikethrough size={14} />,
+    icon: <Strikethrough size={16} />,
     label: 'Strikethrough',
     shortcut: 'Ctrl+Shift+X',
     shortcutKey: 'x',
@@ -121,7 +121,7 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   },
   {
     id: 'inline_code',
-    icon: <Code size={14} />,
+    icon: <Code size={16} />,
     label: 'Inline Code',
     shortcut: 'Ctrl+`',
     shortcutKey: '`',
@@ -129,7 +129,7 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   },
   {
     id: 'code_block',
-    icon: <FileCode2 size={14} />,
+    icon: <FileCode2 size={16} />,
     label: 'Code Block',
     shortcut: 'Ctrl+Shift+`',
     shortcutKey: '`',
@@ -138,13 +138,13 @@ const TOOLBAR_BUTTONS: ToolbarButton[] = [
   },
   {
     id: 'spoiler',
-    icon: <Eye size={14} />,
+    icon: <Eye size={16} />,
     label: 'Spoiler',
     action: (ta, cb) => wrapSelection(ta, '||', '||', cb),
   },
   {
     id: 'link',
-    icon: <Link size={14} />,
+    icon: <Link size={16} />,
     label: 'Link',
     shortcut: 'Ctrl+K',
     shortcutKey: 'k',

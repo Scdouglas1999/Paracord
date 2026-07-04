@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { Copy, Check } from 'lucide-react';
 import hljs from 'highlight.js/lib/core';
 import DOMPurify from 'dompurify';
 
@@ -122,9 +123,10 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
       style={{
         margin: '6px 0',
         border: '1px solid var(--border-subtle)',
-        borderRadius: '8px',
+        borderRadius: 'var(--radius-sm)',
         overflow: 'hidden',
         backgroundColor: 'var(--bg-code)',
+        boxShadow: 'var(--shadow-sm)',
       }}
     >
       <div
@@ -132,58 +134,69 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          padding: '4px 8px',
+          padding: '4px 8px 4px 12px',
           borderBottom: '1px solid var(--border-subtle)',
-          fontSize: '11px',
         }}
       >
         <span
           style={{
             textTransform: 'uppercase',
-            letterSpacing: '0.05em',
+            letterSpacing: '0.06em',
+            fontSize: 'var(--text-section)',
+            fontWeight: 600,
+            fontFamily: 'var(--font-code)',
             color: 'var(--text-muted)',
           }}
         >
-          {language || ''}
+          {language || 'code'}
         </span>
         <button
           type="button"
           onClick={handleCopy}
+          aria-label={copied ? 'Code copied to clipboard' : 'Copy code to clipboard'}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: '4px',
+            gap: '5px',
             background: 'none',
             border: 'none',
             cursor: 'pointer',
-            color: 'var(--text-muted)',
-            fontSize: '11px',
-            padding: '2px 4px',
-            borderRadius: '4px',
-            transition: 'color 0.15s, background-color 0.15s',
+            color: copied ? 'var(--accent-success)' : 'var(--text-muted)',
+            fontSize: 'var(--text-meta)',
+            fontWeight: 500,
+            padding: '3px 7px',
+            borderRadius: 'var(--radius-sm)',
+            outline: 'none',
+            transition: 'color 140ms var(--ease-out), background-color 140ms var(--ease-out), box-shadow 140ms var(--ease-out)',
           }}
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)';
-            (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--bg-mod-subtle)';
+            if (copied) return;
+            e.currentTarget.style.color = 'var(--text-primary)';
+            e.currentTarget.style.backgroundColor = 'var(--bg-mod-subtle)';
           }}
           onMouseLeave={(e) => {
-            (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)';
-            (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent';
+            e.currentTarget.style.color = copied ? 'var(--accent-success)' : 'var(--text-muted)';
+            e.currentTarget.style.backgroundColor = 'transparent';
+          }}
+          onFocus={(e) => {
+            // Keyboard focus must be as reachable/visible as hover (a11y §8).
+            e.currentTarget.style.boxShadow = 'var(--focus-ring)';
+            if (!copied) e.currentTarget.style.color = 'var(--text-primary)';
+          }}
+          onBlur={(e) => {
+            e.currentTarget.style.boxShadow = 'none';
+            e.currentTarget.style.color = copied ? 'var(--accent-success)' : 'var(--text-muted)';
+            e.currentTarget.style.backgroundColor = 'transparent';
           }}
         >
           {copied ? (
             <>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-              Copied!
+              <Check size={14} aria-hidden="true" />
+              Copied
             </>
           ) : (
             <>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
+              <Copy size={14} aria-hidden="true" />
               Copy
             </>
           )}
@@ -191,12 +204,12 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
       </div>
       <pre
         style={{
-          padding: '8px 10px',
+          padding: '10px 12px',
           margin: 0,
           overflowX: 'auto',
           fontSize: '0.875em',
-          lineHeight: '1.2rem',
-          fontFamily: 'monospace',
+          lineHeight: '1.45',
+          fontFamily: 'var(--font-code)',
         }}
       >
         <code

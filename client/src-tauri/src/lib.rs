@@ -568,9 +568,68 @@ async fn native_fetch(req: NativeFetchRequest) -> Result<NativeFetchResponse, St
     Ok(NativeFetchResponse { status, body })
 }
 
+/// Event name carrying a `paracord://` deep link to the webview. The connect
+/// flow listens for this (via `@tauri-apps/api/event`) to route invite tokens
+/// (`paracord://invite/<token>`) and server hosts (`paracord://server/<host>`).
+const DEEP_LINK_EVENT: &str = "deep-link";
+
+/// Pick out the `paracord://` entries from a process argument list. Used to
+/// recover a deep link that Linux/Windows pass as a second-instance argv.
+fn extract_paracord_urls<I>(args: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    args.into_iter()
+        .filter(|arg| arg.starts_with("paracord://"))
+        .collect()
+}
+
+/// Focus the main window and forward each deep link to the webview so the
+/// connect flow can act on it. No-op when there are no links.
+fn forward_deep_link_urls(app: &tauri::AppHandle, urls: &[String]) {
+    use tauri::{Emitter, Manager};
+    if urls.is_empty() {
+        return;
+    }
+    // Bring the existing window to the foreground so the connect flow is visible
+    // when a link is opened while the app is hidden to the tray or backgrounded.
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    for url in urls {
+        if let Err(err) = commands::append_client_log(app.clone(), format!("deep-link {url}")) {
+            eprintln!("failed to log deep link: {err}");
+        }
+        if let Err(err) = app.emit(DEEP_LINK_EVENT, url.clone()) {
+            eprintln!("failed to forward deep link to webview: {err}");
+        }
+    }
+}
+
+/// Default server URL to prefill in the connect flow. Debug builds point at the
+/// local dev server (matching the client's `VITE_DEV_PROXY_TARGET` default);
+/// release builds return an empty string so the user supplies their own server.
+#[tauri::command]
+fn get_default_connect_target() -> String {
+    if cfg!(debug_assertions) {
+        "https://localhost:8443".to_string()
+    } else {
+        String::new()
+    }
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
+        // Register single-instance FIRST so a second launch (how Linux/Windows
+        // deliver a paracord:// link to a running app) focuses the existing
+        // window and forwards the link instead of opening a new window.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            forward_deep_link_urls(app, &extract_paracord_urls(argv));
+        }))
         .manage(native_media::MediaState::new())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -587,6 +646,30 @@ pub fn run() {
             // Restore durably pinned server certificates so pin enforcement
             // survives restarts even before the server list is re-synced.
             load_pinned_certs(app.handle());
+
+            // --- paracord:// deep link handling ---
+            use tauri_plugin_deep_link::DeepLinkExt;
+            // Register the scheme at runtime on Linux/Windows. macOS binds it via
+            // the app bundle's Info.plist, so runtime registration is skipped
+            // there. Best-effort: a failure (e.g. sandboxed env) must not abort
+            // startup.
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            if let Err(err) = app.deep_link().register_all() {
+                eprintln!("failed to register paracord:// deep link scheme: {err}");
+            }
+            // Cold start: the app was launched by opening a link.
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                let urls: Vec<String> = urls.into_iter().map(|u| u.to_string()).collect();
+                forward_deep_link_urls(app.handle(), &urls);
+            }
+            // Warm path: links opened while running arrive here on macOS (and on
+            // Linux/Windows via the single-instance handler above).
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                let urls: Vec<String> = event.urls().into_iter().map(|u| u.to_string()).collect();
+                forward_deep_link_urls(&handle, &urls);
+            });
+
             #[cfg(windows)]
             configure_webview2_overrides(app);
             tray::setup_tray(app.handle())?;
@@ -609,6 +692,7 @@ pub fn run() {
         update_trusted_server_hosts,
         probe_server,
         native_fetch,
+        get_default_connect_target,
         audio_capture::set_system_audio_capture_enabled,
         audio_capture::start_system_audio_capture,
         audio_capture::stop_system_audio_capture,
@@ -801,6 +885,35 @@ mod tests {
         assert_eq!(pinned_fingerprint("pin-test.example"), Some(fp));
         assert_ne!(pinned_fingerprint("pin-test.example"), Some([0u8; 32]));
         assert_eq!(pinned_fingerprint("absent.example"), None);
+    }
+
+    #[test]
+    fn extract_paracord_urls_filters_only_scheme_matches() {
+        let args = vec![
+            "/usr/bin/paracord-desktop".to_string(),
+            "--flag".to_string(),
+            "paracord://invite/abc123".to_string(),
+            "https://example.com".to_string(),
+            "paracord://server/chat.example:8443".to_string(),
+        ];
+        assert_eq!(
+            extract_paracord_urls(args),
+            vec![
+                "paracord://invite/abc123".to_string(),
+                "paracord://server/chat.example:8443".to_string(),
+            ]
+        );
+        assert!(extract_paracord_urls(Vec::<String>::new()).is_empty());
+    }
+
+    #[test]
+    fn default_connect_target_is_dev_server_in_debug_and_empty_in_release() {
+        let target = get_default_connect_target();
+        if cfg!(debug_assertions) {
+            assert_eq!(target, "https://localhost:8443");
+        } else {
+            assert!(target.is_empty());
+        }
     }
 
     #[test]

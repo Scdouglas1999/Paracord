@@ -3,16 +3,7 @@
 ## Quick Start
 
 ```bash
-# 1. Create your secrets file from the template
-cp .env.example .env
-
-# 2. Fill in the required secrets (each must be unique and random)
-#    Generate values with openssl and paste them into .env:
-#      PARACORD_JWT_SECRET=$(openssl rand -hex 32)
-#      PARACORD_LIVEKIT_API_SECRET=$(openssl rand -hex 32)
-#    `docker compose up` intentionally FAILS until both are set.
-
-# 3. Build and start all services
+# Zero config — no .env, no secrets to enter:
 docker compose up -d --build
 
 # View logs
@@ -21,9 +12,15 @@ docker compose logs -f paracord
 
 The server will be available over plain **HTTP** at `http://localhost:8090`.
 
-> Both secrets must be unique and random before you expose the stack to a
-> network. `.env` is git-ignored; never commit it. Only `.env.example` (with
-> blank values) is tracked.
+There is nothing to fill in. On first run the server generates a strong random
+`jwt_secret` (and self-signed media/TLS certs) and persists them to
+`/data/paracord.toml` on the `paracord-data` volume, then reuses the same file —
+and the same secret — on every restart. Native QUIC/WebTransport voice is the
+default media path and needs no extra services. LiveKit is an opt-in fallback
+(see [LiveKit](#livekit-voicevideo) below).
+
+> `.env` is entirely optional and only holds overrides (see `.env.example`). It
+> is git-ignored; only `.env.example` is tracked. Do not commit secrets.
 
 ## TLS & Voice
 
@@ -54,17 +51,18 @@ All configuration can be overridden via environment variables in `docker-compose
 | `PARACORD_PUBLIC_URL` | (auto-detected) | Public URL for CORS and invite links |
 | `PARACORD_DATABASE_URL` | `sqlite:///data/paracord.db?mode=rwc` | SQLite database path |
 | `PARACORD_DATABASE_MAX_CONNECTIONS` | `20` | Max database connections |
-| `PARACORD_JWT_SECRET` | **required** (from `.env`) | JWT signing secret; compose fails to start until set. `openssl rand -hex 32` |
+| `PARACORD_JWT_SECRET` | auto-generated | Not set in Docker. The server generates and persists a random secret to `/data/paracord.toml` on first run and reuses it thereafter |
+| `PARACORD_VOICE_NATIVE_MEDIA` | `true` | Native QUIC/WebTransport voice (the default media path); no LiveKit required |
 | `PARACORD_REGISTRATION_ENABLED` | `true` | Allow new user registrations |
 | `PARACORD_STORAGE_PATH` | `/data/uploads` | File upload storage path |
 | `PARACORD_MEDIA_STORAGE_PATH` | `/data/files` | Media file storage path |
 | `PARACORD_BACKUP_DIR` | `/data/backups` | Backup storage directory |
 | `PARACORD_TLS_ENABLED` | `false` | Disable built-in TLS for the container HTTP quick start; terminate TLS at a reverse proxy in production |
-| `PARACORD_LIVEKIT_URL` | `ws://livekit:7880` | Internal LiveKit WebSocket URL |
+| `PARACORD_LIVEKIT_URL` | `ws://livekit:7880` | Internal LiveKit WebSocket URL (inert unless the `livekit` profile is active and native media is off) |
 | `PARACORD_LIVEKIT_HTTP_URL` | `http://livekit:7880` | Internal LiveKit HTTP URL |
 | `PARACORD_LIVEKIT_PUBLIC_URL` | (derived from server) | Public LiveKit URL for clients |
 | `PARACORD_LIVEKIT_API_KEY` | `paracordlocal` in compose | LiveKit API key id (not a secret); must match the LiveKit service |
-| `PARACORD_LIVEKIT_API_SECRET` | **required** (from `.env`) | LiveKit shared secret; compose fails to start until set. The paracord and livekit services read the same variable. `openssl rand -hex 32` |
+| `PARACORD_LIVEKIT_API_SECRET` | local dev default | Shared LiveKit secret; defaults to a local dev value and is read by both the paracord and livekit services. Override in `.env` before exposing LiveKit to a network. `openssl rand -hex 32` |
 
 ## Volume Mounts
 
@@ -72,14 +70,39 @@ All configuration can be overridden via environment variables in `docker-compose
 |---|---|---|
 | `paracord-data` | `/data` | Config file, database, uploads, media, backups |
 
+## Ports
+
+| Port | Protocol | Service |
+|---|---|---|
+| 8090 | TCP | HTTP API + WebSocket gateway |
+| 8443 | UDP | Native QUIC / WebTransport voice media (raw QUIC desktop + browser WebTransport) |
+
+Forward the UDP 8443 port at your router/firewall in addition to the TCP port so
+native voice works across NAT. The native desktop client speaks raw QUIC and
+needs no TLS; browser voice requires TLS terminated in front of the container
+(see [TLS & Voice](#tls--voice)).
+
 ## LiveKit (Voice/Video)
 
-The `docker-compose.yml` includes an optional LiveKit service for voice and video chat.
-It pins `livekit/livekit-server:v1.9.11`, matching the bundled LiveKit version
-used by release packaging. Change the tag intentionally when validating a
-newer LiveKit release.
+LiveKit is an **opt-in fallback** and is **not started by default** — native
+QUIC/WebTransport media is the default voice path. The `livekit` service lives in
+a Compose profile, so a plain `docker compose up` starts only `paracord`.
 
-### Ports
+To run the LiveKit fallback:
+
+```bash
+# Start paracord + livekit together
+docker compose --profile livekit up -d
+
+# Route voice through LiveKit instead of native media by setting
+# PARACORD_VOICE_NATIVE_MEDIA=false on the paracord service.
+```
+
+It pins `livekit/livekit-server:v1.9.11`, matching the bundled LiveKit version
+used by release packaging. Change the tag intentionally when validating a newer
+LiveKit release.
+
+### LiveKit ports
 
 | Port | Protocol | Service |
 |---|---|---|
@@ -89,26 +112,31 @@ newer LiveKit release.
 
 ### Production LiveKit Configuration
 
-The compose file ships no secret values — `PARACORD_LIVEKIT_API_SECRET` is read
-from your `.env` (see [Quick Start](#quick-start)) and shared by both the
-paracord and livekit services, so a single strong secret keeps them in sync. To
-customize the key id or expose a public LiveKit URL, override in
+Both the paracord and livekit services read `PARACORD_LIVEKIT_API_SECRET`, which
+defaults to a local dev value so the fallback works with zero configuration. Set
+a strong random value in `.env` before exposing LiveKit to a network:
+
+```dotenv
+# .env
+PARACORD_LIVEKIT_API_SECRET=<openssl rand -hex 32>
+```
+
+To customize the key id or expose a public LiveKit URL, override in
 `docker-compose.yml`:
 
 ```yaml
 environment:
   - PARACORD_LIVEKIT_API_KEY=your-strong-api-key
-  # PARACORD_LIVEKIT_API_SECRET stays in .env; do not hardcode it here.
   - PARACORD_LIVEKIT_PUBLIC_URL=wss://chat.example.com/livekit
 ```
 
 If you change the key id, update it on the LiveKit service too (the secret still
-comes from `.env`):
+comes from the shared variable):
 
 ```yaml
 livekit:
   environment:
-    - "LIVEKIT_KEYS=your-strong-api-key: ${PARACORD_LIVEKIT_API_SECRET:?set PARACORD_LIVEKIT_API_SECRET in .env}"
+    - "LIVEKIT_KEYS=your-strong-api-key: ${PARACORD_LIVEKIT_API_SECRET:-paracord-local-dev-livekit-secret}"
 ```
 
 ## Building Only the Server Image

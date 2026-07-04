@@ -4,6 +4,7 @@ import { Crown, Flame, Medal, TrendingUp } from 'lucide-react';
 import { economyApi, type EconomyLeaderboardEntry, type EconomyProgressResponse } from '../../api/economy';
 import { extractApiError } from '../../api/client';
 import { useAuthStore } from '../../stores/authStore';
+import { cn } from '../../lib/utils';
 
 interface GuildEconomyPanelProps {
   guildId: string;
@@ -60,39 +61,40 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
   );
 
   return (
-    <aside className="hidden xl:flex w-[300px] shrink-0 border-l border-border-subtle bg-bg-primary/95 backdrop-blur-sm">
+    <aside className="hidden w-[300px] shrink-0 border-l border-border-subtle bg-bg-secondary xl:flex">
       <div className="flex h-full w-full flex-col gap-4 p-4">
         <div>
-          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+          <div className="flex items-center gap-2 text-label text-text-primary">
             <TrendingUp size={16} className="text-accent-primary" />
-            Guild Leaderboard
+            <span className="font-display text-[15px] font-semibold tracking-[-0.01em]">Guild Leaderboard</span>
           </div>
-          <div className="mt-1 text-xs text-text-muted">
-            Message activity XP, streaks, and levels update in real time.
+          <div className="mt-1 text-meta text-text-muted">
+            Activity XP, streaks, and levels update live.
           </div>
         </div>
 
         {loading ? (
-          <div className="rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-4 text-sm text-text-secondary">
-            Loading progression...
+          <div className="flex flex-col gap-2.5">
+            <div className="h-24 rounded-md bg-bg-mod-subtle" style={{ animation: 'skeleton-pulse 1.8s ease-in-out infinite' }} />
+            <div className="h-40 rounded-md bg-bg-mod-subtle" style={{ animation: 'skeleton-pulse 1.8s ease-in-out infinite' }} />
           </div>
         ) : error ? (
-          <div className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-3 text-sm text-accent-danger">
+          <div className="rounded-md border border-accent-danger/35 bg-danger-tint px-3 py-3 text-meta text-accent-danger">
             {error}
           </div>
         ) : (
           <>
-            <div className="rounded-lg border border-border-subtle bg-bg-mod-subtle/70 p-3">
-              <div className="flex items-center justify-between gap-2 text-sm">
-                <span className="font-semibold text-text-primary">Your Progress</span>
-                <span className="text-xs text-text-muted">Rank #{progress?.rank ?? '-'}</span>
+            <div className="rounded-md border border-border-subtle bg-bg-accent p-3.5 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-label text-text-primary">Your Progress</span>
+                <span className="font-code text-meta tabular-nums text-text-muted">Rank #{progress?.rank ?? '-'}</span>
               </div>
-              <div className="mt-2 flex items-center gap-3 text-sm text-text-secondary">
-                <span className="rounded-md bg-bg-primary px-2 py-1 font-semibold text-text-primary">
+              <div className="mt-2.5 flex items-center gap-2.5 text-meta text-text-secondary">
+                <span className="rounded-xs bg-accent-tint px-2 py-1 text-label font-semibold text-accent-primary">
                   Level {progress?.level ?? 0}
                 </span>
-                <span>{progress?.xp ?? 0} XP</span>
-                <span className="inline-flex items-center gap-1 text-accent-warning">
+                <span className="font-code tabular-nums">{progress?.xp ?? 0} XP</span>
+                <span className="inline-flex items-center gap-1 font-code tabular-nums text-accent-warning">
                   <Flame size={13} />
                   {progress?.streak.days ?? 0}d
                 </span>
@@ -103,7 +105,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
-              <div className="mt-2 text-[11px] text-text-muted">
+              <div className="mt-2 font-code text-[11px] tabular-nums text-text-muted">
                 {progress?.progress.xp_into_level ?? 0}/{progress?.progress.xp_required_this_level ?? 0} XP this level
               </div>
               {progress && progress.achievements.length > 0 && (
@@ -111,7 +113,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                   {progress.achievements.slice(-4).map((achievement) => (
                     <span
                       key={achievement.key}
-                      className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-bg-primary px-2 py-0.5 text-[11px] text-text-secondary"
+                      className="inline-flex items-center gap-1 rounded-full bg-bg-mod-strong px-2 py-0.5 text-[11px] text-text-secondary"
                       title={achievement.key}
                     >
                       <Medal size={10} className="text-accent-warning" />
@@ -122,30 +124,33 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
               )}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border-subtle bg-bg-mod-subtle/60">
+            <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border-subtle bg-bg-primary">
               {entries.length === 0 ? (
-                <div className="px-3 py-4 text-sm text-text-secondary">No leaderboard data yet.</div>
+                <div className="px-3 py-6 text-meta text-text-secondary">
+                  No one's earned XP here yet — be the first to break the ice.
+                </div>
               ) : (
-                <ul className="divide-y divide-border-subtle/70">
+                <ul className="divide-y divide-border-subtle">
                   {entries.map((entry) => {
                     const isMe = currentUserId != null && entry.user.id === currentUserId;
                     return (
                       <li
                         key={entry.user.id}
-                        className={`flex items-center justify-between gap-2 px-3 py-2.5 ${
-                          isMe ? 'bg-accent-primary/10' : ''
-                        }`}
+                        className={cn(
+                          'flex items-center justify-between gap-2 px-3 py-2.5',
+                          isMe && 'bg-accent-tint',
+                        )}
                       >
                         <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 text-sm font-medium text-text-primary">
+                          <div className="flex items-center gap-1.5 text-label text-text-primary">
                             {entry.rank === 1 && <Crown size={12} className="text-accent-warning" />}
                             #{entry.rank} {entry.user.username}
                           </div>
-                          <div className="text-[11px] text-text-muted">
+                          <div className="font-code text-[11px] tabular-nums text-text-muted">
                             L{entry.level} &middot; {entry.xp} XP &middot; {entry.streak_days}d streak
                           </div>
                         </div>
-                        <span className="rounded-md bg-bg-primary px-2 py-0.5 text-xs font-semibold text-text-secondary">
+                        <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 font-code text-meta font-semibold tabular-nums text-text-secondary">
                           L{entry.level}
                         </span>
                       </li>
@@ -156,8 +161,8 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
             </div>
 
             {highlighted == null && currentUserId != null && progress != null && (
-              <div className="rounded-lg border border-border-subtle bg-bg-mod-subtle/70 px-3 py-2 text-xs text-text-secondary">
-                You are currently outside the top 8. Rank #{progress.rank ?? '-'}.
+              <div className="rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-meta text-text-secondary">
+                You're just outside the top 8 — currently rank #{progress.rank ?? '-'}.
               </div>
             )}
           </>

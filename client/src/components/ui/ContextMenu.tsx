@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { cn } from '../../lib/utils';
 
 export interface ContextMenuItem {
   label: string;
@@ -100,7 +101,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
   return createPortal(
     <div
       ref={menuRef}
-      className="context-menu fixed z-[100]"
+      className="fixed z-[100] min-w-[13rem] rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg backdrop-blur-md outline-none"
       style={{ left: adjustedPosition.x, top: adjustedPosition.y }}
       tabIndex={-1}
       role="menu"
@@ -109,20 +110,24 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
     >
       {items.map((item, i) => {
         if (item.divider) {
-          return <div key={i} className="mx-2 my-1.5 h-px" style={{ backgroundColor: 'var(--border-subtle)' }} />;
+          return <div key={i} className="mx-1 my-1 h-px bg-border-subtle" />;
         }
+        const active = focusedIndex === i;
         return (
           <button
             key={i}
             id={`context-menu-item-${i}`}
             role="menuitem"
-            className={`context-menu-item${item.danger ? ' danger' : ''}`}
-            style={{
-              opacity: item.disabled ? 0.5 : 1,
-              cursor: item.disabled ? 'not-allowed' : 'pointer',
-              backgroundColor: focusedIndex === i ? 'var(--accent-primary)' : undefined,
-              color: focusedIndex === i ? '#fff' : undefined,
-            }}
+            className={cn(
+              'flex w-full items-center justify-between gap-3 rounded-sm px-2.5 py-1.5 text-left text-sm outline-none transition-colors duration-[120ms] ease-[var(--ease-out)]',
+              item.danger ? 'text-accent-danger' : 'text-text-secondary',
+              item.disabled && 'cursor-not-allowed opacity-50',
+              active &&
+                !item.disabled &&
+                (item.danger
+                  ? 'bg-accent-danger text-text-on-danger'
+                  : 'bg-accent-tint text-text-primary'),
+            )}
             disabled={item.disabled}
             onClick={() => {
               if (item.disabled) return;
@@ -132,15 +137,17 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
             onMouseEnter={() => setFocusedIndex(i)}
             onMouseLeave={() => setFocusedIndex(-1)}
           >
-            <span className="flex items-center justify-between gap-3">
-              <span className="flex items-center gap-2">
-                {item.icon && <span className="flex h-4 w-4 items-center justify-center">{item.icon}</span>}
-                {item.label}
-              </span>
-              {item.shortcut && (
-                <span className="text-xs opacity-60">{item.shortcut}</span>
+            <span className="flex min-w-0 items-center gap-2.5">
+              {item.icon && (
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                  {item.icon}
+                </span>
               )}
+              <span className="truncate">{item.label}</span>
             </span>
+            {item.shortcut && (
+              <span className="shrink-0 text-meta text-text-muted">{item.shortcut}</span>
+            )}
           </button>
         );
       })}

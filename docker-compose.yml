@@ -3,7 +3,11 @@ services:
     build: .
     container_name: paracord
     ports:
+      # HTTP API + WebSocket gateway (terminate TLS at a reverse proxy for
+      # browser voice; the native desktop client does not need it).
       - "8090:8090"
+      # Native QUIC / WebTransport media (raw QUIC desktop + browser WebTransport).
+      - "8443:8443/udp"
     volumes:
       - paracord-data:/data
     environment:
@@ -12,14 +16,18 @@ services:
       - PARACORD_SERVER_NAME=localhost
       # - PARACORD_PUBLIC_URL=https://chat.example.com
 
-      # Database
+      # Database (SQLite persisted on the paracord-data volume)
       - PARACORD_DATABASE_URL=sqlite:///data/paracord.db?mode=rwc
       - PARACORD_DATABASE_MAX_CONNECTIONS=20
 
-      # Auth - required; set a strong random secret in .env (see .env.example).
-      # The :? form makes `docker compose up` fail fast if it is unset/empty.
-      - PARACORD_JWT_SECRET=${PARACORD_JWT_SECRET:?set PARACORD_JWT_SECRET in .env (openssl rand -hex 32)}
+      # Auth: no secret needed here. The server generates a strong random
+      # jwt_secret on first run and persists it to /data/paracord.toml, then
+      # reuses it on every restart. Nothing to set, nothing to leak in env.
       - PARACORD_REGISTRATION_ENABLED=true
+
+      # Voice: native QUIC/WebTransport media is the default and works with zero
+      # configuration. LiveKit is an opt-in fallback (see the `livekit` profile).
+      - PARACORD_VOICE_NATIVE_MEDIA=true
 
       # Storage
       - PARACORD_STORAGE_PATH=/data/uploads
@@ -28,37 +36,42 @@ services:
       # Backup
       - PARACORD_BACKUP_DIR=/data/backups
 
-      # LiveKit - set if using the optional LiveKit service below
+      # LiveKit (optional fallback): these are inert while native media is on.
+      # They only take effect if you enable the `livekit` profile AND set
+      # PARACORD_VOICE_NATIVE_MEDIA=false. The api_key id is not a secret; the
+      # shared secret defaults to a local dev value and is read from the same
+      # PARACORD_LIVEKIT_API_SECRET variable as the livekit service below, so the
+      # two stay in sync. Override it in .env for any internet-facing LiveKit.
       - PARACORD_LIVEKIT_URL=ws://livekit:7880
       - PARACORD_LIVEKIT_HTTP_URL=http://livekit:7880
       - PARACORD_LIVEKIT_API_KEY=paracordlocal
-      # Shared with the livekit service below; both read the SAME variable.
-      # Required; set in .env (see .env.example). :? fails fast if unset/empty.
-      - PARACORD_LIVEKIT_API_SECRET=${PARACORD_LIVEKIT_API_SECRET:?set PARACORD_LIVEKIT_API_SECRET in .env (openssl rand -hex 32)}
+      - PARACORD_LIVEKIT_API_SECRET=${PARACORD_LIVEKIT_API_SECRET:-paracord-local-dev-livekit-secret}
       # - PARACORD_LIVEKIT_PUBLIC_URL=wss://chat.example.com/livekit
 
-      # TLS - disabled inside Docker by default; the container serves plain HTTP
-      # on 8090. Terminate TLS at a reverse proxy such as Caddy/nginx (or set
-      # PARACORD_TLS_ENABLED=true with mounted certs). Browsers block mic/camera
-      # and screen-share on plain HTTP, so voice needs HTTPS in front of this.
+      # TLS: disabled inside Docker by default; the container serves plain HTTP
+      # on 8090. Terminate TLS at a reverse proxy (Caddy/nginx) or set
+      # PARACORD_TLS_ENABLED=true with mounted certs. Browsers block mic/camera
+      # and screen-share on plain HTTP, so browser voice needs HTTPS in front;
+      # the native desktop client speaks raw QUIC and does not.
       - PARACORD_TLS_ENABLED=false
-
-      # Port forwarding should be configured at your router/firewall layer
     restart: unless-stopped
-    depends_on:
-      - livekit
 
+  # Optional LiveKit fallback. NOT started by default — bring it up explicitly
+  # with `docker compose --profile livekit up -d` (and set
+  # PARACORD_VOICE_NATIVE_MEDIA=false on the paracord service to route through it).
   livekit:
     image: livekit/livekit-server:v1.9.11
     container_name: paracord-livekit
+    profiles: ["livekit"]
     ports:
       - "7880:7880"
       - "7881:7881"
       - "7882:7882/udp"
     environment:
-      # Same secret as the paracord service above (the key id "paracordlocal"
-      # is not a secret). Set PARACORD_LIVEKIT_API_SECRET in .env.
-      - "LIVEKIT_KEYS=paracordlocal: ${PARACORD_LIVEKIT_API_SECRET:?set PARACORD_LIVEKIT_API_SECRET in .env (openssl rand -hex 32)}"
+      # Same secret the paracord service reads (the key id "paracordlocal" is not
+      # a secret). Defaults to a local dev value; override PARACORD_LIVEKIT_API_SECRET
+      # in .env before exposing LiveKit to a network.
+      - "LIVEKIT_KEYS=paracordlocal: ${PARACORD_LIVEKIT_API_SECRET:-paracord-local-dev-livekit-secret}"
     command: --dev --bind 0.0.0.0
     restart: unless-stopped
 

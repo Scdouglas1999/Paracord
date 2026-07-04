@@ -1,10 +1,13 @@
 import { useState, ChangeEvent } from 'react';
-import { Upload, X, Save, LayoutTemplate, MessageSquare, Globe2 } from 'lucide-react';
+import { Upload, X, Hash } from 'lucide-react';
 import { Guild, Channel, HubSettings } from '../../types';
 import { isAllowedImageMimeType, isSafeImageDataUrl, safeStoredImageDataUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
 import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
+import { Button } from '../ui/Button';
+import { Input, Textarea } from '../ui/Input';
+import { SectionHeader, FieldLabel, GroupLabel, ToggleRow } from './SettingsPrimitives';
 
 interface ServerHubSettingsProps {
     guild: Guild;
@@ -88,162 +91,138 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
     const bannerSrc = safeStoredImageDataUrl(hubSettings.banner_hash);
 
     return (
-        <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6 card-stack-relaxed">
-            <div className="flex items-center justify-between mb-6">
-                <div>
-                    <h2 className="settings-section-title !mb-1 flex items-center gap-2">
-                        <LayoutTemplate size={20} className="text-accent-primary" />
-                        Server Hub Customization
-                    </h2>
-                    <p className="text-sm text-text-muted">
-                        Design your server's landing page. Add a banner, welcome text, and pin important channels.
-                    </p>
-                </div>
-                <button
-                    onClick={handleSave}
-                    disabled={loading}
-                    aria-label={loading ? 'Saving server hub settings' : 'Save server hub settings'}
-                    className="btn-primary flex items-center gap-2"
-                >
-                    <Save size={16} />
-                    {loading ? 'Saving...' : 'Save Changes'}
-                </button>
-            </div>
+        <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6">
+            <div className="flex flex-col gap-8">
+                <SectionHeader
+                    title="Server Hub"
+                    description="Design the landing page members see before they join — a banner, a welcome, and the channels you want front and center."
+                    action={
+                        <Button onClick={handleSave} loading={loading} disabled={loading}>
+                            Save changes
+                        </Button>
+                    }
+                />
 
-            <div className="space-y-8">
-                {/* Banner Section */}
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/50 p-5">
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-text-secondary mb-3">
-                        Hub Banner Image
-                    </label>
-                    <div className="flex flex-col gap-4">
+                {/* Banner */}
+                <section className="border-t border-border-subtle pt-6">
+                    <GroupLabel>Hub banner</GroupLabel>
+                    <p className="mt-2 text-[13.5px] leading-relaxed text-text-secondary">
+                        A wide image sets the tone. Aim for 1200×480 — PNG, JPG, or WEBP up to 2 MB.
+                    </p>
+                    <div className="mt-4">
                         {bannerSrc ? (
-                            <div className="relative w-full h-40 rounded-lg overflow-hidden border border-border-subtle group">
+                            <div className="group relative h-44 w-full overflow-hidden rounded-md border border-border-subtle bg-bg-tertiary shadow-sm">
                                 <img
                                     src={bannerSrc}
-                                    alt="Hub Banner"
-                                    className="w-full h-full object-cover"
+                                    alt="Hub banner preview"
+                                    className="h-full w-full object-cover"
                                 />
-                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                    <button onClick={removeBanner} className="btn-danger flex items-center gap-2">
-                                        <X size={16} /> Remove Banner
-                                    </button>
+                                <div className="absolute inset-0 flex items-center justify-center bg-black/55 opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-focus-within:opacity-100 group-hover:opacity-100">
+                                    <Button variant="destructive" onClick={removeBanner}>
+                                        <X size={16} className="mr-1.5" /> Remove banner
+                                    </Button>
                                 </div>
                             </div>
                         ) : (
-                            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-border-strong rounded-lg cursor-pointer hover:border-interactive-normal hover:bg-bg-mod-subtle transition-colors">
-                                <div className="flex flex-col items-center justify-center pt-5 pb-6 text-text-muted">
-                                    <Upload size={24} className="mb-2" />
-                                    <p className="text-sm font-medium">Click to upload banner</p>
-                                    <p className="text-xs mt-1">PNG, JPG, or WEBP (Max 2MB)</p>
-                                </div>
+                            <label className="flex h-36 w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-border-strong bg-bg-tertiary text-text-muted transition-colors hover:border-accent-primary/60 hover:bg-bg-mod-subtle">
+                                <Upload size={22} />
+                                <span className="text-label text-text-secondary">Upload a banner image</span>
+                                <span className="text-meta">PNG, JPG, or WEBP · 2 MB max</span>
                                 <input type="file" className="hidden" accept="image/*" onChange={handleBannerUpload} />
                             </label>
                         )}
                     </div>
-                </div>
+                </section>
 
-                {/* Text Customization */}
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/50 p-5 space-y-5">
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-text-secondary mb-2 flex items-center gap-2">
-                        <MessageSquare size={14} />
-                        Welcome Text / Description
-                    </label>
-
-                    <div>
-                        <span className="text-xs text-text-muted mb-1 block">Headline (Optional)</span>
-                        <input
-                            type="text"
-                            value={hubSettings.welcome_text || ''}
-                            onChange={e => handleTextChange('welcome_text', e.target.value)}
-                            className="input-field w-full"
-                            placeholder="e.g. Welcome to our awesome community!"
-                            maxLength={100}
-                        />
+                {/* Welcome copy */}
+                <section className="border-t border-border-subtle pt-6">
+                    <GroupLabel>Welcome copy</GroupLabel>
+                    <div className="mt-4 flex flex-col gap-5">
+                        <label className="block">
+                            <FieldLabel>Headline</FieldLabel>
+                            <Input
+                                value={hubSettings.welcome_text || ''}
+                                onChange={e => handleTextChange('welcome_text', e.target.value)}
+                                placeholder="A short, warm one-liner"
+                                maxLength={100}
+                            />
+                        </label>
+                        <label className="block">
+                            <FieldLabel>About this server</FieldLabel>
+                            <Textarea
+                                value={hubSettings.description || ''}
+                                onChange={e => handleTextChange('description', e.target.value)}
+                                className="min-h-[100px] resize-y"
+                                placeholder="What is this community for? Who is it for?"
+                                maxLength={2000}
+                            />
+                        </label>
                     </div>
-
-                    <div>
-                        <span className="text-xs text-text-muted mb-1 block">About this Server</span>
-                        <textarea
-                            value={hubSettings.description || ''}
-                            onChange={e => handleTextChange('description', e.target.value)}
-                            className="input-field w-full min-h-[100px] resize-y"
-                            placeholder="Write a detailed description about what this server is for..."
-                            maxLength={2000}
-                        />
-                    </div>
-                </div>
+                </section>
 
                 {/* Discovery */}
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/50 p-5 space-y-5">
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-text-secondary mb-2 flex items-center gap-2">
-                        <Globe2 size={14} />
-                        Server Discovery
-                    </label>
-                    <label className="flex items-start gap-3 rounded-lg border border-border-subtle p-3">
-                        <input
-                            type="checkbox"
+                <section className="border-t border-border-subtle pt-6">
+                    <GroupLabel>Discovery</GroupLabel>
+                    <div className="mt-2 divide-y divide-border-subtle">
+                        <ToggleRow
+                            label="List this server publicly"
+                            description="Public servers can surface in discovery. Leave off for invite-only communities."
                             checked={isDiscoverable}
-                            onChange={e => setIsDiscoverable(e.target.checked)}
-                            className="mt-1 rounded border-border-strong text-accent-primary focus:ring-accent-primary bg-bg-primary"
-                        />
-                        <span>
-                            <span className="block text-sm font-medium text-text-primary">List this server publicly</span>
-                            <span className="block text-xs text-text-muted">
-                                Public servers can appear in discovery results. Leave this off for invite-only communities.
-                            </span>
-                        </span>
-                    </label>
-                    <div>
-                        <span className="text-xs text-text-muted mb-1 block">Discovery Tags</span>
-                        <input
-                            type="text"
-                            value={discoveryTags}
-                            onChange={e => setDiscoveryTags(e.target.value)}
-                            className="input-field w-full"
-                            placeholder="gaming, open-source, friends"
-                            maxLength={240}
+                            onChange={setIsDiscoverable}
                         />
                     </div>
-                </div>
+                    <div className="mt-5">
+                        <label className="block">
+                            <FieldLabel>Discovery tags</FieldLabel>
+                            <Input
+                                value={discoveryTags}
+                                onChange={e => setDiscoveryTags(e.target.value)}
+                                placeholder="gaming, open-source, friends"
+                                maxLength={240}
+                            />
+                        </label>
+                        <p className="mt-2 text-meta text-text-muted">Comma-separated — helps the right people find you.</p>
+                    </div>
+                </section>
 
-                {/* Pinned Channels */}
-                <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/50 p-5">
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-text-secondary mb-3">
-                        Pinned Channels
-                    </label>
-                    <p className="text-xs text-text-muted mb-4">
-                        Select channels to feature prominently on the Hub (e.g., Rules, Announcements).
+                {/* Pinned channels */}
+                <section className="border-t border-border-subtle pt-6">
+                    <GroupLabel>Pinned channels</GroupLabel>
+                    <p className="mt-2 text-[13.5px] leading-relaxed text-text-secondary">
+                        Feature a few channels on the hub — rules, announcements, or wherever newcomers should land first.
                     </p>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {textChannels.map(channel => {
-                            const isPinned = (hubSettings.pinned_channels || []).includes(channel.id);
-                            return (
-                                <label
-                                    key={channel.id}
-                                    className={cn(
-                                        "flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors",
-                                        isPinned ? "border-accent-primary bg-accent-primary/5" : "border-border-subtle hover:bg-bg-mod-subtle"
-                                    )}
-                                >
-                                    <input
-                                        type="checkbox"
-                                        checked={isPinned}
-                                        onChange={() => togglePinnedChannel(channel.id)}
-                                        className="rounded border-border-strong text-accent-primary focus:ring-accent-primary bg-bg-primary"
-                                    />
-                                    <span className="text-sm font-medium text-text-primary">
-                                        # {channel.name}
-                                    </span>
-                                </label>
-                            );
-                        })}
-                        {textChannels.length === 0 && (
-                            <div className="text-sm text-text-muted italic col-span-2">No text channels available.</div>
-                        )}
-                    </div>
-                </div>
+                    {textChannels.length === 0 ? (
+                        <p className="mt-4 text-[13.5px] leading-relaxed text-text-secondary">
+                            No text channels yet. Create one and it'll be pinnable here.
+                        </p>
+                    ) : (
+                        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {textChannels.map(channel => {
+                                const isPinned = (hubSettings.pinned_channels || []).includes(channel.id);
+                                return (
+                                    <label
+                                        key={channel.id}
+                                        className={cn(
+                                            'flex cursor-pointer items-center gap-2.5 rounded-sm border px-3 py-2.5 text-label transition-colors',
+                                            isPinned
+                                                ? 'border-accent-primary/50 bg-accent-tint text-text-primary'
+                                                : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle'
+                                        )}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={isPinned}
+                                            onChange={() => togglePinnedChannel(channel.id)}
+                                            className="h-4 w-4 rounded-sm border-border-subtle accent-accent-primary"
+                                        />
+                                        <Hash size={15} className="shrink-0 text-channel-icon" />
+                                        <span className="truncate">{channel.name}</span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    )}
+                </section>
             </div>
         </div>
     );

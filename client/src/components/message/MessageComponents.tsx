@@ -11,6 +11,7 @@ import type { Member, Role, Channel } from '../../types';
 import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
 import { roleColorToHex } from '../../lib/colors';
 import { LoadingSpinner } from '../ui/Feedback';
+import { Button, type ButtonProps } from '../ui/Button';
 
 interface MessageComponentsProps {
   components: Component[];
@@ -46,17 +47,16 @@ function notifyComponentError(action: string, err: unknown): void {
 // Button Component
 // ---------------------------------------------------------------------------
 
-const BUTTON_STYLE_CLASSES: Record<number, string> = {
-  [ButtonStyle.Primary]:
-    'bg-accent-primary hover:bg-accent-primary/85 text-white border-accent-primary',
-  [ButtonStyle.Secondary]:
-    'bg-bg-mod-strong hover:bg-bg-mod-subtle text-text-primary border-border-subtle',
-  [ButtonStyle.Success]:
-    'bg-accent-success hover:bg-accent-success/85 text-white border-accent-success',
-  [ButtonStyle.Danger]:
-    'bg-accent-danger hover:bg-accent-danger/85 text-white border-accent-danger',
-  [ButtonStyle.Link]:
-    'bg-transparent hover:underline text-text-link border-transparent',
+// Map bot-supplied ButtonStyle onto the shared Button primitive's variants so
+// in-message buttons match the rest of the product exactly (design-spec §7).
+// Success has no primitive variant; it gets a token-driven className, keeping the
+// primitive's metrics/motion/focus-ring intact.
+const BUTTON_STYLE_VARIANT: Record<number, ButtonProps['variant']> = {
+  [ButtonStyle.Primary]: 'default',
+  [ButtonStyle.Secondary]: 'secondary',
+  [ButtonStyle.Success]: 'default',
+  [ButtonStyle.Danger]: 'destructive',
+  [ButtonStyle.Link]: 'link',
 };
 
 function ComponentButton({
@@ -74,10 +74,11 @@ function ComponentButton({
   const isLink = style === ButtonStyle.Link;
   const isDisabled = component.disabled || busy;
 
-  const baseClasses =
-    'inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors';
-  const styleClasses = BUTTON_STYLE_CLASSES[style] ?? BUTTON_STYLE_CLASSES[ButtonStyle.Secondary];
-  const disabledClasses = isDisabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'cursor-pointer';
+  const variant = BUTTON_STYLE_VARIANT[style] ?? 'secondary';
+  const successClasses =
+    style === ButtonStyle.Success
+      ? 'bg-accent-success text-text-on-accent hover:bg-[color-mix(in_srgb,var(--accent-success)_90%,#000)] active:bg-[color-mix(in_srgb,var(--accent-success)_82%,#000)]'
+      : '';
 
   const handleClick = async () => {
     if (isDisabled) return;
@@ -124,17 +125,19 @@ function ComponentButton({
   ) : null;
 
   return (
-    <button
-      type="button"
-      className={`${baseClasses} ${styleClasses} ${disabledClasses}`}
+    <Button
+      variant={variant}
+      size="sm"
+      className={`gap-1.5${successClasses ? ` ${successClasses}` : ''}`}
       onClick={() => void handleClick()}
       disabled={isDisabled}
+      loading={busy}
       title={component.label || component.custom_id || undefined}
     >
       {emojiRender}
       {component.label && <span>{component.label}</span>}
-      {isLink && <ExternalLink size={12} />}
-    </button>
+      {isLink && <ExternalLink size={13} />}
+    </Button>
   );
 }
 
@@ -244,10 +247,10 @@ function StringSelectMenu({
     <div ref={containerRef} className="relative inline-block min-w-[12rem] max-w-[25rem]">
       <button
         type="button"
-        className={`flex w-full items-center justify-between gap-2 rounded-md border border-border-subtle bg-bg-primary/80 px-3 py-2 text-left text-sm transition-colors ${
+        className={`flex h-10 w-full items-center justify-between gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-3 text-left text-body transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring-input)] ${
           isDisabled
             ? 'cursor-not-allowed opacity-50'
-            : 'cursor-pointer hover:border-border-subtle/80 hover:bg-bg-mod-subtle'
+            : 'cursor-pointer hover:border-border-strong'
         }`}
         onClick={() => {
           if (!isDisabled) setOpen((prev) => !prev);
@@ -262,7 +265,7 @@ function StringSelectMenu({
           {displayText}
         </span>
         <svg
-          className={`h-4 w-4 shrink-0 text-text-muted transition-transform ${open ? 'rotate-180' : ''}`}
+          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-[140ms] ease-[var(--ease-out)] ${open ? 'rotate-180' : ''}`}
           viewBox="0 0 20 20"
           fill="currentColor"
         >
@@ -275,25 +278,25 @@ function StringSelectMenu({
       </button>
 
       {open && (
-        <div className="absolute left-0 z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-border-subtle bg-bg-floating shadow-lg">
+        <div className="absolute left-0 z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg">
           {options.map((option) => {
             const isSelected = selectedValues.includes(option.value);
             return (
               <button
                 key={option.value}
                 type="button"
-                className={`flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm transition-colors hover:bg-bg-mod-subtle ${
-                  isSelected ? 'bg-accent-primary/10 text-text-primary' : 'text-text-secondary'
+                className={`flex w-full flex-col gap-0.5 rounded-sm px-2.5 py-1.5 text-left text-label transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                  isSelected ? 'bg-accent-tint text-text-primary' : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
                 }`}
                 onClick={() => handleOptionClick(option.value)}
               >
                 <div className="flex items-center gap-2">
                   {isMulti && (
                     <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-xs ${
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border text-[10px] ${
                         isSelected
-                          ? 'border-accent-primary bg-accent-primary text-white'
-                          : 'border-border-subtle bg-transparent'
+                          ? 'border-accent-primary bg-accent-primary text-text-on-accent'
+                          : 'border-border-strong bg-transparent'
                       }`}
                     >
                       {isSelected ? '\u2713' : ''}
@@ -302,19 +305,19 @@ function StringSelectMenu({
                   <span className="truncate font-medium">{option.label}</span>
                 </div>
                 {option.description && (
-                  <span className="text-xs text-text-muted">{option.description}</span>
+                  <span className="text-meta text-text-muted">{option.description}</span>
                 )}
               </button>
             );
           })}
 
           {isMulti && (
-            <div className="border-t border-border-subtle px-3 py-2">
+            <div className="mt-1 border-t border-border-subtle px-1 pt-2">
               <button
                 type="button"
-                className={`w-full rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
+                className={`w-full rounded-sm px-2 py-1.5 text-meta font-semibold transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                   selectedValues.length >= minValues
-                    ? 'bg-accent-primary text-white hover:bg-accent-primary/90'
+                    ? 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover'
                     : 'cursor-not-allowed bg-bg-mod-strong text-text-muted opacity-50'
                 }`}
                 onClick={() => void submitSelection()}
@@ -456,10 +459,10 @@ function EntitySelectMenu({
     <div ref={containerRef} className="relative inline-block min-w-[12rem] max-w-[25rem]">
       <button
         type="button"
-        className={`flex w-full items-center justify-between gap-2 rounded-md border border-border-subtle bg-bg-primary/80 px-3 py-2 text-left text-sm transition-colors ${
+        className={`flex h-10 w-full items-center justify-between gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-3 text-left text-body transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring-input)] ${
           isDisabled
             ? 'cursor-not-allowed opacity-50'
-            : 'cursor-pointer hover:border-border-subtle/80 hover:bg-bg-mod-subtle'
+            : 'cursor-pointer hover:border-border-strong'
         }`}
         onClick={() => void handleOpen()}
         disabled={isDisabled}
@@ -468,7 +471,7 @@ function EntitySelectMenu({
           {displayText}
         </span>
         <svg
-          className={`h-4 w-4 shrink-0 text-text-muted transition-transform ${open ? 'rotate-180' : ''}`}
+          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-[140ms] ease-[var(--ease-out)] ${open ? 'rotate-180' : ''}`}
           viewBox="0 0 20 20"
           fill="currentColor"
         >
@@ -481,15 +484,15 @@ function EntitySelectMenu({
       </button>
 
       {open && (
-        <div className="absolute left-0 z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-border-subtle bg-bg-floating shadow-lg">
+        <div className="absolute left-0 z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg">
           {loading ? (
             <LoadingSpinner className="px-3 py-3" size="sm" label="Loading options..." />
           ) : loadError ? (
-            <div role="alert" className="px-3 py-3 text-sm text-accent-danger">
+            <div role="alert" className="px-2.5 py-3 text-label text-accent-danger">
               {loadError}
             </div>
           ) : items.length === 0 ? (
-            <div className="px-3 py-3 text-center text-sm text-text-muted">No options available</div>
+            <div className="px-2.5 py-3 text-center text-label text-text-muted">Nothing here to pick from yet</div>
           ) : (
             items.map((item) => {
               const isSelected = selectedIds.includes(item.id);
@@ -497,17 +500,17 @@ function EntitySelectMenu({
                 <button
                   key={item.id}
                   type="button"
-                  className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-bg-mod-subtle ${
-                    isSelected ? 'bg-accent-primary/10 text-text-primary' : 'text-text-secondary'
+                  className={`flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-label transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                    isSelected ? 'bg-accent-tint text-text-primary' : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
                   }`}
                   onClick={() => handleItemClick(item.id)}
                 >
                   {isMulti && (
                     <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-xs ${
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border text-[10px] ${
                         isSelected
-                          ? 'border-accent-primary bg-accent-primary text-white'
-                          : 'border-border-subtle bg-transparent'
+                          ? 'border-accent-primary bg-accent-primary text-text-on-accent'
+                          : 'border-border-strong bg-transparent'
                       }`}
                     >
                       {isSelected ? '\u2713' : ''}
@@ -520,12 +523,12 @@ function EntitySelectMenu({
           )}
 
           {isMulti && selectedIds.length > 0 && (
-            <div className="border-t border-border-subtle px-3 py-2">
+            <div className="mt-1 border-t border-border-subtle px-1 pt-2">
               <button
                 type="button"
-                className={`w-full rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
+                className={`w-full rounded-sm px-2 py-1.5 text-meta font-semibold transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                   selectedIds.length >= minValues
-                    ? 'bg-accent-primary text-white hover:bg-accent-primary/90'
+                    ? 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover'
                     : 'cursor-not-allowed bg-bg-mod-strong text-text-muted opacity-50'
                 }`}
                 onClick={() => void submitSelection(selectedIds)}

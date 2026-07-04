@@ -1,6 +1,6 @@
 import { AlertTriangle } from 'lucide-react';
 import { useConfirmStore } from '../../stores/confirmStore';
-import { cn } from '../../lib/utils';
+import { Button } from './Button';
 import {
   Modal,
   ModalDescription,
@@ -30,7 +30,7 @@ export function ConfirmDialog() {
           <ModalHeader
             icon={
               options.variant === 'danger' ? (
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-danger/12 text-accent-danger">
+                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-danger-tint text-accent-danger">
                   <AlertTriangle size={20} />
                 </div>
               ) : undefined
@@ -44,24 +44,16 @@ export function ConfirmDialog() {
             )}
           </ModalHeader>
           <ModalFooter>
-            <button
-              className="h-10 rounded-xl border border-border-strong px-5 text-sm font-semibold text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
-              onClick={() => close(false)}
-            >
+            <Button variant="secondary" onClick={() => close(false)}>
               {options.cancelLabel || 'Cancel'}
-            </button>
-            <button
-              className={cn(
-                'h-10 rounded-xl px-5 text-sm font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary',
-                options.variant === 'danger'
-                  ? 'bg-accent-danger hover:bg-accent-danger/85 focus-visible:ring-accent-danger'
-                  : 'bg-accent-primary hover:bg-accent-primary-hover focus-visible:ring-accent-primary'
-              )}
+            </Button>
+            <Button
+              variant={options.variant === 'danger' ? 'destructive' : 'default'}
               onClick={() => close(true)}
               autoFocus
             >
               {options.confirmLabel || 'Confirm'}
-            </button>
+            </Button>
           </ModalFooter>
         </>
       )}

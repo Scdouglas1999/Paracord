@@ -13,7 +13,7 @@ const iconMap: Record<ToastType, typeof CheckCircle> = {
 const colorMap: Record<ToastType, string> = {
   success: 'var(--accent-success)',
   error: 'var(--accent-danger)',
-  info: 'var(--accent-primary)',
+  info: 'var(--accent-info)',
   warning: 'var(--accent-warning)',
 };
 
@@ -59,25 +59,18 @@ function ToastItem({
       role={type === 'error' || type === 'warning' ? 'alert' : 'status'}
       aria-live={type === 'error' || type === 'warning' ? 'assertive' : 'polite'}
       style={{
-        background: 'var(--glass-modal-fill-top)',
-        border: '1px solid var(--border-strong)',
-        borderLeft: `3px solid ${color}`,
-        backdropFilter: 'blur(16px)',
-        boxShadow: 'var(--shadow-lg)',
-        animation: 'toast-slide-in 0.25s var(--ease-out)',
+        animation: 'toast-slide-in var(--duration-normal) var(--ease-out)',
       }}
-      className="pointer-events-auto relative flex w-80 max-w-[calc(100vw-2rem)] items-start gap-2.5 overflow-hidden rounded-xl p-3"
+      className="pointer-events-auto relative flex w-80 max-w-[calc(100vw-2rem)] items-start gap-3 overflow-hidden rounded-md border border-border-subtle bg-bg-accent px-4 py-3 shadow-lg"
     >
       <Icon size={18} style={{ color, flexShrink: 0, marginTop: '1px' }} />
-      <div className="flex-1">
-        <p className="text-sm leading-snug" style={{ color: 'var(--text-secondary)' }}>
-          {message}
-        </p>
+      <div className="min-w-0 flex-1">
+        <p className="text-label text-text-primary">{message}</p>
         {action && (
           <button
             type="button"
             onClick={() => void handleAction()}
-            className="mt-1 text-xs font-semibold uppercase tracking-wide text-accent-primary hover:text-accent-primary-hover"
+            className="mt-1 text-meta font-semibold uppercase tracking-wide text-accent-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-accent-primary-hover"
           >
             {action.label}
           </button>
@@ -85,15 +78,15 @@ function ToastItem({
       </div>
       <button
         onClick={() => removeToast(id)}
-        className="flex-shrink-0 rounded-md p-0.5 transition-colors hover:bg-bg-mod-subtle"
-        style={{ color: 'var(--text-muted)' }}
+        aria-label="Dismiss notification"
+        className="-mr-1 flex-shrink-0 rounded-sm p-1 text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
       >
         <X size={14} />
       </button>
       <div
         ref={progressRef}
         className="absolute bottom-0 left-0 h-0.5"
-        style={{ width: '100%', backgroundColor: color, opacity: 0.5 }}
+        style={{ width: '100%', backgroundColor: color, opacity: 0.45 }}
       />
     </div>
   );

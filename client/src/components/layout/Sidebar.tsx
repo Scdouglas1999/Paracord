@@ -20,7 +20,6 @@ import type { Guild } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
 import { safeStoredImageDataUrl } from '../../lib/security';
-import { getGuildColor } from '../../lib/colors';
 import { writeClipboardText } from '../../lib/clipboard';
 import { getVersionedJson, setVersionedJson } from '../../lib/versionedStorage';
 import { toast } from '../../stores/toastStore';
@@ -243,14 +242,17 @@ export function Sidebar() {
     const iconSrc = safeStoredImageDataUrl(guild.icon_hash);
     return (
       <div key={guild.id} className="relative flex shrink-0 items-center justify-center">
-        {!isActive && hasUnread && (
-          <div
+        {/* Left-edge indicator: teal pill when active, emerald dot when unread (§7). */}
+        {isActive ? (
+          <span className="absolute -left-2 h-6 w-1 rounded-r-full bg-accent-secondary transition-all duration-[180ms]" />
+        ) : hasUnread ? (
+          <span
             className={cn(
-              'absolute -left-1 rounded-r-full bg-white transition-all duration-200',
-              hasMentions ? 'h-5 w-1.5' : 'h-2.5 w-1.5'
+              'absolute -left-2 w-1 rounded-r-full bg-accent-primary transition-all duration-[180ms]',
+              hasMentions ? 'h-5' : 'h-2.5'
             )}
           />
-        )}
+        ) : null}
         <Tooltip side="right" content={guild.name}>
           <button
             onClick={() => handleGuildClick(guild)}
@@ -258,37 +260,34 @@ export function Sidebar() {
             onKeyDown={(e) => handleGuildContextMenuKey(e, guild.id)}
             aria-label={guild.name}
             className={cn(
-              'group relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-secondary',
+              // Guild icon recipe: 48px, idle radius-full morphing to radius-md
+              // squircle on hover/active over 180ms; press scales, never lifts.
+              'group relative flex h-12 w-12 items-center justify-center overflow-hidden outline-none transition-[border-radius,background-color,color,box-shadow] duration-[180ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]',
               isActive
-                ? 'sidebar-item-active z-10 bg-accent-primary text-white'
-                : 'bg-white/10 text-white/75 hover:-translate-y-0.5 hover:bg-white/20 hover:text-white'
+                ? 'z-10 rounded-md ring-2 ring-accent-primary'
+                : 'rounded-full hover:rounded-md',
+              !iconSrc &&
+                (isActive
+                  ? 'bg-accent-tint text-accent-primary'
+                  : 'bg-white/10 text-white/80 hover:bg-accent-tint hover:text-accent-primary')
             )}
-            style={!iconSrc && !isActive ? { backgroundColor: 'rgba(255,255,255,0.1)' } : undefined}
           >
-            {!iconSrc && isActive && (
-              <div className="absolute inset-0 opacity-25" style={{ backgroundColor: getGuildColor(guild.id) }} />
-            )}
             {iconSrc ? (
               <img
                 src={iconSrc}
                 alt={guild.name}
                 className={cn(
-                  'h-full w-full object-cover transition-transform duration-300',
+                  'h-full w-full object-cover transition-transform duration-[180ms] ease-[var(--ease-out)]',
                   isActive ? 'scale-105' : 'group-hover:scale-105'
                 )}
               />
             ) : (
-              <span
-                className={cn(
-                  'text-[12px] font-bold transition-colors duration-150',
-                  isActive ? 'text-white' : 'text-white/80 group-hover:text-white'
-                )}
-              >
+              <span className="text-meta font-bold">
                 {guild.name.split(' ').map(w => w[0]).join('').slice(0, 3).toUpperCase()}
               </span>
             )}
             {hasMentions && !isActive && (
-              <span className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-danger px-1 text-[9px] font-bold text-white shadow-sm">
+              <span className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-primary px-1 text-[9px] font-semibold tabular-nums text-text-on-accent ring-2 ring-bg-tertiary">
                 {unreadInfo!.mentionCount > 99 ? '99+' : unreadInfo!.mentionCount}
               </span>
             )}
@@ -330,27 +329,32 @@ export function Sidebar() {
           )}
           {dockExpanded && (
             <>
-              {/* Home Button */}
-              <Tooltip side="right" content="Home">
-                <button
-                  aria-label="Home"
-                  onClick={() => {
-                    selectGuild(null);
-                    useChannelStore.getState().selectGuild(null);
-                    navigate('/app');
-                  }}
-                  className={cn(
-                    'group flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl transition-all duration-200',
-                    isHome
-                      ? 'bg-accent-primary text-white shadow-[0_10px_24px_rgba(var(--accent-primary-rgb),0.35)]'
-                      : 'bg-white/10 text-white/75 hover:-translate-y-0.5 hover:bg-white/20 hover:text-white'
-                  )}
-                >
-                  <Home size={20} className={cn('transition-transform duration-200', isHome ? 'scale-100' : 'group-hover:scale-105')} />
-                </button>
-              </Tooltip>
+              {/* Home Button — active destination gets a solid emerald squircle (§1.2). */}
+              <div className="relative flex shrink-0 items-center justify-center">
+                {isHome && (
+                  <span className="absolute -left-2 h-6 w-1 rounded-r-full bg-accent-secondary transition-all duration-[180ms]" />
+                )}
+                <Tooltip side="right" content="Home">
+                  <button
+                    aria-label="Home"
+                    onClick={() => {
+                      selectGuild(null);
+                      useChannelStore.getState().selectGuild(null);
+                      navigate('/app');
+                    }}
+                    className={cn(
+                      'group flex h-12 w-12 shrink-0 items-center justify-center outline-none transition-[border-radius,background-color,color] duration-[180ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]',
+                      isHome
+                        ? 'rounded-md bg-accent-primary text-text-on-accent shadow-sm'
+                        : 'rounded-full bg-white/10 text-white/80 hover:rounded-md hover:bg-accent-tint hover:text-accent-primary'
+                    )}
+                  >
+                    <Home size={20} />
+                  </button>
+                </Tooltip>
+              </div>
 
-              <div className="h-px w-6 shrink-0 bg-white/20" />
+              <div className="h-px w-6 shrink-0 bg-white/15" />
 
               {/* Guild List */}
               <div className="flex w-full flex-1 flex-col items-center gap-2 overflow-x-visible overflow-y-auto pb-1 pt-1.5 scrollbar-none">
@@ -461,7 +465,7 @@ export function Sidebar() {
                   {/* Multi-server count indicator */}
                   {serverGroups && serverGroups.length > 1 && (
                     <Tooltip side="right" content={`Connected to ${serverGroups.length} servers`}>
-                      <div className="flex items-center justify-center rounded-lg bg-white/8 px-2 py-1">
+                      <div className="flex items-center justify-center rounded-xs bg-white/8 px-2 py-1">
                         <span className="text-[9px] font-bold uppercase tracking-wider text-white/50">
                           {serverGroups.length} srv
                         </span>
@@ -473,9 +477,9 @@ export function Sidebar() {
                     <button
                       aria-label="Add a server"
                       onClick={() => setShowCreateModal(true)}
-                      className="group flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-dashed border-white/35 bg-white/5 text-white/75 transition-all duration-200 hover:-translate-y-0.5 hover:border-white hover:bg-white/20 hover:text-white"
+                      className="group flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-dashed border-white/30 text-status-online outline-none transition-[border-radius,background-color,border-color] duration-[180ms] ease-[var(--ease-out)] hover:rounded-md hover:border-accent-primary hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]"
                     >
-                      <Plus size={19} className="transition-transform duration-200 group-hover:rotate-90" />
+                      <Plus size={20} />
                     </button>
                   </Tooltip>
 
@@ -492,19 +496,19 @@ export function Sidebar() {
                     <button
                       onClick={() => useUIStore.getState().setUserSettingsOpen(true)}
                       aria-label="Open user settings"
-                      className="group relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white/10 transition-all duration-200 hover:-translate-y-0.5 hover:bg-white"
+                      className="group relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full outline-none transition-[border-radius] duration-[180ms] ease-[var(--ease-out)] hover:rounded-md focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]"
                     >
                       {user?.username ? (
-                        <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-accent-primary to-accent-primary-hover text-sm font-bold text-white">
+                        <div className="flex h-full w-full items-center justify-center bg-accent-primary text-sm font-semibold text-text-on-accent">
                           {user.username.charAt(0).toUpperCase()}
                         </div>
                       ) : (
-                        <div className="flex h-full w-full items-center justify-center bg-bg-mod-strong text-sm font-bold text-text-muted">U</div>
+                        <div className="flex h-full w-full items-center justify-center bg-bg-mod-strong text-sm font-semibold text-text-muted">U</div>
                       )}
                       {(connectionStatus === 'reconnecting' || connectionStatus === 'disconnected') && (
                         <span
                           className={cn(
-                            'absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full border-2 border-bg-secondary',
+                            'absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full ring-2 ring-bg-tertiary',
                             connectionStatus === 'reconnecting'
                               ? 'animate-pulse bg-accent-warning'
                               : 'bg-accent-danger'
@@ -519,11 +523,11 @@ export function Sidebar() {
                       onClick={toggleDockPinned}
                       aria-label={dockPinned ? 'Unpin server dock' : 'Pin server dock'}
                       className={cn(
-                        'mt-1 flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-white/45 transition-all duration-200 hover:bg-white/12 hover:text-white/85',
+                        'mt-1 flex h-7 w-7 items-center justify-center rounded-sm text-white/45 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-white/12 hover:text-white/85 focus-visible:shadow-[var(--focus-ring)]',
                         dockPinned && 'bg-white/12 text-white/80'
                       )}
                     >
-                      {dockPinned ? <PanelLeftClose size={13} /> : <PanelLeftOpen size={13} />}
+                      {dockPinned ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
                     </button>
                   </Tooltip>
                 </div>
@@ -790,13 +794,13 @@ export function Sidebar() {
           <div className="fixed inset-0 z-50 bg-black/50" onClick={closeCreateFolderDialog} />
           <div
             ref={createFolderDialogRef}
-            className="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-xl bg-bg-secondary p-5 shadow-xl"
+            className="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-strong bg-bg-accent p-5 shadow-xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="create-folder-title"
             tabIndex={-1}
           >
-            <h3 id="create-folder-title" className="mb-3 text-sm font-semibold text-text-primary">Create Folder</h3>
+            <h3 id="create-folder-title" className="mb-3 text-subhead text-text-primary">Create Folder</h3>
             <input
               autoFocus
               type="text"
@@ -810,18 +814,18 @@ export function Sidebar() {
                   setShowCreateFolder(false);
                 }
               }}
-              className="w-full rounded-lg bg-bg-mod-strong px-3 py-2 text-sm text-text-primary outline-none placeholder:text-text-muted focus:ring-1 focus:ring-accent-primary"
+              className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-body text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] placeholder:text-text-muted focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)]"
             />
-            <div className="mt-3 flex justify-end gap-2">
+            <div className="mt-4 flex justify-end gap-2">
               <button
-                className="rounded-lg px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+                className="rounded-sm px-3 py-1.5 text-label text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
                 onClick={closeCreateFolderDialog}
               >
                 Cancel
               </button>
               <button
                 disabled={!createFolderName.trim()}
-                className="rounded-lg bg-accent-primary px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-primary-hover disabled:opacity-50"
+                className="rounded-sm bg-accent-primary px-3 py-1.5 text-label font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
                 onClick={() => {
                   if (createFolderName.trim()) {
                     createFolder(createFolderName.trim());

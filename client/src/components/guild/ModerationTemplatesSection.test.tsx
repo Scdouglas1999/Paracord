@@ -45,7 +45,7 @@ describe('ModerationTemplatesSection', () => {
     fireEvent.change(screen.getByLabelText('DM template'), {
       target: { value: 'Muted for: {reason}' },
     });
-    await user.click(screen.getByRole('button', { name: 'Create Template' }));
+    await user.click(screen.getByRole('button', { name: 'Create template' }));
 
     await waitFor(() => {
       expect(onCreateTemplate).toHaveBeenCalledWith({
@@ -74,7 +74,7 @@ describe('ModerationTemplatesSection', () => {
       />,
     );
 
-    const createButton = screen.getByRole('button', { name: 'Create Template' });
+    const createButton = screen.getByRole('button', { name: 'Create template' });
     expect(createButton).toBeDisabled();
 
     await user.type(screen.getByLabelText('Template name'), 'Kick macro');
@@ -117,7 +117,7 @@ describe('ModerationTemplatesSection', () => {
       />,
     );
 
-    const applyButton = screen.getByRole('button', { name: 'Apply Template' });
+    const applyButton = screen.getByRole('button', { name: 'Apply template' });
     expect(applyButton).toBeDisabled();
 
     await user.type(screen.getByLabelText('Target user ID for Spam Warning'), 'user-123');
@@ -146,6 +146,6 @@ describe('ModerationTemplatesSection', () => {
       />,
     );
 
-    expect(screen.getByText('No moderation templates yet.')).toBeInTheDocument();
+    expect(screen.getByText('No templates yet')).toBeInTheDocument();
   });
 });

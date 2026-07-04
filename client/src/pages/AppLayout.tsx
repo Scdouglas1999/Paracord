@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, MotionConfig } from 'framer-motion';
+import { cn } from '../lib/utils';
 import { Sidebar } from '../components/layout/Sidebar';
 import { ChannelSidebar } from '../components/layout/ChannelSidebar';
 import { MemberList } from '../components/layout/MemberList';
@@ -86,137 +87,163 @@ export function AppLayout() {
     : false;
   const showMiniVoiceBar = isMobile && voiceConnected && !isOnVoiceChannel;
 
+  // Emerald Commons frame. The whole authenticated app lives inside a single
+  // three-surface elevation ramp rather than a set of stitched floating cards
+  // (design-spec §1.1, kill-list #7): the guild-rail gutter is the deepest
+  // `--bg-tertiary`, the channel + member panels are the raised `--bg-secondary`
+  // separated by 1px hairline dividers, and the main canvas is `--bg-primary`.
+  // `MotionConfig reducedMotion="user"` drops transform-based enters for users who
+  // ask for reduced motion while keeping the opacity fades (design-spec §5, §8).
+  const modalEnter = { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const };
+
   return (
-    <div className="workspace-canvas">
-      {/* Skip-to-content for keyboard/screen-reader users */}
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-xl focus:bg-accent-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-text-on-accent focus:shadow-lg"
-      >
-        Skip to content
-      </a>
+    <MotionConfig reducedMotion="user">
+      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-bg-tertiary text-text-primary">
+        {/* Skip-to-content for keyboard/screen-reader users */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-sm focus:bg-accent-primary focus:px-4 focus:py-2 focus:text-label focus:font-semibold focus:text-text-on-accent focus:outline-none focus:[box-shadow:var(--focus-ring)]"
+        >
+          Skip to content
+        </a>
 
-      <div className="workspace-stage">
-        {showShell && !isMobile && (
-          <aside className="dock-stage">
-            <Sidebar />
-          </aside>
-        )}
-
-        <div className="stage-grid">
-          {showDesktopChannelPanel && (
-            <aside className={`panel-surface nav-panel nav-panel-collapsible ${sidebarOpen ? 'nav-panel-expanded' : 'nav-panel-collapsed'}`}>
-              <ChannelSidebar collapsed={!sidebarOpen} />
+        <div className="flex min-h-0 flex-1">
+          {showShell && !isMobile && (
+            <aside className="flex shrink-0 items-center bg-bg-tertiary px-2.5">
+              <Sidebar />
             </aside>
           )}
 
-          <main id="main-content" className="content-panel">
-            <div className={isSettingsRoute ? 'settings-route-shell h-full w-full' : 'panel-surface stage-panel'}>
-              <Outlet />
-            </div>
-            <AnimatePresence>
-              {showMiniVoiceBar && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.18 }}
-                  className="shrink-0 overflow-hidden"
-                >
-                  <MiniVoiceBar />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </main>
+          <div className="flex min-w-0 flex-1">
+            {showDesktopChannelPanel && (
+              <aside
+                className={cn(
+                  'shrink-0 overflow-hidden border-r border-border-subtle bg-bg-secondary transition-[width] duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+                  sidebarOpen ? 'w-[var(--spacing-channel-sidebar-width)]' : 'w-[52px]',
+                )}
+              >
+                <ChannelSidebar collapsed={!sidebarOpen} />
+              </aside>
+            )}
 
-          {showMemberPanel && (
-            <aside className="panel-surface member-panel">
-              <MemberList />
-            </aside>
-          )}
+            <main
+              id="main-content"
+              className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary"
+            >
+              <div
+                className={cn(
+                  'min-h-0 w-full flex-1 overflow-hidden',
+                  isSettingsRoute && 'p-3',
+                )}
+              >
+                <Outlet />
+              </div>
+              <AnimatePresence>
+                {showMiniVoiceBar && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                    className="shrink-0 overflow-hidden border-t border-border-subtle"
+                  >
+                    <MiniVoiceBar />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </main>
+
+            {showMemberPanel && (
+              <aside className="w-[var(--member-list-width)] shrink-0 overflow-hidden border-l border-border-subtle bg-bg-secondary">
+                <MemberList />
+              </aside>
+            )}
+          </div>
         </div>
+
+        <AnimatePresence>
+          {showMobileChannelPanel && (
+            <motion.div
+              className="fixed inset-0 z-[80] flex md:hidden modal-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              onClick={() => setSidebarCollapsed(true)}
+            >
+              <motion.aside
+                className="h-full w-[min(88vw,19rem)] overflow-hidden border-r border-border-subtle bg-bg-secondary shadow-xl"
+                initial={{ x: -24, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: -24, opacity: 0 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ChannelSidebar />
+              </motion.aside>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {isMobile && showShell && <MobileBottomNav />}
+
+        <CommandPalette />
+        <ConfirmDialog />
+
+        {/* Windowed settings overlays — spec modal enter (§4/§5): backdrop fade,
+            surface scale .96→1 + rise, 240ms ease-out. */}
+        <AnimatePresence>
+          {userSettingsOpen && (
+            <motion.div
+              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+            >
+              <motion.div
+                ref={userSettingsDialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label="User settings"
+                tabIndex={-1}
+                initial={{ scale: 0.96, opacity: 0, y: 8 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.96, opacity: 0, y: 8 }}
+                transition={modalEnter}
+                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden rounded-lg shadow-xl"
+              >
+                <SettingsPage />
+              </motion.div>
+            </motion.div>
+          )}
+
+          {guildSettingsId && (
+            <motion.div
+              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+            >
+              <motion.div
+                ref={guildSettingsDialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Server settings"
+                tabIndex={-1}
+                initial={{ scale: 0.96, opacity: 0, y: 8 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.96, opacity: 0, y: 8 }}
+                transition={modalEnter}
+                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden rounded-lg shadow-xl"
+              >
+                <GuildSettingsPage />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-
-      <AnimatePresence>
-        {showMobileChannelPanel && (
-          <motion.div
-            className="mobile-sidebar-overlay md:hidden modal-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setSidebarCollapsed(true)}
-          >
-            <motion.aside
-              className="panel-surface mobile-nav-panel"
-              initial={{ x: -24, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: -24, opacity: 0 }}
-              transition={{ duration: 0.16 }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <ChannelSidebar />
-            </motion.aside>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {isMobile && showShell && <MobileBottomNav />}
-
-      <CommandPalette />
-      <ConfirmDialog />
-
-      {/* Windowed Settings Overlays */}
-      <AnimatePresence>
-        {userSettingsOpen && (
-          <motion.div
-            className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-          >
-            <motion.div
-              ref={userSettingsDialogRef}
-              role="dialog"
-              aria-modal="true"
-              aria-label="User settings"
-              tabIndex={-1}
-              initial={{ scale: 0.95, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="w-full h-full max-w-6xl max-h-[min(900px,85vh)] shadow-2xl relative flex flex-col"
-            >
-              <SettingsPage />
-            </motion.div>
-          </motion.div>
-        )}
-
-        {guildSettingsId && (
-          <motion.div
-            className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-          >
-            <motion.div
-              ref={guildSettingsDialogRef}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Server settings"
-              tabIndex={-1}
-              initial={{ scale: 0.95, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="w-full h-full max-w-6xl max-h-[min(900px,85vh)] shadow-2xl relative flex flex-col"
-            >
-              <GuildSettingsPage />
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    </MotionConfig>
   );
 }

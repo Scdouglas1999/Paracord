@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useServerListStore } from '../stores/serverListStore';
+import { Loader2, RefreshCw, Server, Sparkles, X } from 'lucide-react';
+import { useServerListStore, resolveDefaultServerTarget } from '../stores/serverListStore';
 import { gateway } from '../gateway/manager';
-import { setStoredServerUrl } from '../lib/config/apiBaseUrl';
+import { setStoredServerUrl, normalizeConnectInput } from '../lib/config/apiBaseUrl';
 import { isPortableLink, decodePortableLink } from '../lib/portableLinks';
 import { confirm } from '../stores/confirmStore';
 import { OnboardingWizard, hasCompletedOnboarding } from '../components/onboarding/OnboardingWizard';
@@ -10,42 +11,20 @@ import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { syncTrustedHosts } from '../lib/trustedHosts';
 import { isTauri } from '../lib/tauriEnv';
+import { AuthCanvas, AuthCard, AuthHeading, Field } from './authScaffold';
 
 const PUBLIC_DEMO_SERVER_URL = (
   import.meta.env.VITE_PUBLIC_DEMO_SERVER_URL || 'https://demo.paracord.chat'
 ).trim();
-
-/**
- * Normalise a raw server address into a full URL with protocol.
- * Defaults to https:// for all non-localhost addresses.
- */
-function normaliseServerUrl(raw: string): string {
-  let serverUrl = raw.trim();
-  if (!/^https?:\/\//i.test(serverUrl)) {
-    const hostAndPort = serverUrl.split('/')[0];
-    const hostPart = hostAndPort.split(':')[0];
-    const hasExplicitPort = /:\d+$/.test(hostAndPort);
-    if (
-      typeof window !== 'undefined' &&
-      hostPart.toLowerCase() === window.location.hostname.toLowerCase() &&
-      !hasExplicitPort
-    ) {
-      return window.location.origin.replace(/\/+$/, '');
-    }
-
-    const isLocalhost =
-      hostPart === 'localhost' || hostPart === '127.0.0.1' || hostPart === '[::1]';
-    serverUrl = (isLocalhost ? 'http://' : 'https://') + serverUrl;
-  }
-  return serverUrl.replace(/\/+$/, '');
-}
 
 function canonicalServerBaseFromResolvedUrl(value: string): string {
   try {
     const parsed = new URL(value);
     return `${parsed.protocol}//${parsed.host}`;
   } catch {
-    return normaliseServerUrl(value);
+    // normalizeConnectInput is the single source of truth for connect-input
+    // normalisation (shared with the data layer), used only as a fallback here.
+    return normalizeConnectInput(value);
   }
 }
 
@@ -63,23 +42,23 @@ function parseInput(input: string): { serverUrl: string; inviteCode?: string } {
   // 1. Portable link (paracord://invite/...)
   if (isPortableLink(trimmed)) {
     const decoded = decodePortableLink(trimmed);
-    return { serverUrl: normaliseServerUrl(decoded.serverUrl), inviteCode: decoded.inviteCode };
+    return { serverUrl: normalizeConnectInput(decoded.serverUrl), inviteCode: decoded.inviteCode };
   }
 
   // 2. Regular URL containing /invite/<code>
   const inviteMatch = trimmed.match(/^(https?:\/\/.+?)\/invite\/([A-Za-z0-9_-]+)\/?$/i);
   if (inviteMatch) {
-    return { serverUrl: normaliseServerUrl(inviteMatch[1]), inviteCode: inviteMatch[2] };
+    return { serverUrl: normalizeConnectInput(inviteMatch[1]), inviteCode: inviteMatch[2] };
   }
 
   // Also handle without protocol: host:port/invite/CODE
   const inviteMatchNoProto = trimmed.match(/^([^/]+)\/invite\/([A-Za-z0-9_-]+)\/?$/i);
   if (inviteMatchNoProto) {
-    return { serverUrl: normaliseServerUrl(inviteMatchNoProto[1]), inviteCode: inviteMatchNoProto[2] };
+    return { serverUrl: normalizeConnectInput(inviteMatchNoProto[1]), inviteCode: inviteMatchNoProto[2] };
   }
 
   // 3. Plain server URL / address
-  return { serverUrl: normaliseServerUrl(trimmed) };
+  return { serverUrl: normalizeConnectInput(trimmed) };
 }
 
 function isLocalhostHost(hostname: string): boolean {
@@ -181,7 +160,9 @@ function toFriendlyConnectionError(err: unknown): string {
 }
 
 export function ServerConnectPage() {
-  const [url, setUrl] = useState('');
+  // Prefill the sensible default (the current origin in browser builds), sourced
+  // from the data layer so URL logic isn't duplicated on the connect screen.
+  const [url, setUrl] = useState(() => resolveDefaultServerTarget());
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
@@ -305,127 +286,126 @@ export function ServerConnectPage() {
   };
 
   return (
-    <div className="auth-shell">
-      <div className="mx-auto w-full max-w-md space-y-8">
-        <form onSubmit={handleSubmit} className="auth-card space-y-8 p-10">
-          <div className="text-center">
-            <h1 className="text-3xl font-bold leading-tight text-text-primary">Add Server</h1>
-            <p className="mt-3 text-sm text-text-muted">
-              Enter a server URL, invite link, or portable link to connect.
-            </p>
-          </div>
+    <AuthCanvas>
+      <div className="mx-auto flex w-full max-w-md flex-col gap-5">
+        <AuthCard>
+          <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-8">
+            <AuthHeading
+              title="Connect to a server"
+              subtitle="Paste a server address, invite, or portable link. Paracord probes it before you sign in."
+            />
 
-          {error && <ErrorBanner message={error} />}
+            {error && <ErrorBanner message={error} />}
 
-          <div className="card-stack-roomy">
-            <label className="block">
-              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Server URL or Invite Link <span className="text-accent-danger">*</span>
-              </span>
+            <Field label="Server URL or Invite Link" required>
               <input
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 required
-                className="input-field mt-2"
-                placeholder="paracord://invite/... or 73.45.123.99:8080"
+                className="input-field font-code"
+                placeholder="chat.example.com or paracord://invite/…"
                 autoFocus
               />
-            </label>
-          </div>
+            </Field>
 
-          <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/65 px-4 py-3.5">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Accepted formats
-            </span>
-            <div className="mt-2 text-sm leading-6 text-text-muted">
-              paracord://invite/aBcDeFgH...<br />
-              http://192.168.1.5:8090/invite/abc123<br />
-              192.168.1.5:8090 or chat.example.com
+            <div className="rounded-md border border-border-subtle bg-bg-tertiary/50 px-4 py-3">
+              <span className="text-section uppercase text-text-muted">Accepted formats</span>
+              <ul className="mt-2 space-y-1 font-code text-meta leading-relaxed text-text-secondary">
+                <li>paracord://invite/aBcDeFgH…</li>
+                <li>http://192.168.1.5:8090/invite/abc123</li>
+                <li>192.168.1.5:8090 · chat.example.com</li>
+              </ul>
             </div>
-          </div>
 
-          <Button
-            type="button"
-            onClick={() => setUrl(PUBLIC_DEMO_SERVER_URL)}
-            variant="outline"
-            className="w-full border-accent-primary/40 bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/20"
-          >
-            Try a public demo server
-          </Button>
-
-          {status && (
-            <div className="text-center text-sm text-text-muted">
-              {status}
-            </div>
-          )}
-
-          <Button type="submit" disabled={loading} className="mt-10 w-full">
-            {loading ? 'Connecting...' : 'Add Server'}
-          </Button>
-        </form>
-
-        {/* Existing servers */}
-        {servers.length > 0 && (
-          <div className="auth-card mt-2">
-            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-text-secondary">
-              Your Servers
-            </h2>
-            <div className="space-y-4">
-              {servers.map((server) => (
-                <div
-                  key={server.id}
-                  className="card-surface flex items-center justify-between rounded-xl border border-border-subtle/60 bg-bg-mod-subtle/40 px-4 py-3"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-text-primary">
-                      {server.name}
-                    </div>
-                    <div className="truncate text-xs text-text-muted">
-                      {server.url}
-                    </div>
-                  </div>
-                  <div className="ml-3 flex items-center gap-2">
-                    <span
-                      className={`inline-block h-2 w-2 rounded-full ${
-                        server.connected
-                          ? 'bg-accent-success'
-                          : server.token
-                            ? 'bg-accent-warning'
-                            : 'bg-text-muted'
-                      }`}
-                    />
-                    {!server.connected && (
-                      <button
-                        onClick={() => void handleReconnectServer(server.id)}
-                        disabled={reconnectingId === server.id}
-                        className="text-xs text-accent-primary transition-colors hover:text-accent-primary-hover disabled:opacity-60"
-                      >
-                        {reconnectingId === server.id ? 'Reconnecting...' : 'Reconnect'}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleRemoveServer(server.id)}
-                      className="text-xs text-text-muted transition-colors hover:text-accent-danger"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {servers.length > 0 && (
-              <Button
-                onClick={() => navigate('/app')}
-                className="mt-4 w-full"
-              >
-                Continue to App
-              </Button>
+            {status && (
+              <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-bg-tertiary/40 px-4 py-2.5 text-label text-text-secondary">
+                <Loader2 size={15} className="shrink-0 animate-spin text-accent-primary" />
+                <span>{status}</span>
+              </div>
             )}
-          </div>
+
+            <div className="flex flex-col gap-2.5">
+              <Button type="submit" loading={loading} disabled={loading} className="w-full">
+                Add Server
+              </Button>
+              <button
+                type="button"
+                onClick={() => setUrl(PUBLIC_DEMO_SERVER_URL)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-sm px-3 py-2 text-label font-semibold text-text-link transition-colors hover:bg-accent-tint"
+              >
+                <Sparkles size={15} />
+                Try a public demo server
+              </button>
+            </div>
+          </form>
+        </AuthCard>
+
+        {/* Recent servers — selectable rows, grouped by dividers rather than tiled cards. */}
+        {servers.length > 0 && (
+          <AuthCard>
+            <div className="flex items-center justify-between px-6 pt-5">
+              <h2 className="text-section uppercase text-text-secondary">Your servers</h2>
+              <span className="text-meta text-text-muted">{servers.length}</span>
+            </div>
+            <ul className="mt-2 flex flex-col divide-y divide-border-subtle px-3 pb-3">
+              {servers.map((server) => {
+                const state = server.connected
+                  ? { dot: 'bg-accent-success', label: 'Connected', tone: 'text-accent-success' }
+                  : server.token
+                    ? { dot: 'bg-accent-warning', label: 'Saved — not connected', tone: 'text-accent-warning' }
+                    : { dot: 'bg-status-offline', label: 'Sign-in required', tone: 'text-text-muted' };
+                const reconnecting = reconnectingId === server.id;
+                return (
+                  <li
+                    key={server.id}
+                    className="flex items-center gap-3 rounded-sm px-3 py-3 transition-colors hover:bg-bg-mod-subtle"
+                  >
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
+                      <Server size={17} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-label font-semibold text-text-primary">
+                        {server.name}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-1.5">
+                        <span className={`inline-block h-1.5 w-1.5 rounded-full ${state.dot}`} />
+                        <span className={`text-meta ${state.tone}`}>{state.label}</span>
+                        <span className="truncate font-code text-meta text-text-muted">· {server.url}</span>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {!server.connected && (
+                        <button
+                          onClick={() => void handleReconnectServer(server.id)}
+                          disabled={reconnecting}
+                          className="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-meta font-semibold text-accent-primary transition-colors hover:bg-accent-tint disabled:opacity-60"
+                        >
+                          <RefreshCw size={13} className={reconnecting ? 'animate-spin' : ''} />
+                          {reconnecting ? 'Reconnecting…' : 'Reconnect'}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleRemoveServer(server.id)}
+                        aria-label={`Remove ${server.name}`}
+                        className="flex h-8 w-8 items-center justify-center rounded-sm text-text-muted transition-colors hover:bg-danger-tint hover:text-accent-danger"
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="border-t border-border-subtle p-4">
+              <Button onClick={() => navigate('/app')} className="w-full">
+                Continue to app
+              </Button>
+            </div>
+          </AuthCard>
         )}
       </div>
-    </div>
+    </AuthCanvas>
   );
 }
 
