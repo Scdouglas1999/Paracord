@@ -110,6 +110,19 @@ describe('AppShell', () => {
     expect(screen.getByTestId('mobile-bottom-nav')).toBeInTheDocument();
   });
 
+  it('never mounts the AppShell MiniVoiceBar dock on desktop (the sidebar CallDock is the sole persistent call surface)', () => {
+    // CHAT-4 invariant: on desktop the persistent call dock lives in the
+    // UnifiedSidebar footer (CallDock). The AppShell-level MiniVoiceBar is a
+    // MOBILE-only dock, so it must stay unmounted on desktop even while
+    // connected — otherwise two persistent voice bars would show at once.
+    mockedUseMobile.mockReturnValue(false);
+    useVoiceStore.setState({ connected: true, channelId: '999' });
+
+    renderShell('/app');
+
+    expect(screen.queryByTestId('mini-voice-bar')).not.toBeInTheDocument();
+  });
+
   it('does not mount the mobile MiniVoiceBar dock while viewing the active voice channel page', () => {
     mockedUseMobile.mockReturnValue(true);
     useUIStore.setState({ sidebarCollapsed: true });

@@ -15,6 +15,12 @@ export function GuildSettingsPage() {
   const overlayInitialSection = useUIStore((s) => s.guildSettingsInitialSection);
   const overlayChannelId = useUIStore((s) => s.guildSettingsChannelId);
   const setGuildSettingsId = useUIStore((s) => s.setGuildSettingsId);
+  // The overlay entry (opened from GuildHomeHeader / SpacesList via `guildSettingsId`)
+  // takes precedence over route params. When it is set we are the windowed overlay,
+  // which can be summoned from anywhere — a DM, a different guild's channel — so it
+  // must only dismiss itself. Only the standalone `guilds/:id/settings` route instance
+  // owns navigation back to the guild home.
+  const isOverlay = Boolean(overlayGuildId);
   const guildId = overlayGuildId || routeGuildId || null;
   const initialSection = overlayInitialSection || searchParams.get('section');
   const initialChannelId = overlayChannelId || searchParams.get('channelId');
@@ -25,7 +31,7 @@ export function GuildSettingsPage() {
   const canManageGuild = isAdmin || hasPermission(permissions, Permissions.MANAGE_GUILD);
   const closeSettings = () => {
     setGuildSettingsId(null);
-    if (routeGuildId) {
+    if (!isOverlay && routeGuildId) {
       navigate(`/app/guilds/${routeGuildId}`);
     }
   };

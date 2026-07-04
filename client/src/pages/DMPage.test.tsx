@@ -1,21 +1,12 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { dmApi } from '../api/dms';
 import { useAuthStore } from '../stores/authStore';
 import { useChannelStore } from '../stores/channelStore';
-import { useRelationshipStore } from '../stores/relationshipStore';
+import { useUIStore } from '../stores/uiStore';
 import type { Channel } from '../types';
 import { DMPage } from './DMPage';
-
-vi.mock('../api/dms', () => ({
-  dmApi: {
-    addRecipient: vi.fn(),
-    removeRecipient: vi.fn(),
-    listRecipients: vi.fn(),
-  },
-}));
 
 vi.mock('../components/layout/TopBar', () => ({
   TopBar: () => <div data-testid="topbar" />,
@@ -49,16 +40,6 @@ const bob = {
   created_at: '2026-01-01T00:00:00.000Z',
 };
 
-const ada = {
-  id: 'ada',
-  username: 'Ada',
-  discriminator: 3,
-  flags: 0,
-  bot: false,
-  system: false,
-  created_at: '2026-01-01T00:00:00.000Z',
-};
-
 function groupDm(recipients = [currentUser, bob]): Channel {
   return {
     id: 'dm-1',
@@ -74,9 +55,32 @@ function groupDm(recipients = [currentUser, bob]): Channel {
   } as unknown as Channel;
 }
 
-function renderDmPage() {
+function directDm(): Channel {
+  return {
+    id: 'dm-2',
+    type: 1,
+    channel_type: 1,
+    guild_id: null,
+    recipient: bob,
+    position: 0,
+    permission_overwrites: [],
+    created_at: '2026-01-01T00:00:00.000Z',
+  } as unknown as Channel;
+}
+
+function seedChannel(channel: Channel) {
+  useChannelStore.setState({
+    channelsByGuild: { '': [channel] },
+    channelsById: { [channel.id]: channel },
+    channels: [channel],
+    selectedChannelId: channel.id,
+    selectedGuildId: null,
+  });
+}
+
+function renderDmPage(channelId: string) {
   return render(
-    <MemoryRouter initialEntries={['/app/dms/dm-1']}>
+    <MemoryRouter initialEntries={[`/app/dms/${channelId}`]}>
       <Routes>
         <Route path="/app/dms/:channelId" element={<DMPage />} />
       </Routes>
@@ -84,65 +88,45 @@ function renderDmPage() {
   );
 }
 
-describe('DMPage group-member states', () => {
+describe('DMPage — ContextPanel-driven member surface (new IA)', () => {
   beforeEach(() => {
-    vi.mocked(dmApi.addRecipient).mockReset();
-    vi.mocked(dmApi.removeRecipient).mockReset();
-    vi.mocked(dmApi.listRecipients).mockReset();
     useAuthStore.setState({ user: currentUser });
-    useChannelStore.setState({
-      channelsByGuild: { '': [groupDm()] },
-      channelsById: { 'dm-1': groupDm() },
-      channels: [groupDm()],
-      selectedChannelId: 'dm-1',
-      selectedGuildId: null,
-    });
-    useRelationshipStore.setState({
-      relationships: [{ id: 'rel-ada', type: 1, user: ada }],
-      fetchRelationships: vi.fn().mockResolvedValue(undefined),
-    });
+    useUIStore.setState({ contextPanelMode: null });
   });
 
-  it('shows an inline alert when adding a group-DM member fails', async () => {
-    const user = userEvent.setup();
-    vi.mocked(dmApi.addRecipient).mockRejectedValue(new Error('Ada cannot be added.'));
+  it('renders the message surface with no docked member <aside>', () => {
+    seedChannel(groupDm());
 
-    renderDmPage();
+    renderDmPage('dm-1');
 
-    await user.click(screen.getByRole('button', { name: 'Show Members' }));
-    await user.click(screen.getByRole('button', { name: 'Add' }));
-    await user.click(screen.getByRole('button', { name: 'Ada' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Ada cannot be added.');
+    expect(screen.getByTestId('message-list')).toBeInTheDocument();
+    expect(screen.getByTestId('message-input')).toBeInTheDocument();
+    // The bespoke docked recipient list is gone; recipients live in ContextPanel.
+    expect(screen.queryByText('Bob')).not.toBeInTheDocument();
   });
 
-  it('shows an inline alert when removing a group-DM member fails', async () => {
+  it('toggles the shared members surface via contextPanelMode for a group DM', async () => {
     const user = userEvent.setup();
-    vi.mocked(dmApi.removeRecipient).mockRejectedValue(new Error('Bob cannot be removed.'));
+    seedChannel(groupDm());
 
-    renderDmPage();
+    renderDmPage('dm-1');
 
-    await user.click(screen.getByRole('button', { name: 'Show Members' }));
-    await user.click(screen.getByRole('button', { name: 'Remove Bob from group DM' }));
+    const membersButton = screen.getByRole('button', { name: 'Members' });
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
 
-    await waitFor(() => expect(dmApi.removeRecipient).toHaveBeenCalledWith('dm-1', 'bob'));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Bob cannot be removed.');
+    await user.click(membersButton);
+    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    expect(membersButton).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(membersButton);
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
   });
 
-  it('shows an empty add-list state when there are no eligible friends', async () => {
-    const user = userEvent.setup();
-    useRelationshipStore.setState({
-      relationships: [{ id: 'rel-bob', type: 1, user: bob }],
-      fetchRelationships: vi.fn().mockResolvedValue(undefined),
-    });
+  it('does not render the group-DM members toggle for a 1:1 DM', () => {
+    seedChannel(directDm());
 
-    renderDmPage();
+    renderDmPage('dm-2');
 
-    await user.click(screen.getByRole('button', { name: 'Show Members' }));
-    await user.click(screen.getByRole('button', { name: 'Add' }));
-
-    expect(
-      screen.getByText('Everyone on your friends list is already in this conversation.'),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
   });
 });

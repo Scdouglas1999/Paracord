@@ -6,7 +6,6 @@ import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { cancelMessageFetch } from '../stores/messageStore';
-import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { GuildWelcomeScreen } from '../components/guild/GuildWelcomeScreen';
@@ -34,7 +33,6 @@ export function GuildPage() {
   const selectChannel = useChannelStore((s) => s.selectChannel);
   const channel = channels.find((c) => c.id === channelId);
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
-  const searchPanelOpen = useUIStore((s) => s.searchPanelOpen);
   const setWatchedStreamer = useVoiceStore((s) => s.setWatchedStreamer);
 
   const [isPhoneLayout, setIsPhoneLayout] = useState(() => {
@@ -95,11 +93,14 @@ export function GuildPage() {
 
     if (prevChannelId && prevChannelId !== channelId) {
       cancelMessageFetch(prevChannelId);
+      // Only drop a watched stream when the user actually switches channels.
+      // Clearing on the initial mount would stomp a RoomCard "Watch" handoff,
+      // which sets voiceStore.watchedStreamerId *before* navigating here.
+      setWatchedStreamer(null);
     }
 
     if (channelId && channel) {
       selectChannel(channelId);
-      setWatchedStreamer(null);
     }
   }, [channelId, channel, selectChannel, setWatchedStreamer]);
 
@@ -151,6 +152,8 @@ export function GuildPage() {
         channelTopic={channel?.topic}
         isVoice={isVoiceLike}
         isForum={isForum}
+        guildId={guildId}
+        guildName={currentGuild?.name}
       />
 
       {showWelcome && currentGuild && (
@@ -180,8 +183,6 @@ export function GuildPage() {
           channelName={channelName}
           channel={channel}
           channels={channels}
-          isPhoneLayout={isPhoneLayout}
-          searchPanelOpen={searchPanelOpen}
         />
       )}
     </div>

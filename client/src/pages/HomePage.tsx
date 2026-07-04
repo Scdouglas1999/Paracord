@@ -5,11 +5,12 @@ import {
   Plus,
   Compass,
   ChevronRight,
-  Volume2,
   MessageSquare,
   FileText,
   MessagesSquare,
   Headphones,
+  PhoneCall,
+  Users,
 } from 'lucide-react';
 
 import { useAuthStore } from '../stores/authStore';
@@ -19,20 +20,32 @@ import { usePresenceStore } from '../stores/presenceStore';
 import { useChannelStore } from '../stores/channelStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useVoice } from '../hooks/useVoice';
 import { dmApi } from '../api/dms';
 import { extractApiError } from '../api/client';
 import { CreateGuildModal } from '../components/guild/CreateGuildModal';
+import { DmPickerModal } from '../components/message/DmPickerModal';
+import { RoomCard } from '../components/rooms/RoomCard';
 import { EmptyState } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { safeStoredImageDataUrl } from '../lib/security';
 import { getGuildColor } from '../lib/colors';
-import { Tooltip } from '../components/ui/Tooltip';
 import { toast } from '../stores/toastStore';
 import { cn } from '../lib/utils';
 
-import type { Channel } from '../types';
+import { ChannelType, type Channel } from '../types';
 
 const EMPTY_CHANNELS: Channel[] = [];
+
+/** Human name for a DM/group-DM channel — recipient, group title, or member list. */
+function dmDisplayName(channel: Channel): string {
+  if (channel.type === ChannelType.GroupDM) {
+    if (channel.name) return channel.name;
+    const names = (channel.recipients ?? []).map((r) => r.username).filter(Boolean);
+    return names.length > 0 ? names.join(', ') : 'Group DM';
+  }
+  return channel.recipient?.username || 'Direct Message';
+}
 
 const STATUS_COLOR: Record<string, string> = {
   online: 'bg-status-online',
@@ -115,8 +128,11 @@ export function HomePage() {
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
   const fetchChannels = useChannelStore((s) => s.fetchChannels);
   const channelParticipants = useVoiceStore((s) => s.channelParticipants);
+  const speakingUsers = useVoiceStore((s) => s.speakingUsers);
   const activeServerId = useServerListStore((s) => s.activeServerId);
+  const { joinChannel } = useVoice();
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showDmPicker, setShowDmPicker] = useState(false);
   const loadedGuildsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -161,20 +177,17 @@ export function HomePage() {
     [onlineKey],
   );
 
-  const activeVoiceChannels = useMemo(() => {
-    const allChannels = Object.entries(channelsByGuild)
-      .filter(([gid]) => gid !== '')
-      .flatMap(([_, chs]) => chs);
-
-    return allChannels
-      .filter(c => c.type === 2)
-      .map(c => ({
-        channel: c,
-        guild: guilds.find(g => g.id === c.guild_id),
-        participants: channelParticipants.get(c.id) || []
-      }))
-      .filter(item => item.participants.length > 0);
-  }, [channelsByGuild, channelParticipants, guilds]);
+  // Live DM / group-DM calls: the DM channels that currently have voice
+  // occupants. This is the "Global Happening Now" for your private life —
+  // fed straight from voiceStore.channelParticipants (the same source the
+  // guild Rooms view reads), scoped to DM + group-DM channels.
+  const liveDmCalls = useMemo(() => {
+    const dmChannels = channelsByGuild[''] ?? EMPTY_CHANNELS;
+    return dmChannels
+      .filter((c) => c.type === ChannelType.DM || c.type === ChannelType.GroupDM)
+      .map((c) => ({ channel: c, participants: channelParticipants.get(c.id) || [] }))
+      .filter((item) => item.participants.length > 0);
+  }, [channelsByGuild, channelParticipants]);
 
   const recentDms = useMemo(() => {
     const dmChannels = channelsByGuild[''] ?? EMPTY_CHANNELS;
@@ -211,17 +224,17 @@ export function HomePage() {
 
   const statusLine = useMemo(() => {
     const parts: string[] = [];
+    if (liveDmCalls.length > 0) {
+      parts.push(`${liveDmCalls.length} call${liveDmCalls.length === 1 ? '' : 's'} happening now`);
+    }
     parts.push(
       onlineFriends.length > 0
-        ? `${onlineFriends.length} friend${onlineFriends.length === 1 ? '' : 's'} online`
-        : 'No friends online',
+        ? `${onlineFriends.length} friend${onlineFriends.length === 1 ? '' : 's'} around`
+        : 'No friends around',
     );
-    if (activeVoiceChannels.length > 0) {
-      parts.push(`${activeVoiceChannels.length} voice room${activeVoiceChannels.length === 1 ? '' : 's'} live`);
-    }
     parts.push(`${guilds.length} server${guilds.length === 1 ? '' : 's'}`);
     return parts.join('  ·  ');
-  }, [onlineFriends.length, activeVoiceChannels.length, guilds.length]);
+  }, [liveDmCalls.length, onlineFriends.length, guilds.length]);
 
   const quickActions = [
     { icon: UserPlus, label: 'Add a friend', hint: 'By username or ID', onClick: () => navigate('/app/friends') },
@@ -234,76 +247,53 @@ export function HomePage() {
     <div className="flex h-full flex-col overflow-y-auto bg-bg-primary scrollbar-thin">
       {/* Solid raised header — greeting in Fraunces, a warm-neutral status line.
           Deliberately not a gradient hero (kill-list #1). */}
-      <header className="shrink-0 border-b border-border-subtle bg-bg-secondary px-6 py-6 sm:px-8 sm:py-7">
-        <h1 className="font-display text-title text-text-primary sm:text-display">
-          {greetingFor(new Date().getHours())}, {user?.username}
-        </h1>
-        <p className="mt-1.5 text-body text-text-secondary">{statusLine}</p>
+      <header className="flex shrink-0 items-center gap-4 border-b border-border-subtle bg-bg-secondary px-6 py-6 sm:px-8 sm:py-7">
+        <div className="min-w-0 flex-1">
+          <h1 className="font-display text-title text-text-primary sm:text-display">
+            {greetingFor(new Date().getHours())}, {user?.username}
+          </h1>
+          <p className="mt-1.5 text-body text-text-secondary">{statusLine}</p>
+        </div>
+        <Button size="sm" className="shrink-0" onClick={() => setShowDmPicker(true)}>
+          <MessageSquare size={16} />
+          New message
+        </Button>
       </header>
 
       <div className="grid flex-1 grid-cols-1 gap-8 px-6 py-6 sm:px-8 xl:grid-cols-[minmax(0,1fr)_320px]">
-        {/* Main column — activity as list rows, not tiled cards (kill-list #5) */}
+        {/* Main column — live calls, then who's around, then recent DMs.
+            Activity as list rows / room cards, not identical tiles (kill-list #5). */}
         <div className="flex min-w-0 flex-col gap-8">
+          {/* (1) Live DM / group calls — the "Global Happening Now" done right.
+              Reuses the RoomCard primitive; no rebuilt card internals. */}
           <section>
             <SectionHeader
-              icon={<Volume2 size={15} />}
-              label="Active voice"
-              count={activeVoiceChannels.length}
+              icon={<PhoneCall size={15} />}
+              label="Happening now"
+              count={liveDmCalls.length}
             />
-            {activeVoiceChannels.length > 0 ? (
-              <div className="divide-y divide-border-subtle rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
-                {activeVoiceChannels.map(({ channel, guild, participants }) => {
-                  const shown = participants.slice(0, 4);
-                  const overflow = participants.length > 4 ? participants.length - 4 : 0;
+            {liveDmCalls.length > 0 ? (
+              <div className="flex flex-col gap-3">
+                {liveDmCalls.map(({ channel, participants }) => {
+                  const named: Channel = { ...channel, name: dmDisplayName(channel) };
                   return (
-                    <div
+                    <RoomCard
                       key={channel.id}
-                      className="group flex items-center gap-4 px-4 py-3 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
-                    >
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
-                        <Volume2 size={18} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate text-label font-semibold text-text-primary">{channel.name}</span>
-                          <span className="inline-flex items-center gap-1 text-meta tabular-nums text-status-online">
-                            <span className="h-1.5 w-1.5 rounded-full bg-status-online" />
-                            {participants.length}
-                          </span>
-                        </div>
-                        {guild && <div className="truncate text-meta text-text-muted">in {guild.name}</div>}
-                      </div>
-                      <div className="hidden items-center sm:flex">
-                        {shown.map((p, i) => (
-                          <Tooltip key={p.user_id} content={p.username || p.user_id} side="top">
-                            <div
-                              className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-tint text-[11px] font-semibold text-accent-primary"
-                              style={{
-                                marginLeft: i > 0 ? '-8px' : '0',
-                                boxShadow: '0 0 0 2px var(--bg-secondary)',
-                              }}
-                            >
-                              {(p.username || p.user_id).charAt(0).toUpperCase()}
-                            </div>
-                          </Tooltip>
-                        ))}
-                        {overflow > 0 && (
-                          <div
-                            className="flex h-7 w-7 items-center justify-center rounded-full bg-bg-mod-strong text-[11px] font-semibold text-text-secondary"
-                            style={{ marginLeft: '-8px', boxShadow: '0 0 0 2px var(--bg-secondary)' }}
-                          >
-                            +{overflow}
-                          </div>
-                        )}
-                      </div>
-                      <Button
-                        size="sm"
-                        className="shrink-0"
-                        onClick={() => navigate(`/app/guilds/${guild?.id}/channels/${channel.id}`)}
-                      >
-                        Join
-                      </Button>
-                    </div>
+                      channel={named}
+                      participants={participants}
+                      speakingUsers={speakingUsers}
+                      guildId=""
+                      onJoin={() => {
+                        void joinChannel(channel.id);
+                        useChannelStore.getState().selectChannel(channel.id);
+                        navigate(`/app/dms/${channel.id}`);
+                      }}
+                      onWatch={(streamerId) => {
+                        useVoiceStore.getState().setWatchedStreamer(streamerId);
+                        useChannelStore.getState().selectChannel(channel.id);
+                        navigate(`/app/dms/${channel.id}`);
+                      }}
+                    />
                   );
                 })}
               </div>
@@ -311,23 +301,66 @@ export function HomePage() {
               <EmptyState
                 className="rounded-md border border-border-subtle bg-bg-secondary px-5 shadow-sm"
                 icon={<Headphones size={20} />}
-                title="No one's in voice yet"
-                description="When friends hop into a voice channel across your servers, you'll see the room here and can drop in with one click."
+                title="No calls right now"
+                description="When you or a friend starts a DM call, it lands here so you can drop straight in with one tap."
                 action={
-                  <Button variant="secondary" size="sm" onClick={() => navigate('/app/discovery')}>
-                    Find a community
+                  <Button variant="secondary" size="sm" onClick={() => setShowDmPicker(true)}>
+                    Start a conversation
                   </Button>
                 }
               />
             )}
           </section>
 
+          {/* (2) Friends around now — presence-first strip. */}
+          <section>
+            <SectionHeader icon={<Users size={15} />} label="Around now" count={onlineFriends.length} />
+            {onlineFriends.length > 0 ? (
+              <div className="divide-y divide-border-subtle rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+                {onlineFriends.map((rel) => {
+                  const status = getPresence(rel.user.id, presenceScope)?.status || 'online';
+                  return (
+                    <button
+                      type="button"
+                      key={rel.user.id}
+                      onClick={() => void handleMessageFriend(rel.user.id)}
+                      className="group flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                    >
+                      <PresenceAvatar name={rel.user.username} status={status} ring="var(--bg-secondary)" size={38} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-label font-semibold text-text-primary">{rel.user.username}</div>
+                        <div className="truncate text-meta text-text-muted">Around now — say hello</div>
+                      </div>
+                      <MessageSquare
+                        size={16}
+                        className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary"
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <EmptyState
+                className="rounded-md border border-border-subtle bg-bg-secondary px-5 shadow-sm"
+                icon={<Users size={20} />}
+                title="Nobody around just yet"
+                description="The friends you've added show up here the moment they come online, so you can catch them while they're around."
+                action={
+                  <Button variant="secondary" size="sm" onClick={() => navigate('/app/friends')}>
+                    Add a friend
+                  </Button>
+                }
+              />
+            )}
+          </section>
+
+          {/* (3) Recent DMs — pick up where you left off. */}
           <section>
             <SectionHeader icon={<MessageSquare size={15} />} label="Recent messages" />
             {recentDms.length > 0 ? (
               <div className="divide-y divide-border-subtle rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
                 {recentDms.map((dm) => {
-                  const username = dm.recipient?.username || 'Direct Message';
+                  const username = dmDisplayName(dm);
                   const status = getPresence(dm.recipient?.id || '', presenceScope)?.status || 'offline';
                   return (
                     <button
@@ -357,9 +390,9 @@ export function HomePage() {
                 className="rounded-md border border-border-subtle bg-bg-secondary px-5 shadow-sm"
                 icon={<MessagesSquare size={20} />}
                 title="Your inbox is clear"
-                description="Direct messages you've been part of show up here. Start one from a friend's profile to pick up where you left off."
+                description="Direct messages you've been part of show up here. Start one to pick up where you left off."
                 action={
-                  <Button variant="secondary" size="sm" onClick={() => navigate('/app/friends')}>
+                  <Button variant="secondary" size="sm" onClick={() => setShowDmPicker(true)}>
                     Message a friend
                   </Button>
                 }
@@ -391,32 +424,6 @@ export function HomePage() {
                   </span>
                 </button>
               ))}
-            </div>
-
-            <div className="border-t border-border-subtle px-4 pt-4">
-              <SectionHeader icon={<MessageSquare size={15} />} label="Online now" count={onlineFriends.length} />
-            </div>
-            <div className="max-h-[240px] overflow-y-auto px-2 pb-2 scrollbar-thin">
-              {onlineFriends.length === 0 ? (
-                <p className="px-2 py-3 text-meta leading-relaxed text-text-muted">
-                  None of your friends are online right now — they'll appear here the moment they sign in.
-                </p>
-              ) : (
-                onlineFriends.map((rel) => (
-                  <button
-                    type="button"
-                    key={rel.user.id}
-                    onClick={() => void handleMessageFriend(rel.user.id)}
-                    className="flex w-full items-center gap-3 rounded-sm px-2 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
-                  >
-                    <PresenceAvatar name={rel.user.username} status="online" ring="var(--bg-secondary)" size={32} />
-                    <span className="min-w-0 flex-1 truncate text-label font-medium text-text-primary">
-                      {rel.user.username}
-                    </span>
-                    <MessageSquare size={15} className="shrink-0 text-text-muted" />
-                  </button>
-                ))
-              )}
             </div>
           </div>
 
@@ -458,6 +465,7 @@ export function HomePage() {
         </aside>
       </div>
 
+      <DmPickerModal open={showDmPicker} onClose={() => setShowDmPicker(false)} />
       {showCreateModal && <CreateGuildModal onClose={() => setShowCreateModal(false)} />}
     </div>
   );

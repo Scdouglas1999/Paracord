@@ -27,7 +27,7 @@ import { useFocusTrap } from '../hooks/useFocusTrap';
  *
  * The left `UnifiedSidebar` is the single left rail (merged across all connected
  * servers). The center is a full-width content pane where the still-original page
- * bodies (`HomePage`/`GuildHub`/`GuildPage`/`DMPage`) render unchanged in the
+ * bodies (`HomePage`/`GuildHomePage`/`GuildPage`/`DMPage`) render unchanged in the
  * `<Outlet/>` during the migration. The right `ContextPanel` is toggleable, not
  * docked — it mounts only when `uiStore.contextPanelMode` is set (single source
  * of truth), and collapses to an overlay on narrow widths (§6).

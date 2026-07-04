@@ -14,7 +14,7 @@ import { PrivacyPage } from './pages/PrivacyPage';
 // Lazy-loaded route surfaces keep the initial auth/server bootstrap bundle small.
 const AppShell = lazy(() => import('./pages/AppShell').then(m => ({ default: m.AppShell })));
 const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.HomePage })));
-const GuildHub = lazy(() => import('./pages/GuildHub').then(m => ({ default: m.GuildHub })));
+const GuildHomePage = lazy(() => import('./pages/GuildHomePage').then(m => ({ default: m.GuildHomePage })));
 const GuildPage = lazy(() => import('./pages/GuildPage').then(m => ({ default: m.GuildPage })));
 const GuildSettingsPage = lazy(() => import('./pages/GuildSettingsPage').then(m => ({ default: m.GuildSettingsPage })));
 const DMPage = lazy(() => import('./pages/DMPage').then(m => ({ default: m.DMPage })));
@@ -264,7 +264,7 @@ export default function App() {
       {/* Main app */}
       <Route path="/app" element={<ProtectedRoute>{lazyRoute(<AppShell />)}</ProtectedRoute>}>
         <Route index element={lazyRoute(<HomePage />)} />
-        <Route path="guilds/:guildId" element={lazyRoute(<GuildHub />)} />
+        <Route path="guilds/:guildId" element={lazyRoute(<GuildHomePage />)} />
         <Route path="guilds/:guildId/settings" element={lazyRoute(<GuildSettingsPage />)} />
         <Route path="guilds/:guildId/channels/:channelId" element={lazyRoute(<GuildPage />)} />
         <Route path="dms" element={lazyRoute(<DMPage />)} />

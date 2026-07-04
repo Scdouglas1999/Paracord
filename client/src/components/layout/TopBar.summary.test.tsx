@@ -22,16 +22,11 @@ vi.mock('framer-motion', async () => {
 });
 
 const mockUIState = vi.hoisted(() => ({
-  toggleMemberPanel: vi.fn(),
-  toggleEconomyPanel: vi.fn(),
-  sidebarOpen: true,
-  toggleSidebar: vi.fn(),
-  setSidebarCollapsed: vi.fn(),
-  memberPanelOpen: true,
-  economyPanelOpen: false,
+  contextPanelMode: null as string | null,
+  toggleContextPanelMode: vi.fn(),
+  sidebarCollapsed: false,
+  toggleSidebarCollapsed: vi.fn(),
   setCommandPaletteOpen: vi.fn(),
-  toggleSearchPanel: vi.fn(),
-  searchPanelOpen: false,
   connectionStatus: 'connected',
   connectionLatency: 42,
 }));

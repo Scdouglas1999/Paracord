@@ -1,11 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { MessageList } from '../../components/message/MessageList';
 import { MessageInput } from '../../components/message/MessageInput';
-import { ThreadPanel } from '../../components/message/ThreadPanel';
-import { SearchPanel } from '../../components/message/SearchPanel';
-import { GuildEconomyPanel } from '../../components/guild/GuildEconomyPanel';
-import { useChannelStore } from '../../stores/channelStore';
 import { useUIStore } from '../../stores/uiStore';
 import type { Channel, Message } from '../../types';
 
@@ -15,21 +10,27 @@ interface TextChannelViewProps {
   channelName: string;
   channel: Channel | undefined;
   channels: Channel[];
-  isPhoneLayout: boolean;
-  searchPanelOpen: boolean;
 }
 
+/**
+ * ChatView body for a text/thread channel (layout-spec §1 — full-width single
+ * pane). All message internals are reused untouched: `MessageList` + composer.
+ *
+ * The right-hand surfaces (search / pins / members / economy / threads) are no
+ * longer docked here — they live in the shell-owned `ContextPanel`, driven by
+ * `uiStore.contextPanelMode` and toggled from `TopBar`. Landing on a *thread*
+ * channel routes the active thread into the ContextPanel `threads` mode
+ * (layout-spec §2: `ThreadPanel` → ContextPanel) and shows the parent channel as
+ * read context in the main pane.
+ */
 export function TextChannelView({
   guildId,
   channelId,
   channelName,
   channel,
   channels,
-  isPhoneLayout,
-  searchPanelOpen,
 }: TextChannelViewProps) {
-  const navigate = useNavigate();
-  const economyPanelOpen = useUIStore((s) => s.economyPanelOpen);
+  const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
 
   // Clear the reply target when switching channels.
@@ -40,69 +41,52 @@ export function TextChannelView({
   const isThread = channel?.type === 6 || channel?.channel_type === 6;
   const parentChannelId = isThread ? channel?.parent_id ?? null : null;
   const parentChannel = parentChannelId ? channels.find((c) => c.id === parentChannelId) : null;
-  const showThreadSplit = Boolean(isThread && guildId && parentChannel);
+  const showThreadContext = Boolean(isThread && guildId && parentChannel);
 
-  const closeThread = () => {
-    useChannelStore.getState().selectChannel(parentChannel!.id);
-    navigate(`/app/guilds/${guildId}/channels/${parentChannel!.id}`);
-  };
+  // A thread channel surfaces its conversation in the ContextPanel `threads`
+  // mode (the ContextPanel derives the active thread from the current channel);
+  // auto-open it on entry so the thread is visible without an extra click.
+  useEffect(() => {
+    if (showThreadContext) {
+      setContextPanelMode('threads');
+    }
+  }, [showThreadContext, channelId, setContextPanelMode]);
+
+  if (showThreadContext) {
+    return (
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="panel-divider flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-2.5">
+            <span className="text-section uppercase text-text-muted">Parent channel</span>
+            <span className="text-label text-text-secondary">#{parentChannel?.name || 'unknown'}</span>
+          </div>
+          <MessageList channelId={parentChannel!.id} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-0 flex-1">
-      {showThreadSplit ? (
-        isPhoneLayout ? (
-          <ThreadPanel
-            guildId={guildId!}
-            threadChannelId={channelId}
-            threadName={channelName}
-            parentChannelName={parentChannel?.name || 'unknown'}
-            className="w-full border-l-0"
-            onClose={closeThread}
-          />
-        ) : (
-          <>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <div className="panel-divider flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-2.5">
-                <span className="text-section uppercase text-text-muted">Parent channel</span>
-                <span className="text-label text-text-secondary">#{parentChannel?.name || 'unknown'}</span>
-              </div>
-              <MessageList channelId={parentChannel!.id} />
-            </div>
-            <ThreadPanel
-              guildId={guildId!}
-              threadChannelId={channelId}
-              threadName={channelName}
-              parentChannelName={parentChannel?.name || 'unknown'}
-              className="w-[min(460px,42vw)] max-w-[40rem]"
-              onClose={closeThread}
-            />
-          </>
-        )
-      ) : (
-        <div className="flex min-w-0 flex-1 flex-col">
-          <MessageList
-            channelId={channelId}
-            onReply={(msg: Message) =>
-              setReplyingTo({
-                id: msg.id,
-                author: msg.author.username,
-                content: msg.content || '',
-              })
-            }
-          />
-          <MessageInput
-            channelId={channelId}
-            guildId={guildId}
-            channelName={channelName}
-            replyingTo={replyingTo}
-            onCancelReply={() => setReplyingTo(null)}
-          />
-        </div>
-      )}
-      {searchPanelOpen && !showThreadSplit && <SearchPanel />}
-      {!searchPanelOpen && !showThreadSplit && guildId && economyPanelOpen && (
-        <GuildEconomyPanel guildId={guildId} />
-      )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <MessageList
+          channelId={channelId}
+          onReply={(msg: Message) =>
+            setReplyingTo({
+              id: msg.id,
+              author: msg.author.username,
+              content: msg.content || '',
+            })
+          }
+        />
+        <MessageInput
+          channelId={channelId}
+          guildId={guildId}
+          channelName={channelName}
+          replyingTo={replyingTo}
+          onCancelReply={() => setReplyingTo(null)}
+        />
+      </div>
     </div>
   );
 }

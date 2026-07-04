@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import {
   AlertTriangle,
+  ChevronRight,
   Hash,
   Search,
   Sparkles,
@@ -12,6 +13,7 @@ import {
   HelpCircle,
   Volume2,
   MessageSquare,
+  MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
   Wifi,
@@ -21,25 +23,23 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { extractApiError } from '../../api/client';
 import { channelApi } from '../../api/channels';
 import { authApi } from '../../api/auth';
 import { useVoice } from '../../hooks/useVoice';
 import { useUIStore } from '../../stores/uiStore';
+import type { ContextPanelMode } from '../../stores/uiStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useReadStateStore } from '../../stores/readStateStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { toast } from '../../stores/toastStore';
-import type { Message, ReadState } from '../../types';
+import type { ReadState } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { useMobile } from '../../hooks/useMobile';
 import { getVersionedJson } from '../../lib/versionedStorage';
 import { TopBarOverlay } from './overlays/TopBarOverlay';
-import { SearchOverlay } from './overlays/SearchOverlay';
-import { PinnedMessagesOverlay } from './overlays/PinnedMessagesOverlay';
 import { InboxOverlay } from './overlays/InboxOverlay';
 import { HelpOverlay } from './overlays/HelpOverlay';
 
@@ -51,20 +51,33 @@ interface TopBarProps {
   isDM?: boolean;
   recipientName?: string;
   dmChannelId?: string;
+  /** Owning guild id — powers the breadcrumb chip → guild Home navigation. */
+  guildId?: string;
+  /** Owning guild name — the breadcrumb chip label ("GuildName /"). */
+  guildName?: string;
 }
 
-export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, recipientName, dmChannelId }: TopBarProps) {
-  const { channelId } = useParams();
-  const toggleMemberPanel = useUIStore((s) => s.toggleMemberPanel);
-  const toggleEconomyPanel = useUIStore((s) => s.toggleEconomyPanel);
-  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
-  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
-  const setSidebarCollapsed = useUIStore((s) => s.setSidebarCollapsed);
-  const memberPanelOpen = useUIStore((s) => s.memberPanelOpen);
-  const economyPanelOpen = useUIStore((s) => s.economyPanelOpen);
+export function TopBar({
+  channelName,
+  channelTopic,
+  isVoice,
+  isForum,
+  isDM,
+  recipientName,
+  dmChannelId,
+  guildId,
+  guildName,
+}: TopBarProps) {
+  const navigate = useNavigate();
+  const { guildId: paramGuildId, channelId } = useParams();
+  const resolvedGuildId = guildId ?? paramGuildId;
+
+  // contextPanelMode is the single source of truth for the right panel.
+  const contextPanelMode = useUIStore((s) => s.contextPanelMode);
+  const toggleContextPanelMode = useUIStore((s) => s.toggleContextPanelMode);
+  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
+  const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed);
   const setCommandPaletteOpen = useUIStore((s) => s.setCommandPaletteOpen);
-  const toggleSearchPanel = useUIStore((s) => s.toggleSearchPanel);
-  const searchPanelOpen = useUIStore((s) => s.searchPanelOpen);
   const connectionStatus = useUIStore((s) => s.connectionStatus);
   const connectionLatency = useUIStore((s) => s.connectionLatency);
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
@@ -102,7 +115,6 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
     }
   };
 
-  const [pins, setPins] = useState<Message[]>([]);
   const [showFollowManager, setShowFollowManager] = useState(false);
   const [followers, setFollowers] = useState<
     Array<{ id: string; target_channel_id: string; target_guild_id: string }>
@@ -110,8 +122,6 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
   const [followersLoading, setFollowersLoading] = useState(false);
   const [followError, setFollowError] = useState<string | null>(null);
   const [followBusyTargetId, setFollowBusyTargetId] = useState<string | null>(null);
-  const [showPins, setShowPins] = useState(false);
-  const [pinsError, setPinsError] = useState<string | null>(null);
   const [showInbox, setShowInbox] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
   const readStateRecord = useReadStateStore((s) => s.readStates);
@@ -125,7 +135,6 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
   const followDialogRef = useRef<HTMLDivElement>(null);
   const summaryDialogRef = useRef<HTMLDivElement>(null);
   const [mutedGuildIds, setMutedGuildIds] = useState<string[]>([]);
-  const isMobile = useMobile();
 
   useFocusTrap(followDialogRef as RefObject<HTMLDivElement | null>, showFollowManager, () => setShowFollowManager(false));
   useFocusTrap(summaryDialogRef as RefObject<HTMLDivElement | null>, showSummary, () => setShowSummary(false));
@@ -170,7 +179,6 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
         setCommandPaletteOpen(true);
       }
       if (event.key === 'Escape') {
-        setShowPins(false);
         setShowFollowManager(false);
         setShowInbox(false);
         setShowHelp(false);
@@ -204,19 +212,6 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
       window.removeEventListener('paracord-muted-guilds-updated', readMutedGuilds as EventListener);
     };
   }, []);
-
-  const openPins = async () => {
-    if (!channelId) return;
-    setPinsError(null);
-    try {
-      const { data } = await channelApi.getPins(channelId);
-      setPins(data);
-    } catch (err) {
-      setPins([]);
-      setPinsError(`Failed to load pinned messages: ${extractApiError(err)}`);
-    }
-    setShowPins(true);
-  };
 
   const openSummary = async () => {
     if (!channelId) return;
@@ -332,6 +327,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
       <Tooltip content={tooltip} side="bottom">
         <button
           aria-label={tooltip}
+          aria-pressed={active}
           onClick={onClick}
           disabled={disabled}
           className={cn(
@@ -351,37 +347,25 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
     </div>
   );
 
+  // Drives a ContextPanel mode off the single source of truth.
+  const panelToggle = (mode: Exclude<ContextPanelMode, null>) => () => toggleContextPanelMode(mode);
+
   const ChannelIcon = isVoice ? Volume2 : isForum ? MessageSquare : Hash;
+  const showBreadcrumb = !isDM && Boolean(resolvedGuildId) && Boolean(guildName);
 
   return (
     <div className="z-10 flex h-[3.25rem] w-full shrink-0 items-center justify-between gap-2 border-b border-border-subtle bg-bg-secondary px-3 sm:px-4">
-      {/* Left: channel info */}
+      {/* Left: breadcrumb + channel info */}
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-        {!isMobile && (
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
-            title={sidebarOpen ? 'Collapse channel sidebar' : 'Expand channel sidebar'}
-            aria-label={sidebarOpen ? 'Collapse channel sidebar' : 'Expand channel sidebar'}
-          >
-            {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-          </button>
-        )}
-        {isMobile && (
-          <button
-            type="button"
-            onClick={() => {
-              if (!sidebarOpen) toggleSidebar();
-              setSidebarCollapsed(false);
-            }}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
-            title="Open sidebar"
-            aria-label="Open sidebar"
-          >
-            <PanelLeftOpen size={16} />
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={toggleSidebarCollapsed}
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button>
         {isDM ? (
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-text-on-accent">
@@ -394,7 +378,21 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
             <span className="hidden truncate text-label text-text-secondary sm:block">Direct message</span>
           </div>
         ) : (
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            {showBreadcrumb && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/app/guilds/${resolvedGuildId}`)}
+                  className="hidden max-w-[10rem] shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)] sm:inline-flex"
+                  aria-label={`Go to ${guildName} home`}
+                  title={`Go to ${guildName} home`}
+                >
+                  <span className="truncate">{guildName}</span>
+                </button>
+                <ChevronRight size={14} className="hidden shrink-0 text-text-muted sm:block" aria-hidden />
+              </>
+            )}
             <ChannelIcon size={18} className="shrink-0 text-channel-icon" />
             <span className="truncate text-[15px] font-semibold text-text-primary">
               {channelName || 'channel'}
@@ -411,7 +409,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
         )}
       </div>
 
-      {/* Right: action buttons */}
+      {/* Right: context toggles + anchored popovers */}
       <div className="flex shrink-0 items-center gap-0.5">
         {systemAudioCaptureActive && (
           <Tooltip content="System audio capture is active" side="bottom">
@@ -443,8 +441,8 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
         )}
         <TopBarIcon
           icon={Search}
-          onClick={() => toggleSearchPanel()}
-          active={searchPanelOpen}
+          onClick={panelToggle('search')}
+          active={contextPanelMode === 'search'}
           tooltip={channelId ? 'Search Messages' : 'Select a channel to search'}
           disabled={!channelId}
         />
@@ -457,10 +455,19 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
         />
         <TopBarIcon
           icon={Pin}
-          onClick={() => void openPins()}
+          onClick={panelToggle('pins')}
+          active={contextPanelMode === 'pins'}
           tooltip={channelId ? 'Pinned Messages' : 'Select a channel to view pins'}
           disabled={!channelId}
         />
+        {!isDM && !isVoice && (
+          <TopBarIcon
+            icon={MessagesSquare}
+            onClick={panelToggle('threads')}
+            active={contextPanelMode === 'threads'}
+            tooltip="Threads"
+          />
+        )}
         {isAnnouncementChannel && (
           <TopBarIcon
             icon={Share2}
@@ -474,14 +481,14 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
           <>
             <TopBarIcon
               icon={TrendingUp}
-              onClick={() => toggleEconomyPanel()}
-              active={economyPanelOpen}
+              onClick={panelToggle('economy')}
+              active={contextPanelMode === 'economy'}
               tooltip="Guild Leaderboard"
             />
             <TopBarIcon
               icon={Users}
-              onClick={() => toggleMemberPanel()}
-              active={memberPanelOpen}
+              onClick={panelToggle('members')}
+              active={contextPanelMode === 'members'}
               tooltip="Member List"
             />
           </>
@@ -514,15 +521,6 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
           </Tooltip>
         )}
       </div>
-
-      {/* Search overlay */}
-      <SearchOverlay
-        open={searchPanelOpen}
-        onClose={() => toggleSearchPanel()}
-        channelId={channelId}
-        channelName={channelName}
-        allChannels={allChannels}
-      />
 
       {/* Summary overlay */}
       <TopBarOverlay
@@ -565,17 +563,6 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
           </>
         )}
       </TopBarOverlay>
-
-      {/* Pins overlay */}
-      <PinnedMessagesOverlay
-        open={showPins}
-        onClose={() => setShowPins(false)}
-        channelId={channelId}
-        pins={pins}
-        onPinsChange={setPins}
-        error={pinsError}
-        onErrorChange={setPinsError}
-      />
 
       {/* Channel follows overlay */}
       <TopBarOverlay

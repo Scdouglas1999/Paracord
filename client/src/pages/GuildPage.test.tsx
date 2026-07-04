@@ -7,6 +7,7 @@ import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { useUIStore } from '../stores/uiStore';
+import { useVoiceStore } from '../stores/voiceStore';
 import type { Channel } from '../types';
 import { GuildPage } from './GuildPage';
 
@@ -105,7 +106,7 @@ describe('GuildPage composition shell', () => {
     useGuildStore.setState({ guilds: [{ id: GUILD_ID, name: 'Test Guild' }] as never });
     useMemberStore.setState({ membersLoaded: { [GUILD_ID]: true } });
     useAuthStore.setState({ user: { id: 'me', username: 'Me' } as never });
-    useUIStore.setState({ searchPanelOpen: false });
+    useUIStore.setState({ contextPanelMode: null });
   });
 
   it('renders the loading screen while channels load', () => {
@@ -133,6 +134,19 @@ describe('GuildPage composition shell', () => {
 
     expect(screen.getByTestId('voice-stage')).toBeInTheDocument();
     expect(screen.queryByTestId('text-view')).not.toBeInTheDocument();
+  });
+
+  it('preserves a RoomCard Watch handoff (watchedStreamerId) when landing on the voice channel', () => {
+    // CHAT-4 handoff seam: RoomCard.Watch sets voiceStore.watchedStreamerId THEN
+    // navigates to the voice channel route. GuildPage must NOT clear it on the
+    // initial mount — only when the user actually switches channels.
+    useVoiceStore.setState({ watchedStreamerId: 'streamer-1' });
+    seedChannels([makeChannel('vc', 2)]);
+
+    renderGuildPage('vc');
+
+    expect(screen.getByTestId('voice-stage')).toBeInTheDocument();
+    expect(useVoiceStore.getState().watchedStreamerId).toBe('streamer-1');
   });
 
   it('renders the forum section for forum channels', () => {

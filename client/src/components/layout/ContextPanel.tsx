@@ -2,9 +2,11 @@ import { useCallback } from 'react';
 import type { KeyboardEvent } from 'react';
 import { Coins, Users, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { Message } from '../../types';
+import type { Channel, Message } from '../../types';
 import { useUIStore } from '../../stores/uiStore';
+import { useChannelStore } from '../../stores/channelStore';
 import { MemberList } from './MemberList';
+import { GroupDmMembersPanel } from './GroupDmMembersPanel';
 import { ThreadPanel } from '../message/ThreadPanel';
 import { PinnedMessagesOverlay } from './overlays/PinnedMessagesOverlay';
 import { SearchOverlay } from './overlays/SearchOverlay';
@@ -43,6 +45,32 @@ const PANEL_HEADERS: Record<'members' | 'economy', { title: string; icon: Lucide
   members: { title: 'Members', icon: Users },
   economy: { title: 'Server Economy', icon: Coins },
 };
+
+const isThreadChannel = (channel: Channel | undefined): boolean =>
+  channel?.type === 6 || channel?.channel_type === 6;
+
+const isGroupDmChannel = (channel: Channel | undefined): boolean =>
+  channel?.type === 3 || channel?.channel_type === 3;
+
+/**
+ * Derive the active-thread descriptor from the current channel when the ChatView
+ * has not supplied one explicitly. A thread channel (type 6) surfaces its own
+ * conversation in the `threads` mode, with its parent channel name for context.
+ */
+function deriveActiveThread(
+  channelId: string | null | undefined,
+  channelsById: Record<string, Channel>,
+): ContextPanelThread | null {
+  if (!channelId) return null;
+  const channel = channelsById[channelId];
+  if (!isThreadChannel(channel)) return null;
+  const parent = channel?.parent_id ? channelsById[channel.parent_id] : undefined;
+  return {
+    threadChannelId: channel!.id,
+    threadName: channel!.name || 'Thread',
+    parentChannelName: parent?.name || 'unknown',
+  };
+}
 
 const CLOSE_BUTTON =
   'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-text-muted ' +
@@ -83,6 +111,7 @@ export function ContextPanel({
 }: ContextPanelProps) {
   const mode = useUIStore((s) => s.contextPanelMode);
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
+  const channelsById = useChannelStore((s) => s.channelsById);
 
   const close = useCallback(() => setContextPanelMode(null), [setContextPanelMode]);
 
@@ -126,10 +155,24 @@ export function ContextPanel({
     );
   }
 
+  // Group-DM recipients live in the shared `members` surface (layout-spec §2).
+  // The panel is self-chromed (own header + Add + close), so short-circuit before
+  // the guild MemberList chrome below.
+  if (mode === 'members') {
+    const activeChannel = channelId ? channelsById[channelId] : undefined;
+    if (isGroupDmChannel(activeChannel)) {
+      return <GroupDmMembersPanel channelId={channelId as string} onClose={close} />;
+    }
+  }
+
   // ThreadPanel is a self-chromed inline panel (its own header + close). Give it
-  // the panel width and let its own left hairline serve as the divider.
+  // the panel width and let its own left hairline serve as the divider. The
+  // active thread is supplied by the ChatView or derived from the current
+  // (thread) channel.
   if (mode === 'threads') {
-    if (!activeThread || !guildId) return null;
+    const thread = activeThread ?? deriveActiveThread(channelId, channelsById);
+    const threadGuildId = guildId ?? (channelId ? channelsById[channelId]?.guild_id ?? null : null);
+    if (!thread || !threadGuildId) return null;
     return (
       <div
         className="flex h-full shrink-0 flex-col"
@@ -138,10 +181,10 @@ export function ContextPanel({
         data-mode="threads"
       >
         <ThreadPanel
-          guildId={guildId}
-          threadChannelId={activeThread.threadChannelId}
-          threadName={activeThread.threadName}
-          parentChannelName={activeThread.parentChannelName}
+          guildId={threadGuildId}
+          threadChannelId={thread.threadChannelId}
+          threadName={thread.threadName}
+          parentChannelName={thread.parentChannelName}
           onClose={close}
         />
       </div>
