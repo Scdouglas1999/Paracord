@@ -19,6 +19,15 @@ infrastructure to wire up.
   zero configuration and no secrets to enter; the server generates and persists
   everything it needs into the data volume on first run. `.env` is entirely
   optional and only holds overrides.
+- **New "Emerald Commons" UI refresh.** The desktop client moved to a single
+  authoritative design language — a mature, expressive dark theme built on
+  warm-neutral surfaces with a real elevation ramp, a calibrated emerald primary
+  accent (with a rationed teal secondary) spent only on meaning, a display face on
+  headings, and restrained motion. Every accent, surface, and semantic color is a
+  runtime CSS token (`client/src/styles/tokens.css`, applied by `useTheme.ts`), so
+  components consume tokens instead of hard-coded hex. Ships with dark (default),
+  light, AMOLED, and high-contrast themes, plus custom-CSS support. See
+  [docs/design-spec.md](docs/design-spec.md) for the full contract.
 - **New operator docs.** A one-command quickstart in the README, a step-by-step
   [Getting Started](docs/getting-started.md) walkthrough (including native-vs-LiveKit
   guidance and the TLS/WebTransport nuance), and production

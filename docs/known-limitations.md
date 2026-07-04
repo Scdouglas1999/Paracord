@@ -4,7 +4,7 @@ This page documents support boundaries for the v0.9.0 release candidate. Items h
 
 ## Native Media
 
-- Native QUIC/WebTransport media is opt-in with `[voice] native_media = true`; LiveKit remains the default voice/video path.
+- Native QUIC/WebTransport media is the default voice/video path (`[voice] native_media = true`). LiveKit is an optional fallback for legacy WebRTC interop or SFU-scale rooms; set `native_media = false` and configure LiveKit to use it.
 - Desktop native input and output device switching both work at runtime; switching the speaker/output device rebinds the active playback sinks in place.
 - Native video receive routes each remote track to its own per-SSRC decoder. VP9 frames are decoded to raw I420 in the Tauri binary; codecs without a native backend (AV1/H.264) are passed through encoded for the frontend to decode.
 - Native media subscription negotiation is wired end-to-end: subscribe/unsubscribe control messages are honored by the relay, so a client only receives the tracks it asks for.
@@ -13,7 +13,7 @@ This page documents support boundaries for the v0.9.0 release candidate. Items h
 ## Platform Capture Support
 
 - Windows screen capture and system audio are the primary supported native capture path for this release candidate.
-- Linux capture depends on desktop portal/PulseAudio availability and should be validated on the target distribution before publishing Linux artifacts.
+- Linux screen-share capture is functional: the PipeWire/portal encoding pipeline handles non-16:9 and odd capture dimensions and honors portal chunk offsets/stride. It still depends on desktop portal/PulseAudio availability, so validate it on the target distribution — and run a live multi-peer call/stream test — before publishing Linux artifacts.
 - macOS system audio capture is not implemented; the app falls back to browser-style capture behavior where available.
 
 ## Federation

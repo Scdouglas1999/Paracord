@@ -89,6 +89,8 @@ On February 9th, 2026, Discord's CEO announced that they would be starting to ro
 
 Guilds, channels, and DMs with the full messaging experience — send, edit, delete, reply, pin, react with emoji, attach files via drag-and-drop, and see who's typing in real-time. Images embed inline with a lightbox viewer (zoom, pan, keyboard navigation), files show name and size, and messages group by author just like you'd expect. Full-text message search with author and date filters. Markdown toolbar with keyboard shortcuts (Ctrl+B, Ctrl+I, etc.) and right-click context menus for quick actions.
 
+<!-- SCREENSHOT REFRESH NEEDED before v1.0.0 tag: docs/screenshots/*.png predate the
+     Emerald Commons UI refresh and must be recaptured against the current client. -->
 ![Paracord text chat screenshot](docs/screenshots/text-chat-current.png)
 
 ### Threads
@@ -203,7 +205,12 @@ Connect to multiple Paracord servers at once. A server rail in the sidebar lets 
 
 ### Appearance
 
-Dark, light, and AMOLED black themes. Compact or cozy message density. Custom CSS support. The UI is a command palette shortcut away from anywhere (Ctrl+K).
+The v1.0 client ships the "Emerald Commons" design language — a mature, expressive
+look built on warm-neutral dark surfaces with a real elevation ramp and a
+calibrated emerald accent (rationed teal secondary) spent only on meaning. Every
+color is a runtime CSS token, so themes swap cleanly: dark (default), light,
+AMOLED black, and high-contrast. Compact or cozy message density, custom CSS
+support, and the UI is a command palette shortcut away from anywhere (Ctrl+K).
 
 ### Coming Soon
 
@@ -284,7 +291,7 @@ Once running, the Docker stack serves plain **HTTP** at `http://<server-ip>:8090
 ## Configuration
 
 The server auto-generates `config/paracord.toml` on first run with:
-- Random JWT secret and LiveKit API credentials
+- A random JWT secret (native QUIC media is on by default; LiveKit credentials default to an inert local value and are only used if you opt into LiveKit)
 - SQLite database in `./data/`
 - Local upload storage in `./data/uploads/`
 - TLS certificates in `./data/certs/`
@@ -682,7 +689,7 @@ paracord/
 |   |-- src-tauri/          # Native Rust backend (system audio, TLS, signed updater support)
 |   `-- e2e/                # Playwright E2E tests
 |-- docs/                   # Design specs, security docs, API contracts
-`-- docker-compose.yml      # Docker deployment with LiveKit
+`-- docker-compose.yml      # Docker deployment (native media default; optional LiveKit profile)
 ```
 
 ## License
