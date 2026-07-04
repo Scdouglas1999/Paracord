@@ -12,7 +12,7 @@ import { TermsPage } from './pages/TermsPage';
 import { PrivacyPage } from './pages/PrivacyPage';
 
 // Lazy-loaded route surfaces keep the initial auth/server bootstrap bundle small.
-const AppLayout = lazy(() => import('./pages/AppLayout').then(m => ({ default: m.AppLayout })));
+const AppShell = lazy(() => import('./pages/AppShell').then(m => ({ default: m.AppShell })));
 const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.HomePage })));
 const GuildHub = lazy(() => import('./pages/GuildHub').then(m => ({ default: m.GuildHub })));
 const GuildPage = lazy(() => import('./pages/GuildPage').then(m => ({ default: m.GuildPage })));
@@ -262,7 +262,7 @@ export default function App() {
       <Route path="/privacy" element={<PrivacyPage />} />
 
       {/* Main app */}
-      <Route path="/app" element={<ProtectedRoute>{lazyRoute(<AppLayout />)}</ProtectedRoute>}>
+      <Route path="/app" element={<ProtectedRoute>{lazyRoute(<AppShell />)}</ProtectedRoute>}>
         <Route index element={lazyRoute(<HomePage />)} />
         <Route path="guilds/:guildId" element={lazyRoute(<GuildHub />)} />
         <Route path="guilds/:guildId/settings" element={lazyRoute(<GuildSettingsPage />)} />

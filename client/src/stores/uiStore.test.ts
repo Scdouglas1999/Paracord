@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useUIStore } from './uiStore';
+import {
+  useUIStore,
+  SIDEBAR_WIDTH_MIN,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_DEFAULT,
+} from './uiStore';
 
 describe('uiStore', () => {
   beforeEach(() => {
@@ -10,7 +15,9 @@ describe('uiStore', () => {
       customCss: '',
       serverRestarting: false,
       commandPaletteOpen: false,
-      memberPanelOpen: true,
+      contextPanelMode: null,
+      sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
+      memberPanelOpen: false,
       economyPanelOpen: false,
       sidebarCollapsed: false,
       searchPanelOpen: false,
@@ -23,6 +30,8 @@ describe('uiStore', () => {
     expect(state.theme).toBe('dark');
     expect(state.customCss).toBe('');
     expect(state.searchPanelOpen).toBe(false);
+    expect(state.contextPanelMode).toBeNull();
+    expect(state.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
   });
 
   it('toggles sidebar', () => {
@@ -67,18 +76,22 @@ describe('uiStore', () => {
     expect(useUIStore.getState().commandPaletteOpen).toBe(false);
   });
 
-  it('toggles member panel', () => {
-    useUIStore.getState().toggleMemberPanel();
-    expect(useUIStore.getState().memberPanelOpen).toBe(false);
+  it('toggles member panel (open from closed default, then close)', () => {
     useUIStore.getState().toggleMemberPanel();
     expect(useUIStore.getState().memberPanelOpen).toBe(true);
+    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    useUIStore.getState().toggleMemberPanel();
+    expect(useUIStore.getState().memberPanelOpen).toBe(false);
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
   });
 
   it('toggles economy panel', () => {
     useUIStore.getState().toggleEconomyPanel();
     expect(useUIStore.getState().economyPanelOpen).toBe(true);
+    expect(useUIStore.getState().contextPanelMode).toBe('economy');
     useUIStore.getState().toggleEconomyPanel();
     expect(useUIStore.getState().economyPanelOpen).toBe(false);
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
   });
 
   it('toggles sidebar collapsed', () => {
@@ -98,14 +111,100 @@ describe('uiStore', () => {
   it('toggles search panel', () => {
     useUIStore.getState().toggleSearchPanel();
     expect(useUIStore.getState().searchPanelOpen).toBe(true);
+    expect(useUIStore.getState().contextPanelMode).toBe('search');
     useUIStore.getState().toggleSearchPanel();
     expect(useUIStore.getState().searchPanelOpen).toBe(false);
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
   });
 
   it('sets search panel open', () => {
     useUIStore.getState().setSearchPanelOpen(true);
     expect(useUIStore.getState().searchPanelOpen).toBe(true);
+    expect(useUIStore.getState().contextPanelMode).toBe('search');
     useUIStore.getState().setSearchPanelOpen(false);
     expect(useUIStore.getState().searchPanelOpen).toBe(false);
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
+  });
+
+  // --- contextPanelMode: single source of truth ---
+
+  it('setContextPanelMode drives the mode and mirrored booleans', () => {
+    useUIStore.getState().setContextPanelMode('members');
+    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    expect(useUIStore.getState().memberPanelOpen).toBe(true);
+    expect(useUIStore.getState().economyPanelOpen).toBe(false);
+    expect(useUIStore.getState().searchPanelOpen).toBe(false);
+
+    useUIStore.getState().setContextPanelMode('threads');
+    expect(useUIStore.getState().contextPanelMode).toBe('threads');
+    // threads/pins have no mirrored boolean; all three stay false
+    expect(useUIStore.getState().memberPanelOpen).toBe(false);
+    expect(useUIStore.getState().economyPanelOpen).toBe(false);
+    expect(useUIStore.getState().searchPanelOpen).toBe(false);
+
+    useUIStore.getState().setContextPanelMode(null);
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
+  });
+
+  it('toggleContextPanelMode closes when re-toggling the same mode', () => {
+    useUIStore.getState().toggleContextPanelMode('pins');
+    expect(useUIStore.getState().contextPanelMode).toBe('pins');
+    useUIStore.getState().toggleContextPanelMode('pins');
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
+  });
+
+  it('toggleContextPanelMode switches directly between modes', () => {
+    useUIStore.getState().toggleContextPanelMode('members');
+    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    useUIStore.getState().toggleContextPanelMode('search');
+    expect(useUIStore.getState().contextPanelMode).toBe('search');
+    expect(useUIStore.getState().memberPanelOpen).toBe(false);
+    expect(useUIStore.getState().searchPanelOpen).toBe(true);
+  });
+
+  it('only one panel is ever open (single source of truth)', () => {
+    useUIStore.getState().setMemberPanelOpen(true);
+    expect(useUIStore.getState().memberPanelOpen).toBe(true);
+    // Opening economy via the legacy adapter must close members
+    useUIStore.getState().setEconomyPanelOpen(true);
+    expect(useUIStore.getState().economyPanelOpen).toBe(true);
+    expect(useUIStore.getState().memberPanelOpen).toBe(false);
+    expect(useUIStore.getState().contextPanelMode).toBe('economy');
+  });
+
+  it('legacy setMemberPanelOpen adapter drives contextPanelMode', () => {
+    useUIStore.getState().setMemberPanelOpen(true);
+    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    useUIStore.getState().setMemberPanelOpen(false);
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
+    expect(useUIStore.getState().memberPanelOpen).toBe(false);
+  });
+
+  // --- sidebarWidth: clamp + persist ---
+
+  it('sets sidebar width within bounds', () => {
+    useUIStore.getState().setSidebarWidth(320);
+    expect(useUIStore.getState().sidebarWidth).toBe(320);
+  });
+
+  it('clamps sidebar width to the token range', () => {
+    useUIStore.getState().setSidebarWidth(9999);
+    expect(useUIStore.getState().sidebarWidth).toBe(SIDEBAR_WIDTH_MAX);
+    useUIStore.getState().setSidebarWidth(0);
+    expect(useUIStore.getState().sidebarWidth).toBe(SIDEBAR_WIDTH_MIN);
+    useUIStore.getState().setSidebarWidth(Number.NaN);
+    expect(useUIStore.getState().sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
+  });
+
+  it('persists contextPanelMode, sidebarWidth and sidebarCollapsed', () => {
+    useUIStore.getState().setContextPanelMode('members');
+    useUIStore.getState().setSidebarWidth(360);
+    useUIStore.getState().setSidebarCollapsed(true);
+    const raw = localStorage.getItem('ui-storage');
+    expect(raw).toBeTruthy();
+    const persisted = JSON.parse(raw as string).state;
+    expect(persisted.contextPanelMode).toBe('members');
+    expect(persisted.sidebarWidth).toBe(360);
+    expect(persisted.sidebarCollapsed).toBe(true);
   });
 });

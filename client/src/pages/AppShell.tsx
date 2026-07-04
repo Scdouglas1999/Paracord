@@ -1,0 +1,265 @@
+import { useCallback, useEffect, useRef } from 'react';
+import { Outlet, useLocation, useParams } from 'react-router-dom';
+import { AnimatePresence, motion, MotionConfig } from 'framer-motion';
+import { cn } from '../lib/utils';
+import { UnifiedSidebar } from '../components/layout/sidebar/UnifiedSidebar';
+import { ContextPanel } from '../components/layout/ContextPanel';
+import { CommandPalette } from '../components/layout/CommandPalette';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { MiniVoiceBar } from '../components/voice/MiniVoiceBar';
+import { MobileBottomNav } from '../components/layout/MobileBottomNav';
+import { useUIStore } from '../stores/uiStore';
+import { useVoiceStore } from '../stores/voiceStore';
+import { useKeyboardNavigation } from '../hooks/useKeyboardNavigation';
+import { useSwipeGesture } from '../hooks/useSwipeGesture';
+import { useMobile } from '../hooks/useMobile';
+import { SettingsPage } from './SettingsPage';
+import { GuildSettingsPage } from './GuildSettingsPage';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+
+/**
+ * AppShell — the "Rooms + Unified Stream" frame (layout-spec §1, §4, §5, §6).
+ *
+ * Replaces the old two-rail Discord skeleton (`Sidebar` guild rail +
+ * `ChannelSidebar` channel column + docked `MemberList`) with a two-zone shell:
+ *
+ *   [ UnifiedSidebar ]  [ <main><Outlet/></main> ]  [ ContextPanel? ]
+ *
+ * The left `UnifiedSidebar` is the single left rail (merged across all connected
+ * servers). The center is a full-width content pane where the still-original page
+ * bodies (`HomePage`/`GuildHub`/`GuildPage`/`DMPage`) render unchanged in the
+ * `<Outlet/>` during the migration. The right `ContextPanel` is toggleable, not
+ * docked — it mounts only when `uiStore.contextPanelMode` is set (single source
+ * of truth), and collapses to an overlay on narrow widths (§6).
+ *
+ * `MotionConfig reducedMotion="user"` drops transform-based enters for users who
+ * ask for reduced motion while keeping opacity fades (design-spec §5, §8).
+ */
+export function AppShell() {
+  useKeyboardNavigation();
+
+  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
+  const setSidebarCollapsed = useUIStore((s) => s.setSidebarCollapsed);
+  const contextPanelMode = useUIStore((s) => s.contextPanelMode);
+  const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
+  const voiceConnected = useVoiceStore((s) => s.connected);
+  const voiceChannelId = useVoiceStore((s) => s.channelId);
+  const location = useLocation();
+  const { guildId, channelId } = useParams();
+
+  const userSettingsOpen = useUIStore((s) => s.userSettingsOpen);
+  const guildSettingsId = useUIStore((s) => s.guildSettingsId);
+  const setUserSettingsOpen = useUIStore((s) => s.setUserSettingsOpen);
+  const setGuildSettingsId = useUIStore((s) => s.setGuildSettingsId);
+  const userSettingsDialogRef = useRef<HTMLDivElement>(null);
+  const guildSettingsDialogRef = useRef<HTMLDivElement>(null);
+  const closeUserSettings = useCallback(() => setUserSettingsOpen(false), [setUserSettingsOpen]);
+  const closeGuildSettings = useCallback(() => setGuildSettingsId(null), [setGuildSettingsId]);
+
+  useFocusTrap(userSettingsDialogRef, userSettingsOpen, closeUserSettings);
+  useFocusTrap(guildSettingsDialogRef, Boolean(guildSettingsId), closeGuildSettings);
+
+  const isMobile = useMobile();
+
+  // On mount / breakpoint change, collapse the sidebar on mobile so it starts as
+  // a hidden overlay rather than eating the viewport (layout-spec §6).
+  useEffect(() => {
+    setSidebarCollapsed(isMobile);
+  }, [isMobile, setSidebarCollapsed]);
+
+  // Mobile swipe gestures (§6): right from the left edge opens the sidebar overlay;
+  // left from the right edge opens the ContextPanel in `members` mode (mirrors the
+  // old member-panel gesture).
+  useSwipeGesture(
+    {
+      onSwipeRight: () => setSidebarCollapsed(false),
+      onSwipeLeft: () => setContextPanelMode('members'),
+    },
+    isMobile,
+  );
+
+  // Settings full-page routes (`/app/admin`, guild settings) keep their internal
+  // padding; the shell chrome (sidebar/context panel) stays present around them —
+  // the Unified Sidebar is now universal navigation.
+  const isSettingsRoute =
+    location.pathname === '/app/admin'
+    || /^\/app\/guilds\/[^/]+\/settings$/.test(location.pathname);
+
+  // Mobile persistent call surface: the sidebar CallDock is unreachable while the
+  // overlay sidebar is closed, so the mobile bottom dock stays mounted whenever
+  // connected and not already on the voice channel's page (§6).
+  const isOnVoiceChannel = voiceChannelId
+    ? location.pathname.includes(`/channels/${voiceChannelId}`)
+    : false;
+  const showMiniVoiceBar = isMobile && voiceConnected && !isOnVoiceChannel;
+
+  const showContextPanel = contextPanelMode !== null;
+  const showSidebarOverlay = isMobile && !sidebarCollapsed;
+
+  // Emerald Commons elevation ramp (design-spec §1.1, kill-list #7): the whole
+  // authenticated app lives inside a single surface ramp — `--bg-tertiary` base,
+  // the raised `--bg-secondary` sidebar / context panel separated by 1px hairline
+  // dividers, and the `--bg-primary` main canvas.
+  const modalEnter = { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const };
+
+  return (
+    <MotionConfig reducedMotion="user">
+      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-bg-tertiary text-text-primary">
+        {/* Skip-to-content for keyboard/screen-reader users */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-sm focus:bg-accent-primary focus:px-4 focus:py-2 focus:text-label focus:font-semibold focus:text-text-on-accent focus:outline-none focus:[box-shadow:var(--focus-ring)]"
+        >
+          Skip to content
+        </a>
+
+        <div className="flex min-h-0 flex-1">
+          {/* Left rail — Unified Sidebar. Desktop renders inline (self-collapsing
+              to the 64px icon rail); mobile renders it as an overlay below. */}
+          {!isMobile && <UnifiedSidebar />}
+
+          <main
+            id="main-content"
+            className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary"
+          >
+            <div className={cn('min-h-0 w-full flex-1 overflow-hidden', isSettingsRoute && 'p-3')}>
+              <Outlet />
+            </div>
+            <AnimatePresence>
+              {showMiniVoiceBar && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                  className="shrink-0 overflow-hidden border-t border-border-subtle"
+                >
+                  <MiniVoiceBar />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </main>
+
+          {/* Right rail — ContextPanel (desktop inline; toggleable, not docked). */}
+          {!isMobile && showContextPanel && (
+            <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} />
+          )}
+        </div>
+
+        {/* Mobile: Unified Sidebar as a left overlay (§6 — full overlay, never the
+            64px rail on mobile). */}
+        <AnimatePresence>
+          {showSidebarOverlay && (
+            <motion.div
+              className="fixed inset-0 z-[80] flex md:hidden modal-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              onClick={() => setSidebarCollapsed(true)}
+            >
+              <motion.div
+                className="h-full max-w-[88vw] overflow-hidden shadow-xl"
+                initial={{ x: -24, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: -24, opacity: 0 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <UnifiedSidebar />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Mobile: ContextPanel as a right overlay (§6 — default closed). */}
+        <AnimatePresence>
+          {isMobile && showContextPanel && (
+            <motion.div
+              className="fixed inset-0 z-[80] flex justify-end md:hidden modal-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              onClick={() => setContextPanelMode(null)}
+            >
+              <motion.div
+                className="h-full max-w-[88vw] overflow-hidden shadow-xl"
+                initial={{ x: 24, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: 24, opacity: 0 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {isMobile && <MobileBottomNav />}
+
+        <CommandPalette />
+        <ConfirmDialog />
+
+        {/* Windowed settings overlays — spec modal enter (§4/§5): backdrop fade,
+            surface scale .96→1 + rise, 240ms ease-out. */}
+        <AnimatePresence>
+          {userSettingsOpen && (
+            <motion.div
+              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              onClick={closeUserSettings}
+            >
+              <motion.div
+                ref={userSettingsDialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label="User settings"
+                tabIndex={-1}
+                initial={{ scale: 0.96, opacity: 0, y: 8 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.96, opacity: 0, y: 8 }}
+                transition={modalEnter}
+                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden rounded-lg shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <SettingsPage />
+              </motion.div>
+            </motion.div>
+          )}
+
+          {guildSettingsId && (
+            <motion.div
+              className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-8 md:p-12 lg:p-20 backdrop-blur-md modal-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              onClick={closeGuildSettings}
+            >
+              <motion.div
+                ref={guildSettingsDialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Server settings"
+                tabIndex={-1}
+                initial={{ scale: 0.96, opacity: 0, y: 8 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.96, opacity: 0, y: 8 }}
+                transition={modalEnter}
+                className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden rounded-lg shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <GuildSettingsPage />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </MotionConfig>
+  );
+}

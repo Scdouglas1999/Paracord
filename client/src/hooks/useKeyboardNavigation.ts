@@ -47,8 +47,9 @@ function matchesKeybind(e: KeyboardEvent, keybind: string | undefined): boolean 
  * - Ctrl+Alt+Up / Ctrl+Alt+Down: switch previous/next guild
  * - Ctrl+, : open user settings
  * - Ctrl+Shift+, : open current guild settings
- * - Ctrl+B: toggle server dock
- * - Escape: close open panels (command palette)
+ * - Ctrl+B: toggle Unified Sidebar collapse
+ * - ArrowUp/Down + Home/End: roving-tabindex nav within the sidebar row list
+ * - Escape: Command Palette → ContextPanel → narrow sidebar overlay (§5 precedence)
  * - Configurable voice keybinds (default: Ctrl+Shift+M = mute, Ctrl+Shift+D = deafen)
  */
 export function useKeyboardNavigation() {
@@ -76,7 +77,10 @@ export function useKeyboardNavigation() {
         target.tagName === 'SELECT' ||
         target.isContentEditable;
 
-      // -- Escape: close panels regardless of focus --
+      // -- Escape: close panels regardless of focus (layout-spec §5 precedence) --
+      // Command Palette → ContextPanel (contextPanelMode) → narrow sidebar overlay.
+      // Settings overlays keep their own Esc handler (useFocusTrap), so we defer to
+      // them by not swallowing Escape here.
       if (e.key === 'Escape') {
         const ui = useUIStore.getState();
         if (ui.commandPaletteOpen) {
@@ -84,18 +88,8 @@ export function useKeyboardNavigation() {
           e.preventDefault();
           return;
         }
-        if (ui.searchPanelOpen) {
-          ui.setSearchPanelOpen(false);
-          e.preventDefault();
-          return;
-        }
-        if (ui.economyPanelOpen) {
-          ui.setEconomyPanelOpen(false);
-          e.preventDefault();
-          return;
-        }
-        if (ui.memberPanelOpen) {
-          ui.setMemberPanelOpen(false);
+        if (ui.contextPanelMode !== null) {
+          ui.setContextPanelMode(null);
           e.preventDefault();
           return;
         }
@@ -112,10 +106,10 @@ export function useKeyboardNavigation() {
         return;
       }
 
-      // -- Ctrl+B: toggle dock --
+      // -- Ctrl+B: toggle sidebar collapse (layout-spec §5) --
       if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toUpperCase() === 'B') {
         e.preventDefault();
-        useUIStore.getState().toggleDockPinned();
+        useUIStore.getState().toggleSidebarCollapsed();
         return;
       }
 
@@ -134,6 +128,40 @@ export function useKeyboardNavigation() {
           useUIStore.getState().setGuildSettingsId(currentGuildId);
         }
         return;
+      }
+
+      // -- Sidebar roving-tabindex navigation (layout-spec §5) --
+      // When focus is inside the Unified Sidebar's flat row list (Needs-you →
+      // Pinned → Recent → Spaces, exposed via [data-nav-index] rows inside the
+      // [data-roving-container]), ArrowUp/Down move between rows, Home/End jump to
+      // the ends. Enter/Space fall through to the row's native <button> activation.
+      if (
+        (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Home' || e.key === 'End')
+        && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey
+        && typeof document !== 'undefined'
+      ) {
+        const container = document.querySelector('[data-roving-container]');
+        const active = document.activeElement as HTMLElement | null;
+        if (container && active && container.contains(active)) {
+          const rows = Array.from(
+            container.querySelectorAll<HTMLElement>('[data-nav-index]'),
+          );
+          if (rows.length === 0) return;
+          const currentIndex = rows.findIndex((r) => r === active || r.contains(active));
+          let nextIndex: number;
+          if (e.key === 'Home') {
+            nextIndex = 0;
+          } else if (e.key === 'End') {
+            nextIndex = rows.length - 1;
+          } else if (e.key === 'ArrowUp') {
+            nextIndex = currentIndex <= 0 ? rows.length - 1 : currentIndex - 1;
+          } else {
+            nextIndex = currentIndex >= rows.length - 1 ? 0 : currentIndex + 1;
+          }
+          e.preventDefault();
+          rows[nextIndex]?.focus();
+          return;
+        }
       }
 
       // The remaining shortcuts should not fire when editing text
