@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send } from 'lucide-react';
@@ -22,7 +22,7 @@ import { ContextMenu, useContextMenu, type ContextMenuItem } from '../ui/Context
 import { usePermissions } from '../../hooks/usePermissions';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
-import { getAccessToken } from '../../lib/authToken';
+import { getDownloadTicket } from '../../lib/downloadTicket';
 import { writeClipboardText } from '../../lib/clipboard';
 import { SkeletonMessage } from '../ui/Skeleton';
 import { parseMarkdown } from '../../lib/markdown';
@@ -49,6 +49,14 @@ const REPLY_INDENT_PX = 18;
 const THREAD_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const _threadHydratedAt = new Map<string, number>();
 const IMAGE_ATTACHMENT_EXTENSION_RE = /\.(png|jpe?g|gif|webp)$/i;
+let lightboxBlobUrls: string[] = [];
+
+function revokeLightboxBlobUrls(): void {
+  for (const url of lightboxBlobUrls) {
+    URL.revokeObjectURL(url);
+  }
+  lightboxBlobUrls = [];
+}
 
 /**
  * Resolve an attachment URL for use in `<img>` src and similar browser-native
@@ -58,23 +66,82 @@ const IMAGE_ATTACHMENT_EXTENSION_RE = /\.(png|jpe?g|gif|webp)$/i;
 function resolveAttachmentUrl(url: string): string | null {
   const safeRawUrl = safeClientResourceUrl(url);
   if (!safeRawUrl) return null;
-  return safeClientResourceUrl(resolveResourceUrl(safeRawUrl, getAccessToken()));
+  return safeClientResourceUrl(resolveResourceUrl(safeRawUrl, getDownloadTicket()));
 }
 
 /**
  * For federated attachments (those with origin_server), route the download
  * through the local federated-files proxy endpoint instead of the normal URL.
  */
-function resolveFederatedAttachmentUrl(att: { url: string; id: string; origin_server?: string }): string | null {
+function resolveFederatedAttachmentUrl(
+  att: { url: string; id: string; origin_server?: string },
+  channelId: string,
+): string | null {
   if (att.origin_server) {
+    const path = `/api/v1/federated-files/${encodeURIComponent(att.origin_server)}/${att.id}?channel_id=${encodeURIComponent(channelId)}`;
     return safeClientResourceUrl(
-      resolveResourceUrl(
-        `/api/v1/federated-files/${encodeURIComponent(att.origin_server)}/${att.id}`,
-        getAccessToken(),
-      ),
+      resolveResourceUrl(path, getDownloadTicket()),
     );
   }
   return resolveAttachmentUrl(att.url);
+}
+
+function ResolvedAttachmentImage({
+  url,
+  alt,
+  className,
+  style,
+}: {
+  url: string;
+  alt: string;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
+  const safeRawUrl = safeClientResourceUrl(url);
+
+  useEffect(() => {
+    if (!safeRawUrl) return;
+
+    let cancelled = false;
+    let blobUrl: string | null = null;
+
+    void fileApi.resolveAttachmentObjectUrl(safeRawUrl).then((src) => {
+      if (cancelled) {
+        if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+        return;
+      }
+      if (src.startsWith('blob:')) blobUrl = src;
+      setResolvedSrc(src);
+    }).catch(() => {
+      if (!cancelled) setResolvedSrc(null);
+    });
+
+    return () => {
+      cancelled = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [safeRawUrl]);
+
+  if (!safeRawUrl || !resolvedSrc) {
+    return (
+      <div
+        className="max-w-[min(100%,400px)] rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-6 text-center text-meta text-text-muted"
+        style={{ maxHeight: '300px' }}
+      >
+        Loading attachment…
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={resolvedSrc}
+      alt={alt}
+      className={className}
+      style={style}
+    />
+  );
 }
 
 function isImageAttachment(att: { content_type?: string; filename: string }): boolean {
@@ -1660,7 +1727,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           {msg.attachments && msg.attachments.length > 0 && (
             <div className="mt-1.5 flex flex-col gap-2">
               {msg.attachments.map((att) => {
-                const src = resolveFederatedAttachmentUrl(att);
+                const src = resolveFederatedAttachmentUrl(att, msg.channel_id);
                 const isFederated = Boolean(att.origin_server);
                 const federatedBadge = isFederated ? (
                   <span
@@ -1712,22 +1779,38 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                     );
                   }
                   const imageAttachments = msg.attachments!.filter(isImageAttachment);
-                  const openImageLightbox = () => {
-                    const safeImageAttachments = imageAttachments.flatMap((imageAtt) => {
-                      const imageSrc = resolveFederatedAttachmentUrl(imageAtt);
-                      if (!imageSrc) return [];
-                      return [{
-                        attachment: imageAtt,
-                        image: {
-                          src: imageSrc,
-                          alt: imageAtt.filename,
-                          filename: imageAtt.filename,
-                        } satisfies LightboxImage,
-                      }];
-                    });
-                    const lightboxImages = safeImageAttachments.map(({ image }) => image);
+                  const openImageLightbox = async () => {
+                    revokeLightboxBlobUrls();
+                    const safeImageAttachments = await Promise.all(
+                      imageAttachments.map(async (imageAtt) => {
+                        const imageSrc = resolveFederatedAttachmentUrl(imageAtt, msg.channel_id);
+                        if (!imageSrc) return null;
+                        const safeRawUrl = safeClientResourceUrl(imageSrc);
+                        if (!safeRawUrl) return null;
+                        try {
+                          const resolvedSrc = await fileApi.resolveAttachmentObjectUrl(safeRawUrl);
+                          if (resolvedSrc.startsWith('blob:')) {
+                            lightboxBlobUrls.push(resolvedSrc);
+                          }
+                          return {
+                            attachment: imageAtt,
+                            image: {
+                              src: resolvedSrc,
+                              alt: imageAtt.filename,
+                              filename: imageAtt.filename,
+                            } satisfies LightboxImage,
+                          };
+                        } catch {
+                          return null;
+                        }
+                      }),
+                    );
+                    const resolved = safeImageAttachments.filter(
+                      (entry): entry is NonNullable<typeof entry> => entry !== null,
+                    );
+                    const lightboxImages = resolved.map(({ image }) => image);
                     if (lightboxImages.length === 0) return;
-                    const imageIndex = safeImageAttachments.findIndex(({ attachment }) => attachment.id === att.id);
+                    const imageIndex = resolved.findIndex(({ attachment }) => attachment.id === att.id);
                     useLightboxStore.getState().open(lightboxImages, imageIndex >= 0 ? imageIndex : 0);
                   };
                   return (
@@ -1737,8 +1820,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                         className="inline-block max-w-fit cursor-pointer border-0 bg-transparent p-0 text-left"
                         onClick={() => void openImageLightbox()}
                       >
-                        <img
-                          src={src!}
+                        <ResolvedAttachmentImage
+                          url={src!}
                           alt={att.filename}
                           className="max-w-[min(100%,400px)] rounded-md border border-border-subtle"
                           style={{ maxHeight: '300px', objectFit: 'contain' }}

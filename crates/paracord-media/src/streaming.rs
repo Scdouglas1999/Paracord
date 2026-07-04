@@ -22,28 +22,42 @@ pub fn quality_presets() -> Vec<StreamQualityPreset> {
             width: 1280,
             height: 720,
             framerate: 30,
-            bitrate_kbps: 2500,
+            bitrate_kbps: 8000,
         },
         StreamQualityPreset {
             name: "1080p60".to_string(),
             width: 1920,
             height: 1080,
             framerate: 60,
-            bitrate_kbps: 6000,
+            bitrate_kbps: 25000,
         },
         StreamQualityPreset {
             name: "1440p60".to_string(),
             width: 2560,
             height: 1440,
             framerate: 60,
-            bitrate_kbps: 10000,
+            bitrate_kbps: 35000,
         },
         StreamQualityPreset {
             name: "4k60".to_string(),
             width: 3840,
             height: 2160,
             framerate: 60,
-            bitrate_kbps: 20000,
+            bitrate_kbps: 50000,
+        },
+        StreamQualityPreset {
+            name: "movie-50".to_string(),
+            width: 3840,
+            height: 2160,
+            framerate: 60,
+            bitrate_kbps: 50000,
+        },
+        StreamQualityPreset {
+            name: "movie-100".to_string(),
+            width: 3840,
+            height: 2160,
+            framerate: 60,
+            bitrate_kbps: 100000,
         },
     ]
 }
@@ -60,18 +74,18 @@ pub fn simulcast_layers() -> Vec<SimulcastLayer> {
     vec![
         SimulcastLayer {
             rid: "q".to_string(),
-            scale_resolution_down_by: 4.0,
-            max_bitrate_kbps: 300,
+            scale_resolution_down_by: 3.0,
+            max_bitrate_kbps: 800,
         },
         SimulcastLayer {
             rid: "h".to_string(),
             scale_resolution_down_by: 2.0,
-            max_bitrate_kbps: 1000,
+            max_bitrate_kbps: 3500,
         },
         SimulcastLayer {
             rid: "f".to_string(),
             scale_resolution_down_by: 1.0,
-            max_bitrate_kbps: 6000,
+            max_bitrate_kbps: 25000,
         },
     ]
 }
@@ -141,7 +155,7 @@ impl ScreenCaptureConfig {
             width: 1920,
             height: 1080,
             framerate: 60,
-            bitrate_kbps: 6000,
+            bitrate_kbps: 25000,
             simulcast: true,
         }
     }

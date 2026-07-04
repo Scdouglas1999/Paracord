@@ -284,6 +284,7 @@ describe('messageStore', () => {
         attachment_ids: undefined,
         sticker_ids: undefined,
         e2ee,
+        nonce: expect.any(String),
       });
     });
 

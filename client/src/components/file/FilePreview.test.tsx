@@ -1,7 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FilePreview } from './FilePreview';
+
+// FilePreview resolves attachment URLs asynchronously (blob URLs on desktop,
+// absolute URLs on web). Return the input url verbatim so href/src assertions
+// stay deterministic; the resolution logic has its own coverage in files.ts.
+vi.mock('../../api/files', () => ({
+  fileApi: {
+    resolveAttachmentObjectUrl: vi.fn(async (url: string) => url),
+  },
+}));
 
 describe('FilePreview image lightbox accessibility', () => {
   it('opens an accessible image preview dialog and closes it with Escape', async () => {
@@ -15,7 +24,7 @@ describe('FilePreview image lightbox accessibility', () => {
       />,
     );
 
-    screen.getByRole('button', { name: 'Open image preview: release-shot.png' }).focus();
+    (await screen.findByRole('button', { name: 'Open image preview: release-shot.png' })).focus();
     await user.keyboard('{Enter}');
 
     const dialog = await screen.findByRole('dialog', { name: 'Image preview: release-shot.png' });
@@ -44,7 +53,7 @@ describe('FilePreview image lightbox accessibility', () => {
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 
-  it('does not render unsafe image MIME types as image previews', () => {
+  it('does not render unsafe image MIME types as image previews', async () => {
     render(
       <FilePreview
         url="/api/v1/files/vector"
@@ -54,8 +63,8 @@ describe('FilePreview image lightbox accessibility', () => {
       />,
     );
 
+    expect(await screen.findByRole('link')).toHaveAttribute('href', '/api/v1/files/vector');
     expect(screen.queryByRole('button', { name: 'Open image preview: vector.svg' })).not.toBeInTheDocument();
     expect(screen.queryByAltText('vector.svg')).not.toBeInTheDocument();
-    expect(screen.getByRole('link')).toHaveAttribute('href', '/api/v1/files/vector');
   });
 });

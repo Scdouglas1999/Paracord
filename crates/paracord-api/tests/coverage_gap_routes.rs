@@ -310,7 +310,7 @@ async fn upload_policy_uses_active_content_downgraded_type() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn custom_emoji_images_require_membership_and_support_query_tokens() -> anyhow::Result<()> {
+async fn custom_emoji_images_require_membership_and_support_download_tickets() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let guild_id = create_guild(&ctx, "Emoji Image Auth").await?;
     let png_bytes: &[u8] = &[
@@ -360,10 +360,18 @@ async fn custom_emoji_images_require_membership_and_support_query_tokens() -> an
         .await?;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
+    let (ticket_status, ticket_body) = ctx
+        .request_json(Method::POST, "/api/v1/download/ticket", None)
+        .await?;
+    assert_eq!(ticket_status, StatusCode::OK);
+    let download_ticket = ticket_body["ticket"]
+        .as_str()
+        .context("download ticket should be present")?;
+
     let (status, headers, image_body) = ctx
         .request_raw_with_token(
             Method::GET,
-            &format!("{path}?token={}", ctx.token),
+            &format!("{path}?ticket={download_ticket}"),
             Vec::new(),
             None,
             None,
@@ -2296,6 +2304,95 @@ async fn channel_summary_uses_configured_ai_provider() -> anyhow::Result<()> {
     assert!(
         summary.contains("ship on Friday"),
         "expected AI summary content in response: {payload}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn instance_info_exposes_upload_limit_and_requires_auth() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+
+    // Unauthenticated callers must not be able to read instance limits.
+    let (status, _) = ctx
+        .request_json_no_auth(Method::GET, "/api/v1/instance", None)
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "instance info must require authentication"
+    );
+
+    // Authenticated callers get the configured, non-sensitive limits. The test
+    // harness configures max_upload_size = 10 MB (see tests/common/mod.rs).
+    let (status, body) = ctx
+        .request_json(Method::GET, "/api/v1/instance", None)
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("max_upload_size").and_then(Value::as_u64),
+        Some(10 * 1024 * 1024),
+        "instance info should report the configured upload limit: {body}"
+    );
+    assert!(
+        body.get("p2p_threshold").and_then(Value::as_u64).is_some(),
+        "instance info should report the p2p threshold: {body}"
+    );
+
+    // Must not leak secrets or internal configuration.
+    let raw = body.to_string().to_lowercase();
+    for forbidden in ["jwt", "secret", "path", "database", "cryptor", "token"] {
+        assert!(
+            !raw.contains(forbidden),
+            "instance info leaked sensitive field '{forbidden}': {body}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn oversized_upload_reports_the_limit_in_the_error() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Size Limit").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "uploads").await?;
+    let guild_id_num = guild_id.parse::<i64>()?;
+
+    // Admin configures a tiny per-guild maximum file size (1 KB).
+    paracord_db::guild_storage_policies::upsert_guild_storage_policy(
+        &ctx.db,
+        guild_id_num,
+        Some(1024),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    let boundary = "----paracord-size-limit-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(&vec![0u8; 4096]); // 4 KB, over the 1 KB policy
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let (status, _, response_body) = ctx
+        .request_raw(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/attachments"),
+            body,
+            Some(&format!("multipart/form-data; boundary={boundary}")),
+        )
+        .await?;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let text = String::from_utf8_lossy(&response_body);
+    assert!(
+        text.contains("maximum") && text.contains("KB"),
+        "oversize rejection should state the configured limit: {text}"
     );
     Ok(())
 }

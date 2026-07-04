@@ -18,6 +18,7 @@ import {
   Phone,
   PhoneOff,
   Loader2,
+  TrendingUp,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useParams } from 'react-router-dom';
@@ -55,10 +56,12 @@ interface TopBarProps {
 export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, recipientName, dmChannelId }: TopBarProps) {
   const { channelId } = useParams();
   const toggleMemberPanel = useUIStore((s) => s.toggleMemberPanel);
+  const toggleEconomyPanel = useUIStore((s) => s.toggleEconomyPanel);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const setSidebarCollapsed = useUIStore((s) => s.setSidebarCollapsed);
   const memberPanelOpen = useUIStore((s) => s.memberPanelOpen);
+  const economyPanelOpen = useUIStore((s) => s.economyPanelOpen);
   const setCommandPaletteOpen = useUIStore((s) => s.setCommandPaletteOpen);
   const toggleSearchPanel = useUIStore((s) => s.toggleSearchPanel);
   const searchPanelOpen = useUIStore((s) => s.searchPanelOpen);
@@ -468,12 +471,20 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
           />
         )}
         {!isDM && (
-          <TopBarIcon
-            icon={Users}
-            onClick={() => toggleMemberPanel()}
-            active={memberPanelOpen}
-            tooltip="Member List"
-          />
+          <>
+            <TopBarIcon
+              icon={TrendingUp}
+              onClick={() => toggleEconomyPanel()}
+              active={economyPanelOpen}
+              tooltip="Guild Leaderboard"
+            />
+            <TopBarIcon
+              icon={Users}
+              onClick={() => toggleMemberPanel()}
+              active={memberPanelOpen}
+              tooltip="Member List"
+            />
+          </>
         )}
         <TopBarIcon icon={Inbox} onClick={() => void openInbox()} tooltip="Inbox" badge={unreadItems.length} />
         <TopBarIcon className="hidden md:block" icon={HelpCircle} onClick={() => setShowHelp(true)} tooltip="Shortcuts" />

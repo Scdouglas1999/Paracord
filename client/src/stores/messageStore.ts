@@ -196,7 +196,24 @@ interface OfflineQueuedMessage {
   channelId: string;
   content: string;
   referencedMessageId?: string;
+  nonce: string;
   createdAt: string;
+}
+
+function createMessageNonce(): string {
+  return crypto.randomUUID();
+}
+
+function mergeMessageFields(existing: Message, incoming: Partial<Message>): Message {
+  const merged: Message = { ...existing };
+  for (const key of Object.keys(incoming) as (keyof Message)[]) {
+    if (key === 'id') continue;
+    const value = incoming[key];
+    if (value !== undefined) {
+      (merged as unknown as Record<string, unknown>)[key as string] = value;
+    }
+  }
+  return merged;
 }
 
 function loadOfflineQueue(): OfflineQueuedMessage[] {
@@ -352,6 +369,7 @@ async function buildSendMessageRequest(
   referencedMessageId?: string,
   attachmentIds?: string[],
   stickerIds?: string[],
+  nonce?: string,
 ): Promise<SendMessageRequest> {
   const normalizedContent = content.trim();
   const request: SendMessageRequest = {
@@ -359,6 +377,7 @@ async function buildSendMessageRequest(
     referenced_message_id: referencedMessageId,
     attachment_ids: attachmentIds,
     sticker_ids: stickerIds,
+    nonce: nonce ?? createMessageNonce(),
   };
   if (!isDmChannel(channelId) || normalizedContent.length === 0) {
     return request;
@@ -516,7 +535,7 @@ interface MessageState {
 
   // Gateway event handlers
   addMessage: (channelId: string, message: Message) => void;
-  updateMessage: (channelId: string, message: Message) => void;
+  updateMessage: (channelId: string, message: Partial<Message> & Pick<Message, 'id'>) => void;
   removeMessage: (channelId: string, messageId: string) => void;
   removeMessages: (channelId: string, messageIds: string[]) => void;
 }
@@ -654,6 +673,7 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
         channelId,
         content: normalized,
         referencedMessageId,
+        nonce: createMessageNonce(),
         createdAt: new Date().toISOString(),
       };
       set((state) => {
@@ -676,7 +696,8 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
       e2ee: request.e2ee,
       nonce: request.nonce,
       send_at: sendAtIso,
-    });
+      ...(referencedMessageId ? { reference_message_id: referencedMessageId } : {}),
+    } as Parameters<typeof channelApi.createScheduledMessage>[1]);
   },
 
   editScheduledMessage: async (channelId, scheduledMessageId, content, sendAtIso, e2ee) => {
@@ -703,6 +724,9 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
           queued.channelId,
           queued.content,
           queued.referencedMessageId,
+          undefined,
+          undefined,
+          queued.nonce,
         );
         const { data } = await channelApi.sendMessage(queued.channelId, request);
         const decrypted = await decryptMessageForChannel(queued.channelId, data);
@@ -1033,6 +1057,10 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
     set((state) => {
       const existing = state.messages[channelId] || [];
       if (existing.some((m) => m.id === message.id)) return state;
+      const incomingNonce = (message as { nonce?: string }).nonce;
+      if (incomingNonce && existing.some((m) => (m as { nonce?: string }).nonce === incomingNonce)) {
+        return state;
+      }
       const nextDecrypting = isE2ee ? new Set(state.decryptingIds).add(message.id) : state.decryptingIds;
       return applyEviction(state, {
         messages: { ...state.messages, [channelId]: capChannelMessages([...existing, baseMessage]) },
@@ -1060,17 +1088,27 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
   },
 
   updateMessage: (channelId, message) => {
-    const isE2ee = Boolean(message.e2ee);
-    const baseMessage = {
-      ...message,
-      content: isE2ee ? '' : message.content,
-    };
-    if (baseMessage.poll) {
-      usePollStore.getState().upsertPoll(baseMessage.poll);
-    }
     set((state) => {
       const existing = state.messages[channelId] || [];
-      const nextDecrypting = isE2ee ? new Set(state.decryptingIds).add(message.id) : state.decryptingIds;
+      const current = existing.find((m) => m.id === message.id);
+      if (!current) return state;
+      const merged = mergeMessageFields(current, message);
+      const isE2ee = message.e2ee !== undefined ? Boolean(message.e2ee) : Boolean(merged.e2ee);
+      const baseMessage: Message = {
+        ...merged,
+        content:
+          isE2ee && message.content === undefined
+            ? current.content
+            : isE2ee
+              ? ''
+              : merged.content,
+      };
+      if (baseMessage.poll) {
+        usePollStore.getState().upsertPoll(baseMessage.poll);
+      }
+      const nextDecrypting = isE2ee && message.e2ee !== undefined
+        ? new Set(state.decryptingIds).add(message.id)
+        : state.decryptingIds;
       return {
         messages: {
           ...state.messages,
@@ -1079,8 +1117,12 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
         decryptingIds: nextDecrypting,
       };
     });
-    if (isE2ee) {
-      void decryptMessageForChannel(channelId, { ...message }).then((decrypted) => {
+    const existingMessage = get().messages[channelId]?.find((m) => m.id === message.id);
+    const shouldDecrypt = message.e2ee !== undefined
+      ? Boolean(message.e2ee)
+      : Boolean(existingMessage?.e2ee);
+    if (shouldDecrypt && message.e2ee !== undefined) {
+      void decryptMessageForChannel(channelId, mergeMessageFields(existingMessage!, message)).then((decrypted) => {
         set((state) => {
           const current = state.messages[channelId] || [];
           const nextDecrypting = new Set(state.decryptingIds);

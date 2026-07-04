@@ -11,6 +11,7 @@ describe('uiStore', () => {
       serverRestarting: false,
       commandPaletteOpen: false,
       memberPanelOpen: true,
+      economyPanelOpen: false,
       sidebarCollapsed: false,
       searchPanelOpen: false,
     });
@@ -71,6 +72,13 @@ describe('uiStore', () => {
     expect(useUIStore.getState().memberPanelOpen).toBe(false);
     useUIStore.getState().toggleMemberPanel();
     expect(useUIStore.getState().memberPanelOpen).toBe(true);
+  });
+
+  it('toggles economy panel', () => {
+    useUIStore.getState().toggleEconomyPanel();
+    expect(useUIStore.getState().economyPanelOpen).toBe(true);
+    useUIStore.getState().toggleEconomyPanel();
+    expect(useUIStore.getState().economyPanelOpen).toBe(false);
   });
 
   it('toggles sidebar collapsed', () => {

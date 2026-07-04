@@ -22,7 +22,10 @@ use paracord_transport::stream::{StreamId, TrackId};
 #[cfg(feature = "vpx")]
 use std::collections::HashMap;
 #[cfg(feature = "vpx")]
-use std::sync::{atomic::Ordering, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Mutex, OnceLock,
+};
 #[cfg(feature = "vpx")]
 use std::time::{Duration, Instant};
 
@@ -34,6 +37,12 @@ const VIDEO_REASSEMBLY_TTL: Duration = Duration::from_secs(3);
 const SCREEN_ENCODER_EMPTY_OUTPUT_FALLBACK_THRESHOLD: u32 = 30;
 #[cfg(feature = "vpx")]
 const SCREEN_ENCODER_STARTUP_FALLBACK_TIMEOUT: Duration = Duration::from_millis(900);
+#[cfg(feature = "vpx")]
+static VIDEO_SEND_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "vpx")]
+static VIDEO_STORE_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "vpx")]
+static VIDEO_HANDLE_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "vpx")]
 struct VideoReassemblyState {
@@ -294,6 +303,20 @@ fn store_pulled_video_frame(
     height: u32,
     data: Vec<u8>,
 ) {
+    let debug_index = VIDEO_STORE_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
+    if debug_index < 24 {
+        eprintln!(
+            "[native-video-debug] store frame track={} count={} codec={} format={} {}x{} keyframe={} bytes={}",
+            track_key,
+            debug_index + 1,
+            codec,
+            format,
+            width,
+            height,
+            is_keyframe,
+            data.len(),
+        );
+    }
     let mut state = match video_dispatch_state().lock() {
         Ok(state) => state,
         Err(_) => return,
@@ -698,8 +721,8 @@ fn build_screen_simulcast_configs(
 
     let mut layers = Vec::new();
     let layer_targets = [
-        (SimulcastLayer::Low, 320u32, 180u32, 15u32, 300u32),
-        (SimulcastLayer::Medium, 640u32, 360u32, 30u32, 1_000u32),
+        (SimulcastLayer::Low, 640u32, 360u32, 30u32, 800u32),
+        (SimulcastLayer::Medium, 1280u32, 720u32, 60u32, 3_500u32),
         (
             SimulcastLayer::High,
             target_width,
@@ -914,14 +937,14 @@ fn maybe_fallback_screen_encoder_after_empty_output(
 }
 
 /// Encode an RGBA frame and send it over QUIC.
-pub fn encode_and_send_video_frame(
+pub async fn encode_and_send_video_frame(
     session: &mut NativeMediaSession,
     width: u32,
     height: u32,
     rgba_data: &[u8],
     is_screen: bool,
     input_is_bgra: bool,
-    _loopback_app: Option<&AppHandle>,
+    app: Option<&AppHandle>,
 ) -> Result<(), String> {
     #[cfg(feature = "vpx")]
     {
@@ -1093,19 +1116,18 @@ pub fn encode_and_send_video_frame(
         }
 
         let i420_size = PixelFormat::I420.frame_size(frame_width, frame_height);
-        let i420_buf = &mut session.i420_convert_buf;
-        i420_buf.resize(i420_size, 0u8);
+        let mut i420_buf = vec![0u8; i420_size];
         if input_is_bgra {
-            bgra_to_i420(rgba_data, frame_width, frame_height, i420_buf);
+            bgra_to_i420(rgba_data, frame_width, frame_height, &mut i420_buf);
         } else {
-            rgba_to_i420(rgba_data, frame_width, frame_height, i420_buf);
+            rgba_to_i420(rgba_data, frame_width, frame_height, &mut i420_buf);
         }
 
         let scaled_i420;
         let encode_input =
             if !is_screen && (encode_width != frame_width || encode_height != frame_height) {
                 scaled_i420 = downscale_i420(
-                    i420_buf,
+                    &i420_buf,
                     frame_width,
                     frame_height,
                     encode_width,
@@ -1178,6 +1200,8 @@ pub fn encode_and_send_video_frame(
 
         if !is_screen {
             sync_published_video_track_metadata(session, false);
+        } else if session.published_screen_track.is_none() {
+            publish_screen_track_for_current_config(session, app).await?;
         }
 
         let timestamp_step = (90_000u32 / fps).max(1);
@@ -1192,11 +1216,41 @@ pub fn encode_and_send_video_frame(
         let local_track_id = local_video_track_id(is_screen);
 
         let can_send_screen_frames = !is_screen || session.published_screen_track.is_some();
+        let track_key_epoch = {
+            let sender_keys = session.track_sender_keys.lock().await;
+            sender_keys
+                .get(&(local_stream_id.clone(), local_track_id.clone()))
+                .map(|state| state.epoch)
+        };
+        let track_key_epoch = match (can_send_screen_frames || !is_screen, track_key_epoch) {
+            (true, Some(epoch)) => epoch,
+            (true, None) => {
+                return Err(format!(
+                    "video sender key missing for {}:{}",
+                    local_stream_id.0, local_track_id.0
+                ));
+            }
+            (false, _) => session.current_key_epoch.load(Ordering::SeqCst),
+        };
         let frame_timestamp = if is_screen {
             session.screen_timestamp
         } else {
             session.video_timestamp
         };
+        if is_screen && can_send_screen_frames {
+            let track_key = make_track_key(&local_stream_id.0, &local_track_id.0);
+            let timestamp_us = (u64::from(frame_timestamp) * 1_000_000) / 90_000;
+            store_pulled_video_frame(
+                &track_key,
+                timestamp_us,
+                true,
+                "raw",
+                "i420",
+                frame_width,
+                frame_height,
+                i420_buf.clone(),
+            );
+        }
         for frame in encoded_frames.drain(..) {
             let frame_timestamp_us = (frame.pts.max(0) as u64 * 1_000_000) / fps as u64;
             let frame_data = frame.data.clone();
@@ -1226,7 +1280,7 @@ pub fn encode_and_send_video_frame(
             send_encoded_video_frame(
                 &session.connection,
                 &session.frame_encryptor,
-                session.current_key_epoch.load(Ordering::SeqCst),
+                track_key_epoch,
                 ssrc,
                 if is_screen {
                     &mut session.screen_seq
@@ -1244,6 +1298,19 @@ pub fn encode_and_send_video_frame(
                 frame_timestamp_us,
                 &frame_data,
             )?;
+            let debug_index = VIDEO_SEND_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if debug_index < 24 {
+                eprintln!(
+                    "[native-video-debug] sent video datagram stream={} track={} ssrc={} layer={} epoch={} keyframe={} bytes={}",
+                    local_stream_id.0,
+                    local_track_id.0,
+                    ssrc,
+                    layer_id,
+                    track_key_epoch,
+                    frame_is_keyframe,
+                    frame_data.len(),
+                );
+            }
         }
         if is_screen {
             session.screen_timestamp = session.screen_timestamp.wrapping_add(timestamp_step);
@@ -1334,6 +1401,17 @@ pub fn handle_video_datagram(
     #[cfg(feature = "vpx")]
     {
         use paracord_codec::video::EncodedFrame;
+        let debug_index = VIDEO_HANDLE_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed);
+        if debug_index < 24 {
+            eprintln!(
+                "[native-video-debug] handle video datagram ssrc={} seq={} layer={} epoch={} payload={}",
+                header.ssrc,
+                header.sequence,
+                header.simulcast_layer,
+                header.key_epoch,
+                decrypted_payload.len(),
+            );
+        }
 
         let Some((metadata, encoded_bytes)) = reassemble_video_payload(header, decrypted_payload)
         else {
@@ -1803,6 +1881,30 @@ pub async fn ensure_track_sender_key(
         .map_err(|_| "frame decryptor lock poisoned".to_string())?;
     for layer in &track.layers {
         decryptor.set_peer_key(layer.ssrc, key.epoch, &key.key);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "vpx")]
+pub async fn publish_screen_track_for_current_config(
+    session: &mut NativeMediaSession,
+    app: Option<&AppHandle>,
+) -> Result<(), String> {
+    let track = super::screen_capture::build_screen_track(session)?;
+    ensure_track_sender_key(session, &track).await?;
+    {
+        let mut registry = session.stream_registry.lock().await;
+        registry.publish_track(track.clone());
+    }
+    session
+        .send_control_message(&paracord_transport::control::ControlMessage::TrackPublish {
+            track: track.clone(),
+        })
+        .await?;
+    session.published_screen_track = Some(track.clone());
+    if let Some(app) = app {
+        use tauri::Emitter;
+        let _ = app.emit("media_track_publish", track);
     }
     Ok(())
 }

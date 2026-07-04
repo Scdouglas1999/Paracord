@@ -1,16 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { Loader2, WifiOff } from 'lucide-react';
+import { Loader2, Wifi, WifiOff } from 'lucide-react';
+import { gateway } from '../gateway/manager';
 import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
 
-// App-wide connectivity banner (design-spec §7 Toast/banner language): a slim
-// top bar on a semantic tinted surface with a matching lucide icon and a
-// --text-label message, sliding in over --duration-normal. This is the
-// top-level variant; the layout/ConnectionStatusBar.tsx variant is owned
-// elsewhere.
-type BannerTone = 'warning' | 'danger';
+type BannerTone = 'warning' | 'danger' | 'success';
 
 const TONE: Record<
   BannerTone,
@@ -26,12 +22,22 @@ const TONE: Record<
     edge: 'color-mix(in srgb, var(--accent-danger) 45%, transparent)',
     fg: 'var(--accent-danger)',
   },
+  success: {
+    surface: 'color-mix(in srgb, var(--accent-success) 16%, var(--bg-secondary))',
+    edge: 'color-mix(in srgb, var(--accent-success) 45%, transparent)',
+    fg: 'var(--accent-success)',
+  },
 };
 
 const MESSAGES: Record<string, { tone: BannerTone; text: string }> = {
   reconnecting: { tone: 'warning', text: 'Reconnecting to the server…' },
   disconnected: { tone: 'danger', text: 'Connection lost — retrying automatically' },
 };
+
+const RETRY_BUTTON =
+  'ml-1 inline-flex h-7 items-center rounded-sm border border-current/30 px-2.5 text-meta font-semibold ' +
+  'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-current/10 ' +
+  'focus-visible:shadow-[var(--focus-ring)]';
 
 export function ConnectionStatusBar() {
   const status = useUIStore((s) => s.connectionStatus);
@@ -41,40 +47,57 @@ export function ConnectionStatusBar() {
   const voiceConnected = useVoiceStore((s) => s.connected);
   const reduceMotion = useReducedMotion();
 
-  // Don't show the banner until we've been connected at least once.
-  // This prevents a flash of "Disconnected" on startup before the
-  // gateway has had time to establish its first connection.
   const hasConnected = useRef(false);
   const [showBanner, setShowBanner] = useState(false);
+  const [showConnected, setShowConnected] = useState(false);
+  const [prevStatus, setPrevStatus] = useState(status);
 
   useEffect(() => {
     if (status === 'connected') {
+      if (hasConnected.current && (prevStatus === 'reconnecting' || prevStatus === 'disconnected')) {
+        setShowConnected(true);
+        const timer = setTimeout(() => setShowConnected(false), 2000);
+        setPrevStatus(status);
+        setShowBanner(false);
+        return () => clearTimeout(timer);
+      }
       hasConnected.current = true;
       setShowBanner(false);
+      setPrevStatus(status);
       return;
     }
-    // Only show the banner after we've previously been connected.
+    setPrevStatus(status);
     if (!hasConnected.current) return;
-    // Brief grace period to avoid flashing during transient reconnects.
     const timer = setTimeout(() => setShowBanner(true), 4000);
     return () => clearTimeout(timer);
-  }, [status]);
+  }, [status, prevStatus]);
+
+  useEffect(() => {
+    if (voiceConnected && status === 'disconnected') {
+      void gateway.connectAll();
+    }
+  }, [voiceConnected, status]);
 
   const apiReachable = Boolean(activeServer?.apiReachable);
   const info = MESSAGES[status];
-  // Voice connectivity proves the network is up; suppress the banner.
-  const visible =
+  const offlineVisible =
     status !== 'connected' && showBanner && !apiReachable && !voiceConnected && Boolean(info);
+  const visible = offlineVisible || showConnected;
 
-  const tone = info ? TONE[info.tone] : TONE.danger;
   const reconnecting = status === 'reconnecting';
+  const tone = showConnected
+    ? TONE.success
+    : info
+      ? TONE[info.tone]
+      : TONE.danger;
+  const message = showConnected ? 'Back online' : info?.text ?? '';
 
   return (
     <AnimatePresence>
-      {visible && info && (
+      {visible && message && (
         <motion.div
-          role="alert"
-          aria-live="assertive"
+          role="status"
+          aria-live="polite"
           aria-atomic="true"
           initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -87,14 +110,26 @@ export function ConnectionStatusBar() {
             boxShadow: 'var(--shadow-md)',
           }}
         >
-          {reconnecting ? (
+          {showConnected ? (
+            <Wifi size={15} style={{ color: tone.fg }} />
+          ) : reconnecting ? (
             <Loader2 size={15} className="animate-spin" style={{ color: tone.fg }} />
           ) : (
             <WifiOff size={15} style={{ color: tone.fg }} />
           )}
           <span className="text-label" style={{ color: tone.fg }}>
-            {info.text}
+            {message}
           </span>
+          {!showConnected && status === 'disconnected' && (
+            <button
+              type="button"
+              className={RETRY_BUTTON}
+              style={{ color: tone.fg }}
+              onClick={() => void gateway.connectAll()}
+            >
+              Retry
+            </button>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

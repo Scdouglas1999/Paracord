@@ -222,21 +222,25 @@ pub async fn apply_template(
         ACTION_TIMED_MUTE => {
             let duration_minutes = template.duration_minutes.unwrap_or(10).max(1);
             let until = Utc::now() + Duration::minutes(duration_minutes as i64);
-            paracord_db::members::set_member_timeout(
+            paracord_core::admin::timeout_member(
                 &state.db,
-                target_user_id,
                 guild_id,
+                auth.user_id,
+                target_user_id,
                 Some(until),
             )
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            .await?;
             action_result["status"] = json!("muted");
             action_result["until"] = json!(until.to_rfc3339());
         }
         ACTION_KICK => {
-            paracord_db::members::remove_member(&state.db, target_user_id, guild_id)
-                .await
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            paracord_core::admin::kick_member(
+                &state.db,
+                guild_id,
+                auth.user_id,
+                target_user_id,
+            )
+            .await?;
             state.member_index.remove_member(guild_id, target_user_id);
             state.event_bus.dispatch(
                 "GUILD_MEMBER_REMOVE",
@@ -250,16 +254,14 @@ pub async fn apply_template(
             action_result["status"] = json!("kicked");
         }
         ACTION_BAN => {
-            paracord_db::bans::create_ban(
+            paracord_core::admin::ban_member(
                 &state.db,
-                target_user_id,
                 guild_id,
-                Some(&rendered_reason),
                 auth.user_id,
+                target_user_id,
+                Some(&rendered_reason),
             )
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-            let _ = paracord_db::members::remove_member(&state.db, target_user_id, guild_id).await;
+            .await?;
             state.member_index.remove_member(guild_id, target_user_id);
             state.event_bus.dispatch(
                 "GUILD_BAN_ADD",

@@ -45,6 +45,7 @@ function makeFakeEngine() {
     onParticipantJoin: vi.fn(),
     onParticipantLeave: vi.fn(),
     onSpeakingChange: vi.fn(),
+    onTransportLost: vi.fn(),
   };
 }
 

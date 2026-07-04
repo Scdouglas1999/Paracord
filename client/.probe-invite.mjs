@@ -18,14 +18,23 @@ if (!page.url().includes('/app')) {
   await page.getByRole('button', { name: 'Log In' }).click();
 }
 await page.waitForFunction(() => location.pathname.startsWith('/app'), { timeout: 20000 });
-await page.waitForTimeout(1500);
-await page.getByRole('button', { name: 'Jump in' }).click().catch(()=>{});
-
-// Enter guild directly via channel URL
-await page.goto(`${BASE}/app/guilds/331819912232177664/channels/331819912232177665`, { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(2000);
 await page.getByRole('button', { name: 'Jump in' }).click().catch(()=>{});
 await page.waitForTimeout(600);
+
+// In-app: click guild rail pill (SPA nav, keeps auth)
+await page.getByRole('button', { name: 'Polish Probe HQ', exact: true }).click().catch(()=>{});
+await page.waitForTimeout(1200);
+// dismiss any settings/onboarding overlay
+await page.keyboard.press('Escape').catch(()=>{});
+await page.waitForTimeout(300);
+await page.getByRole('button', { name: 'Jump in' }).click().catch(()=>{});
+await page.waitForTimeout(400);
+// select #general treeitem to ensure a text channel context
+await page.getByRole('treeitem').filter({ hasText: /general/i }).first().click().catch(()=>{});
+await page.waitForTimeout(800);
+await page.getByRole('button', { name: 'Jump in' }).click().catch(()=>{});
+await page.waitForTimeout(400);
 await page.screenshot({ path: `${OUT}/_dbg-guildpage.png` });
 
 // Open server menu
@@ -35,7 +44,7 @@ await page.getByRole('button', { name: /Invite People/i }).click();
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `${OUT}/${PHASE}-invite-modal.png` });
 
-// Also capture an options-dirty state (change a select)
+// options-dirty state
 await page.getByRole('combobox').first().selectOption('1hr').catch(()=>{});
 await page.waitForTimeout(400);
 await page.screenshot({ path: `${OUT}/${PHASE}-invite-modal-dirty.png` });

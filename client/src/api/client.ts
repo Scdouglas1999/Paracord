@@ -19,7 +19,7 @@ const API_TIMING_VERBOSE =
   import.meta.env.VITE_API_TIMING_TRACE === 'true';
 const API_LOG_REDACTED = '[redacted]';
 const API_LOG_SENSITIVE_QUERY_RE =
-  /([?&](?:token|access_token|refresh_token|media_token|session_id|csrf|secret|password|webhook_token)=)[^&#\s]+/gi;
+  /([?&](?:token|ticket|access_token|refresh_token|media_token|session_id|csrf|secret|password|webhook_token)=)[^&#\s]+/gi;
 const API_LOG_WEBHOOK_TOKEN_PATH_RE =
   /(\/webhooks\/[^/?#\s]+\/)([^/?#\s]+)(?=(?:\/messages\/|[/?#\s]|$))/gi;
 const API_LOG_INTERACTION_TOKEN_PATH_RE =

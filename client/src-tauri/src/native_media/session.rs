@@ -130,6 +130,7 @@ pub struct NativeMediaSession {
 
     pub video_ssrc: u32,
     pub screen_ssrc: u32,
+    pub screen_audio_ssrc: u32,
     #[cfg(feature = "vpx")]
     pub video_layer_ssrcs: Vec<(u8, u32)>,
     #[cfg(feature = "vpx")]
@@ -146,6 +147,11 @@ pub struct NativeMediaSession {
     pub stream_capabilities: MediaStreamCapabilities,
     pub published_video_track: Option<PublishedTrack>,
     pub published_screen_track: Option<PublishedTrack>,
+    pub published_screen_audio_track: Option<PublishedTrack>,
+    pub screen_audio_send_task: Option<JoinHandle<()>>,
+    pub connection_monitor_task: Option<JoinHandle<()>>,
+    pub stream_remote_audio:
+        Arc<tokio::sync::Mutex<HashMap<u32, super::audio_pipeline::StreamRemoteAudioState>>>,
     #[cfg(feature = "vpx")]
     pub video_force_keyframe: bool,
     #[cfg(feature = "vpx")]
@@ -298,6 +304,7 @@ impl NativeMediaSession {
         let local_ssrc = Self::derive_track_ssrc(local_user_id, "audio");
         let video_ssrc = Self::derive_track_ssrc(local_user_id, "video");
         let screen_ssrc = Self::derive_track_ssrc(local_user_id, "screen");
+        let screen_audio_ssrc = Self::derive_track_ssrc(local_user_id, "screen:audio");
 
         // E2EE key setup
         let key_epoch = 1u8;
@@ -354,6 +361,7 @@ impl NativeMediaSession {
             screen_send_task: None,
             video_ssrc,
             screen_ssrc,
+            screen_audio_ssrc,
             #[cfg(feature = "vpx")]
             video_layer_ssrcs: Vec::new(),
             #[cfg(feature = "vpx")]
@@ -371,6 +379,10 @@ impl NativeMediaSession {
                 .unwrap_or_else(detect_media_stream_capabilities),
             published_video_track: None,
             published_screen_track: None,
+            published_screen_audio_track: None,
+            screen_audio_send_task: None,
+            connection_monitor_task: None,
+            stream_remote_audio: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             #[cfg(feature = "vpx")]
             video_force_keyframe: true,
             #[cfg(feature = "vpx")]
@@ -409,6 +421,12 @@ impl NativeMediaSession {
             h.abort();
         }
         if let Some(h) = self.screen_send_task.take() {
+            h.abort();
+        }
+        if let Some(h) = self.screen_audio_send_task.take() {
+            h.abort();
+        }
+        if let Some(h) = self.connection_monitor_task.take() {
             h.abort();
         }
 

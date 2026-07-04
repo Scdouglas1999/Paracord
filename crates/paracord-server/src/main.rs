@@ -104,6 +104,11 @@ async fn main() -> Result<()> {
         );
     }
     let at_rest_profile = build_at_rest_profile(&config)?;
+    if config::is_production_deployment(&config) && at_rest_profile.totp_cryptor.is_none() {
+        tracing::warn!(
+            "public_url is configured but at-rest TOTP encryption is unavailable; MFA setup will be rejected until [at_rest] is enabled with a valid key"
+        );
+    }
     if livekit_credentials_look_insecure(&config.livekit.api_key, &config.livekit.api_secret) {
         // Only enforce LiveKit credential hygiene when LiveKit will actually be
         // used: native media is disabled, or an explicit external LiveKit is
@@ -1630,7 +1635,7 @@ async fn run_scheduled_message_worker_once(state: &paracord_core::AppState) -> R
             content,
             paracord_core::message::CreateMessageOptions {
                 message_type: 0,
-                reference_id: None,
+                reference_id: scheduled.reference_id,
                 allow_empty_content: allow_empty,
                 dm_e2ee,
                 nonce: scheduled.nonce.clone(),

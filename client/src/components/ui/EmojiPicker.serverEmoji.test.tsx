@@ -12,8 +12,8 @@ vi.mock('../../api/emojis', () => ({
 
 vi.mock('../../lib/config/apiBaseUrl', () => ({
   resolveApiBaseUrl: () => '/api/v1',
-  resolveResourceUrl: (path: string, token?: string | null) =>
-    token ? `/api/v1/${path}?token=${encodeURIComponent(token)}` : `/api/v1/${path}`,
+  resolveResourceUrl: (path: string, ticket?: string | null) =>
+    ticket ? `/api/v1/${path}?ticket=${encodeURIComponent(ticket)}` : `/api/v1/${path}`,
 }));
 
 const listGuild = vi.mocked(emojiApi.listGuild);

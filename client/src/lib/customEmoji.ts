@@ -1,5 +1,5 @@
 import { resolveResourceUrl } from './config/apiBaseUrl';
-import { getAccessToken } from './authToken';
+import { getDownloadTicket } from './downloadTicket';
 
 const CUSTOM_EMOJI_TOKEN_PATTERN = /^<(a?):([A-Za-z0-9_]{1,32}):([0-9]+)>$/;
 
@@ -33,6 +33,6 @@ export function formatCustomEmojiToken(name: string, emojiId: string, animated =
 export function buildGuildEmojiImageUrl(guildId: string, emojiId: string): string {
   return resolveResourceUrl(
     `guilds/${encodeURIComponent(guildId)}/emojis/${encodeURIComponent(emojiId)}/image`,
-    getAccessToken(),
+    getDownloadTicket(),
   );
 }

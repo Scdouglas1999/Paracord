@@ -1,15 +1,20 @@
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
 use paracord_transport::control::{ControlMessage, SessionParticipant, TrackKind};
 use paracord_transport::protocol::{MediaHeader, HEADER_SIZE};
 use paracord_transport::stream::{PublishedTrack, StreamId, TrackId, VideoCodecCapability};
 
+use crate::bandwidth::BandwidthEstimator;
 use crate::room::MediaRoomManager;
 use crate::speaker::SpeakerDetector;
 
@@ -30,6 +35,20 @@ const MAX_SENDER_PACKETS_PER_SECOND: f64 = 1500.0;
 /// are not dropped, while the long-run average is still bounded by
 /// [`MAX_SENDER_PACKETS_PER_SECOND`].
 const SENDER_RATE_BURST_PACKETS: f64 = 3000.0;
+
+/// Interval between QUIC path-stat samples for one connection.
+const BANDWIDTH_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Force a `BandwidthFeedback` at least this often even if the estimate is stable.
+const BANDWIDTH_FEEDBACK_MAX_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Minimum relative change (10%) before emitting an out-of-band feedback update.
+const BANDWIDTH_FEEDBACK_CHANGE_RATIO: f64 = 0.10;
+
+/// Receiver reports above this loss rate may trigger a server-side layer downgrade.
+const HIGH_PACKET_LOSS_PPM: u32 = 50_000;
+
+static RELAY_VIDEO_FORWARD_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Per-sender token-bucket packet-rate limiter keyed by `user_id`.
 ///
@@ -194,6 +213,14 @@ impl ConnectionHandle {
         }
     }
 
+    /// QUIC connection used for transport statistics (raw or bridged control path).
+    pub fn quinn_connection(&self) -> Option<&quinn::Connection> {
+        match &self.transport {
+            MediaTransport::Quic(conn) => Some(conn),
+            MediaTransport::Bridged { control_conn, .. } => control_conn.as_ref(),
+        }
+    }
+
     /// Accept a bidirectional control stream from the remote peer.
     pub async fn accept_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), String> {
         match &self.transport {
@@ -247,6 +274,8 @@ pub struct RelayForwarder {
     speaker_detector: Arc<SpeakerDetector>,
     /// Per-sender packet-rate limiter guarding the forwarding hot path.
     sender_rate_limiter: SenderRateLimiter,
+    /// Per-connection QUIC bandwidth estimates driving adaptation feedback.
+    bandwidth_estimator: BandwidthEstimator,
     /// Notify signal for shutdown.
     shutdown: Notify,
 }
@@ -272,6 +301,7 @@ impl RelayForwarder {
                 MAX_SENDER_PACKETS_PER_SECOND,
                 SENDER_RATE_BURST_PACKETS,
             ),
+            bandwidth_estimator: BandwidthEstimator::new(),
             shutdown: Notify::new(),
         }
     }
@@ -298,6 +328,8 @@ impl RelayForwarder {
         let forwarder = Arc::clone(self);
         let user_id = handle.user_id;
         let room_id = handle.room_id.clone();
+
+        forwarder.spawn_bandwidth_task(handle.clone());
 
         tokio::spawn(async move {
             info!(user_id, room_id = %room_id, "relay: forwarding task started");
@@ -373,6 +405,7 @@ impl RelayForwarder {
             // Clean up on disconnect
             let had_active_session = forwarder.active_sessions.remove(&user_id).is_some();
             forwarder.sender_rate_limiter.forget(user_id);
+            forwarder.bandwidth_estimator.remove_user(user_id);
             forwarder.remove_connection(user_id);
             if had_active_session {
                 forwarder
@@ -384,6 +417,62 @@ impl RelayForwarder {
                     .await;
             }
             info!(user_id, room_id = %room_id, "relay: forwarding task ended");
+        });
+    }
+
+    /// Periodically sample QUIC path stats and emit `BandwidthFeedback` to the
+    /// participant. Runs on its own task so the datagram fan-out loop is never
+    /// blocked or delayed by congestion estimation.
+    fn spawn_bandwidth_task(self: &Arc<Self>, handle: ConnectionHandle) {
+        let forwarder = Arc::clone(self);
+        let user_id = handle.user_id;
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(BANDWIDTH_SAMPLE_INTERVAL);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut last_sent_kbps = 0u32;
+            let mut last_feedback_at = Instant::now();
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = forwarder.shutdown.notified() => break,
+                }
+
+                if !handle.is_alive() {
+                    break;
+                }
+
+                let Some(conn) = handle.quinn_connection() else {
+                    continue;
+                };
+
+                forwarder
+                    .bandwidth_estimator
+                    .update_from_connection(user_id, conn);
+                let available_kbps = forwarder.bandwidth_estimator.available_kbps(user_id);
+
+                let materially_changed = last_sent_kbps == 0
+                    || {
+                        let delta = available_kbps.abs_diff(last_sent_kbps) as f64;
+                        let baseline = last_sent_kbps.max(1) as f64;
+                        delta / baseline >= BANDWIDTH_FEEDBACK_CHANGE_RATIO
+                    };
+                let stale = last_feedback_at.elapsed() >= BANDWIDTH_FEEDBACK_MAX_INTERVAL;
+
+                if materially_changed || stale {
+                    forwarder
+                        .send_control_to_user(
+                            user_id,
+                            &ControlMessage::BandwidthFeedback { available_kbps },
+                        )
+                        .await;
+                    last_sent_kbps = available_kbps;
+                    last_feedback_at = Instant::now();
+                }
+            }
+
+            forwarder.bandwidth_estimator.remove_user(user_id);
         });
     }
 
@@ -457,6 +546,14 @@ impl RelayForwarder {
             None => return,
         };
         let published_track = resolve_published_track_for_ssrc(&room, sender_id, header.ssrc);
+        let video_debug_index = if matches!(
+            header.track_type,
+            paracord_transport::protocol::TrackType::Video
+        ) {
+            Some(RELAY_VIDEO_FORWARD_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed))
+        } else {
+            None
+        };
 
         // Find all participants subscribed to this sender
         let mut forward_count = 0u32;
@@ -485,6 +582,21 @@ impl RelayForwarder {
                 recipients = forward_count,
                 "relay: forwarded datagram"
             );
+        }
+        if let Some(debug_index) = video_debug_index {
+            if debug_index < 48 {
+                warn!(
+                    sender = sender_id,
+                    room_id = %room_id,
+                    ssrc = header.ssrc,
+                    seq = header.sequence,
+                    layer = header.simulcast_layer,
+                    epoch = header.key_epoch,
+                    has_track = published_track.is_some(),
+                    recipients = forward_count,
+                    "relay-video-debug: routed video datagram"
+                );
+            }
         }
     }
 
@@ -790,30 +902,61 @@ impl RelayForwarder {
                 estimated_bitrate_kbps,
                 packet_loss_ppm,
             } => {
-                if let Err(err) = self.room_manager.update_track_subscription(
+                let track = self.resolve_any_published_track(room_id, &stream_id, &track_id);
+                let path_kbps = self.bandwidth_estimator.available_kbps(user_id);
+                let budget_kbps =
+                    receiver_budget_kbps(estimated_bitrate_kbps, packet_loss_ppm, path_kbps);
+                let congestion_layer =
+                    track.as_ref().and_then(|t| suggest_layer_for_budget(t, budget_kbps));
+                let effective_active_layer = match active_layer {
+                    Some(layer) if packet_loss_ppm < HIGH_PACKET_LOSS_PPM => Some(layer),
+                    _ => active_layer.or(congestion_layer),
+                };
+
+                let subscription_changed = match self.room_manager.update_track_subscription(
                     room_id,
                     user_id,
                     &stream_id,
                     &track_id,
-                    active_layer,
+                    effective_active_layer,
                     viewport.clone(),
                 ) {
-                    warn!(
+                    Ok(updated) => {
+                        updated
+                            && effective_active_layer.is_some()
+                            && effective_active_layer != active_layer
+                    }
+                    Err(err) => {
+                        warn!(
+                            user_id,
+                            room_id = %room_id,
+                            error = %err,
+                            "relay: failed to update track subscription from receiver report"
+                        );
+                        false
+                    }
+                };
+
+                if subscription_changed {
+                    self.send_control_to_user(
                         user_id,
-                        room_id = %room_id,
-                        error = %err,
-                        "relay: failed to update track subscription from receiver report"
-                    );
+                        &ControlMessage::SubscriptionAck {
+                            stream_id: stream_id.clone(),
+                            track_id: track_id.clone(),
+                            layer_id: effective_active_layer,
+                            active: true,
+                        },
+                    )
+                    .await;
                 }
-                if let Some(track) =
-                    self.resolve_any_published_track(room_id, &stream_id, &track_id)
-                {
+
+                if let Some(track) = track {
                     self.send_control_to_user(
                         track.publisher_user_id,
                         &ControlMessage::ReceiverReport {
                             stream_id,
                             track_id,
-                            active_layer,
+                            active_layer: effective_active_layer,
                             viewport,
                             estimated_bitrate_kbps,
                             packet_loss_ppm,
@@ -1172,6 +1315,37 @@ fn should_forward_to_participant(
     }
 }
 
+/// Merge the viewer's receive estimate with the relay's QUIC path budget and
+/// discount for observed packet loss.
+fn receiver_budget_kbps(
+    estimated_bitrate_kbps: u32,
+    packet_loss_ppm: u32,
+    path_available_kbps: u32,
+) -> u32 {
+    let mut budget = estimated_bitrate_kbps.min(path_available_kbps);
+    if packet_loss_ppm > 0 {
+        let loss = (packet_loss_ppm as f64 / 1_000_000.0).clamp(0.0, 0.9);
+        budget = ((budget as f64) * (1.0 - loss)).max(100.0) as u32;
+    }
+    budget
+}
+
+/// Pick the highest published simulcast layer that fits within `budget_kbps`.
+fn suggest_layer_for_budget(track: &PublishedTrack, budget_kbps: u32) -> Option<u8> {
+    if track.layers.is_empty() {
+        return None;
+    }
+
+    let mut layers = track.layers.clone();
+    layers.sort_by_key(|layer| layer.layer_id);
+    layers
+        .iter()
+        .rev()
+        .find(|layer| layer.max_bitrate_kbps.unwrap_or(u32::MAX) <= budget_kbps)
+        .or_else(|| layers.first())
+        .map(|layer| layer.layer_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1187,6 +1361,55 @@ mod tests {
         let mgr = MediaRoomManager::new();
         let forwarder = RelayForwarder::new(Arc::new(mgr), Arc::new(SpeakerDetector::new()));
         assert_eq!(forwarder.connection_count(), 0);
+    }
+
+    #[test]
+    fn receiver_budget_respects_path_and_loss() {
+        assert_eq!(receiver_budget_kbps(5000, 0, 3000), 3000);
+        let lossy = receiver_budget_kbps(5000, 100_000, 5000);
+        assert!(lossy < 5000);
+        assert!(lossy >= 100);
+    }
+
+    #[test]
+    fn suggest_layer_for_budget_picks_highest_fitting_layer() {
+        let track = PublishedTrack {
+            stream_id: StreamId::new("stream-1"),
+            track_id: TrackId::new("cam"),
+            publisher_user_id: 1,
+            kind: TrackKind::Video,
+            codec: Some(VideoCodec::Vp9),
+            layers: vec![
+                PublishedLayer {
+                    layer_id: 0,
+                    ssrc: 10,
+                    width: Some(640),
+                    height: Some(360),
+                    max_bitrate_kbps: Some(500),
+                    active: true,
+                },
+                PublishedLayer {
+                    layer_id: 1,
+                    ssrc: 11,
+                    width: Some(1280),
+                    height: Some(720),
+                    max_bitrate_kbps: Some(1500),
+                    active: true,
+                },
+                PublishedLayer {
+                    layer_id: 2,
+                    ssrc: 12,
+                    width: Some(1920),
+                    height: Some(1080),
+                    max_bitrate_kbps: Some(4000),
+                    active: true,
+                },
+            ],
+        };
+
+        assert_eq!(suggest_layer_for_budget(&track, 4000), Some(2));
+        assert_eq!(suggest_layer_for_budget(&track, 1500), Some(1));
+        assert_eq!(suggest_layer_for_budget(&track, 400), Some(0));
     }
 
     #[test]

@@ -200,6 +200,7 @@ export function AppLayout() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.18 }}
+              onClick={closeUserSettings}
             >
               <motion.div
                 ref={userSettingsDialogRef}
@@ -212,6 +213,7 @@ export function AppLayout() {
                 exit={{ scale: 0.96, opacity: 0, y: 8 }}
                 transition={modalEnter}
                 className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden rounded-lg shadow-xl"
+                onClick={(e) => e.stopPropagation()}
               >
                 <SettingsPage />
               </motion.div>
@@ -225,6 +227,7 @@ export function AppLayout() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.18 }}
+              onClick={closeGuildSettings}
             >
               <motion.div
                 ref={guildSettingsDialogRef}
@@ -237,6 +240,7 @@ export function AppLayout() {
                 exit={{ scale: 0.96, opacity: 0, y: 8 }}
                 transition={modalEnter}
                 className="relative flex h-full max-h-[min(900px,85vh)] w-full max-w-6xl flex-col overflow-hidden rounded-lg shadow-xl"
+                onClick={(e) => e.stopPropagation()}
               >
                 <GuildSettingsPage />
               </motion.div>

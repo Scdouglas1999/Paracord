@@ -599,6 +599,109 @@ async fn native_fetch(req: NativeFetchRequest) -> Result<NativeFetchResponse, St
     Ok(NativeFetchResponse { status, body })
 }
 
+#[derive(serde::Deserialize)]
+struct NativeUploadFileRequest {
+    url: String,
+    filename: String,
+    content_type: String,
+    // Base64-encoded file bytes. Sent as a string rather than a raw byte array
+    // because nested typed arrays do not round-trip reliably through the Tauri
+    // JSON IPC (a `Uint8Array` serializes to an object, not a `Vec<u8>`), which
+    // previously produced an empty multipart body and a 400 from the server.
+    data_base64: String,
+    headers: Option<std::collections::HashMap<String, String>>,
+}
+
+#[tauri::command]
+async fn native_upload_file(req: NativeUploadFileRequest) -> Result<NativeFetchResponse, String> {
+    use base64::Engine as _;
+
+    ensure_native_fetch_target_is_trusted(&req.url)?;
+    let client = tls_pinning_client()?;
+
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(req.data_base64.as_bytes())
+        .map_err(|e| format!("Invalid upload payload encoding: {e}"))?;
+    if data.is_empty() {
+        return Err("Upload payload was empty".to_string());
+    }
+
+    let part = reqwest::multipart::Part::bytes(data)
+        .file_name(req.filename)
+        .mime_str(&req.content_type)
+        .map_err(|e| e.to_string())?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+
+    let mut builder = client.post(&req.url).multipart(form);
+    if let Some(headers) = req.headers {
+        for (k, v) in headers {
+            if k.eq_ignore_ascii_case("content-type") {
+                continue;
+            }
+            builder = builder.header(&k, &v);
+        }
+    }
+
+    let resp = builder.send().await.map_err(map_reqwest_error)?;
+    let status = resp.status().as_u16();
+    let body = resp
+        .json::<serde_json::Value>()
+        .await
+        .unwrap_or(serde_json::Value::Null);
+    Ok(NativeFetchResponse { status, body })
+}
+
+#[derive(serde::Deserialize)]
+struct NativeDownloadFileRequest {
+    url: String,
+    headers: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(serde::Serialize)]
+struct NativeDownloadFileResponse {
+    status: u16,
+    content_type: Option<String>,
+    // Base64-encoded body. Returning raw bytes as a JSON number array
+    // (`Vec<u8>`) is enormous and slow to serialize/parse for multi-MB
+    // attachments, which blocks the UI thread for a noticeable moment on every
+    // image load/open/download. Base64 is ~4x smaller over the IPC and decodes
+    // quickly via `atob` on the client.
+    data_base64: String,
+}
+
+#[tauri::command]
+async fn native_download_file(
+    req: NativeDownloadFileRequest,
+) -> Result<NativeDownloadFileResponse, String> {
+    use base64::Engine as _;
+
+    ensure_native_fetch_target_is_trusted(&req.url)?;
+    let client = tls_pinning_client()?;
+    let mut builder = client.get(&req.url);
+    if let Some(headers) = req.headers {
+        for (k, v) in headers {
+            builder = builder.header(&k, &v);
+        }
+    }
+    let resp = builder.send().await.map_err(map_reqwest_error)?;
+    let status = resp.status().as_u16();
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let data = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+    let data_base64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    Ok(NativeDownloadFileResponse {
+        status,
+        content_type,
+        data_base64,
+    })
+}
+
 fn find_sse_delimiter(buffer: &str) -> Option<(usize, usize)> {
     let lf = buffer.find("\n\n").map(|idx| (idx, 2));
     let crlf = buffer.find("\r\n\r\n").map(|idx| (idx, 4));
@@ -895,6 +998,8 @@ pub fn run() {
         update_trusted_server_hosts,
         probe_server,
         native_fetch,
+        native_upload_file,
+        native_download_file,
         start_native_sse_stream,
         stop_native_sse_stream,
         get_default_connect_target,

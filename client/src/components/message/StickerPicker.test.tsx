@@ -20,6 +20,10 @@ vi.mock('../../lib/config/apiBaseUrl', () => ({
   resolveResourceUrl: (url: string) => `/resolved${url}`,
 }));
 
+vi.mock('../../lib/downloadTicket', () => ({
+  getDownloadTicket: () => null,
+}));
+
 vi.mock('../../lib/authToken', () => ({
   getAccessToken: () => 'test-token',
 }));

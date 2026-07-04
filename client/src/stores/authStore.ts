@@ -9,6 +9,7 @@ import {
   setAccessToken,
   setRefreshToken,
 } from '../lib/authToken';
+import { clearDownloadTicketCache, startDownloadTicketLifecycle } from '../lib/downloadTicket';
 import { toast } from './toastStore';
 import { useTypingStore } from './typingStore';
 import { useReadStateStore } from './readStateStore';
@@ -38,6 +39,7 @@ function clearAuthState(set: (partial: Partial<AuthState>) => void): void {
   setAccessToken(null);
   setRefreshToken(null);
   clearLegacyPersistedAuth();
+  clearDownloadTicketCache();
   // Clear per-session transient state so stale typing indicators and their
   // pending expiry timers don't leak into the next session.
   useTypingStore.getState().reset();
@@ -71,11 +73,9 @@ export const useAuthStore = create<AuthState>()((set) => ({
       setAccessToken(data.token);
       if (data.refresh_token) setRefreshToken(data.refresh_token);
       set({ token: data.token, user: data.user, isLoading: false });
+      startDownloadTicketLifecycle();
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { message?: string } } }).response?.data?.message ||
-        'Login failed';
-      set({ error: message, isLoading: false });
+      set({ error: extractApiError(err), isLoading: false });
       throw err;
     }
   },
@@ -92,11 +92,9 @@ export const useAuthStore = create<AuthState>()((set) => ({
       setAccessToken(data.token);
       if (data.refresh_token) setRefreshToken(data.refresh_token);
       set({ token: data.token, user: data.user, isLoading: false });
+      startDownloadTicketLifecycle();
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { message?: string } } }).response?.data?.message ||
-        'Registration failed';
-      set({ error: message, isLoading: false });
+      set({ error: extractApiError(err), isLoading: false });
       throw err;
     }
   },
@@ -110,6 +108,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
       setAccessToken(data.token);
       if (data.refresh_token) setRefreshToken(data.refresh_token);
       set({ token: data.token, sessionBootstrapComplete: true });
+      startDownloadTicketLifecycle();
     } catch {
       setAccessToken(null);
       set({ token: null, sessionBootstrapComplete: true });
@@ -148,8 +147,11 @@ export const useAuthStore = create<AuthState>()((set) => ({
     try {
       const { data } = await authApi.getSettings();
       set({ settings: data, hasFetchedSettings: true });
-    } catch {
+    } catch (err) {
+      // Mark as fetched even on failure so consumers don't spin in a refetch
+      // loop; surface the failure to the user via a toast.
       set({ hasFetchedSettings: true });
+      toast.error(`Failed to load settings: ${extractApiError(err)}`);
     }
   },
 

@@ -125,6 +125,26 @@ pub async fn create_session(
     Ok(row)
 }
 
+pub async fn get_session_by_superseded_refresh_hash(
+    pool: &DbPool,
+    refresh_token_hash: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<AuthSessionRow>, DbError> {
+    let row = sqlx::query_as::<_, AuthSessionRow>(
+        "SELECT id, user_id, refresh_token_hash, current_jti, pub_key, device_id, user_agent, ip_address,
+                issued_at, last_seen_at, expires_at, revoked_at, revoked_reason
+         FROM auth_sessions
+         WHERE previous_refresh_token_hash = $1
+           AND revoked_at IS NULL
+           AND expires_at > $2",
+    )
+    .bind(refresh_token_hash)
+    .bind(datetime_to_db_text(now))
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 pub async fn get_session_by_refresh_hash(
     pool: &DbPool,
     refresh_token_hash: &str,
@@ -190,6 +210,7 @@ pub async fn rotate_session_refresh_token(
     let result = sqlx::query(
         "UPDATE auth_sessions
          SET refresh_token_hash = $3,
+             previous_refresh_token_hash = $2,
              current_jti = $4,
              last_seen_at = $5,
              expires_at = $6
@@ -207,6 +228,15 @@ pub async fn rotate_session_refresh_token(
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Revoke every active session for a user after refresh-token reuse is detected.
+pub async fn revoke_all_sessions_for_refresh_reuse(
+    pool: &DbPool,
+    user_id: i64,
+    now: DateTime<Utc>,
+) -> Result<u64, DbError> {
+    revoke_all_user_sessions_except(pool, user_id, None, "refresh_token_reuse", now).await
 }
 
 pub async fn update_session_jti(

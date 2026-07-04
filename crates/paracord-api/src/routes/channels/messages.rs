@@ -592,7 +592,7 @@ pub async fn send_message(
         paracord_core::message::CreateMessageOptions {
             message_type: 0,
             reference_id: referenced_message_id,
-            allow_empty_content: !body.attachment_ids.is_empty(),
+            allow_empty_content: !body.attachment_ids.is_empty() || !body.sticker_ids.is_empty(),
             dm_e2ee,
             nonce,
         },

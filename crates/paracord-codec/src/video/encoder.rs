@@ -352,31 +352,31 @@ mod vpx_impl {
             match config.content_hint {
                 VideoContentHint::Motion | VideoContentHint::Film => {
                     match config.width.saturating_mul(config.height) {
-                        pixels if pixels >= 3840 * 2160 => 8,
-                        pixels if pixels >= 2560 * 1440 => 7,
-                        pixels if pixels >= 1920 * 1080 => 6,
+                        pixels if pixels >= 3840 * 2160 => 7,
+                        pixels if pixels >= 2560 * 1440 => 6,
+                        pixels if pixels >= 1920 * 1080 => 5,
                         _ => 5,
                     }
                 }
                 VideoContentHint::Detail => match config.width.saturating_mul(config.height) {
-                    pixels if pixels >= 2560 * 1440 => 7,
-                    pixels if pixels >= 1920 * 1080 => 6,
-                    _ => 5,
+                    pixels if pixels >= 2560 * 1440 => 6,
+                    pixels if pixels >= 1920 * 1080 => 5,
+                    _ => 4,
                 },
                 VideoContentHint::Default => match config.width.saturating_mul(config.height) {
-                    pixels if pixels >= 3840 * 2160 => 8,
-                    pixels if pixels >= 1920 * 1080 => 7,
-                    _ => 6,
+                    pixels if pixels >= 3840 * 2160 => 7,
+                    pixels if pixels >= 1920 * 1080 => 6,
+                    _ => 5,
                 },
             }
         }
 
         fn quantizer_bounds(config: &EncoderConfig) -> (u32, u32) {
             match config.content_hint {
-                VideoContentHint::Detail => (4, 28),
-                VideoContentHint::Motion => (4, 32),
-                VideoContentHint::Film => (4, 36),
-                VideoContentHint::Default => (4, 34),
+                VideoContentHint::Detail => (2, 24),
+                VideoContentHint::Motion => (2, 28),
+                VideoContentHint::Film => (2, 26),
+                VideoContentHint::Default => (4, 30),
             }
         }
 

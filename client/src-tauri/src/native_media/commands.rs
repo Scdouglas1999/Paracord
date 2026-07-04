@@ -132,9 +132,11 @@ pub async fn start_voice_session(
 
     // Spawn audio pipeline tasks
     audio_pipeline::spawn_audio_send_task(&mut session);
+    audio_pipeline::spawn_screen_audio_send_task(&mut session);
     audio_pipeline::spawn_datagram_recv_task(&mut session, app.clone());
-    audio_pipeline::spawn_playout_task(&mut session);
+    audio_pipeline::spawn_playout_task(&mut session, app.clone());
     events::spawn_control_recv_task(&mut session, app.clone());
+    events::spawn_connection_monitor(&mut session, app.clone());
 
     // Spawn event tasks
     events::spawn_speaking_detector(&mut session, app.clone());
@@ -407,6 +409,7 @@ pub async fn voice_push_video_frame(
     super::video_pipeline::encode_and_send_video_frame(
         session, width, height, rgba, false, false, None,
     )
+    .await
 }
 
 #[tauri::command]
@@ -420,18 +423,45 @@ pub async fn voice_push_screen_frame(
     super::video_pipeline::encode_and_send_video_frame(
         session, width, height, rgba, true, false, None,
     )
+    .await
 }
 
 #[tauri::command]
 pub async fn voice_set_screen_audio_enabled(
     enabled: bool,
     state: State<'_, MediaState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let mut guard = state.session.lock().await;
-    let session = guard.as_mut().ok_or("no active session")?;
-    session
-        .screen_audio_enabled
-        .store(enabled, Ordering::SeqCst);
+    let should_announce = {
+        let mut guard = state.session.lock().await;
+        let session = guard.as_mut().ok_or("no active session")?;
+        session
+            .screen_audio_enabled
+            .store(enabled, Ordering::SeqCst);
+        enabled
+            && session.published_screen_track.is_some()
+            && session.published_screen_audio_track.is_none()
+    };
+    if should_announce {
+        super::screen_capture::announce_screen_audio_track_public(&state, &app).await?;
+    } else if !enabled {
+        let mut guard = state.session.lock().await;
+        if let Some(session) = guard.as_mut() {
+            if let Some(track) = session.published_screen_audio_track.take() {
+                super::video_pipeline::clear_track_sender_key(session, &track).await;
+                {
+                    let mut registry = session.stream_registry.lock().await;
+                    registry.unpublish_track(&track.stream_id, &track.track_id);
+                }
+                let _ = session
+                    .send_control_message(&paracord_transport::control::ControlMessage::TrackUnpublish {
+                        stream_id: track.stream_id.clone(),
+                        track_id: track.track_id.clone(),
+                    })
+                    .await;
+            }
+        }
+    }
     Ok(())
 }
 

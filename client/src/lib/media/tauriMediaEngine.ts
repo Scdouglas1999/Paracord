@@ -38,6 +38,7 @@ const tauriReady = (async () => {
 
 type UnlistenFn = () => void;
 const VIDEO_POLL_INTERVAL_MS = 16;
+const VIDEO_IDLE_POLL_INTERVAL_MS = 250;
 const VP9_CODEC = 'vp09.00.10.08';
 const H264_CODEC = 'avc1.640028';
 const AV1_CODEC = 'av01.0.10M.08';
@@ -217,9 +218,9 @@ export function startPulledEncodedVideoSubscription(
     attachDecoder(decoderRef.current);
   }
 
-  const scheduleNextPoll = () => {
+  const scheduleNextPoll = (delayMs = VIDEO_POLL_INTERVAL_MS) => {
     if (stopped) return;
-    timer = setTimeout(runPoll, VIDEO_POLL_INTERVAL_MS);
+    timer = setTimeout(runPoll, delayMs);
   };
 
   const renderNativeI420Frame = (
@@ -287,6 +288,8 @@ export function startPulledEncodedVideoSubscription(
           pollCount,
           afterSequence: lastSequence,
         });
+      } else {
+        emptyPollCount += 1;
       }
     } catch (err) {
       if (!stopped) {
@@ -297,7 +300,11 @@ export function startPulledEncodedVideoSubscription(
       }
     } finally {
       pollInFlight = false;
-      scheduleNextPoll();
+      scheduleNextPoll(
+        emptyPollCount > 0
+          ? Math.min(VIDEO_IDLE_POLL_INTERVAL_MS, VIDEO_POLL_INTERVAL_MS * 2 ** Math.min(emptyPollCount, 4))
+          : VIDEO_POLL_INTERVAL_MS,
+      );
     }
   };
 
@@ -331,6 +338,19 @@ export class TauriMediaEngine implements MediaEngine {
   private screenAudioAccumulator: number[] = [];
   private screenAudioActive = false;
   private screenEventUnlisten: UnlistenFn | null = null;
+  private transportLostUnlisten: UnlistenFn | null = null;
+  private streamAudioUnlisten: UnlistenFn | null = null;
+  private transportLostCb: ((reason: string) => void) | null = null;
+  private disconnecting = false;
+
+  private screenShareAudioSubscriptions = new Map<
+    string,
+    {
+      playbackContext: AudioContext;
+      gainNode: GainNode;
+      nextStartTime: number;
+    }
+  >();
 
   // Video frame extraction
   private videoStream: MediaStream | null = null;
@@ -362,6 +382,7 @@ export class TauriMediaEngine implements MediaEngine {
       });
       await this.initializePublishedTrackListeners();
       await this.initializeMediaKeyListeners();
+      await this.initializeTransportListeners();
       const tracks = await this.listPublishedTracks().catch(() => []);
       for (const track of tracks) {
         this.publishedTracks.set(`${track.streamId}:${track.trackId}`, track);
@@ -382,8 +403,11 @@ export class TauriMediaEngine implements MediaEngine {
 
   async disconnect(): Promise<void> {
     await tauriReady;
+    this.disconnecting = true;
+    this.transportLostCb = null;
     this.stopFrameExtraction();
     this.clearVideoSubscriptions();
+    this.clearScreenShareAudioSubscriptions();
     this.cleanupScreenShare();
     this.screenAudioActive = false;
     for (const unlisten of this.unlisteners) {
@@ -391,12 +415,15 @@ export class TauriMediaEngine implements MediaEngine {
     }
     this.unlisteners = [];
     this.screenEventUnlisten = null;
+    this.transportLostUnlisten = null;
+    this.streamAudioUnlisten = null;
     this.publishedTracks.clear();
     this.sessionParticipantCapabilities.clear();
     this.publishedTrackListenersReady = false;
     this.localUserId = null;
     this.localRoomId = null;
     await invoke('stop_voice_session');
+    this.disconnecting = false;
   }
 
   setMute(muted: boolean): void {
@@ -407,22 +434,22 @@ export class TauriMediaEngine implements MediaEngine {
     invoke('voice_set_deaf', { deafened });
   }
 
-  enableVideo(enabled: boolean): void {
+  async enableVideo(enabled: boolean): Promise<void> {
     if (enabled) {
-      // Capture camera in WebView, extract RGBA frames, send to Rust for VP9 encoding
-      navigator.mediaDevices
-        .getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 30 } } })
-        .then((stream) => {
-          this.videoStream = stream;
-          invoke('voice_enable_video', { enabled: true });
-          this.startVideoFrameExtraction(stream, false);
-        })
-        .catch((err) => {
-          console.error('[TauriMediaEngine] camera capture failed:', err);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 30 } },
         });
+        this.videoStream = stream;
+        await invoke('voice_enable_video', { enabled: true });
+        this.startVideoFrameExtraction(stream, false);
+      } catch (err) {
+        console.error('[TauriMediaEngine] camera capture failed:', err);
+        throw err instanceof Error ? err : new Error(String(err));
+      }
     } else {
       this.stopVideoCapture();
-      invoke('voice_enable_video', { enabled: false });
+      await invoke('voice_enable_video', { enabled: false });
     }
   }
 
@@ -709,6 +736,140 @@ export class TauriMediaEngine implements MediaEngine {
       this.unlisteners.push(unlisten);
     });
     this.listenerPromises.push(p);
+  }
+
+  onTransportLost(cb: (reason: string) => void): void {
+    this.transportLostCb = cb;
+  }
+
+  subscribeScreenShareAudio(userId: string, getVolume: () => number): () => void {
+    void tauriReady.then(async () => {
+      const playbackContext = new AudioContext({ sampleRate: 48_000 });
+      const gainNode = playbackContext.createGain();
+      gainNode.gain.value = getVolume();
+      gainNode.connect(playbackContext.destination);
+      this.screenShareAudioSubscriptions.set(userId, {
+        playbackContext,
+        gainNode,
+        nextStartTime: playbackContext.currentTime,
+      });
+      const tracks = await this.listPublishedTracks().catch(() => []);
+      const audioTrack = tracks.find(
+        (track) =>
+          String(track.publisherUserId) === userId &&
+          track.trackId === 'screen-audio' &&
+          track.kind === 'audio',
+      );
+      if (audioTrack) {
+        await this.registerTrackSubscription({
+          streamId: audioTrack.streamId,
+          trackId: audioTrack.trackId,
+          requestedLayer: 0,
+        }).catch(() => {});
+      }
+    });
+
+    const volumeTimer = setInterval(() => {
+      const sub = this.screenShareAudioSubscriptions.get(userId);
+      if (sub) {
+        sub.gainNode.gain.value = getVolume();
+      }
+    }, 100);
+
+    return () => {
+      clearInterval(volumeTimer);
+      const sub = this.screenShareAudioSubscriptions.get(userId);
+      if (sub) {
+        sub.playbackContext.close().catch(() => {});
+        this.screenShareAudioSubscriptions.delete(userId);
+      }
+    };
+  }
+
+  private clearScreenShareAudioSubscriptions(): void {
+    for (const [, sub] of this.screenShareAudioSubscriptions) {
+      sub.playbackContext.close().catch(() => {});
+    }
+    this.screenShareAudioSubscriptions.clear();
+  }
+
+  private async initializeTransportListeners(): Promise<void> {
+    if (!listen) return;
+
+    if (!this.transportLostUnlisten) {
+      this.transportLostUnlisten = await listen('media_transport_lost', (event) => {
+        if (this.disconnecting) return;
+        const reason =
+          typeof event.payload === 'string'
+            ? event.payload
+            : 'Native voice connection lost';
+        this.transportLostCb?.(reason);
+      });
+      this.unlisteners.push(this.transportLostUnlisten);
+    }
+
+    if (!this.streamAudioUnlisten) {
+      this.streamAudioUnlisten = await listen('media_stream_audio_pcm', (event) => {
+        const payload = event.payload as {
+          userId?: string;
+          samples?: number[];
+        } | null;
+        if (!payload?.userId || !Array.isArray(payload.samples) || payload.samples.length === 0) {
+          return;
+        }
+        const sub = this.screenShareAudioSubscriptions.get(payload.userId);
+        if (!sub) return;
+        const buffer = sub.playbackContext.createBuffer(1, payload.samples.length, 48_000);
+        buffer.copyToChannel(Float32Array.from(payload.samples), 0);
+        const source = sub.playbackContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(sub.gainNode);
+        const startAt = Math.max(sub.nextStartTime, sub.playbackContext.currentTime);
+        source.start(startAt);
+        sub.nextStartTime = startAt + buffer.duration;
+      });
+      this.unlisteners.push(this.streamAudioUnlisten);
+    }
+
+    const bandwidthUnlisten = await listen('media_bandwidth_feedback', (event) => {
+      const payload = event.payload as { availableKbps?: number } | null;
+      const availableKbps = Number(payload?.availableKbps ?? 0);
+      if (!Number.isFinite(availableKbps) || availableKbps <= 0) return;
+      void this.applyBandwidthFeedback(availableKbps).catch(() => {});
+    });
+    this.unlisteners.push(bandwidthUnlisten);
+  }
+
+  private async applyBandwidthFeedback(availableKbps: number): Promise<void> {
+    for (const [, sub] of this.videoSubscriptions) {
+      if (!sub.streamId || !sub.trackId) continue;
+      const track = this.publishedTracks.get(`${sub.streamId}:${sub.trackId}`);
+      if (!track?.layers.length) continue;
+      const sortedLayers = [...track.layers].sort(
+        (a, b) => (a.maxBitrateKbps ?? 0) - (b.maxBitrateKbps ?? 0),
+      );
+      let targetLayer = sortedLayers[0]?.layerId ?? 0;
+      for (const layer of sortedLayers) {
+        if ((layer.maxBitrateKbps ?? 0) <= availableKbps) {
+          targetLayer = layer.layerId;
+        }
+      }
+      if (sub.activeLayer === targetLayer) continue;
+      sub.activeLayer = targetLayer;
+      const viewport = rendererCanvasSize(sub.renderer);
+      await invoke('media_register_stream_video_subscription', {
+        streamId: sub.streamId,
+        trackId: sub.trackId,
+        ssrc: track.layers.find((layer) => layer.layerId === targetLayer)?.ssrc,
+      }).catch(() => {});
+      await this.registerTrackSubscription({
+        streamId: sub.streamId,
+        trackId: sub.trackId,
+        requestedLayer: targetLayer,
+        activeLayer: targetLayer,
+        viewport,
+      }).catch(() => {});
+    }
   }
 
   async getStreamCapabilities(): Promise<MediaStreamCapabilities> {

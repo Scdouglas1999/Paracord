@@ -7,7 +7,6 @@ import { useAuthStore } from '../../stores/authStore';
 import { useUIStore } from '../../stores/uiStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { VoiceControls } from '../voice/VoiceControls';
-import { ConnectionStatusBar } from './ConnectionStatusBar';
 import { InviteModal } from '../guild/InviteModal';
 import { Permissions, hasPermission, isAdmin as isGlobalAdmin, ChannelType, type Channel } from '../../types/index';
 import { buildChannelGroups, isVirtualGroup } from '../../lib/features/channelGroups';
@@ -659,7 +658,6 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
         )}
       </div>
 
-      <ConnectionStatusBar />
       <VoiceControls />
       <UserPanel
         user={user}

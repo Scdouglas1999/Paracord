@@ -169,6 +169,25 @@ pub fn emit_media_request_keyframe(
     );
 }
 
+/// Spawn a task that watches the QUIC connection and notifies the UI on loss.
+pub fn spawn_connection_monitor(session: &mut NativeMediaSession, app: tauri::AppHandle) {
+    let shutdown = session.shutdown.clone();
+    let conn = session.connection.inner().clone();
+
+    let handle = tokio::spawn(async move {
+        tokio::select! {
+            _ = shutdown.notified() => {}
+            reason = conn.closed() => {
+                use tauri::Emitter;
+                let message = format!("Native voice connection lost: {reason}");
+                let _ = app.emit("media_transport_lost", message);
+            }
+        }
+    });
+
+    session.connection_monitor_task = Some(handle);
+}
+
 /// Spawn a task that receives stream-control messages on QUIC bidi streams and
 /// folds them into the local session stream registry.
 pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
@@ -609,13 +628,19 @@ async fn handle_control_message(
                 "received receiver report"
             );
         }
+        ControlMessage::BandwidthFeedback { available_kbps } => {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "media_bandwidth_feedback",
+                serde_json::json!({ "availableKbps": available_kbps }),
+            );
+        }
         ControlMessage::SessionJoin { .. }
         | ControlMessage::SessionLeave { .. }
         | ControlMessage::Auth { .. }
         | ControlMessage::Subscribe { .. }
         | ControlMessage::Unsubscribe { .. }
         | ControlMessage::KeyAnnounce { .. }
-        | ControlMessage::BandwidthFeedback { .. }
         | ControlMessage::Ping
         | ControlMessage::Pong
         | ControlMessage::FileTransferInit { .. }

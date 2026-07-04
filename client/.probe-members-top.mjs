@@ -26,26 +26,53 @@ await page.waitForTimeout(2500);
 console.log('after-login url:', page.url());
 
 // Pure client-side navigation — NO page.goto reload (session lives in sessionStorage)
-await page.getByRole('button', { name: 'Polish Probe HQ', exact: true }).click().catch((e) => console.log('pill click:', e.message));
-await page.waitForTimeout(1200);
-await page.keyboard.press('Escape').catch(() => {});
+const pill = page.getByRole('button', { name: 'Polish Probe HQ', exact: true });
+for (let i = 0; i < 5 && !page.url().includes('/guilds/'); i++) {
+  await pill.first().click({ timeout: 4000 }).catch((e) => console.log('pill click:', e.message));
+  await page.waitForFunction(() => location.pathname.includes('/guilds/'), { timeout: 4000 }).catch(() => {});
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.waitForTimeout(400);
+}
 await page.getByRole('button', { name: 'Jump in' }).click().catch(() => {});
-await page.waitForTimeout(700);
-await page.getByRole('treeitem').filter({ hasText: /general/i }).first().click().catch((e) => console.log('treeitem click:', e.message));
+await page.waitForTimeout(500);
+const general = page.getByRole('treeitem').filter({ hasText: /general/i }).first();
+await general.click({ timeout: 8000 }).catch((e) => console.log('treeitem click:', e.message));
 await page.waitForTimeout(900);
 await page.getByRole('button', { name: 'Jump in' }).click().catch(() => {});
 await page.waitForTimeout(900);
 console.log('final url:', page.url());
 
-await page.screenshot({ path: `${OUT}/${PHASE}-full.png` });
-await page.screenshot({ path: `${OUT}/${PHASE}-topbar.png`, clip: { x: 0, y: 0, width: 1600, height: 60 } });
-await page.screenshot({ path: `${OUT}/${PHASE}-memberlist.png`, clip: { x: 1600 - 260, y: 0, width: 260, height: 900 } });
+// Open the member panel (Users icon in top bar) so MemberList renders
+const membersBtn = page.getByRole('button', { name: 'Member List' });
+if (await membersBtn.count()) {
+  // Toggle until the member list (aria-label="Member list") is visible
+  const memberList = page.locator('[aria-label="Member list"]');
+  if (!(await memberList.count()) || !(await memberList.first().isVisible().catch(() => false))) {
+    await membersBtn.first().click().catch(() => {});
+    await page.waitForTimeout(700);
+  }
+}
+await page.waitForTimeout(600);
 
-const footer = page.locator('.panel-divider').first();
+await page.screenshot({ path: `${OUT}/${PHASE}-full.png` });
+await page.screenshot({ path: `${OUT}/${PHASE}-topbar.png`, clip: { x: 0, y: 0, width: 1600, height: 56 } });
+// Top-bar right action cluster, zoomed
+await page.screenshot({ path: `${OUT}/${PHASE}-topbar-right.png`, clip: { x: 1600 - 420, y: 0, width: 420, height: 56 } });
+
+const memberList = page.locator('[aria-label="Member list"]').first();
+if (await memberList.count()) {
+  const box = await memberList.boundingBox();
+  if (box) {
+    await page.screenshot({ path: `${OUT}/${PHASE}-memberlist.png`, clip: { x: box.x, y: 0, width: box.width, height: 900 } });
+  }
+}
+
+// User footer: the panel-divider that contains the Copy-username button
+const footer = page.locator('div.panel-divider').filter({ has: page.locator('[aria-label^="Copy username"]') }).first();
 if (await footer.count()) {
   const box = await footer.boundingBox();
   if (box) {
-    await page.screenshot({ path: `${OUT}/${PHASE}-userfooter.png`, clip: { x: Math.max(0, box.x - 6), y: Math.max(0, box.y - 6), width: box.width + 12, height: box.height + 12 } });
+    await page.screenshot({ path: `${OUT}/${PHASE}-userfooter.png`, clip: { x: Math.max(0, box.x - 8), y: Math.max(0, box.y - 8), width: box.width + 16, height: box.height + 16 } });
   }
 }
 

@@ -208,8 +208,24 @@ export class BrowserMediaEngine implements MediaEngine {
   private screenEncoder: MediaVideoEncoder | null = null;
   private screenFrameCallbackId: number | null = null;
   private screenTrack: MediaStreamTrack | null = null;
-  private screenAudioSource: MediaStreamAudioSourceNode | null = null;
+  // Screen share audio capture (separate from voice uplink)
+  private screenAudioContext: AudioContext | null = null;
+  private screenAudioWorkletNode: AudioWorkletNode | null = null;
+  private screenAudioEncoder: OpusMediaEncoder | null = null;
+  private screenAudioSequence = 0;
   private screenAudioActive = false;
+
+  // Remote screen-share audio playback (separate from voice)
+  private screenAudioSubscriptions = new Map<
+    string,
+    {
+      ssrc: number;
+      decoder: OpusMediaDecoder;
+      jitterBuffer: JitterBuffer;
+      gainNode: GainNode;
+      playbackContext: AudioContext;
+    }
+  >();
   private screenSequence = 0;
   private screenShareEndedCb: (() => void) | null = null;
 
@@ -225,6 +241,7 @@ export class BrowserMediaEngine implements MediaEngine {
   private localAudioSsrc = 0;
   private localVideoSsrc = 0;
   private localScreenSsrc = 0;
+  private localScreenAudioSsrc = 0;
   private localVideoLayerSsrcs = new Map<number, number>();
   private localScreenLayerSsrcs = new Map<number, number>();
   private localUserId: string | null = null;
@@ -242,6 +259,8 @@ export class BrowserMediaEngine implements MediaEngine {
   private speakingChangeCb: ((speakers: Map<string, number>) => void) | null = null;
   private participantJoinCb: ((userId: string) => void) | null = null;
   private participantLeaveCb: ((userId: string) => void) | null = null;
+  private transportLostCb: ((reason: string) => void) | null = null;
+  private disconnecting = false;
 
   // Playback timer
   private playbackInterval: ReturnType<typeof setInterval> | null = null;
@@ -255,12 +274,14 @@ export class BrowserMediaEngine implements MediaEngine {
       this.localAudioSsrc = await deriveTrackSsrc(this.localUserId, 'audio');
       this.localVideoSsrc = await deriveTrackSsrc(this.localUserId, 'video');
       this.localScreenSsrc = await deriveTrackSsrc(this.localUserId, 'screen');
+      this.localScreenAudioSsrc = await deriveTrackSsrc(this.localUserId, 'screen:audio');
       this.localVideoLayerSsrcs = await this.buildLayerSsrcs(this.localUserId, 'video', this.localVideoSsrc);
       this.localScreenLayerSsrcs = await this.buildLayerSsrcs(this.localUserId, 'screen', this.localScreenSsrc);
     } else {
       this.localAudioSsrc = ((Math.random() * 0xffffffff) >>> 0) || 1;
       this.localVideoSsrc = ((Math.random() * 0xffffffff) >>> 0) || 2;
       this.localScreenSsrc = ((Math.random() * 0xffffffff) >>> 0) || 3;
+      this.localScreenAudioSsrc = ((Math.random() * 0xffffffff) >>> 0) || 8;
       this.localVideoLayerSsrcs = new Map([
         [0, ((Math.random() * 0xffffffff) >>> 0) || 4],
         [1, ((Math.random() * 0xffffffff) >>> 0) || 5],
@@ -282,10 +303,17 @@ export class BrowserMediaEngine implements MediaEngine {
 
     this.transport.onStreamControl((msg) => this.handleStreamControlMessage(msg));
     this.transport.onDatagram((data) => this.handleDatagram(data));
+    this.transport.onRestored(() => {
+      void this.restoreTransportSession().catch((err) => {
+        console.warn('[BrowserMediaEngine] Failed to restore session after reconnect:', err);
+      });
+    });
     this.transport.onClose((reason) => {
+      if (this.disconnecting) return;
       console.warn('[BrowserMediaEngine] Connection closed:', reason);
       this.cleanupAudio();
       this.cleanupVideo();
+      this.transportLostCb?.(reason);
     });
 
     await this.transport.connect(endpoint, token, certHash);
@@ -310,6 +338,7 @@ export class BrowserMediaEngine implements MediaEngine {
   }
 
   async disconnect(): Promise<void> {
+    this.disconnecting = true;
     if (this.transport) {
       await this.transport
         .sendStreamControl({
@@ -343,6 +372,9 @@ export class BrowserMediaEngine implements MediaEngine {
       sub.renderer.destroy();
     }
     this.videoSubscriptions.clear();
+    this.clearScreenAudioSubscriptions();
+    this.transportLostCb = null;
+    this.disconnecting = false;
   }
 
   setMute(muted: boolean): void {
@@ -361,13 +393,15 @@ export class BrowserMediaEngine implements MediaEngine {
     }
   }
 
-  enableVideo(enabled: boolean): void {
+  async enableVideo(enabled: boolean): Promise<void> {
     if (enabled && !this.videoEnabled) {
       this.videoEnabled = true;
-      this.setupVideoCapture().catch((err) => {
-        console.error('[BrowserMediaEngine] Failed to enable video:', err);
+      try {
+        await this.setupVideoCapture();
+      } catch (err) {
         this.videoEnabled = false;
-      });
+        throw err;
+      }
     } else if (!enabled && this.videoEnabled) {
       this.videoEnabled = false;
       this.cleanupVideo();
@@ -413,14 +447,10 @@ export class BrowserMediaEngine implements MediaEngine {
 
     this.screenTrack = videoTracks[0];
 
-    // Mix captured display audio into the existing outbound Opus pipeline.
-    // Native QUIC transport currently has a single audio track, so stream audio
-    // is delivered by mixing it with the microphone uplink while sharing.
+    // Publish screen audio on a dedicated SSRC instead of mixing into voice.
     const audioTracks = this.screenStream.getAudioTracks();
-    if (config.audio && audioTracks.length > 0 && this.audioContext && this.workletNode) {
-      const audioOnlyStream = new MediaStream(audioTracks);
-      this.screenAudioSource = this.audioContext.createMediaStreamSource(audioOnlyStream);
-      this.screenAudioSource.connect(this.workletNode);
+    if (config.audio && audioTracks.length > 0) {
+      await this.setupScreenAudioCapture(audioTracks);
       this.screenAudioActive = true;
     }
 
@@ -461,6 +491,16 @@ export class BrowserMediaEngine implements MediaEngine {
         track,
       }).catch(() => {});
       await this.announceTrackSenderKey(track).catch(() => {});
+      if (this.screenAudioActive) {
+        const audioTrack = this.buildLocalScreenAudioTrack();
+        this.publishedTracks.set(this.trackKey(audioTrack.streamId, audioTrack.trackId), audioTrack);
+        this.ssrcToUserId.set(this.localScreenAudioSsrc, String(audioTrack.publisherUserId));
+        await this.transport.sendStreamControl({
+          type: 'track_publish',
+          track: audioTrack,
+        }).catch(() => {});
+        await this.announceTrackSenderKey(audioTrack).catch(() => {});
+      }
     }
 
     // Start reading frames from the screen share track
@@ -472,10 +512,16 @@ export class BrowserMediaEngine implements MediaEngine {
 
     if (this.transport) {
       this.publishedTracks.delete(this.trackKey(this.localScreenStreamId(), 'screen'));
+      this.publishedTracks.delete(this.trackKey(this.localScreenStreamId(), 'screen-audio'));
       void this.transport.sendStreamControl({
         type: 'track_unpublish',
         stream_id: this.localScreenStreamId(),
         track_id: 'screen',
+      }).catch(() => {});
+      void this.transport.sendStreamControl({
+        type: 'track_unpublish',
+        stream_id: this.localScreenStreamId(),
+        track_id: 'screen-audio',
       }).catch(() => {});
     }
   }
@@ -510,6 +556,82 @@ export class BrowserMediaEngine implements MediaEngine {
 
   onParticipantLeave(cb: (userId: string) => void): void {
     this.participantLeaveCb = cb;
+  }
+
+  onTransportLost(cb: (reason: string) => void): void {
+    this.transportLostCb = cb;
+  }
+
+  subscribeScreenShareAudio(userId: string, getVolume: () => number): () => void {
+    const existing = this.screenAudioSubscriptions.get(userId);
+    if (existing) {
+      existing.playbackContext.close().catch(() => {});
+      this.screenAudioSubscriptions.delete(userId);
+    }
+
+    const playbackContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+    const gainNode = playbackContext.createGain();
+    gainNode.gain.value = getVolume();
+    gainNode.connect(playbackContext.destination);
+
+    const publishedTrack = this.findPublishedScreenAudioTrack(userId);
+    const ssrc =
+      publishedTrack?.layers[0]?.ssrc ??
+      this.derivePlaceholderSsrc(`${userId}:screen:audio`);
+
+    const decoder = new OpusMediaDecoder({
+      sampleRate: SAMPLE_RATE,
+      channels: CHANNELS,
+    });
+    decoder.onDecoded((audioData) => {
+      const channelData = new Float32Array(audioData.numberOfFrames);
+      audioData.copyTo(channelData, { planeIndex: 0, format: 'f32' });
+      const buffer = playbackContext.createBuffer(1, channelData.length, SAMPLE_RATE);
+      buffer.copyToChannel(channelData, 0);
+      const source = playbackContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(gainNode);
+      source.start();
+      audioData.close();
+    });
+    const jitterBuffer = new JitterBuffer(FRAME_MS, 60);
+
+    this.screenAudioSubscriptions.set(userId, {
+      ssrc,
+      decoder,
+      jitterBuffer,
+      gainNode,
+      playbackContext,
+    });
+
+    if (publishedTrack) {
+      void this.registerTrackSubscription({
+        streamId: publishedTrack.streamId,
+        trackId: publishedTrack.trackId,
+        requestedLayer: 0,
+      }).catch(() => {});
+      void this.applyDeliveredTrackKeys(publishedTrack);
+    }
+
+    const volumeTimer = setInterval(() => {
+      const sub = this.screenAudioSubscriptions.get(userId);
+      if (sub) {
+        sub.gainNode.gain.value = getVolume();
+      }
+    }, 100);
+
+    return () => {
+      clearInterval(volumeTimer);
+      const sub = this.screenAudioSubscriptions.get(userId);
+      if (!sub) return;
+      const track = this.findPublishedScreenAudioTrack(userId);
+      if (track) {
+        void this.unregisterTrackSubscription(track.streamId, track.trackId).catch(() => {});
+      }
+      sub.decoder.close();
+      sub.playbackContext.close().catch(() => {});
+      this.screenAudioSubscriptions.delete(userId);
+    };
   }
 
   async getStreamCapabilities(): Promise<MediaStreamCapabilities> {
@@ -1288,9 +1410,16 @@ export class BrowserMediaEngine implements MediaEngine {
       // Ignore our own audio packets to avoid echo, but allow local video
       // loopback so the host sees the real published stream path.
       if (header.ssrc === this.localAudioSsrc && header.trackType !== TrackType.Video) return;
+      if (header.ssrc === this.localScreenAudioSsrc) return;
 
       if (header.trackType === TrackType.Video) {
         this.handleVideoDatagram(data, header, payload);
+        return;
+      }
+
+      const streamAudioUserId = this.findScreenAudioUserIdForSsrc(header.ssrc);
+      if (streamAudioUserId) {
+        this.handleScreenAudioDatagram(streamAudioUserId, header, payload, data);
         return;
       }
 
@@ -1661,6 +1790,13 @@ export class BrowserMediaEngine implements MediaEngine {
         }
         break;
       }
+      case 'bandwidth_feedback': {
+        const availableKbps = Number(msg.available_kbps ?? 0);
+        if (Number.isFinite(availableKbps) && availableKbps > 0) {
+          void this.applyBandwidthFeedback(availableKbps).catch(() => {});
+        }
+        break;
+      }
       case 'key_deliver': {
         const senderUserId = String((msg.sender_user_id as string | number | undefined) ?? '');
         const epoch = msg.epoch as number | undefined;
@@ -1879,6 +2015,7 @@ export class BrowserMediaEngine implements MediaEngine {
         this.localAudioSsrc,
         this.localVideoSsrc,
         this.localScreenSsrc,
+        this.localScreenAudioSsrc,
         ...this.localVideoLayerSsrcs.values(),
         ...this.localScreenLayerSsrcs.values(),
       ].filter((ssrc) => Number.isFinite(ssrc) && ssrc > 0)),
@@ -1949,6 +2086,240 @@ export class BrowserMediaEngine implements MediaEngine {
       codec,
       layers: this.buildSimulcastLayers(width, height, 2000, this.localScreenLayerSsrcs),
     };
+  }
+
+  private buildLocalScreenAudioTrack(): PublishedTrackDescriptor {
+    return {
+      streamId: this.localScreenStreamId(),
+      trackId: 'screen-audio',
+      publisherUserId: this.localUserId ?? '0',
+      kind: 'audio',
+      codec: null,
+      layers: [{
+        layerId: 0,
+        ssrc: this.localScreenAudioSsrc,
+        width: null,
+        height: null,
+        maxBitrateKbps: 192,
+        active: true,
+      }],
+    };
+  }
+
+  private findPublishedScreenAudioTrack(userId: string): PublishedTrackDescriptor | undefined {
+    return Array.from(this.publishedTracks.values()).find(
+      (track) =>
+        String(track.publisherUserId) === userId &&
+        track.trackId === 'screen-audio' &&
+        track.kind === 'audio',
+    );
+  }
+
+  private findScreenAudioUserIdForSsrc(ssrc: number): string | null {
+    for (const track of this.publishedTracks.values()) {
+      if (track.trackId !== 'screen-audio' || track.kind !== 'audio') {
+        continue;
+      }
+      if (track.layers.some((layer) => layer.ssrc === ssrc)) {
+        return String(track.publisherUserId);
+      }
+    }
+    for (const [userId, sub] of this.screenAudioSubscriptions) {
+      if (sub.ssrc === ssrc) {
+        return userId;
+      }
+    }
+    return null;
+  }
+
+  private async setupScreenAudioCapture(audioTracks: MediaStreamTrack[]): Promise<void> {
+    this.cleanupScreenAudioCapture();
+    const audioOnlyStream = new MediaStream(audioTracks);
+    this.screenAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+    const processorUrl = new URL('./audio/audioProcessor.ts', import.meta.url).href;
+    await this.screenAudioContext.audioWorklet.addModule(processorUrl);
+    const source = this.screenAudioContext.createMediaStreamSource(audioOnlyStream);
+    this.screenAudioWorkletNode = new AudioWorkletNode(this.screenAudioContext, 'media-audio-processor');
+    this.screenAudioWorkletNode.port.onmessage = (event) => {
+      if (event.data.type === 'frame' && this.screenAudioActive) {
+        this.encodeAndSendScreenAudio(event.data.samples);
+      }
+    };
+    source.connect(this.screenAudioWorkletNode);
+    this.screenAudioWorkletNode.connect(this.screenAudioContext.destination);
+    this.screenAudioEncoder = new OpusMediaEncoder({
+      sampleRate: SAMPLE_RATE,
+      channels: CHANNELS,
+      bitrate: 192_000,
+    });
+    this.screenAudioEncoder.onEncoded((chunk) => {
+      void this.sendEncodedScreenAudio(chunk);
+    });
+    this.screenAudioSequence = 0;
+  }
+
+  private encodeAndSendScreenAudio(samples: Float32Array): void {
+    if (!this.screenAudioEncoder) return;
+    const timestamp = this.screenAudioSequence * FRAME_MS * 1000;
+    this.screenAudioEncoder.encode(samples, timestamp);
+  }
+
+  private async sendEncodedScreenAudio(chunk: EncodedAudioChunk): Promise<void> {
+    if (!this.transport) return;
+    const encodedData = new Uint8Array(chunk.byteLength);
+    chunk.copyTo(encodedData);
+    const header: MediaHeader = {
+      version: PROTOCOL_VERSION,
+      trackType: TrackType.Audio,
+      simulcastLayer: 0,
+      sequence: this.screenAudioSequence & 0xffff,
+      timestamp: (chunk.timestamp / 1000) >>> 0,
+      ssrc: this.localScreenAudioSsrc,
+      audioLevel: 127,
+      keyEpoch: this.senderKeys.currentEpoch,
+      payloadLength: 0,
+      codec: 0,
+    };
+    const headerAAD = createPacket(header, new Uint8Array(0)).slice(0, HEADER_SIZE);
+    const encrypted = await this.senderKeys.encrypt(
+      headerAAD,
+      encodedData,
+      this.senderKeys.currentEpoch,
+      this.screenAudioSequence & 0xffff,
+      this.localScreenAudioSsrc,
+    );
+    const packet = createPacket(header, encrypted);
+    this.transport.sendDatagram(packet);
+    this.screenAudioSequence++;
+  }
+
+  private handleScreenAudioDatagram(
+    userId: string,
+    header: MediaHeader,
+    payload: Uint8Array,
+    rawData: Uint8Array,
+  ): void {
+    let subscription = this.screenAudioSubscriptions.get(userId);
+    if (!subscription) {
+      return;
+    }
+    subscription.ssrc = header.ssrc;
+    this.senderKeys.decrypt(
+      rawData.slice(0, HEADER_SIZE),
+      payload,
+      header.keyEpoch,
+      header.sequence,
+      header.ssrc,
+    ).then((decrypted) => {
+      if (this.deafened) return;
+      subscription!.jitterBuffer.push(header.sequence, header.timestamp, decrypted);
+    }).catch(() => {});
+  }
+
+  private async restoreTransportSession(): Promise<void> {
+    if (!this.transport) return;
+    await this.transport.sendStreamControl({
+      type: 'session_join',
+      room_id: this.localRoomId ?? '',
+      session_id: `browser-${this.localUserId ?? 'unknown'}`,
+      video_capabilities: (await this.getStreamCapabilities()).video.map((capability) => ({
+        codec: capability.codec,
+        encode: capability.encode,
+        decode: capability.decode,
+        hardware_accelerated: capability.hardwareAccelerated,
+      })),
+    });
+    const recipientUserIds = this.currentRemoteParticipantIds();
+    await this.announceAudioSenderKey(recipientUserIds);
+    await this.announcePublishedTrackKeysForRecipients(recipientUserIds);
+    for (const [, sub] of this.videoSubscriptions) {
+      if (!sub.streamId || !sub.trackId) continue;
+      const canvas = sub.renderer.canvasElement;
+      const viewport = canvas
+        ? {
+            width: Math.max(
+              1,
+              Math.round((canvas.clientWidth || canvas.width || 1) * (window.devicePixelRatio || 1)),
+            ),
+            height: Math.max(
+              1,
+              Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1)),
+            ),
+          }
+        : undefined;
+      await this.registerTrackSubscription({
+        streamId: sub.streamId,
+        trackId: sub.trackId,
+        requestedLayer: sub.activeLayer,
+        viewport,
+      }).catch(() => {});
+    }
+    for (const userId of this.screenAudioSubscriptions.keys()) {
+      const track = this.findPublishedScreenAudioTrack(userId);
+      if (track) {
+        await this.registerTrackSubscription({
+          streamId: track.streamId,
+          trackId: track.trackId,
+          requestedLayer: 0,
+        }).catch(() => {});
+      }
+    }
+  }
+
+  private async applyBandwidthFeedback(availableKbps: number): Promise<void> {
+    for (const [, sub] of this.videoSubscriptions) {
+      if (!sub.streamId || !sub.trackId) continue;
+      const track = this.publishedTracks.get(this.trackKey(sub.streamId, sub.trackId));
+      if (!track?.layers.length) continue;
+      const sortedLayers = [...track.layers].sort((a, b) => (a.maxBitrateKbps ?? 0) - (b.maxBitrateKbps ?? 0));
+      let targetLayer = sortedLayers[0]?.layerId ?? 0;
+      for (const layer of sortedLayers) {
+        if ((layer.maxBitrateKbps ?? 0) <= availableKbps) {
+          targetLayer = layer.layerId;
+        }
+      }
+      if (sub.activeLayer === targetLayer) continue;
+      sub.activeLayer = targetLayer;
+      const canvas = sub.renderer.canvasElement;
+      const viewport = canvas
+        ? {
+            width: Math.max(1, Math.round((canvas.clientWidth || canvas.width || 1) * (window.devicePixelRatio || 1))),
+            height: Math.max(1, Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1))),
+          }
+        : undefined;
+      await this.registerTrackSubscription({
+        streamId: sub.streamId,
+        trackId: sub.trackId,
+        requestedLayer: targetLayer,
+        activeLayer: targetLayer,
+        viewport,
+      }).catch(() => {});
+    }
+  }
+
+  private clearScreenAudioSubscriptions(): void {
+    for (const [, sub] of this.screenAudioSubscriptions) {
+      sub.decoder.close();
+      sub.playbackContext.close().catch(() => {});
+    }
+    this.screenAudioSubscriptions.clear();
+  }
+
+  private cleanupScreenAudioCapture(): void {
+    if (this.screenAudioWorkletNode) {
+      this.screenAudioWorkletNode.disconnect();
+      this.screenAudioWorkletNode = null;
+    }
+    if (this.screenAudioContext) {
+      this.screenAudioContext.close().catch(() => {});
+      this.screenAudioContext = null;
+    }
+    if (this.screenAudioEncoder) {
+      this.screenAudioEncoder.close();
+      this.screenAudioEncoder = null;
+    }
+    this.screenAudioSequence = 0;
+    this.screenAudioActive = false;
   }
 
   private buildLocalCameraTrack(
@@ -2145,6 +2516,13 @@ export class BrowserMediaEngine implements MediaEngine {
           participant.decoder.decode(frame, timestamp);
         }
       }
+
+      for (const [, subscription] of this.screenAudioSubscriptions) {
+        const frame = subscription.jitterBuffer.pull();
+        if (!frame) continue;
+        const timestamp = performance.now() * 1000;
+        subscription.decoder.decode(frame, timestamp);
+      }
     }, FRAME_MS);
 
     // Wire up decoded audio to playback
@@ -2238,11 +2616,7 @@ export class BrowserMediaEngine implements MediaEngine {
       this.screenFrameCallbackId = null;
     }
 
-    if (this.screenAudioSource) {
-      this.screenAudioSource.disconnect();
-      this.screenAudioSource = null;
-    }
-    this.screenAudioActive = false;
+    this.cleanupScreenAudioCapture();
 
     if (this.screenTrack) {
       const cleanup = (this.screenTrack as unknown as Record<string, () => void>).__paracordCleanup;

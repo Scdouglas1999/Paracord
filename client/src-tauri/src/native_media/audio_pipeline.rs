@@ -13,10 +13,34 @@ use super::session::{NativeMediaSession, RemoteAudioState};
 const VOICE_BITRATE_BPS: i32 = 96_000;
 const STREAM_BITRATE_BPS: i32 = 192_000;
 
+pub struct StreamRemoteAudioState {
+    pub publisher_user_id: i64,
+    pub decoder: OpusDecoder,
+    pub jitter_buffer: JitterBuffer<Vec<u8>>,
+}
+
+fn stream_audio_publisher_for_ssrc(
+    registry: &super::stream_registry::StreamRegistry,
+    ssrc: u32,
+) -> Option<i64> {
+    for track in registry.published_tracks() {
+        if track.track_id.0.as_str() != "screen-audio" {
+            continue;
+        }
+        if track
+            .layers
+            .iter()
+            .any(|layer| layer.ssrc == ssrc)
+        {
+            return Some(track.publisher_user_id);
+        }
+    }
+    None
+}
+
 /// Spawn the audio send task: captures mic → noise suppress → Opus encode → encrypt → QUIC datagram.
 pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
     let muted = session.muted.clone();
-    let screen_audio_enabled = session.screen_audio_enabled.clone();
     let shutdown = session.shutdown.clone();
     let local_ssrc = session.local_ssrc;
 
@@ -24,7 +48,6 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
     let Some(mut pcm_rx) = session.pcm_rx.take() else {
         return;
     };
-    let mut screen_audio_rx = session.screen_audio_rx.take();
 
     let conn_inner = session.connection.inner().clone();
     let current_key_epoch = session.current_key_epoch.clone();
@@ -42,58 +65,23 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
         let mut noise_suppressor = paracord_codec::audio::noise::NoiseSuppressor::new();
         let mut seq: u16 = 0;
         let mut timestamp: u32 = 0;
-        let mut latest_screen_frame: Option<Vec<f32>> = None;
-        let mut active_bitrate = VOICE_BITRATE_BPS;
 
         loop {
             tokio::select! {
                 _ = shutdown.notified() => break,
-                maybe_screen = async {
-                    match screen_audio_rx.as_mut() {
-                        Some(rx) => rx.recv().await,
-                        None => std::future::pending::<Option<Vec<f32>>>().await,
-                    }
-                } => {
-                    match maybe_screen {
-                        Some(frame) => latest_screen_frame = Some(frame),
-                        None => screen_audio_rx = None,
-                    }
-                }
                 frame = pcm_rx.recv() => {
                     let Some(pcm) = frame else { break };
 
-                    let include_screen_audio = screen_audio_enabled.load(Ordering::SeqCst);
-                    let has_screen_audio = include_screen_audio && latest_screen_frame.is_some();
                     let mic_muted = muted.load(Ordering::SeqCst);
-                    if mic_muted && !has_screen_audio {
+                    if mic_muted {
                         continue;
                     }
 
-                    // Use a higher Opus bitrate while screen audio is active.
-                    let target_bitrate = if has_screen_audio {
-                        STREAM_BITRATE_BPS
-                    } else {
-                        VOICE_BITRATE_BPS
-                    };
-                    if target_bitrate != active_bitrate {
-                        if let Err(e) = opus_encoder.set_bitrate(target_bitrate) {
-                            tracing::warn!("opus bitrate update failed: {e}");
-                        } else {
-                            active_bitrate = target_bitrate;
-                        }
+                    if let Err(e) = opus_encoder.set_bitrate(VOICE_BITRATE_BPS) {
+                        tracing::warn!("opus bitrate update failed: {e}");
                     }
 
-                    // Run mic through denoiser unless muted, then mix in screen audio if active.
-                    let mut mixed = if mic_muted {
-                        vec![0.0f32; FRAME_SIZE]
-                    } else {
-                        noise_suppressor.process_frame(&pcm)
-                    };
-                    if has_screen_audio {
-                        if let Some(screen) = latest_screen_frame.as_deref() {
-                            mix_audio_in_place(&mut mixed, screen);
-                        }
-                    }
+                    let mixed = noise_suppressor.process_frame(&pcm);
 
                     // Compute audio level (RMS → dBov approximation)
                     let audio_level = compute_audio_level(&mixed);
@@ -167,10 +155,118 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
     session.audio_send_task = Some(handle);
 }
 
+/// Spawn the screen-audio send task on a dedicated SSRC (separate from voice).
+pub fn spawn_screen_audio_send_task(session: &mut NativeMediaSession) {
+    let screen_audio_enabled = session.screen_audio_enabled.clone();
+    let shutdown = session.shutdown.clone();
+    let screen_audio_ssrc = session.screen_audio_ssrc;
+    let stream_id = format!("stream:{}:screen", session.session_id);
+    let track_id = "screen-audio".to_string();
+    let Some(mut screen_audio_rx) = session.screen_audio_rx.take() else {
+        return;
+    };
+
+    let conn_inner = session.connection.inner().clone();
+    let frame_encryptor = session.frame_encryptor.clone();
+    let track_sender_keys = session.track_sender_keys.clone();
+
+    let handle = tokio::spawn(async move {
+        let mut opus_encoder = match paracord_codec::audio::opus::OpusEncoder::new() {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!("screen audio send task: opus encoder init failed: {e}");
+                return;
+            }
+        };
+        let _ = opus_encoder.set_bitrate(STREAM_BITRATE_BPS);
+        let mut seq: u16 = 0;
+        let mut timestamp: u32 = 0;
+
+        loop {
+            tokio::select! {
+                _ = shutdown.notified() => break,
+                frame = screen_audio_rx.recv() => {
+                    let Some(pcm) = frame else { break };
+                    if !screen_audio_enabled.load(Ordering::SeqCst) {
+                        continue;
+                    }
+
+                    let key_epoch = {
+                        let sender_keys = track_sender_keys.lock().await;
+                        sender_keys
+                            .get(&(
+                                paracord_transport::stream::StreamId::new(stream_id.clone()),
+                                paracord_transport::stream::TrackId::new(track_id.clone()),
+                            ))
+                            .map(|state| state.epoch)
+                            .unwrap_or(1)
+                    };
+
+                    let opus_data = match opus_encoder.encode(&pcm) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            tracing::warn!("screen audio opus encode error: {e}");
+                            continue;
+                        }
+                    };
+
+                    let mut header = MediaHeader::new(TrackType::Audio, screen_audio_ssrc);
+                    header.sequence = seq;
+                    header.timestamp = timestamp;
+                    header.audio_level = compute_audio_level(&pcm);
+                    header.key_epoch = key_epoch;
+
+                    let mut header_buf = BytesMut::with_capacity(HEADER_SIZE);
+                    header.encode(&mut header_buf);
+                    let header_bytes: [u8; HEADER_SIZE] = header_buf[..HEADER_SIZE]
+                        .try_into()
+                        .expect("header is 16 bytes");
+
+                    let encrypted = {
+                        let mut encryptor = match frame_encryptor.lock() {
+                            Ok(encryptor) => encryptor,
+                            Err(_) => continue,
+                        };
+                        match encryptor.encrypt(
+                            &header_bytes,
+                            screen_audio_ssrc,
+                            key_epoch,
+                            seq,
+                            &opus_data,
+                        ) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                tracing::warn!("screen audio encrypt error: {e:?}");
+                                continue;
+                            }
+                        }
+                    };
+
+                    header.payload_length = encrypted.len() as u16;
+                    let mut buf = BytesMut::with_capacity(HEADER_SIZE + encrypted.len());
+                    header.encode(&mut buf);
+                    buf.put_slice(&encrypted);
+
+                    if conn_inner.send_datagram(buf.freeze()).is_err() {
+                        break;
+                    }
+
+                    seq = seq.wrapping_add(1);
+                    timestamp = timestamp.wrapping_add(FRAME_SIZE as u32);
+                }
+            }
+        }
+    });
+
+    session.screen_audio_send_task = Some(handle);
+}
+
 /// Spawn the datagram receive task: QUIC datagram → parse header → decrypt → dispatch audio/video.
 pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
     let shutdown = session.shutdown.clone();
     let remote_audio = session.remote_audio.clone();
+    let stream_remote_audio = session.stream_remote_audio.clone();
+    let stream_registry = session.stream_registry.clone();
     let audio_actor = session.audio_actor.clone();
     let deafened = session.deafened.clone();
     let conn_inner = session.connection.inner().clone();
@@ -228,6 +324,51 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                                 continue;
                             }
                             let arrival_ms = start_time.elapsed().as_millis() as u64;
+                            let stream_publisher = {
+                                let registry = stream_registry.lock().await;
+                                stream_audio_publisher_for_ssrc(&registry, header.ssrc)
+                            };
+
+                            if let Some(publisher_user_id) = stream_publisher {
+                                let mut stream_audio = stream_remote_audio.lock().await;
+                                if let Some(state) = stream_audio.get_mut(&header.ssrc) {
+                                    state.jitter_buffer.insert(
+                                        header.sequence,
+                                        header.timestamp,
+                                        decrypted,
+                                        arrival_ms,
+                                    );
+                                    continue;
+                                }
+                                drop(stream_audio);
+
+                                let decoder = match OpusDecoder::new() {
+                                    Ok(decoder) => decoder,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            ssrc = header.ssrc,
+                                            "failed to init stream audio decoder: {e}"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let mut state = StreamRemoteAudioState {
+                                    publisher_user_id,
+                                    decoder,
+                                    jitter_buffer: JitterBuffer::new(),
+                                };
+                                state.jitter_buffer.insert(
+                                    header.sequence,
+                                    header.timestamp,
+                                    decrypted,
+                                    arrival_ms,
+                                );
+                                stream_remote_audio
+                                    .lock()
+                                    .await
+                                    .insert(header.ssrc, state);
+                                continue;
+                            }
 
                             // Fast path: SSRC already has decode/playout state.
                             {
@@ -304,10 +445,11 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
 }
 
 /// Spawn the playout task: 20ms timer → pull from jitter buffers → Opus decode → send to playback mixer.
-pub fn spawn_playout_task(session: &mut NativeMediaSession) {
+pub fn spawn_playout_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
     let shutdown = session.shutdown.clone();
     let deafened = session.deafened.clone();
     let remote_audio = session.remote_audio.clone();
+    let stream_remote_audio = session.stream_remote_audio.clone();
 
     let handle = tokio::spawn(async move {
         let mut tick = interval(Duration::from_millis(20));
@@ -338,6 +480,31 @@ pub fn spawn_playout_task(session: &mut NativeMediaSession) {
                             let _ = state.playback_tx.try_send(pcm);
                         }
                     }
+                    drop(remote);
+
+                    let mut stream_audio = stream_remote_audio.lock().await;
+                    for (_ssrc, state) in stream_audio.iter_mut() {
+                        let pcm = match state.jitter_buffer.pull() {
+                            Some(opus_bytes) => {
+                                match state.decoder.decode(&opus_bytes) {
+                                    Ok(samples) => samples,
+                                    Err(_) => state.decoder.decode_plc().unwrap_or_default(),
+                                }
+                            }
+                            None => state.decoder.decode_plc().unwrap_or_default(),
+                        };
+                        if pcm.is_empty() {
+                            continue;
+                        }
+                        use tauri::Emitter;
+                        let _ = app.emit(
+                            "media_stream_audio_pcm",
+                            serde_json::json!({
+                                "userId": state.publisher_user_id.to_string(),
+                                "samples": pcm,
+                            }),
+                        );
+                    }
                 }
             }
         }
@@ -362,6 +529,7 @@ fn compute_audio_level(pcm: &[f32]) -> u8 {
 
 /// Mix a secondary stream into the primary mono frame in-place.
 /// If `overlay` is stereo interleaved, it is downmixed to mono first.
+#[cfg(test)]
 fn mix_audio_in_place(primary: &mut [f32], overlay: &[f32]) {
     if overlay.is_empty() || primary.is_empty() {
         return;

@@ -212,13 +212,13 @@ export function resolveServerRootUrl(path: string): string {
 /**
  * Build an absolute resource URL suitable for `<img>` src and similar
  * browser-native fetches that cannot carry an Authorization header.
- * Appends `?token=<access_token>` when the URL is cross-origin so the
- * server can authenticate the request via query parameter.
+ * Appends `?ticket=<download_ticket>` when the URL is cross-origin so the
+ * server can authenticate the request without exposing the raw access token.
  *
  * @param path - relative path, absolute path, or full URL
- * @param token - access token to append for cross-origin auth (caller provides to avoid circular imports)
+ * @param ticket - download ticket to append for cross-origin auth (defaults to cached ticket)
  */
-export function resolveResourceUrl(path: string, token?: string | null): string {
+export function resolveResourceUrl(path: string, ticket?: string | null): string {
   const base = resolveApiBaseUrl();
   let url: string;
   if (path.startsWith('http://') || path.startsWith('https://')) {
@@ -238,12 +238,13 @@ export function resolveResourceUrl(path: string, token?: string | null): string 
   } else {
     url = `${base}/${path}`;
   }
-  // Append token for cross-origin requests where cookies won't work.
-  if (token && url.startsWith('http')) {
+  // Append download ticket for cross-origin requests where cookies won't work.
+  const authTicket = ticket ?? null;
+  if (authTicket && url.startsWith('http')) {
     try {
       const parsed = new URL(url);
       if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
-        parsed.searchParams.set('token', token);
+        parsed.searchParams.set('ticket', authTicket);
         return parsed.toString();
       }
     } catch {

@@ -24,6 +24,7 @@ pub struct ScheduledMessageRow {
     pub content: Option<String>,
     pub e2ee_payload: Option<String>,
     pub nonce: Option<String>,
+    pub reference_id: Option<i64>,
     pub send_at: DateTime<Utc>,
     pub delivered_message_id: Option<i64>,
     pub status: i16,
@@ -44,6 +45,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ScheduledMessageRow {
             content: row.try_get("content")?,
             e2ee_payload: row.try_get("e2ee_payload")?,
             nonce: row.try_get("nonce")?,
+            reference_id: row.try_get("reference_id")?,
             send_at: DateTime::from_timestamp_millis(send_at_ms).ok_or_else(|| {
                 sqlx::Error::Protocol(format!("invalid send_at epoch millis {send_at_ms}"))
             })?,
@@ -57,11 +59,11 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ScheduledMessageRow {
 }
 
 const SCHEDULED_MESSAGES_SELECT_SQLITE: &str =
-    "id, channel_id, author_id, content, e2ee_payload, nonce, send_at, delivered_message_id,
-     status, error, created_at, updated_at";
+    "id, channel_id, author_id, content, e2ee_payload, nonce, reference_id, send_at,
+     delivered_message_id, status, error, created_at, updated_at";
 
 const SCHEDULED_MESSAGES_SELECT_POSTGRES: &str =
-    "id, channel_id, author_id, content, e2ee_payload, nonce, send_at,
+    "id, channel_id, author_id, content, e2ee_payload, nonce, reference_id, send_at,
      delivered_message_id, status, error,
      to_char(timezone('UTC', created_at), 'YYYY-MM-DD HH24:MI:SS.US') AS created_at,
      to_char(timezone('UTC', updated_at), 'YYYY-MM-DD HH24:MI:SS.US') AS updated_at";
@@ -74,6 +76,7 @@ pub async fn create_scheduled_message(
     content: Option<&str>,
     e2ee_payload: Option<&str>,
     nonce: Option<&str>,
+    reference_id: Option<i64>,
     send_at: DateTime<Utc>,
 ) -> Result<ScheduledMessageRow, DbError> {
     let select_cols = match active_database_engine() {
@@ -82,9 +85,9 @@ pub async fn create_scheduled_message(
     };
     let row = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
         "INSERT INTO scheduled_messages
-            (id, channel_id, author_id, content, e2ee_payload, nonce, send_at, status, updated_at)
+            (id, channel_id, author_id, content, e2ee_payload, nonce, reference_id, send_at, status, updated_at)
          VALUES
-            ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+            ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
          RETURNING {}",
         select_cols
     ))
@@ -94,6 +97,7 @@ pub async fn create_scheduled_message(
     .bind(content)
     .bind(e2ee_payload)
     .bind(nonce)
+    .bind(reference_id)
     .bind(send_at.timestamp_millis())
     .bind(STATUS_SCHEDULED)
     .fetch_one(pool)

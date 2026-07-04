@@ -9,6 +9,7 @@ import { getDesktopDiagnosticsLogPath, logVoiceDiagnostic } from './lib/desktopD
 import { isTauri } from './lib/tauriEnv';
 import { syncTrustedHosts } from './lib/trustedHosts';
 import { useServerListStore } from './stores/serverListStore';
+import { toast } from './stores/toastStore';
 
 // In Tauri, assets are embedded in the exe. The PWA service worker caches stale
 // assets in WebView2 storage that override the exe's embedded files, preventing
@@ -39,6 +40,36 @@ if (isTauri()) {
   document.addEventListener('dragover', (e) => e.preventDefault());
   document.addEventListener('drop', (e) => e.preventDefault());
 }
+
+let lastUnhandledRejection = '';
+let lastUnhandledRejectionAt = 0;
+
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  const message =
+    reason instanceof Error
+      ? reason.message
+      : typeof reason === 'string'
+        ? reason
+        : 'An unexpected error occurred';
+  const now = Date.now();
+  if (message === lastUnhandledRejection && now - lastUnhandledRejectionAt < 3000) {
+    return;
+  }
+  lastUnhandledRejection = message;
+  lastUnhandledRejectionAt = now;
+  // A global rejection is a safety net, not a user-facing error. Surfacing raw
+  // rejection messages (failed background fetches, updater probes, gateway
+  // reconnects) as toasts spams the user — especially on the login screen
+  // before anything is connected. Show it only in dev; capture it in the
+  // diagnostics log in release builds so we can still debug it.
+  if (import.meta.env.DEV) {
+    console.error('Unhandled promise rejection:', reason);
+    toast.error(message);
+  } else {
+    void logVoiceDiagnostic('[app] unhandled promise rejection', { message });
+  }
+});
 
 logVoiceDiagnostic('[desktop] frontend main.tsx boot');
 void getDesktopDiagnosticsLogPath().then((path) => {

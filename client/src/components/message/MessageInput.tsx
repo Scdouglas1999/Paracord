@@ -20,6 +20,11 @@ import { StickerPicker } from './StickerPicker';
 import { SlashCommandPopup } from './SlashCommandPopup';
 import { ScheduledMessagesPanel } from './ScheduledMessagesPanel';
 import type { ApplicationCommand } from '../../types/commands';
+import { ApplicationCommandType, CommandOptionType } from '../../types/commands';
+import type { ResolvedCommandOption } from '../../types/interactions';
+import { interactionApi } from '../../api/interactions';
+import { useCommandStore } from '../../stores/commandStore';
+import { useInteractionStore } from '../../stores/interactionStore';
 import {
   getVersionedStorageItem,
   removeVersionedStorageItem,
@@ -65,6 +70,88 @@ const POLL_DURATION_OPTIONS = [
 
 function canPreviewImageFile(file: File): boolean {
   return isAllowedImageMimeType(file.type);
+}
+
+function parseSlashArgs(text: string): string[] {
+  const args: string[] = [];
+  const pattern = /"([^"]*)"|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    args.push(match[1] ?? match[2]);
+  }
+  return args;
+}
+
+function parseSlashCommandOptions(
+  command: ApplicationCommand,
+  argsText: string,
+): ResolvedCommandOption[] {
+  if (!command.options?.length) return [];
+
+  const parts = parseSlashArgs(argsText);
+  let index = 0;
+  const options: ResolvedCommandOption[] = [];
+  const topLevel = command.options;
+
+  const first = topLevel[0];
+  if (first?.type === CommandOptionType.SubCommand) {
+    const subName = parts[index++];
+    if (!subName) return options;
+    const sub = topLevel.find((entry) => entry.name === subName);
+    if (!sub) return options;
+    const subOptions: ResolvedCommandOption[] = [];
+    for (const opt of sub.options ?? []) {
+      if (index >= parts.length) break;
+      if (opt.type === CommandOptionType.String) {
+        subOptions.push({ name: opt.name, type: opt.type, value: parts[index++] });
+      } else if (opt.type === CommandOptionType.Integer || opt.type === CommandOptionType.Number) {
+        const raw = parts[index++];
+        const parsed = Number(raw);
+        if (!Number.isNaN(parsed)) {
+          subOptions.push({ name: opt.name, type: opt.type, value: parsed });
+        }
+      } else if (opt.type === CommandOptionType.Boolean) {
+        const raw = parts[index++]?.toLowerCase();
+        if (raw === 'true' || raw === 'false') {
+          subOptions.push({ name: opt.name, type: opt.type, value: raw === 'true' });
+        }
+      }
+    }
+    options.push({ name: sub.name, type: CommandOptionType.SubCommand, options: subOptions });
+    return options;
+  }
+
+  for (const opt of topLevel) {
+    if (index >= parts.length) break;
+    if (opt.type === CommandOptionType.String) {
+      options.push({ name: opt.name, type: opt.type, value: parts[index++] });
+    } else if (opt.type === CommandOptionType.Integer || opt.type === CommandOptionType.Number) {
+      const raw = parts[index++];
+      const parsed = Number(raw);
+      if (!Number.isNaN(parsed)) {
+        options.push({ name: opt.name, type: opt.type, value: parsed });
+      }
+    } else if (opt.type === CommandOptionType.Boolean) {
+      const raw = parts[index++]?.toLowerCase();
+      if (raw === 'true' || raw === 'false') {
+        options.push({ name: opt.name, type: opt.type, value: raw === 'true' });
+      }
+    }
+  }
+  return options;
+}
+
+async function resolveGuildSlashCommand(
+  guildId: string,
+  commandName: string,
+): Promise<ApplicationCommand | undefined> {
+  const store = useCommandStore.getState();
+  if (!store.guildCommands.has(guildId)) {
+    await store.fetchGuildCommands(guildId);
+  }
+  return store.guildCommands.get(guildId)?.find(
+    (cmd) => cmd.name === commandName && cmd.type === ApplicationCommandType.ChatInput,
+  );
 }
 
 function loadDraft(channelId: string): string {
@@ -117,7 +204,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const [scheduledCount, setScheduledCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { upload, uploading } = useFileUpload(channelId);
+  const { upload, uploading, maxUploadSize } = useFileUpload(channelId);
   const { triggerTyping } = useTyping(channelId);
   const reduceMotion = useReducedMotion();
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
@@ -343,6 +430,35 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       setSubmitError(`Message is too long (${content.length}/${MAX_MESSAGE_LENGTH}).`);
       return;
     }
+
+    const trimmed = content.trim();
+    const slashMatch = trimmed.match(/^\/(\w+)(?:\s+([\s\S]*))?$/);
+    if (guildId && slashMatch && stagedFiles.length === 0) {
+      const commandName = slashMatch[1];
+      const argsText = (slashMatch[2] ?? '').trim();
+      const command = await resolveGuildSlashCommand(guildId, commandName);
+      if (command) {
+        try {
+          setSubmitError(null);
+          const { data: interaction } = await interactionApi.invokeCommand({
+            command_name: commandName,
+            guild_id: guildId,
+            channel_id: channelId,
+            options: parseSlashCommandOptions(command, argsText),
+          });
+          useInteractionStore.getState().addPendingInteraction(interaction);
+          clearDraftTimer();
+          setContent('');
+          saveDraft(channelId, '');
+          onCancelReply?.();
+          if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        } catch (err) {
+          setSubmitError(messageInputError(err, 'Failed to run command.'));
+        }
+        return;
+      }
+    }
+
     try {
       setSubmitError(null);
       const attachmentIds: string[] = [];
@@ -354,7 +470,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       }
       await useMessageStore.getState().sendMessage(
         channelId,
-        content.trim(),
+        trimmed,
         replyingTo?.id,
         attachmentIds,
       );
@@ -590,38 +706,53 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       )}
 
       {stagedFiles.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {stagedFiles.map((file, i) => (
-            <div
-              key={i}
-              className="relative flex flex-shrink-0 items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5"
-              style={{ maxWidth: 'min(220px, 60vw)' }}
-            >
-              {canPreviewImageFile(file) ? (
-                <img
-                  src={stagedImagePreviews[i] || ''}
-                  alt={file.name}
-                  className="h-10 w-10 rounded-xs object-cover"
-                />
-              ) : (
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xs bg-bg-mod-subtle text-text-muted">
-                  <FileText size={18} />
-                </span>
-              )}
-              <div className="min-w-0">
-                <div className="truncate text-label text-text-primary">{file.name}</div>
-                <div className="text-meta tabular-nums text-text-muted">{formatFileSize(file.size)}</div>
-              </div>
-              <button
-                onClick={() => removeFile(i)}
-                className="ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-bg-mod-strong text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                aria-label={`Remove ${file.name}`}
-                title={`Remove ${file.name}`}
-              >
-                <X size={13} />
-              </button>
-            </div>
-          ))}
+        <div className="flex flex-col gap-1">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {stagedFiles.map((file, i) => {
+              const overLimit = file.size > maxUploadSize;
+              return (
+                <div
+                  key={i}
+                  className={`relative flex flex-shrink-0 items-center gap-2 rounded-sm border bg-bg-tertiary px-2 py-1.5 ${
+                    overLimit ? 'border-accent-danger' : 'border-border-subtle'
+                  }`}
+                  style={{ maxWidth: 'min(220px, 60vw)' }}
+                >
+                  {canPreviewImageFile(file) ? (
+                    <img
+                      src={stagedImagePreviews[i] || ''}
+                      alt={file.name}
+                      className="h-10 w-10 rounded-xs object-cover"
+                    />
+                  ) : (
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xs bg-bg-mod-subtle text-text-muted">
+                      <FileText size={18} />
+                    </span>
+                  )}
+                  <div className="min-w-0">
+                    <div className="truncate text-label text-text-primary">{file.name}</div>
+                    <div
+                      className={`text-meta tabular-nums ${overLimit ? 'text-accent-danger' : 'text-text-muted'}`}
+                    >
+                      {formatFileSize(file.size)}
+                      {overLimit ? ' · exceeds limit' : ''}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => removeFile(i)}
+                    className="ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-bg-mod-strong text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                    aria-label={`Remove ${file.name}`}
+                    title={`Remove ${file.name}`}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="px-0.5 text-meta text-text-muted">
+            Max file size {formatFileSize(maxUploadSize)}
+          </div>
         </div>
       )}
 

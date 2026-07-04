@@ -359,6 +359,8 @@ pub async fn transfer_ownership(
         Some(json!({ "new_owner_id": new_owner_id.to_string() })),
     )
     .await;
+    paracord_core::permissions::invalidate_user(&state.permission_cache, auth.user_id).await;
+    paracord_core::permissions::invalidate_user(&state.permission_cache, new_owner_id).await;
     Ok(Json(payload))
 }
 

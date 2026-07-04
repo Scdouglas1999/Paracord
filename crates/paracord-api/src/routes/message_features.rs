@@ -197,6 +197,7 @@ pub struct ScheduledMessageRequest {
     pub e2ee: Option<Value>,
     pub nonce: Option<String>,
     pub send_at: String,
+    pub reference_message_id: Option<String>,
 }
 
 fn scheduled_message_to_json(row: &paracord_db::scheduled_messages::ScheduledMessageRow) -> Value {
@@ -207,6 +208,7 @@ fn scheduled_message_to_json(row: &paracord_db::scheduled_messages::ScheduledMes
         "content": row.content,
         "e2ee": row.e2ee_payload.as_ref().and_then(|raw| serde_json::from_str::<Value>(raw).ok()),
         "nonce": row.nonce,
+        "reference_message_id": row.reference_id.map(|id| id.to_string()),
         "send_at": row.send_at.to_rfc3339(),
         "status": row.status,
         "error": row.error,
@@ -257,6 +259,23 @@ pub async fn create_scheduled_message(
         .transpose()
         .map_err(|_| ApiError::BadRequest("Invalid e2ee payload".into()))?;
 
+    let reference_id = parse_optional_i64(
+        body.reference_message_id.as_deref(),
+        "reference_message_id",
+    )?;
+    if let Some(ref_id) = reference_id {
+        let referenced = paracord_db::messages::get_message(&state.db, ref_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::BadRequest(
+                "referenced_message_id does not exist".into(),
+            ))?;
+        if referenced.channel_id != channel_id {
+            return Err(ApiError::BadRequest(
+                "referenced_message_id must belong to this channel".into(),
+            ));
+        }
+    }
     let row = paracord_db::scheduled_messages::create_scheduled_message(
         &state.db,
         paracord_util::snowflake::generate(1),
@@ -269,6 +288,7 @@ pub async fn create_scheduled_message(
         },
         e2ee_payload.as_deref(),
         body.nonce.as_deref(),
+        reference_id,
         send_at,
     )
     .await

@@ -215,7 +215,15 @@ export function UpdateNotification() {
       setVisible(true);
     } catch (error) {
       setStatus('idle');
-      setErrorText(getErrorMessage(error));
+      const message = getErrorMessage(error);
+      setErrorText(message);
+      // Update checks run automatically on launch and on an interval. On an
+      // offline machine or a self-hosted/dev build with no update feed they
+      // fail routinely, so log for diagnostics instead of nagging the user
+      // with a toast on every failed background check.
+      if (import.meta.env.DEV) {
+        console.warn('Update check failed:', message);
+      }
     }
   }, [closeActiveUpdate, runningInTauri, setActiveUpdate]);
 

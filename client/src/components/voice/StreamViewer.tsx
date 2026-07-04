@@ -83,6 +83,15 @@ export function StreamViewer({
     if (audioEl) audioEl.volume = volume;
   }, [volume]);
 
+  const updateStreamVolume = useCallback((nextVolume: number) => {
+    const clampedVolume = Math.min(1, Math.max(0, nextVolume));
+    setVolume(clampedVolume);
+    const audioEl = screenShareAudioRef.current;
+    if (audioEl) audioEl.volume = clampedVolume;
+    const videoEl = videoRef.current;
+    if (videoEl) videoEl.volume = clampedVolume;
+  }, []);
+
   // Stream audio plays on the default device. Process Loopback Exclusion
   // handles echo prevention at the OS level — no device rerouting needed.
 
@@ -382,6 +391,72 @@ export function StreamViewer({
     };
   }, [room, mediaEngine, streamerId, localUserId, selfStream, streamerName, hideSelfPreview]);
 
+  // Native media path: subscribe to screen-share audio separately from voice.
+  useEffect(() => {
+    if (room || !mediaEngine || !streamerId) return;
+    const watchingSelf = localUserId != null && streamerId === localUserId;
+    if (watchingSelf) return;
+    const unsubscribe = mediaEngine.subscribeScreenShareAudio(streamerId, () => volumeRef.current);
+    return () => {
+      unsubscribe();
+      cleanupScreenShareAudio();
+    };
+  }, [room, mediaEngine, streamerId, localUserId, cleanupScreenShareAudio]);
+
+  const qualityToLayer = useCallback(
+    (value: typeof quality): number | null => {
+      switch (value) {
+        case 'low':
+          return 0;
+        case 'medium':
+          return 1;
+        case 'high':
+        case 'source':
+          return 2;
+        case 'auto':
+        default:
+          return null;
+      }
+    },
+    [],
+  );
+
+  // Native media path: apply quality selector to simulcast subscriptions.
+  useEffect(() => {
+    if (room || !mediaEngine || !streamerId) return;
+    const watchingSelf = localUserId != null && streamerId === localUserId;
+    if (watchingSelf) return;
+    const requestedLayer = qualityToLayer(quality);
+    void mediaEngine.listPublishedTracks().then((tracks) => {
+      const screenTrack = tracks.find(
+        (track) =>
+          String(track.publisherUserId) === streamerId &&
+          track.trackId === 'screen' &&
+          track.kind === 'video',
+      );
+      if (!screenTrack) return;
+      const canvas = canvasRef.current;
+      const viewport = canvas
+        ? {
+            width: Math.max(
+              1,
+              Math.round((canvas.clientWidth || canvas.width || 1) * (window.devicePixelRatio || 1)),
+            ),
+            height: Math.max(
+              1,
+              Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1)),
+            ),
+          }
+        : undefined;
+      void mediaEngine.registerTrackSubscription({
+        streamId: screenTrack.streamId,
+        trackId: screenTrack.trackId,
+        requestedLayer: requestedLayer ?? undefined,
+        viewport,
+      });
+    });
+  }, [room, mediaEngine, streamerId, localUserId, quality, qualityToLayer]);
+
   // LiveKit room path: subscribe to room events for track attachment
   useEffect(() => {
     if (!room) return;
@@ -538,12 +613,7 @@ export function StreamViewer({
           >
             <button
               onClick={() => {
-                const newVol = isMuted ? 1 : 0;
-                setVolume(newVol);
-                const audioEl = screenShareAudioRef.current;
-                if (audioEl) audioEl.volume = newVol;
-                const videoEl = videoRef.current;
-                if (videoEl) videoEl.volume = newVol;
+                updateStreamVolume(isMuted ? 1 : 0);
               }}
               className="flex h-9 w-9 items-center justify-center rounded-sm bg-black/40 text-white/80 outline-none backdrop-blur-md transition-[color,background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:bg-black/60 hover:text-white hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
               title={isMuted ? 'Unmute' : 'Mute'}
@@ -552,9 +622,12 @@ export function StreamViewer({
             </button>
             {showVolumeSlider && (
               <div
-                className="absolute left-1/2 top-full z-50 mt-2 flex -translate-x-1/2 flex-col items-center gap-2 rounded-md border border-border-subtle px-2 py-3 shadow-lg"
+                className="absolute right-0 top-full z-50 mt-2 flex min-w-44 items-center gap-2 rounded-md border border-border-subtle px-3 py-2 shadow-lg"
                 style={{ backgroundColor: 'var(--bg-floating)', backdropFilter: 'blur(12px)' }}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
               >
+                <VolumeX size={13} className="shrink-0 text-text-muted" />
                 <input
                   type="range"
                   min="0"
@@ -563,17 +636,13 @@ export function StreamViewer({
                   value={volume}
                   onChange={(e) => {
                     const v = parseFloat(e.target.value);
-                    setVolume(v);
-                    const audioEl = screenShareAudioRef.current;
-                    if (audioEl) audioEl.volume = v;
-                    const videoEl = videoRef.current;
-                    if (videoEl) videoEl.volume = v;
+                    updateStreamVolume(v);
                   }}
-                  className="h-24 w-1.5 cursor-pointer appearance-none rounded-full bg-bg-mod-strong accent-accent-primary [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-primary"
-                  style={{ writingMode: 'vertical-lr', direction: 'rtl' }}
+                  className="h-1.5 w-28 cursor-pointer appearance-none rounded-full bg-bg-mod-strong accent-accent-primary [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-primary"
                   title={`Volume: ${Math.round(volume * 100)}%`}
                 />
-                <span className="text-[10px] font-medium text-text-muted">
+                <Volume2 size={13} className="shrink-0 text-text-muted" />
+                <span className="w-8 text-right text-[10px] font-medium tabular-nums text-text-muted">
                   {Math.round(volume * 100)}%
                 </span>
               </div>

@@ -21,14 +21,14 @@ describe('customEmoji', () => {
     });
   });
 
-  it('appends the access token for cross-origin emoji image resources', async () => {
+  it('appends the download ticket for cross-origin emoji image resources', async () => {
     vi.stubEnv('VITE_API_URL', 'https://api.example.com/api/v1');
-    const { setAccessToken } = await import('./authToken');
-    setAccessToken('emoji-token');
+    const { setDownloadTicketForTests } = await import('./downloadTicket');
+    setDownloadTicketForTests('emoji-ticket');
     const { buildGuildEmojiImageUrl } = await import('./customEmoji');
 
     expect(buildGuildEmojiImageUrl('guild 1', 'emoji/2')).toBe(
-      'https://api.example.com/api/v1/guilds/guild%201/emojis/emoji%2F2/image?token=emoji-token',
+      'https://api.example.com/api/v1/guilds/guild%201/emojis/emoji%2F2/image?ticket=emoji-ticket',
     );
   });
 });

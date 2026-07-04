@@ -4,7 +4,7 @@ import { extractApiError } from '../../api/client';
 import { guildApi } from '../../api/guilds';
 import type { Sticker } from '../../types/message.types';
 import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
-import { getAccessToken } from '../../lib/authToken';
+import { getDownloadTicket } from '../../lib/downloadTicket';
 import { safeClientResourceUrl } from '../../lib/security';
 import { EmptyState } from '../ui/Feedback';
 import { Skeleton } from '../ui/Skeleton';
@@ -19,7 +19,7 @@ function resolveStickerImageUrl(url: string): string | null {
   const rawUrl = url.trim();
   const safeRawUrl = safeClientResourceUrl(rawUrl);
   if (!safeRawUrl) return null;
-  return safeClientResourceUrl(resolveResourceUrl(safeRawUrl, getAccessToken()));
+  return safeClientResourceUrl(resolveResourceUrl(safeRawUrl, getDownloadTicket()));
 }
 
 function stickerPickerError(action: string, err: unknown): string {

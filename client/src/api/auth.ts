@@ -1,5 +1,37 @@
 import { getApi } from './activeClient';
+import { signServerChallengeWithUnlockedKey } from '../lib/accountSession';
+import { getCurrentOriginServerUrl, getStoredServerUrl } from '../lib/config/apiBaseUrl';
 import type { LoginRequest, LoginResponse, RegisterRequest, ReadState, User, UserSettings } from '../types';
+
+interface AuthChallenge {
+  nonce: string;
+  timestamp: number;
+  server_origin: string;
+}
+
+async function requestAuthChallenge(): Promise<AuthChallenge> {
+  const { data: challenge } = await getApi().post<AuthChallenge>('/auth/challenge');
+
+  const nowMs = Date.now();
+  const challengeMs = challenge.timestamp * 1000;
+  if (!Number.isFinite(challengeMs) || Math.abs(nowMs - challengeMs) > 120_000) {
+    throw new Error('Server challenge timestamp is invalid or stale');
+  }
+
+  const serverUrl = getCurrentOriginServerUrl() ?? getStoredServerUrl();
+  if (serverUrl) {
+    try {
+      const expectedOrigin = new URL(serverUrl).origin;
+      if (new URL(challenge.server_origin).origin !== expectedOrigin) {
+        throw new Error('Server challenge origin mismatch');
+      }
+    } catch {
+      throw new Error('Server challenge origin mismatch');
+    }
+  }
+
+  return challenge;
+}
 
 export interface AuthSession {
   id: string;
@@ -29,8 +61,20 @@ export const authApi = {
   logout: () => getApi().post('/auth/logout'),
   listSessions: () => getApi().get<AuthSession[]>('/auth/sessions'),
   revokeSession: (sessionId: string) => getApi().delete(`/auth/sessions/${sessionId}`),
-  attachPublicKey: (publicKey: string) =>
-    getApi().post<LoginResponse>('/auth/attach-public-key', { public_key: publicKey }),
+  attachPublicKey: async (publicKey: string) => {
+    const challenge = await requestAuthChallenge();
+    const signature = await signServerChallengeWithUnlockedKey(
+      challenge.nonce,
+      challenge.timestamp,
+      challenge.server_origin,
+    );
+    return getApi().post<LoginResponse>('/auth/attach-public-key', {
+      public_key: publicKey,
+      nonce: challenge.nonce,
+      timestamp: challenge.timestamp,
+      signature,
+    });
+  },
   getMe: () => getApi().get<User>('/users/@me'),
   updateMe: (data: Partial<User>) => getApi().patch<User>('/users/@me', data),
   getSettings: () => getApi().get<UserSettings>('/users/@me/settings'),

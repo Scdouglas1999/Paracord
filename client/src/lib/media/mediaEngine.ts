@@ -115,7 +115,7 @@ export interface MediaEngine {
   disconnect(): Promise<void>;
   setMute(muted: boolean): void;
   setDeaf(deafened: boolean): void;
-  enableVideo(enabled: boolean): void;
+  enableVideo(enabled: boolean): Promise<void>;
   startScreenShare(config: ScreenShareConfig): Promise<void>;
   stopScreenShare(): Promise<void>;
   supportsNativeSourcePicker(): boolean;
@@ -129,6 +129,12 @@ export interface MediaEngine {
   onSpeakingChange(cb: (speakers: Map<string, number>) => void): void;
   onParticipantJoin(cb: (userId: string) => void): void;
   onParticipantLeave(cb: (userId: string) => void): void;
+  /** Fired when the transport is permanently lost after reconnect exhaustion. */
+  onTransportLost(cb: (reason: string) => void): void;
+  subscribeScreenShareAudio(
+    userId: string,
+    getVolume: () => number,
+  ): () => void;
   getStreamCapabilities(): Promise<MediaStreamCapabilities>;
   getStreamingDiagnostics(): Promise<MediaStreamDiagnostics>;
   listPublishedTracks(): Promise<PublishedTrackDescriptor[]>;

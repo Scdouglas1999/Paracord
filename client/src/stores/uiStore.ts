@@ -25,6 +25,7 @@ interface UIState {
   serverRestarting: boolean;
   commandPaletteOpen: boolean;
   memberPanelOpen: boolean;
+  economyPanelOpen: boolean;
   sidebarCollapsed: boolean;
   searchPanelOpen: boolean;
   connectionStatus: ConnectionStatus;
@@ -46,6 +47,8 @@ interface UIState {
   setCommandPaletteOpen: (open: boolean) => void;
   toggleMemberPanel: () => void;
   setMemberPanelOpen: (open: boolean) => void;
+  toggleEconomyPanel: () => void;
+  setEconomyPanelOpen: (open: boolean) => void;
   toggleSidebarCollapsed: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSearchPanel: () => void;
@@ -69,6 +72,7 @@ export const useUIStore = create<UIState>()(
       serverRestarting: false,
       commandPaletteOpen: false,
       memberPanelOpen: true,
+      economyPanelOpen: false,
       sidebarCollapsed: false,
       searchPanelOpen: false,
       connectionStatus: 'disconnected' as ConnectionStatus,
@@ -90,6 +94,8 @@ export const useUIStore = create<UIState>()(
       setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
       toggleMemberPanel: () => set((s) => ({ memberPanelOpen: !s.memberPanelOpen })),
       setMemberPanelOpen: (memberPanelOpen) => set({ memberPanelOpen }),
+      toggleEconomyPanel: () => set((s) => ({ economyPanelOpen: !s.economyPanelOpen })),
+      setEconomyPanelOpen: (economyPanelOpen) => set({ economyPanelOpen }),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSearchPanel: () => set((s) => ({ searchPanelOpen: !s.searchPanelOpen })),
@@ -114,6 +120,7 @@ export const useUIStore = create<UIState>()(
         customCss: state.customCss,
         dockPinned: state.dockPinned,
         memberPanelOpen: state.memberPanelOpen,
+        economyPanelOpen: state.economyPanelOpen,
         sidebarCollapsed: state.sidebarCollapsed,
         lowBandwidthMode: state.lowBandwidthMode,
       }),

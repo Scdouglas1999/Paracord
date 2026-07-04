@@ -15,6 +15,7 @@ import { UpdateNotification } from '../components/UpdateNotification';
 import { ToastContainer } from '../components/ui/Toast';
 import { ImageLightbox } from '../components/ui/ImageLightbox';
 import { logVoiceDiagnostic } from './desktopDiagnostics';
+import { startDownloadTicketLifecycle } from './downloadTicket';
 
 function AppInitializer({ children }: { children: ReactNode }) {
   // Initialize gateway connection when authenticated
@@ -22,7 +23,17 @@ function AppInitializer({ children }: { children: ReactNode }) {
   const gwHydrated = useServerListStore((s) => s.hydrated);
   const gwTokensHydrated = useServerListStore((s) => s.tokensHydrated);
   const gwServerCount = useServerListStore((s) => s.servers.length);
-  logVoiceDiagnostic('[diag] AppInitializer render', { hasToken: !!gwToken, hydrated: gwHydrated, tokensHydrated: gwTokensHydrated, serverCount: gwServerCount });
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    logVoiceDiagnostic('[diag] AppInitializer state', {
+      hasToken: !!gwToken,
+      hydrated: gwHydrated,
+      tokensHydrated: gwTokensHydrated,
+      serverCount: gwServerCount,
+    });
+  }, [gwToken, gwHydrated, gwTokensHydrated, gwServerCount]);
+
   useGateway();
   // Apply theme CSS variables on mount and when theme changes
   useTheme();
@@ -31,6 +42,7 @@ function AppInitializer({ children }: { children: ReactNode }) {
   // Detect foreground desktop app and publish "Playing ..." presence.
   useActivityPresence();
   const token = useAuthStore((s) => s.token);
+  const activeServerId = useServerListStore((s) => s.activeServerId);
   const initializeSession = useAuthStore((s) => s.initializeSession);
   const hydrateServerTokens = useServerListStore((s) => s.hydrateTokens);
   const fetchUser = useAuthStore((s) => s.fetchUser);
@@ -50,6 +62,12 @@ function AppInitializer({ children }: { children: ReactNode }) {
   useEffect(() => {
     void initializeSession();
   }, [initializeSession]);
+
+  useEffect(() => {
+    if (token) {
+      startDownloadTicketLifecycle();
+    }
+  }, [token, activeServerId]);
 
   useEffect(() => {
     if (token) {

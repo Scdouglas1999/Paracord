@@ -100,30 +100,22 @@ export function CustomCSS({ initialCSS = '', onSave }: CustomCSSProps) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h3 className="font-display text-heading text-text-primary">Custom CSS</h3>
-          <p className="mt-1 text-meta text-text-muted">
-            Previewed live as you type. Save to keep it across sessions.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleReset}
-            className={`inline-flex items-center gap-1.5 rounded-sm border border-border-subtle px-3 py-2 text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
-          >
-            <RotateCcw size={15} />
-            Reset
-          </button>
-          <button
-            onClick={handleSave}
-            aria-label={saved ? 'Custom CSS saved' : 'Save custom CSS'}
-            className={cnSaveButton(saved, FOCUS_RING)}
-          >
-            <Save size={15} />
-            {saved ? 'Saved' : 'Save'}
-          </button>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button
+          onClick={handleReset}
+          className={`inline-flex items-center gap-1.5 rounded-sm border border-border-subtle px-3 py-2 text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+        >
+          <RotateCcw size={15} />
+          Reset
+        </button>
+        <button
+          onClick={handleSave}
+          aria-label={saved ? 'Custom CSS saved' : 'Save custom CSS'}
+          className={cnSaveButton(saved, FOCUS_RING)}
+        >
+          <Save size={15} />
+          {saved ? 'Saved' : 'Save'}
+        </button>
       </div>
 
       <div

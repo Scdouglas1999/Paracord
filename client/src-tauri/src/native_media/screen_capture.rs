@@ -23,14 +23,11 @@ use serde::Serialize;
 use tauri::Emitter;
 
 use super::{session::NativeMediaSession, video_pipeline, MediaState};
-use paracord_transport::control::ControlMessage;
-#[cfg(feature = "vpx")]
-use paracord_transport::control::TrackKind;
+use paracord_transport::control::{ControlMessage, TrackKind};
 use paracord_transport::stream::PublishedTrack;
+use paracord_transport::stream::{PublishedLayer, StreamId, TrackId};
 #[cfg(feature = "vpx")]
-use paracord_transport::stream::{
-    PublishedLayer, StreamId, TrackId, VideoCodec as TransportVideoCodec,
-};
+use paracord_transport::stream::VideoCodec as TransportVideoCodec;
 
 const EVENT_EVENT: &str = "native_screen_share_event";
 const SCREEN_AUDIO_SAMPLE_RATE: u32 = 48_000;
@@ -84,6 +81,7 @@ pub struct ActiveScreenCapture {
     worker: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone)]
 struct PendingVideoFrame {
     width: u32,
     height: u32,
@@ -321,16 +319,24 @@ pub async fn start_capture(
 
     match startup_rx.recv_timeout(Duration::from_secs(3)) {
         Ok(Ok(())) => {
-            if let Err(err) = announce_screen_track(state, &app).await {
-                stop_flag.store(true, Ordering::SeqCst);
-                let _ = worker.join();
-                let mut guard = state.session.lock().await;
-                if let Some(session) = guard.as_mut() {
-                    video_pipeline::stop_screen_share(session);
-                    session.screen_audio_enabled.store(false, Ordering::SeqCst);
-                    session.published_screen_track = None;
+            let track_already_published = {
+                let guard = state.session.lock().await;
+                guard
+                    .as_ref()
+                    .is_some_and(|session| session.published_screen_track.is_some())
+            };
+            if !track_already_published {
+                if let Err(err) = announce_screen_track(state, &app).await {
+                    stop_flag.store(true, Ordering::SeqCst);
+                    let _ = worker.join();
+                    let mut guard = state.session.lock().await;
+                    if let Some(session) = guard.as_mut() {
+                        video_pipeline::stop_screen_share(session);
+                        session.screen_audio_enabled.store(false, Ordering::SeqCst);
+                        session.published_screen_track = None;
+                    }
+                    return Err(err);
                 }
-                return Err(err);
             }
             let mut guard = state.screen_capture.lock().map_err(|e| e.to_string())?;
             *guard = Some(ActiveScreenCapture::new(stop_flag, worker));
@@ -383,6 +389,19 @@ pub async fn stop_capture(state: &MediaState) -> Result<(), String> {
                 })
                 .await;
         }
+        if let Some(track) = session.published_screen_audio_track.take() {
+            video_pipeline::clear_track_sender_key(session, &track).await;
+            {
+                let mut registry = session.stream_registry.lock().await;
+                registry.unpublish_track(&track.stream_id, &track.track_id);
+            }
+            let _ = session
+                .send_control_message(&ControlMessage::TrackUnpublish {
+                    stream_id: track.stream_id.clone(),
+                    track_id: track.track_id.clone(),
+                })
+                .await;
+        }
         video_pipeline::stop_screen_share(session);
         session.screen_audio_enabled.store(false, Ordering::SeqCst);
     }
@@ -404,6 +423,57 @@ async fn announce_screen_track(state: &MediaState, app: &tauri::AppHandle) -> Re
         })
         .await?;
     session.published_screen_track = Some(track.clone());
+    let _ = app.emit("media_track_publish", track);
+    drop(guard);
+
+    if state
+        .session
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|session| session.screen_audio_enabled.load(Ordering::SeqCst))
+    {
+        announce_screen_audio_track_public(state, app).await?;
+    }
+    Ok(())
+}
+
+pub(crate) fn build_screen_audio_track(session: &NativeMediaSession) -> PublishedTrack {
+    PublishedTrack {
+        stream_id: StreamId::new(format!("stream:{}:screen", session.session_id)),
+        track_id: TrackId::new("screen-audio"),
+        publisher_user_id: session.local_user_id,
+        kind: TrackKind::Audio,
+        codec: None,
+        layers: vec![PublishedLayer {
+            layer_id: 0,
+            ssrc: session.screen_audio_ssrc,
+            width: None,
+            height: None,
+            max_bitrate_kbps: Some(192),
+            active: true,
+        }],
+    }
+}
+
+pub async fn announce_screen_audio_track_public(
+    state: &MediaState,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
+    let mut guard = state.session.lock().await;
+    let session = guard.as_mut().ok_or("no active session")?;
+    let track = build_screen_audio_track(session);
+    video_pipeline::ensure_track_sender_key(session, &track).await?;
+    {
+        let mut registry = session.stream_registry.lock().await;
+        registry.publish_track(track.clone());
+    }
+    session
+        .send_control_message(&ControlMessage::TrackPublish {
+            track: track.clone(),
+        })
+        .await?;
+    session.published_screen_audio_track = Some(track.clone());
     let _ = app.emit("media_track_publish", track);
     Ok(())
 }
@@ -526,22 +596,32 @@ fn run_capture_loop(
     let encoder_startup = Arc::new(std::sync::Mutex::new(Some(startup_tx)));
     let encoder_startup_signal = encoder_startup.clone();
     let encoder = thread::spawn(move || -> Result<(), String> {
+        let frame_interval =
+            Duration::from_millis((1_000u64 / u64::from(max_frame_rate.max(1))).max(1));
+        let mut last_frame: Option<PendingVideoFrame> = None;
         while !encoder_stop.load(Ordering::SeqCst) {
             let next_frame = {
                 let mut guard = encoder_frames.frame.lock().map_err(|e| e.to_string())?;
-                while guard.is_none() && !encoder_stop.load(Ordering::SeqCst) {
-                    let (next_guard, _) = encoder_frames
+                if guard.is_none() && !encoder_stop.load(Ordering::SeqCst) {
+                    let (next_guard, timeout) = encoder_frames
                         .notify
-                        .wait_timeout(guard, Duration::from_millis(50))
+                        .wait_timeout(guard, frame_interval)
                         .map_err(|e| e.to_string())?;
                     guard = next_guard;
+                    if timeout.timed_out() && guard.is_none() {
+                        last_frame.clone()
+                    } else {
+                        guard.take()
+                    }
+                } else {
+                    guard.take()
                 }
-                guard.take()
             };
 
             let Some(frame) = next_frame else {
                 continue;
             };
+            last_frame = Some(frame.clone());
 
             let encode_result = encoder_runtime.block_on(async {
                 let mut guard = encoder_session.lock().await;
@@ -566,6 +646,7 @@ fn run_capture_loop(
                         true,
                         Some(&encoder_app),
                     )
+                    .await
                 } else {
                     Err("no active session".to_string())
                 }
@@ -600,16 +681,8 @@ fn run_capture_loop(
     let mut audio_accumulator = Vec::<f32>::new();
     let result = (|| -> Result<(), String> {
         while !stop_flag.load(Ordering::SeqCst) {
-            let frame = capturer
-                .get_next_frame()
-                .map_err(|e| format!("capture frame read failed: {e}"))?;
             let mut latest_video: Option<scap::frame::VideoFrame> = None;
             let mut audio_frames: Vec<scap::frame::AudioFrame> = Vec::new();
-
-            match frame {
-                scap::frame::Frame::Video(video) => latest_video = Some(video),
-                scap::frame::Frame::Audio(audio) => audio_frames.push(audio),
-            }
 
             loop {
                 match capturer.try_get_next_frame() {
@@ -625,6 +698,11 @@ fn run_capture_loop(
                         return Err("capture stream disconnected".into());
                     }
                 }
+            }
+
+            if latest_video.is_none() && audio_frames.is_empty() {
+                thread::sleep(Duration::from_millis(5));
+                continue;
             }
 
             for audio in audio_frames {

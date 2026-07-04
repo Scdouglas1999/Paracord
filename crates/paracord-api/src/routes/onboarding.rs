@@ -361,6 +361,8 @@ pub async fn update_my_onboarding_state(
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
 
+    paracord_core::permissions::invalidate_user(&state.permission_cache, auth.user_id).await;
+
     let selected_json = serde_json::to_string(&selected_role_ids)
         .map_err(|_| ApiError::Internal(anyhow::anyhow!("failed to serialize selected roles")))?;
     let updated = paracord_db::onboarding::upsert_member_onboarding_state(

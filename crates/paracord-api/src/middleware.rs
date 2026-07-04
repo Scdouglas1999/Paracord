@@ -5,6 +5,7 @@ use axum::{
 use chrono::Utc;
 use paracord_core::AppState;
 
+use crate::download_ticket::validate_download_ticket;
 use crate::error::ApiError;
 
 pub struct AuthUser {
@@ -49,21 +50,18 @@ fn get_cookie_value(parts: &Parts, cookie_name: &str) -> Option<String> {
     None
 }
 
-/// Extract `token` query parameter from the request URI.
-fn get_query_token(uri: &Uri) -> Option<String> {
+/// Extract `ticket` query parameter from the request URI.
+fn get_query_download_ticket(uri: &Uri) -> Option<String> {
     uri.query().and_then(|q| {
         url::form_urlencoded::parse(q.as_bytes())
-            .find(|(key, _)| key == "token")
+            .find(|(key, _)| key == "ticket")
             .map(|(_, value)| value.into_owned())
             .filter(|v| !v.is_empty())
     })
 }
 
-fn allows_query_token_fallback(parts: &Parts) -> bool {
+fn allows_query_download_ticket(parts: &Parts) -> bool {
     let path = parts.uri.path();
-    // Attachment downloads no longer accept a `?token=` query fallback: raw
-    // access tokens in the URL leak into logs, referrers, and history. Clients
-    // must send the Authorization header (or use the SSE-style download ticket).
     if parts.method == Method::GET && path.starts_with("/api/v1/federated-files/") {
         return true;
     }
@@ -83,16 +81,7 @@ async fn validate_auth(
 ) -> Result<paracord_core::auth::Claims, ApiError> {
     let token = match extract_auth_scheme(parts) {
         Some(AuthScheme::Bearer(t)) => t.to_string(),
-        _ => {
-            let query_token = if allows_query_token_fallback(parts) {
-                get_query_token(&parts.uri)
-            } else {
-                None
-            };
-            get_cookie_value(parts, ACCESS_COOKIE_NAME)
-                .or(query_token)
-                .ok_or(ApiError::Unauthorized)?
-        }
+        _ => get_cookie_value(parts, ACCESS_COOKIE_NAME).ok_or(ApiError::Unauthorized)?,
     };
 
     let claims = paracord_core::auth::validate_token(&token, &state.config.jwt_secret)
@@ -210,6 +199,18 @@ impl FromRequestParts<AppState> for AuthUser {
             });
         }
 
+        if allows_query_download_ticket(parts) {
+            if let Some(ticket) = get_query_download_ticket(&parts.uri) {
+                if let Some(user_id) = validate_download_ticket(&ticket) {
+                    return Ok(AuthUser {
+                        user_id,
+                        session_id: None,
+                        token_jti: None,
+                    });
+                }
+            }
+        }
+
         Err(ApiError::Unauthorized)
     }
 }
@@ -245,89 +246,85 @@ impl FromRequestParts<AppState> for AdminUser {
 
 #[cfg(test)]
 mod tests {
-    use super::allows_query_token_fallback;
+    use super::allows_query_download_ticket;
     use axum::http::Request;
 
     #[test]
-    fn rejects_query_token_for_realtime_events() {
-        // The SSE stream authenticates via a single-use ticket, never a raw
-        // access token in the query string.
+    fn rejects_query_download_ticket_for_realtime_events() {
         let request = Request::builder()
             .method("GET")
-            .uri("/api/v2/rt/events?token=abc")
+            .uri("/api/v2/rt/events?ticket=abc")
             .body(())
             .expect("request");
         let (parts, _) = request.into_parts();
-        assert!(!allows_query_token_fallback(&parts));
+        assert!(!allows_query_download_ticket(&parts));
     }
 
     #[test]
-    fn rejects_query_token_for_attachment_downloads() {
-        // Attachment GETs must authenticate via the Authorization header or a
-        // single-use download ticket, never a raw token in the query string.
+    fn rejects_query_download_ticket_for_attachment_downloads() {
         let get_request = Request::builder()
             .method("GET")
-            .uri("/api/v1/attachments/123?token=abc")
+            .uri("/api/v1/attachments/123?ticket=abc")
             .body(())
             .expect("request");
         let (get_parts, _) = get_request.into_parts();
-        assert!(!allows_query_token_fallback(&get_parts));
+        assert!(!allows_query_download_ticket(&get_parts));
     }
 
     #[test]
-    fn allows_query_token_for_federated_file_downloads_only() {
+    fn allows_query_download_ticket_for_federated_file_downloads_only() {
         let get_request = Request::builder()
             .method("GET")
-            .uri("/api/v1/federated-files/123?token=abc")
+            .uri("/api/v1/federated-files/123?ticket=abc")
             .body(())
             .expect("request");
         let (get_parts, _) = get_request.into_parts();
-        assert!(allows_query_token_fallback(&get_parts));
+        assert!(allows_query_download_ticket(&get_parts));
 
         let delete_request = Request::builder()
             .method("DELETE")
-            .uri("/api/v1/federated-files/123?token=abc")
+            .uri("/api/v1/federated-files/123?ticket=abc")
             .body(())
             .expect("request");
         let (delete_parts, _) = delete_request.into_parts();
-        assert!(!allows_query_token_fallback(&delete_parts));
+        assert!(!allows_query_download_ticket(&delete_parts));
     }
 
     #[test]
-    fn allows_query_token_for_guild_image_assets_only() {
+    fn allows_query_download_ticket_for_guild_image_assets_only() {
         let emoji_request = Request::builder()
             .method("GET")
-            .uri("/api/v1/guilds/1/emojis/2/image?token=abc")
+            .uri("/api/v1/guilds/1/emojis/2/image?ticket=abc")
             .body(())
             .expect("request");
         let (emoji_parts, _) = emoji_request.into_parts();
-        assert!(allows_query_token_fallback(&emoji_parts));
+        assert!(allows_query_download_ticket(&emoji_parts));
 
         let sticker_request = Request::builder()
             .method("GET")
-            .uri("/api/v1/guilds/1/stickers/2/image?token=abc")
+            .uri("/api/v1/guilds/1/stickers/2/image?ticket=abc")
             .body(())
             .expect("request");
         let (sticker_parts, _) = sticker_request.into_parts();
-        assert!(allows_query_token_fallback(&sticker_parts));
+        assert!(allows_query_download_ticket(&sticker_parts));
 
         let list_request = Request::builder()
             .method("GET")
-            .uri("/api/v1/guilds/1/emojis?token=abc")
+            .uri("/api/v1/guilds/1/emojis?ticket=abc")
             .body(())
             .expect("request");
         let (list_parts, _) = list_request.into_parts();
-        assert!(!allows_query_token_fallback(&list_parts));
+        assert!(!allows_query_download_ticket(&list_parts));
     }
 
     #[test]
-    fn rejects_query_token_for_unlisted_paths() {
+    fn rejects_query_download_ticket_for_unlisted_paths() {
         let request = Request::builder()
             .method("GET")
-            .uri("/api/v1/channels/1/messages?token=abc")
+            .uri("/api/v1/channels/1/messages?ticket=abc")
             .body(())
             .expect("request");
         let (parts, _) = request.into_parts();
-        assert!(!allows_query_token_fallback(&parts));
+        assert!(!allows_query_download_ticket(&parts));
     }
 }

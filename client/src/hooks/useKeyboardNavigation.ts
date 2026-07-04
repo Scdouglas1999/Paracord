@@ -89,6 +89,11 @@ export function useKeyboardNavigation() {
           e.preventDefault();
           return;
         }
+        if (ui.economyPanelOpen) {
+          ui.setEconomyPanelOpen(false);
+          e.preventDefault();
+          return;
+        }
         if (ui.memberPanelOpen) {
           ui.setMemberPanelOpen(false);
           e.preventDefault();

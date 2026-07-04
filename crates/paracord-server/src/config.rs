@@ -738,6 +738,12 @@ require_email = {require_email}
 # configure the [s3] section below, and build the server with `--features s3`.
 storage_type = "{storage_type}"
 path = "{storage_path}"
+# Maximum size (bytes) of a single upload/attachment. Enforced server-side on
+# every upload path; clients read this value to pre-validate and show the limit.
+# Default 52428800 (50 MB). Example: 104857600 = 100 MB.
+max_upload_size = {max_upload_size}
+# Maximum total stored bytes per guild (0 = unlimited). Default 10737418240 (10 GB).
+max_guild_storage_quota = {max_guild_storage_quota}
 
 # [s3]
 # # Optional S3-compatible object storage (MinIO, Cloudflare R2, AWS S3,
@@ -900,6 +906,8 @@ timeout_seconds = {ai_timeout_seconds}
         require_email = config.auth.require_email,
         storage_type = config.storage.storage_type,
         storage_path = config.storage.path,
+        max_upload_size = config.storage.max_upload_size,
+        max_guild_storage_quota = config.storage.max_guild_storage_quota,
         media_path = config.media.storage_path,
         max_file_size = config.media.max_file_size,
         p2p_threshold = config.media.p2p_threshold,
@@ -1441,6 +1449,16 @@ impl Config {
         validate_secret_configuration(&config)?;
         Ok(config)
     }
+}
+
+/// True when the server is configured for a public deployment (non-local dev).
+pub fn is_production_deployment(config: &Config) -> bool {
+    config
+        .server
+        .public_url
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|url| !url.is_empty())
 }
 
 fn parse_optional_days(raw: &str) -> Option<i64> {

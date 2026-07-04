@@ -16,8 +16,10 @@ export class WebTransportManager {
   private datagramCallbacks: Array<(data: Uint8Array) => void> = [];
   private streamControlCallbacks: Array<(msg: StreamControlMessage) => void> = [];
   private closeCallbacks: Array<(reason: string) => void> = [];
+  private restoredCallbacks: Array<() => void> = [];
 
   private reconnectAttempts = 0;
+  private hasConnectedOnce = false;
   private maxReconnectAttempts = 10;
   private shouldReconnect = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -79,6 +81,15 @@ export class WebTransportManager {
       }
 
       this.reconnectAttempts = 0;
+
+      const isRestore = this.hasConnectedOnce;
+      if (isRestore) {
+        for (const cb of this.restoredCallbacks) {
+          cb();
+        }
+      } else {
+        this.hasConnectedOnce = true;
+      }
 
       // Start reading datagrams and control messages
       this.readDatagrams();
@@ -149,6 +160,10 @@ export class WebTransportManager {
 
   onClose(cb: (reason: string) => void): void {
     this.closeCallbacks.push(cb);
+  }
+
+  onRestored(cb: () => void): void {
+    this.restoredCallbacks.push(cb);
   }
 
   private async readDatagrams(): Promise<void> {

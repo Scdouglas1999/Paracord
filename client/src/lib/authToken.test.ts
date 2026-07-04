@@ -21,7 +21,7 @@ describe('authToken', () => {
     expect(localStorage.getItem('token')).toBeNull();
   });
 
-  it('stores and clears refresh token in localStorage', () => {
+  it('stores and clears refresh token in memory for same-origin API', () => {
     setRefreshToken('refresh-token');
     expect(getRefreshToken()).toBe('refresh-token');
 

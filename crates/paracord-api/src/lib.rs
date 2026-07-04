@@ -32,6 +32,7 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 pub mod ai;
+pub mod download_ticket;
 pub mod error;
 pub mod middleware;
 pub mod opengraph;
@@ -59,6 +60,10 @@ pub fn build_router() -> Router<AppState> {
         .route(
             "/api/v1/stream/ticket",
             post(routes::realtime::create_stream_ticket),
+        )
+        .route(
+            "/api/v1/download/ticket",
+            post(download_ticket::create_download_ticket),
         )
         .route("/api/v2/rt/session", post(routes::realtime::create_session))
         .route("/api/v2/rt/events", get(routes::realtime::stream_events))
@@ -765,6 +770,8 @@ pub fn build_router() -> Router<AppState> {
             "/api/v1/attachments/{id}",
             get(routes::files::download_file).delete(routes::files::delete_file),
         )
+        // Non-sensitive instance limits (auth-gated) for client pre-validation
+        .route("/api/v1/instance", get(routes::files::instance_info))
         // QUIC file transfer pre-authorization
         .route(
             "/api/v2/channels/{channel_id}/upload-token",

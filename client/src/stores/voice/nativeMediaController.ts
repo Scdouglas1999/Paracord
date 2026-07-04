@@ -102,6 +102,19 @@ export function resolveNativeDeviceIndex(
   return '0';
 }
 
+export async function switchNativeInputDevice(selected: string | null | undefined): Promise<void> {
+  if (!isTauri()) return;
+  const devices = await listNativeInputDevices();
+  const index = resolveNativeDeviceIndex(devices, selected);
+  try {
+    await tauriInvoke('voice_switch_input_device', { deviceId: index });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    void clientLog(`[voice] native voice_switch_input_device failed (index=${index}): ${message}`);
+    throw err;
+  }
+}
+
 /**
  * Route the native (cpal) output device to match the user's selection.
  *

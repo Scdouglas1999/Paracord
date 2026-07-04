@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, FileText, FileWarning, X } from 'lucide-react';
+import { fileApi } from '../../api/files';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 import { formatFileSize } from '../../lib/formatters';
@@ -13,16 +14,48 @@ interface FilePreviewProps {
 
 export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps) {
   const [lightbox, setLightbox] = useState(false);
+  const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
   const lightboxRef = useRef<HTMLDivElement>(null);
   const closeLightbox = useCallback(() => setLightbox(false), []);
   useFocusTrap(lightboxRef, lightbox, closeLightbox);
-  const safeUrl = safeClientResourceUrl(url);
+  const safeRawUrl = safeClientResourceUrl(url);
 
-  if (!safeUrl) {
+  useEffect(() => {
+    if (!safeRawUrl) return;
+
+    let cancelled = false;
+    let blobUrl: string | null = null;
+
+    void fileApi.resolveAttachmentObjectUrl(safeRawUrl).then((src) => {
+      if (cancelled) {
+        if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+        return;
+      }
+      if (src.startsWith('blob:')) blobUrl = src;
+      setResolvedSrc(src);
+    }).catch(() => {
+      if (!cancelled) setResolvedSrc(null);
+    });
+
+    return () => {
+      cancelled = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [safeRawUrl]);
+
+  if (!safeRawUrl) {
     return (
       <div className="mt-1 flex max-w-sm items-center gap-2.5 rounded-md border border-border-subtle bg-bg-secondary px-3.5 py-3 text-meta text-text-muted">
         <FileWarning size={16} className="shrink-0 text-accent-warning" />
         Attachment link blocked.
+      </div>
+    );
+  }
+
+  if (!resolvedSrc) {
+    return (
+      <div className="mt-1 max-w-sm rounded-md border border-border-subtle bg-bg-secondary px-3.5 py-3 text-meta text-text-muted">
+        Loading attachment…
       </div>
     );
   }
@@ -39,7 +72,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
             onClick={() => setLightbox(true)}
           >
             <img
-              src={safeUrl}
+              src={resolvedSrc}
               alt={filename}
               className="max-h-72 object-contain"
             />
@@ -70,7 +103,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
             >
               <X size={18} />
             </button>
-            <img src={safeUrl} alt={filename} className="max-h-[90vh] max-w-[90vw] object-contain" />
+            <img src={resolvedSrc} alt={filename} className="max-h-[90vh] max-w-[90vw] object-contain" />
           </div>
         )}
       </>
@@ -82,7 +115,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
     return (
       <div className="mt-1 max-w-md">
         <video
-          src={safeUrl}
+          src={resolvedSrc}
           controls
           className="max-h-72 rounded-md border border-border-subtle"
         />
@@ -99,7 +132,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
     return (
       <div className="mt-1 max-w-md">
         <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary p-3.5">
-          <audio src={safeUrl} controls className="h-9 flex-1" />
+          <audio src={resolvedSrc} controls className="h-9 flex-1" />
         </div>
         <div className="mt-1.5 flex items-center gap-2 text-meta text-text-muted">
           <span className="truncate">{filename}</span>
@@ -114,7 +147,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
   return (
     <div className="mt-1 max-w-sm">
       <a
-        href={safeUrl}
+        href={resolvedSrc}
         download={filename}
         className="group flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary p-3 no-underline outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong hover:bg-bg-accent focus-visible:shadow-[var(--focus-ring)]"
       >

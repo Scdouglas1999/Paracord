@@ -32,10 +32,17 @@ vi.mock('./toastStore', () => ({ toast: mockToast }));
 vi.mock('../api/auth', () => ({ authApi: mockAuthApi }));
 
 vi.mock('../api/client', () => ({
-  extractApiError: vi.fn((err: unknown) => {
-    if (err instanceof Error) return err.message;
-    return 'An unexpected error occurred';
-  }),
+  extractApiError: vi.fn(
+    (err: { response?: { data?: { message?: string; error?: string } }; message?: string } | unknown) => {
+      const e = err as { response?: { data?: { message?: string; error?: string } }; message?: string };
+      return (
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        'An unexpected error occurred'
+      );
+    },
+  ),
 }));
 
 import { useAuthStore } from './authStore';
@@ -132,14 +139,14 @@ describe('authStore', () => {
       expect(state.token).toBeNull();
     });
 
-    it('uses fallback error when response has no message', async () => {
+    it('surfaces the underlying error message when the response has no structured message', async () => {
       mockAuthApi.login.mockRejectedValue(new Error('Network error'));
 
       await expect(
         useAuthStore.getState().login('test@example.com', 'pass'),
       ).rejects.toBeDefined();
 
-      expect(useAuthStore.getState().error).toBe('Login failed');
+      expect(useAuthStore.getState().error).toBe('Network error');
     });
   });
 
@@ -168,14 +175,14 @@ describe('authStore', () => {
       expect(useAuthStore.getState().error).toBe('Email already exists');
     });
 
-    it('uses fallback error when response has no message', async () => {
+    it('surfaces the underlying error message when the response has no structured message', async () => {
       mockAuthApi.register.mockRejectedValue(new Error('timeout'));
 
       await expect(
         useAuthStore.getState().register('a@b.com', 'u', 'p'),
       ).rejects.toBeDefined();
 
-      expect(useAuthStore.getState().error).toBe('Registration failed');
+      expect(useAuthStore.getState().error).toBe('timeout');
     });
   });
 

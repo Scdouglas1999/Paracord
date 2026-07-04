@@ -106,6 +106,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   const removeGuild = useGuildStore((s) => s.removeGuild);
   const authUser = useAuthStore((s) => s.user);
   const { permissions, isAdmin } = usePermissions(guildId);
+  const canManageRoles = isAdmin || hasPermission(permissions, Permissions.MANAGE_ROLES);
   const canManageRoleSettings = isAdmin || hasPermission(permissions, Permissions.MANAGE_GUILD);
   const canManageEmojis = isAdmin || hasPermission(permissions, Permissions.MANAGE_EMOJIS);
   const canManageWebhooks = isAdmin || hasPermission(permissions, Permissions.MANAGE_WEBHOOKS);
@@ -443,7 +444,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   };
 
   const createRole = async () => {
-    if (!canManageRoleSettings) return;
+    if (!canManageRoles) return;
     if (!newRoleName.trim()) return;
     const colorInt = parseInt(newRoleColor.replace('#', ''), 16) || 0;
     await runAction(async () => {
@@ -456,7 +457,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   };
 
   const renameRole = async (roleId: string, nextName: string) => {
-    if (!canManageRoleSettings) return;
+    if (!canManageRoles) return;
     if (!nextName.trim()) return;
     await runAction(async () => {
       await guildApi.updateRole(guildId, roleId, { name: nextName.trim() });
@@ -474,7 +475,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   };
 
   const saveRoleEdits = async () => {
-    if (!canManageRoleSettings) return;
+    if (!canManageRoles) return;
     if (!editingRoleId) return;
     const colorInt = parseInt(editingRoleColor.replace('#', ''), 16) || 0;
     await runAction(async () => {
@@ -501,7 +502,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   };
 
   const deleteRole = async (roleId: string) => {
-    if (!canManageRoleSettings) return;
+    if (!canManageRoles) return;
     const deletedRole = roles.find((role) => role.id === roleId);
     await runAction(async () => {
       await guildApi.deleteRole(guildId, roleId);
@@ -532,13 +533,13 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   };
 
   const startEditingMemberRoles = (member: Member) => {
-    if (!canManageRoleSettings) return;
+    if (!canManageRoles) return;
     setEditingMemberRoleUserId(member.user.id);
     setDraftMemberRoleIds((member.roles || []).filter((roleId) => roleId !== memberRoleId));
   };
 
   const saveMemberRoles = async (userId: string) => {
-    if (!canManageRoleSettings) return;
+    if (!canManageRoles) return;
     await runAction(async () => {
       await guildApi.updateMember(guildId, userId, {
         roles: [memberRoleId, ...draftMemberRoleIds],
@@ -1109,7 +1110,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
             {activeSection === 'roles' && (
               <RolesSection
                 roles={roles}
-                canManage={canManageRoleSettings}
+                canManage={canManageRoles}
                 guildId={guildId}
                 newRoleName={newRoleName}
                 newRoleColor={newRoleColor}
@@ -1139,7 +1140,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
               <MembersSection
                 members={members}
                 roles={roles}
-                canManage={canManageRoleSettings}
+                canManage={canManageRoleSettings || canManageRoles}
                 memberRoleId={memberRoleId}
                 memberSearch={memberSearch}
                 editingMemberRoleUserId={editingMemberRoleUserId}
@@ -1165,7 +1166,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
                 guildId={guildId}
                 channels={channels}
                 roles={roles}
-                canManageRoles={canManageRoleSettings}
+                canManageRoles={canManageRoles}
                 highlightedChannelId={initialChannelId}
                 onRefresh={refreshAll}
               />

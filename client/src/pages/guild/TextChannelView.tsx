@@ -6,6 +6,7 @@ import { ThreadPanel } from '../../components/message/ThreadPanel';
 import { SearchPanel } from '../../components/message/SearchPanel';
 import { GuildEconomyPanel } from '../../components/guild/GuildEconomyPanel';
 import { useChannelStore } from '../../stores/channelStore';
+import { useUIStore } from '../../stores/uiStore';
 import type { Channel, Message } from '../../types';
 
 interface TextChannelViewProps {
@@ -28,6 +29,7 @@ export function TextChannelView({
   searchPanelOpen,
 }: TextChannelViewProps) {
   const navigate = useNavigate();
+  const economyPanelOpen = useUIStore((s) => s.economyPanelOpen);
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
 
   // Clear the reply target when switching channels.
@@ -98,7 +100,9 @@ export function TextChannelView({
         </div>
       )}
       {searchPanelOpen && !showThreadSplit && <SearchPanel />}
-      {!searchPanelOpen && !showThreadSplit && guildId && <GuildEconomyPanel guildId={guildId} />}
+      {!searchPanelOpen && !showThreadSplit && guildId && economyPanelOpen && (
+        <GuildEconomyPanel guildId={guildId} />
+      )}
     </div>
   );
 }

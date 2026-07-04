@@ -240,7 +240,7 @@ export function VoiceControlBar({
                             ) : (
                                 <MonitorUp size={20} />
                             )}
-                            <span className="hidden text-label sm:block">
+                            <span className="hidden whitespace-nowrap text-label sm:block">
                                 {selfStream ? 'Stop Stream' : streamStarting ? 'Starting…' : 'Share Screen'}
                             </span>
                         </button>
@@ -343,7 +343,7 @@ export function VoiceControlBar({
                     className="flex h-11 items-center gap-2 rounded-sm bg-accent-danger-fill px-4 text-text-on-danger shadow-sm outline-none transition-[background-color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-[color-mix(in_srgb,var(--accent-danger-fill)_90%,#000)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]"
                 >
                     <PhoneOff size={20} />
-                    <span className="hidden text-label sm:block">Disconnect</span>
+                    <span className="hidden whitespace-nowrap text-label sm:block">Disconnect</span>
                 </button>
             </Tooltip>
         </div>

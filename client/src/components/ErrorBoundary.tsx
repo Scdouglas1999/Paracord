@@ -58,7 +58,11 @@ export class ErrorBoundary extends Component<Props, State> {
     const remainingRetries = Math.max(0, MAX_RETRIES - this.state.retryCount);
 
     return (
-      <div className="flex min-h-screen items-center justify-center bg-bg-primary px-4 py-10">
+      <div
+        className="flex min-h-screen items-center justify-center bg-bg-primary px-4 py-10"
+        role="alert"
+        aria-live="assertive"
+      >
         <div className="w-full max-w-2xl rounded-md border border-border-subtle bg-bg-secondary p-8 shadow-md">
           <div className="flex h-11 w-11 items-center justify-center rounded-sm bg-danger-tint text-accent-danger">
             <Bug size={22} />

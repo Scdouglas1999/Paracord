@@ -49,6 +49,10 @@ const MAX_LOGIN_BODY_BYTES: usize = 16 * 1024;
 
 // In-memory challenge nonce store (nonce -> timestamp).
 static CHALLENGE_STORE: OnceLock<Cache<String, i64>> = OnceLock::new();
+// Superseded refresh hashes (old hash -> session id) for reuse detection between
+// rotations when the DB row has not yet been updated. Durable detection uses
+// auth_sessions.previous_refresh_token_hash; see sessions.rs.
+static SUPERSEDED_REFRESH_HASHES: OnceLock<Cache<String, String>> = OnceLock::new();
 static AUTH_GUARD_OP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn challenge_store() -> &'static Cache<String, i64> {
@@ -58,6 +62,120 @@ fn challenge_store() -> &'static Cache<String, i64> {
             .time_to_live(StdDuration::from_secs(CHALLENGE_STORE_TTL_SECONDS))
             .build()
     })
+}
+
+fn superseded_refresh_hashes() -> &'static Cache<String, String> {
+    SUPERSEDED_REFRESH_HASHES.get_or_init(|| {
+        let ttl_days = refresh_session_ttl_days();
+        Cache::builder()
+            .max_capacity(100_000)
+            .time_to_live(StdDuration::from_secs(
+                ttl_days.saturating_mul(24 * 60 * 60) as u64,
+            ))
+            .build()
+    })
+}
+
+fn track_superseded_refresh_hash(old_hash: &str, session_id: &str) {
+    superseded_refresh_hashes().insert(old_hash.to_string(), session_id.to_string());
+}
+
+fn validate_public_key_hex(public_key: &str) -> Result<(), ApiError> {
+    if public_key.len() != 64 || !public_key.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ApiError::BadRequest(
+            "Invalid public key format (expected 64 hex characters)".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_pubkey_challenge_proof(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer_ip: Option<&str>,
+    public_key: &str,
+    nonce: &str,
+    timestamp: i64,
+    signature: &str,
+) -> Result<(), ApiError> {
+    validate_public_key_hex(public_key)?;
+
+    let issued_at = match challenge_store().remove(nonce) {
+        Some(issued_at) => issued_at,
+        None => return Err(ApiError::Unauthorized),
+    };
+
+    let now = Utc::now().timestamp();
+    if now - issued_at > CHALLENGE_MAX_AGE_SECONDS
+        || (timestamp - issued_at).abs() > CHALLENGE_SKEW_SECONDS
+    {
+        return Err(ApiError::Unauthorized);
+    }
+
+    let server_origin = resolve_server_origin(
+        state.config.public_url.as_deref(),
+        headers,
+        peer_ip,
+    );
+
+    let valid = paracord_core::auth::verify_challenge(
+        public_key,
+        nonce,
+        timestamp,
+        &server_origin,
+        signature,
+    )
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    if valid {
+        Ok(())
+    } else {
+        Err(ApiError::Unauthorized)
+    }
+}
+
+async fn handle_refresh_token_reuse(
+    state: &AppState,
+    session_id: &str,
+    headers: Option<&HeaderMap>,
+    peer_ip: Option<&str>,
+) -> Result<(), ApiError> {
+    let now = Utc::now();
+    let session = paracord_db::sessions::get_session_by_id(&state.db, session_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .filter(|row| row.revoked_at.is_none() && row.expires_at > now);
+    let Some(session) = session else {
+        return Ok(());
+    };
+
+    tracing::warn!(
+        target: "paracord::auth",
+        session_id = %session.id,
+        user_id = session.user_id,
+        "auth.refresh.reuse"
+    );
+    let _ = paracord_db::sessions::revoke_all_sessions_for_refresh_reuse(
+        &state.db,
+        session.user_id,
+        now,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    security::log_security_event(
+        state,
+        "auth.refresh.reuse",
+        Some(session.user_id),
+        Some(session.user_id),
+        Some(&session.id),
+        headers,
+        peer_ip,
+        None,
+    )
+    .await;
+
+    Ok(())
 }
 
 fn constant_time_equal(a: &str, b: &str) -> bool {
@@ -947,13 +1065,32 @@ async fn issue_auth_session(
 async fn rotate_auth_session(
     state: &AppState,
     refresh_token: &str,
+    headers: Option<&HeaderMap>,
+    peer_ip: Option<&str>,
 ) -> Result<(String, String, String, String, String, String), ApiError> {
     let refresh_hash = sha256_hex(refresh_token);
     let now = Utc::now();
-    let session = paracord_db::sessions::get_session_by_refresh_hash(&state.db, &refresh_hash)
+    let session = match paracord_db::sessions::get_session_by_refresh_hash(&state.db, &refresh_hash)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        .ok_or(ApiError::Unauthorized)?;
+    {
+        Some(session) => session,
+        None => {
+            if let Some(session) = paracord_db::sessions::get_session_by_superseded_refresh_hash(
+                &state.db,
+                &refresh_hash,
+                now,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            {
+                handle_refresh_token_reuse(state, &session.id, headers, peer_ip).await?;
+            } else if let Some(session_id) = superseded_refresh_hashes().get(&refresh_hash) {
+                handle_refresh_token_reuse(state, &session_id, headers, peer_ip).await?;
+            }
+            return Err(ApiError::Unauthorized);
+        }
+    };
     if session.revoked_at.is_some() || session.expires_at <= now {
         return Err(ApiError::Unauthorized);
     }
@@ -977,6 +1114,7 @@ async fn rotate_auth_session(
     if !rotated {
         return Err(ApiError::Unauthorized);
     }
+    track_superseded_refresh_hash(&refresh_hash, &session.id);
 
     let access_token = paracord_core::auth::create_session_token(
         session.user_id,
@@ -1568,7 +1706,7 @@ pub async fn refresh(
         })
         .ok_or(ApiError::Unauthorized)?;
     let (token, access_cookie, refresh_cookie, csrf_cookie, session_id, new_raw_refresh) =
-        rotate_auth_session(&state, &refresh_token).await?;
+        rotate_auth_session(&state, &refresh_token, Some(&headers), Some(peer_ip.as_str())).await?;
     security::log_security_event(
         &state,
         "auth.refresh",
@@ -1739,6 +1877,9 @@ pub async fn revoke_session(
 #[derive(Deserialize)]
 pub struct AttachPublicKeyRequest {
     pub public_key: String,
+    pub nonce: String,
+    pub timestamp: i64,
+    pub signature: String,
 }
 
 pub async fn attach_public_key(
@@ -1749,12 +1890,20 @@ pub async fn attach_public_key(
     Json(body): Json<AttachPublicKeyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let peer_ip = addr.ip().to_string();
-    // Validate public key format (64 hex chars = 32 bytes Ed25519 public key)
-    if body.public_key.len() != 64 || !body.public_key.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(ApiError::BadRequest(
-            "Invalid public key format (expected 64 hex characters)".into(),
-        ));
-    }
+    verify_pubkey_challenge_proof(
+        &state,
+        &headers,
+        Some(peer_ip.as_str()),
+        &body.public_key,
+        &body.nonce,
+        body.timestamp,
+        &body.signature,
+    )?;
+
+    let current_user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
 
     // Check that this public key isn't already attached to a different account
     let existing = paracord_db::users::get_user_by_public_key(&state.db, &body.public_key)
@@ -1767,14 +1916,15 @@ pub async fn attach_public_key(
                 "This public key is already in use by another account".into(),
             ));
         }
-        // Already attached to this user — rotate current session token anyway.
     }
 
-    // Attach the public key to the authenticated user's account.
-    let user =
+    let user = if current_user.public_key.as_deref() == Some(body.public_key.as_str()) {
+        current_user
+    } else {
         paracord_db::users::update_user_public_key(&state.db, auth.user_id, &body.public_key)
             .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    };
 
     // Force global session invalidation on trust material change.
     let _ = paracord_db::sessions::revoke_all_user_sessions_except(
@@ -2106,10 +2256,15 @@ pub async fn verify_email(
 const MFA_BACKUP_CODE_COUNT: usize = 10;
 const MFA_ISSUER: &str = "Paracord";
 
-/// Encrypt a TOTP secret before storing in the database. Returns the original
-/// plaintext if no at-rest encryption is configured (graceful degradation).
+/// Encrypt a TOTP secret before storing in the database. In production
+/// (public_url configured) at-rest encryption is required; dev may store plaintext.
 fn encrypt_totp_secret(state: &AppState, plaintext_base32: &str) -> Result<String, ApiError> {
     let Some(cryptor) = state.config.totp_cryptor.as_ref() else {
+        if state.config.public_url.is_some() {
+            return Err(ApiError::ServiceUnavailable(
+                "MFA requires at-rest encryption when public_url is configured; enable [at_rest] with a valid key".into(),
+            ));
+        }
         return Ok(plaintext_base32.to_string());
     };
     let encrypted = cryptor
@@ -2216,7 +2371,7 @@ pub async fn mfa_setup(
 
     let secret_base32 = generate_totp_secret();
 
-    // Encrypt the TOTP secret before storing (falls back to plaintext if no at-rest key)
+    // Encrypt the TOTP secret before storing (plaintext only when at-rest is unset in dev).
     let stored_secret = encrypt_totp_secret(&state, &secret_base32)?;
 
     // Store as pending (not yet enabled)
@@ -2634,7 +2789,7 @@ pub async fn verify(
     };
 
     // Validate public key format (64 hex chars = 32 bytes Ed25519 public key).
-    if body.public_key.len() != 64 || !body.public_key.chars().all(|c| c.is_ascii_hexdigit()) {
+    if let Err(err) = validate_public_key_hex(&body.public_key) {
         auth_guard_record_failure(
             &state,
             &headers,
@@ -2642,7 +2797,7 @@ pub async fn verify(
             Some(&body.public_key),
         )
         .await;
-        return Err(ApiError::BadRequest("Invalid public key".into()));
+        return Err(err);
     }
 
     // Consume the nonce (one-time use) and recover its server-issued timestamp.

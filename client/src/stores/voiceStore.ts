@@ -36,7 +36,8 @@ import {
 } from './voice/livekitController';
 import { computeConnectRetryDelayMs, isTransientVoiceConnectError } from './voice/reconnect';
 import { computeSpeaking, isStallWarningInterval, smoothVolume } from './voice/timers';
-import { switchNativeOutputDevice } from './voice/nativeMediaController';
+import { switchNativeOutputDevice, switchNativeInputDevice } from './voice/nativeMediaController';
+import { useToastStore } from './toastStore';
 import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
 import type { MediaEngine } from '../lib/media/mediaEngine';
 import { createMediaEngine } from '../lib/media/mediaEngine';
@@ -1064,8 +1065,8 @@ type ScreenCapturePreset = {
   height: number;
   frameRate: number;
   maxBitrate: number;
-  /** 'detail' = optimize for sharp text/UI, 'motion' = optimize for video playback */
-  hint: 'detail' | 'motion';
+  /** 'detail' = crisp text/UI, 'motion' = games/action, 'film' = gradients/grain/movies */
+  hint: 'detail' | 'motion' | 'film';
 };
 
 function clampEvenDimension(value: number): number {
@@ -1943,6 +1944,7 @@ interface VoiceStoreState {
    *  settings so changes take effect immediately without mute/unmute. */
   reapplyAudioConstraints: () => Promise<void>;
   clearConnectionError: () => void;
+  handleMediaTransportLost: (reason: string) => Promise<void>;
   acknowledgeSystemAudioPrivacyWarning: () => void;
   setWatchedStreamer: (userId: string | null) => void;
   setPreviewStreamer: (userId: string | null) => void;
@@ -2231,6 +2233,9 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           engine.onSpeakingChange((speakers) => {
             set({ speakingUsers: new Set(speakers.keys()) });
           });
+          engine.onTransportLost((reason) => {
+            void get().handleMediaTransportLost(reason);
+          });
 
           // Try each candidate endpoint in order (LAN first, then public).
           let connected = false;
@@ -2285,6 +2290,9 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
               });
               engine.onSpeakingChange((speakers) => {
                 set({ speakingUsers: new Set(speakers.keys()) });
+              });
+              engine.onTransportLost((reason) => {
+                void get().handleMediaTransportLost(reason);
               });
             }
           }
@@ -3033,12 +3041,12 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         // Use the same quality presets as the LiveKit path so resolution,
         // framerate, and bitrate targets match what the user selected.
         const nativePresetMap: Record<string, ScreenCapturePreset> = {
-          '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 8_000_000, hint: 'motion' },
-          '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 25_000_000, hint: 'motion' },
-          '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 35_000_000, hint: 'motion' },
+          '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 8_000_000, hint: 'detail' },
+          '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 25_000_000, hint: 'detail' },
+          '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 35_000_000, hint: 'detail' },
           '4k60': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'motion' },
-          'movie-50': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 60_000_000, hint: 'motion' },
-          'movie-100': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 100_000_000, hint: 'motion' },
+          'movie-50': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'film' },
+          'movie-100': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 100_000_000, hint: 'film' },
         };
         const capture = nativePresetMap[qualityPreset] ?? nativePresetMap['1080p60'];
 
@@ -3129,15 +3137,16 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       //    encoder targets). Without explicit encoding params LiveKit falls
       //    back to very conservative defaults causing blocky, low-fps streams.
       const presetMap: Record<string, ScreenCapturePreset> = {
-        '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 8_000_000, hint: 'motion' },
-        '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 25_000_000, hint: 'motion' },
-        '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 35_000_000, hint: 'motion' },
+        '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 8_000_000, hint: 'detail' },
+        '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 25_000_000, hint: 'detail' },
+        '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 35_000_000, hint: 'detail' },
         '4k60': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'motion' },
-        'movie-50': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 60_000_000, hint: 'motion' },
-        'movie-100': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 100_000_000, hint: 'motion' },
+        'movie-50': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'film' },
+        'movie-100': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 100_000_000, hint: 'film' },
       };
       const capture = presetMap[qualityPreset] ?? presetMap['1080p60'];
       const isTauriApp = isTauri();
+      const browserContentHint = capture.hint === 'film' ? 'motion' : capture.hint;
 
       await room.localParticipant.setScreenShareEnabled(true, {
         // In Tauri, skip browser audio capture; we use native WASAPI/PulseAudio
@@ -3152,7 +3161,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         surfaceSwitching: 'include',
         preferCurrentTab: false,
         resolution: { width: capture.width, height: capture.height, frameRate: capture.frameRate },
-        contentHint: capture.hint,
+        contentHint: browserContentHint,
       }, {
         screenShareEncoding: {
           maxBitrate: capture.maxBitrate,
@@ -3474,8 +3483,19 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     const nextSelfVideo = !state.selfVideo;
     // Native media path
     if (state.mediaEngine) {
-      state.mediaEngine.enableVideo(nextSelfVideo);
-      set({ selfVideo: nextSelfVideo });
+      if (nextSelfVideo) {
+        void state.mediaEngine.enableVideo(true)
+          .then(() => set({ selfVideo: true }))
+          .catch((err) => {
+            const message = err instanceof Error ? err.message : 'Failed to enable camera';
+            console.warn('[voice] Failed to enable camera:', message);
+            useToastStore.getState().addToast('error', message);
+            set({ selfVideo: false });
+          });
+      } else {
+        void state.mediaEngine.enableVideo(false);
+        set({ selfVideo: false });
+      }
       return;
     }
     if (!state.room) {
@@ -3544,17 +3564,27 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
   },
   applyAudioInputDevice: async (deviceId) => {
     const state = get();
+    const normalizedDeviceId = normalizeDeviceId(deviceId);
+    if (isTauri() && state.mediaEngine != null) {
+      try {
+        await switchNativeInputDevice(normalizedDeviceId ?? null);
+        return true;
+      } catch (err) {
+        console.warn('[voice] Failed to switch native input device:', err);
+        return false;
+      }
+    }
     const room = state.room;
     // No active room: the selection is persisted and applied on next connect,
     // so this is a success, not a swallowed failure.
     if (!room) return true;
-    let normalizedDeviceId = normalizeDeviceId(deviceId);
-    if (normalizedDeviceId && invalidAudioInputDeviceIds.has(normalizedDeviceId)) {
-      normalizedDeviceId = undefined;
+    let resolvedDeviceId = normalizedDeviceId;
+    if (resolvedDeviceId && invalidAudioInputDeviceIds.has(resolvedDeviceId)) {
+      resolvedDeviceId = undefined;
     }
     try {
       try {
-        await room.switchActiveDevice('audioinput', normalizedDeviceId ?? 'default');
+        await room.switchActiveDevice('audioinput', resolvedDeviceId ?? 'default');
       } catch (err) {
         // Device constraints can fail for stale IDs and occasionally even for
         // "default" when browser/device state changes. Recover by forcing a
@@ -3564,10 +3594,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
             '[voice] Input device constraints failed; resetting to default microphone:',
             err
           );
-          if (normalizedDeviceId) {
-            invalidAudioInputDeviceIds.add(normalizedDeviceId);
+          if (resolvedDeviceId) {
+            invalidAudioInputDeviceIds.add(resolvedDeviceId);
           }
-          normalizedDeviceId = undefined;
+          resolvedDeviceId = undefined;
         } else {
           throw err;
         }
@@ -3575,7 +3605,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       // If the user is currently unmuted, ensure the active mic is enabled
       // on the newly selected device.
       if (!state.selfMute && !state.selfDeaf) {
-        const ok = await setMicrophoneEnabledWithFallback(room, true, normalizedDeviceId);
+        const ok = await setMicrophoneEnabledWithFallback(room, true, resolvedDeviceId);
         if (ok) {
           startLocalAudioUplinkMonitor(room);
         }
@@ -3628,6 +3658,32 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     }
   },
   clearConnectionError: () => set({ connectionError: null, connectionErrorChannelId: null }),
+  handleMediaTransportLost: async (reason) => {
+    const state = get();
+    if (!state.connected || !state.channelId) {
+      return;
+    }
+    const { channelId, mediaEngine } = state;
+    if (mediaEngine) {
+      await mediaEngine.disconnect().catch(() => { });
+    }
+    suppressVoiceForStream(false);
+    set({
+      connected: false,
+      joining: false,
+      joiningChannelId: null,
+      connectionError: reason || 'Voice connection lost',
+      connectionErrorChannelId: channelId,
+      mediaEngine: null,
+      room: null,
+      selfStream: false,
+      streamAudioWarning: null,
+      systemAudioCaptureActive: false,
+      voiceSuppressedForStream: false,
+      watchedStreamerId: null,
+      previewStreamerId: null,
+    });
+  },
   acknowledgeSystemAudioPrivacyWarning: () => {
     persistSystemAudioPrivacyWarningAcknowledgement();
     set({ showSystemAudioPrivacyWarning: false });

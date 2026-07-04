@@ -14,6 +14,25 @@ use crate::middleware::AuthUser;
 use crate::routes::audit;
 use crate::routes::mod_log;
 
+fn validate_member_role_assignment(
+    guild_owner_id: i64,
+    actor_user_id: i64,
+    actor_perms: paracord_models::permissions::Permissions,
+    role: &paracord_db::roles::RoleRow,
+) -> Result<(), ApiError> {
+    if actor_user_id == guild_owner_id || actor_perms.contains(Permissions::ADMINISTRATOR) {
+        return Ok(());
+    }
+    if role.permissions & Permissions::ADMINISTRATOR.bits() != 0 {
+        return Err(ApiError::Forbidden);
+    }
+    let disallowed = role.permissions & !actor_perms.bits();
+    if disallowed != 0 {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(())
+}
+
 pub async fn list_members(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -106,9 +125,7 @@ pub async fn update_member(
             .collect();
 
     if let Some(raw_roles) = body.roles {
-        if !paracord_core::permissions::is_server_admin(actor_perms) {
-            return Err(ApiError::Forbidden);
-        }
+        paracord_core::permissions::require_permission(actor_perms, Permissions::MANAGE_ROLES)?;
 
         let guild_roles = paracord_db::roles::get_guild_roles(&state.db, guild_id)
             .await
@@ -156,6 +173,12 @@ pub async fn update_member(
                 if role.position >= actor_top_role_pos {
                     return Err(ApiError::Forbidden);
                 }
+                validate_member_role_assignment(
+                    guild.owner_id,
+                    auth.user_id,
+                    actor_perms,
+                    role,
+                )?;
             }
         }
 
@@ -186,21 +209,6 @@ pub async fn update_member(
     let mut timed_out_until = target_member.communication_disabled_until;
     let touched_timeout = body.communication_disabled_until.is_some();
     if let Some(raw_until) = body.communication_disabled_until {
-        paracord_core::permissions::require_permission(actor_perms, Permissions::MUTE_MEMBERS)?;
-        if user_id == guild.owner_id {
-            return Err(ApiError::Forbidden);
-        }
-        if auth.user_id != guild.owner_id {
-            let actor_top_role_pos = actor_roles.iter().map(|r| r.position).max().unwrap_or(0);
-            let target_roles = paracord_db::roles::get_member_roles(&state.db, user_id, guild_id)
-                .await
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-            let target_top_role_pos = target_roles.iter().map(|r| r.position).max().unwrap_or(0);
-            if target_top_role_pos >= actor_top_role_pos {
-                return Err(ApiError::Forbidden);
-            }
-        }
-
         let parsed = if raw_until.trim().is_empty() {
             None
         } else {
@@ -212,9 +220,14 @@ pub async fn update_member(
                     .with_timezone(&chrono::Utc),
             )
         };
-        let member = paracord_db::members::set_member_timeout(&state.db, user_id, guild_id, parsed)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let member = paracord_core::admin::timeout_member(
+            &state.db,
+            guild_id,
+            auth.user_id,
+            user_id,
+            parsed,
+        )
+        .await?;
         timed_out_until = member.communication_disabled_until;
     }
 

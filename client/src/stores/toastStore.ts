@@ -27,6 +27,7 @@ interface ToastState {
 }
 
 let nextId = 0;
+const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 export const useToastStore = create<ToastState>()((set, get) => ({
   toasts: [],
@@ -36,15 +37,23 @@ export const useToastStore = create<ToastState>()((set, get) => ({
     set((state) => ({
       toasts: [...state.toasts, { id, type, message, duration, action }],
     }));
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      dismissTimers.delete(id);
       if (get().toasts.some((t) => t.id === id)) {
         set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
       }
     }, duration);
+    dismissTimers.set(id, timer);
   },
 
-  removeToast: (id) =>
-    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
+  removeToast: (id) => {
+    const timer = dismissTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      dismissTimers.delete(id);
+    }
+    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
+  },
 }));
 
 /** Convenience helpers for use outside React components (e.g. in other stores). */

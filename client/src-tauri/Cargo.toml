@@ -37,7 +37,7 @@ anyhow = { workspace = true }
 uuid = { workspace = true }
 quinn = { workspace = true }
 url = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "multipart"] }
 # Direct rustls handle for the trust-on-first-use certificate-pinning verifier
 # wired into reqwest via `use_preconfigured_tls`. Must match reqwest's rustls
 # major (0.23) and its `ring` crypto provider so the config downcasts correctly.

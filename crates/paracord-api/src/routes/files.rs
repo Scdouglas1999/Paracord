@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
@@ -26,6 +26,45 @@ const ATTACHMENT_AAD_PREFIX: &str = "attachment:";
 
 fn attachment_aad(attachment_id: i64) -> String {
     format!("{ATTACHMENT_AAD_PREFIX}{attachment_id}")
+}
+
+/// Human-readable byte size for user-facing limit messages (e.g. "50 MB").
+pub fn format_byte_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.0} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.0} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// A 400 telling the caller exactly what the server-wide upload ceiling is, so
+/// clients and users can react instead of seeing an opaque "too large".
+fn file_too_large_error(max_bytes: u64) -> ApiError {
+    ApiError::BadRequest(format!(
+        "File exceeds the server upload limit of {}",
+        format_byte_size(max_bytes)
+    ))
+}
+
+/// Non-sensitive instance limits so authenticated clients can pre-validate
+/// uploads and display the correct maximum. The server remains the sole
+/// authority: every upload path re-checks these limits regardless of what the
+/// client believes. Deliberately excludes secrets, paths, and internal config.
+pub async fn instance_info(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({
+        "max_upload_size": state.config.max_upload_size,
+        "p2p_threshold": state.config.media_p2p_threshold,
+    })))
 }
 
 fn sanitize_filename_for_disposition(filename: &str) -> String {
@@ -439,9 +478,10 @@ async fn check_guild_upload_policy(
 
     if let Some(max_file_size) = policy.max_file_size {
         if file_size > max_file_size as u64 {
-            return Err(ApiError::BadRequest(
-                "File exceeds guild maximum file size limit".into(),
-            ));
+            return Err(ApiError::BadRequest(format!(
+                "File exceeds this server's per-guild maximum of {}",
+                format_byte_size(max_file_size as u64)
+            )));
         }
     }
 
@@ -581,7 +621,7 @@ pub async fn upload_file(
     }
 
     if size > state.config.max_upload_size {
-        return Err(ApiError::BadRequest("File too large".into()));
+        return Err(file_too_large_error(state.config.max_upload_size));
     }
     let db_size = i32::try_from(size).map_err(|_| ApiError::BadRequest("File too large".into()))?;
 
@@ -850,7 +890,7 @@ pub async fn process_uploaded_file(
         return Err(ApiError::BadRequest("Empty file".into()));
     }
     if size > state.config.max_upload_size {
-        return Err(ApiError::BadRequest("File too large".into()));
+        return Err(file_too_large_error(state.config.max_upload_size));
     }
     let db_size = i32::try_from(size).map_err(|_| ApiError::BadRequest("File too large".into()))?;
 
@@ -959,7 +999,7 @@ pub async fn upload_token(
         return Err(ApiError::BadRequest("Empty file".into()));
     }
     if req.size > state.config.max_upload_size {
-        return Err(ApiError::BadRequest("File too large".into()));
+        return Err(file_too_large_error(state.config.max_upload_size));
     }
 
     // 2b. Check guild-level upload policy (size, quota, type restrictions).
@@ -1029,31 +1069,169 @@ pub async fn upload_token(
 
 // ── Federated file proxy ────────────────────────────────────────────────────
 
+#[derive(Debug, Deserialize)]
+pub struct FederatedFileQuery {
+    pub channel_id: Option<i64>,
+}
+
+async fn ensure_channel_read_access(
+    state: &AppState,
+    user_id: i64,
+    channel_id: i64,
+) -> Result<i64, ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let guild_id = channel.guild_id().ok_or(ApiError::Forbidden)?;
+
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
+    paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
+    paracord_core::permissions::require_permission(perms, Permissions::READ_MESSAGE_HISTORY)?;
+    Ok(guild_id)
+}
+
+async fn guild_has_readable_channel(
+    state: &AppState,
+    user_id: i64,
+    guild_id: i64,
+) -> Result<bool, ApiError> {
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let channels = paracord_db::channels::get_guild_channels(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    for channel in channels {
+        if channel.guild_id().is_none() {
+            continue;
+        }
+        let perms = paracord_core::permissions::compute_channel_permissions(
+            &state.db,
+            guild_id,
+            channel.id,
+            guild.owner_id,
+            user_id,
+        )
+        .await?;
+        if perms.contains(Permissions::VIEW_CHANNEL | Permissions::READ_MESSAGE_HISTORY) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+async fn guild_has_federated_read_access(
+    state: &AppState,
+    user_id: i64,
+    guild_id: i64,
+    origin_server: &str,
+) -> Result<bool, ApiError> {
+    let channels = paracord_db::channels::get_guild_channels(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let mut has_origin_channel_map = false;
+    for channel in channels {
+        if channel.guild_id().is_none() {
+            continue;
+        }
+        let Some(channel_map) =
+            paracord_db::federation::get_channel_mapping_by_local(&state.db, channel.id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        else {
+            continue;
+        };
+        if !channel_map.origin_server.eq_ignore_ascii_case(origin_server) {
+            continue;
+        }
+        has_origin_channel_map = true;
+        if ensure_channel_read_access(state, user_id, channel.id)
+            .await
+            .is_ok()
+        {
+            return Ok(true);
+        }
+    }
+    if has_origin_channel_map {
+        return Ok(false);
+    }
+    guild_has_readable_channel(state, user_id, guild_id).await
+}
+
+fn federated_room_id(remote_space_id: &str, origin_server: &str) -> String {
+    format!("!{remote_space_id}:{origin_server}")
+}
+
 pub async fn download_federated_file(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((origin_server, attachment_id)): Path<(String, String)>,
+    Query(query): Query<FederatedFileQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Check that the user is a member of at least one guild federated with origin_server
     let space_mappings =
         paracord_db::federation::list_space_mappings_by_origin(&state.db, &origin_server)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let mut has_access = false;
-    for mapping in &space_mappings {
-        let member =
-            paracord_db::members::get_member(&state.db, auth.user_id, mapping.local_guild_id)
-                .await
-                .ok()
-                .flatten();
-        if member.is_some() {
-            has_access = true;
-            break;
-        }
-    }
-    if !has_access {
+    if space_mappings.is_empty() {
         return Err(ApiError::Forbidden);
     }
+
+    let selected_mapping = if let Some(channel_id) = query.channel_id {
+        let guild_id = ensure_channel_read_access(&state, auth.user_id, channel_id).await?;
+        space_mappings
+            .iter()
+            .find(|mapping| mapping.local_guild_id == guild_id)
+            .ok_or(ApiError::Forbidden)?
+    } else {
+        let mut authorized = Vec::new();
+        for mapping in &space_mappings {
+            if paracord_db::members::get_member(&state.db, auth.user_id, mapping.local_guild_id)
+                .await
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                continue;
+            }
+            if guild_has_federated_read_access(
+                &state,
+                auth.user_id,
+                mapping.local_guild_id,
+                &origin_server,
+            )
+            .await? {
+                authorized.push(mapping);
+            }
+        }
+        if authorized.is_empty() {
+            return Err(ApiError::Forbidden);
+        }
+        if authorized.len() > 1 {
+            tracing::debug!(
+                origin_server = %origin_server,
+                attachment_id = %attachment_id,
+                mapping_count = authorized.len(),
+                "federated file download resolved first authorized space mapping; pass channel_id to disambiguate multi-space origins"
+            );
+        }
+        authorized[0]
+    };
+
+    let room_id = federated_room_id(&selected_mapping.remote_space_id, &selected_mapping.origin_server);
 
     let server = paracord_db::federation::get_federated_server(&state.db, &origin_server)
         .await
@@ -1064,10 +1242,6 @@ pub async fn download_federated_file(
     let client = crate::routes::federation::build_signed_federation_client(&service)
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("federation client unavailable")))?;
 
-    let room_id = space_mappings
-        .first()
-        .map(|m| format!("!{}:{}", m.remote_space_id, m.origin_server))
-        .unwrap_or_default();
     let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?

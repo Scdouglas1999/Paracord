@@ -618,8 +618,14 @@ pub async fn list_guild_invites(
         guild.owner_id,
         auth.user_id,
     );
+    // Managers can always list a guild's invites. Publicly discoverable guilds
+    // additionally expose their invites to any authenticated user so discovery
+    // joiners can obtain a usable invite code (mirrors the `visibility ==
+    // "public"` filter used by guild discovery). Private/role-gated guilds stay
+    // manager-only.
     let can_manage_invites = perms.contains(Permissions::MANAGE_GUILD);
-    if !can_manage_invites && !guild.visibility.eq_ignore_ascii_case("public") {
+    let is_publicly_discoverable = guild.visibility.eq_ignore_ascii_case("public");
+    if !can_manage_invites && !is_publicly_discoverable {
         return Err(ApiError::Forbidden);
     }
 

@@ -457,14 +457,14 @@ pub async fn resolve_report(
             ))?;
             let minutes = body.mute_minutes.unwrap_or(15).clamp(1, 60 * 24 * 7);
             let timeout_until = chrono::Utc::now() + chrono::Duration::minutes(minutes);
-            paracord_db::members::set_member_timeout(
+            paracord_core::admin::timeout_member(
                 &state.db,
-                user_id,
                 guild_id,
+                auth.user_id,
+                user_id,
                 Some(timeout_until),
             )
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            .await?;
             changes["status"] = Value::String("muted".to_string());
             changes["mute_minutes"] = Value::Number(serde_json::Number::from(minutes));
             state.event_bus.dispatch(

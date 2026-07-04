@@ -220,10 +220,11 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         }
       }
       break;
-    case GatewayEvents.MESSAGE_UPDATE:
-      if (!data.channel_id) break;
-      useMessageStore.getState().updateMessage(data.channel_id, data as Message);
+    case GatewayEvents.MESSAGE_UPDATE: {
+      if (!data.channel_id || !data.id) break;
+      useMessageStore.getState().updateMessage(data.channel_id, { ...data, id: data.id });
       break;
+    }
     case GatewayEvents.MESSAGE_DELETE:
       if (!data.channel_id || !data.id) break;
       useMessageStore.getState().removeMessage(data.channel_id, data.id);

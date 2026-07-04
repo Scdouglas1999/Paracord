@@ -1,9 +1,38 @@
 use crate::error::CoreError;
 use crate::permissions;
 use crate::{is_admin, USER_FLAG_ADMIN};
+use chrono::{DateTime, Utc};
 use paracord_db::DbPool;
 use paracord_models::permissions::Permissions;
 use serde::Serialize;
+
+/// Owner immunity and role-hierarchy gate for moderation actions (kick, ban, timeout).
+pub async fn ensure_actor_can_moderate_target(
+    pool: &DbPool,
+    guild_id: i64,
+    actor_id: i64,
+    target_id: i64,
+) -> Result<(), CoreError> {
+    let guild = paracord_db::guilds::get_guild(pool, guild_id)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+
+    if target_id == guild.owner_id {
+        return Err(CoreError::BadRequest("Cannot moderate the guild owner".into()));
+    }
+
+    if actor_id != guild.owner_id {
+        let actor_roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
+        let actor_top_role_pos = actor_roles.iter().map(|r| r.position).max().unwrap_or(0);
+        let target_roles = paracord_db::roles::get_member_roles(pool, target_id, guild_id).await?;
+        let target_top_role_pos = target_roles.iter().map(|r| r.position).max().unwrap_or(0);
+        if target_top_role_pos >= actor_top_role_pos {
+            return Err(CoreError::Forbidden);
+        }
+    }
+
+    Ok(())
+}
 
 /// Kick a member from a guild. Requires KICK_MEMBERS permission.
 pub async fn kick_member(
@@ -16,15 +45,11 @@ pub async fn kick_member(
         .await?
         .ok_or(CoreError::NotFound)?;
 
-    if target_id == guild.owner_id {
-        return Err(CoreError::BadRequest("Cannot kick the guild owner".into()));
-    }
-
     let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
     let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
     permissions::require_permission(perms, Permissions::KICK_MEMBERS)?;
+    ensure_actor_can_moderate_target(pool, guild_id, actor_id, target_id).await?;
 
-    // Verify target is actually a member
     paracord_db::members::get_member(pool, target_id, guild_id)
         .await?
         .ok_or(CoreError::NotFound)?;
@@ -45,13 +70,10 @@ pub async fn ban_member(
         .await?
         .ok_or(CoreError::NotFound)?;
 
-    if target_id == guild.owner_id {
-        return Err(CoreError::BadRequest("Cannot ban the guild owner".into()));
-    }
-
     let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
     let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
     permissions::require_permission(perms, Permissions::BAN_MEMBERS)?;
+    ensure_actor_can_moderate_target(pool, guild_id, actor_id, target_id).await?;
 
     // Remove from members if present
     let _ = paracord_db::members::remove_member(pool, target_id, guild_id).await;
@@ -60,6 +82,31 @@ pub async fn ban_member(
     paracord_db::bans::create_ban(pool, target_id, guild_id, reason, actor_id).await?;
 
     Ok(())
+}
+
+/// Apply or clear a member communication timeout. Requires MUTE_MEMBERS permission.
+pub async fn timeout_member(
+    pool: &DbPool,
+    guild_id: i64,
+    actor_id: i64,
+    target_id: i64,
+    until: Option<DateTime<Utc>>,
+) -> Result<paracord_db::members::MemberRow, CoreError> {
+    let guild = paracord_db::guilds::get_guild(pool, guild_id)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+
+    let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
+    let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
+    permissions::require_permission(perms, Permissions::MUTE_MEMBERS)?;
+    ensure_actor_can_moderate_target(pool, guild_id, actor_id, target_id).await?;
+
+    paracord_db::members::get_member(pool, target_id, guild_id)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+
+    let member = paracord_db::members::set_member_timeout(pool, target_id, guild_id, until).await?;
+    Ok(member)
 }
 
 /// Unban a member. Requires BAN_MEMBERS permission.

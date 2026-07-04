@@ -195,6 +195,30 @@ pub struct UpsertChannelOverwriteRequest {
     pub deny_perms: i64,
 }
 
+fn validate_overwrite_permission_bits(
+    guild_owner_id: i64,
+    actor_user_id: i64,
+    actor_perms: Permissions,
+    allow_perms: i64,
+    deny_perms: i64,
+) -> Result<(), ApiError> {
+    if actor_user_id == guild_owner_id || actor_perms.contains(Permissions::ADMINISTRATOR) {
+        return Ok(());
+    }
+    for bits in [allow_perms, deny_perms] {
+        Permissions::from_bits(bits)
+            .ok_or(ApiError::BadRequest("Invalid permissions bitset".into()))?;
+        if bits & Permissions::ADMINISTRATOR.bits() != 0 {
+            return Err(ApiError::Forbidden);
+        }
+        let disallowed = bits & !actor_perms.bits();
+        if disallowed != 0 {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct AddChannelFollowRequest {
     pub target_channel_id: String,
@@ -1143,6 +1167,28 @@ pub async fn upsert_channel_overwrite(
     {
         return Err(ApiError::BadRequest("Invalid overwrite target type".into()));
     }
+    let guild_id = channel
+        .guild_id()
+        .ok_or(ApiError::BadRequest("Channel has no guild".into()))?;
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let actor_perms = paracord_core::permissions::compute_permissions_from_roles(
+        &roles,
+        guild.owner_id,
+        auth.user_id,
+    );
+    validate_overwrite_permission_bits(
+        guild.owner_id,
+        auth.user_id,
+        actor_perms,
+        body.allow_perms,
+        body.deny_perms,
+    )?;
     paracord_db::channel_overwrites::upsert_channel_overwrite(
         &state.db,
         channel_id,
