@@ -1,4 +1,6 @@
 @import "@fontsource-variable/inter";
+/* Display face for headings only — self-hosted (CSP-safe), never external CDN. */
+@import "@fontsource-variable/fraunces";
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
 @import "@fontsource/jetbrains-mono/600.css";

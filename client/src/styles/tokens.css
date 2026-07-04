@@ -1,91 +1,166 @@
 /* =============================================================================
-   Paracord design-system tokens — single source of truth (FEAT-7).
+   Paracord design-system tokens — "Emerald Commons" (warm-neutral dark).
+   Single source of truth for the visual language. See docs/design-spec.md for
+   the full contract, component recipes, and the anti-AI-slop kill-list.
 
    CANONICAL VOCABULARY (consume these in components/pages):
-     Spacing ....... --space-1 … --space-12          (4px grid, 0.25rem * n)
-     Radii ......... --radius-sm|md|lg|full
-     Type size ..... --text-xs|sm|base|lg|xl|2xl      (mirrors Tailwind text-*)
-     Line height ... --leading-tight|snug|normal|relaxed|loose
-     Font weight ... --font-weight-normal|medium|semibold|bold
-     Elevation ..... --shadow-sm|md|lg|xl
-     Text .......... --text-primary|secondary|muted|link --text-on-accent
-     Surfaces ...... --bg-primary|secondary|tertiary|accent|floating (+ mods)
-     Border ........ --border-subtle|strong|glow
-     Accent/state .. --accent(-primary|-hover) --accent-success|danger|warning
+     Surfaces ...... --bg-primary|secondary|tertiary|accent|floating (+ -mod-*)
+     Text .......... --text-primary|secondary|muted|link --text-on-accent|on-danger
+     Accent ........ --accent(-primary|-hover|-active) --accent-secondary(teal)
+     Semantic ...... --accent-success|warning|danger|info (+ --accent-danger-fill)
+     Tints ......... --accent-tint --teal-tint --success|warning|danger|info-tint
      Presence ...... --status-online|idle|dnd|offline|streaming
+     Border ........ --border-subtle|strong
+     Interactive ... --interactive-normal|hover|active|muted --channel-icon
+     Radii ......... --radius-xs|sm|md|lg|full          (4 / 8 / 12 / 16 / pill)
+     Elevation ..... --shadow-sm|md|lg|xl               (near-black + top highlight)
+     Focus ......... --focus-ring --focus-ring-color --focus-ring-input
+     Spacing ....... --space-1 … --space-12             (4px grid, 0.25rem * n)
+     Type size ..... --text-xs|sm|base|lg|xl|2xl        (mirror Tailwind text-*)
+     Type steps .... --text-display|title|heading|subhead|body|label|meta|section
+     Line height ... --leading-tight|snug|normal|relaxed|loose
+     Font weight ... --font-weight-normal|medium|semibold|bold|body|display
+     Fonts ......... --font-primary (Inter) --font-display (Fraunces) --font-code
+     Motion ........ --duration-fast|normal|slow --ease-out|in-out|spring
 
-   The --text-, --leading-, --font-weight-, and --radius- scales intentionally
-   match Tailwind v4 defaults so `var(--text-sm)` and the `text-sm` utility agree.
+   IDENTITY: a single calibrated emerald (#24D196) is spent only on meaning —
+   primary actions, active nav, mentions, online presence, links, focus rings.
+   Teal (#1CC3C0) is the secondary/brand tint (active-nav bar, presence ring,
+   app mark). It is NEVER a gradient wash. Semantic colors (success/warn/danger/
+   info) are distinct hues, not the accent.
 
-   NORMALIZING/ADDITIVE ONLY. Aliases (kept for back-compat, do not remove):
-     --line-height-tight|normal|relaxed → --leading-*
-   Theme-scoped semantic tokens (--bg-*, --text-*, --accent-*, --status-*, …) are
-   redefined per theme in the :root[data-theme='…'] blocks below.
+   RUNTIME NOTE: src/hooks/useTheme.ts re-applies theme + accent-preset values
+   at runtime via inline style. These @theme/:root values are the design default
+   and the pre-hydration fallback; keep the two in lockstep when editing.
+
+   The --text-xs…2xl, --leading-*, --font-weight-*, and legacy line-height names
+   are kept so `var(--text-sm)` and the `text-sm` utility resolve identically.
    ============================================================================= */
 @theme {
-  --color-bg-primary: #10141d;
-  --color-bg-secondary: #141a26;
-  --color-bg-tertiary: #0a0f18;
-  --color-bg-accent: #1d2635;
-  --color-bg-floating: rgba(10, 14, 23, 0.9);
+  /* ---- Surfaces: warm-neutral dark with a whisper of green ------------------ */
+  --color-bg-primary: #141b17;
+  --color-bg-secondary: #1b241f;
+  --color-bg-tertiary: #0d1211;
+  --color-bg-accent: #222d27;
+  --color-bg-floating: rgba(27, 36, 31, 0.97);
   --color-bg-mod-subtle: rgba(255, 255, 255, 0.04);
-  --color-bg-mod-strong: rgba(255, 255, 255, 0.12);
+  --color-bg-mod-strong: rgba(255, 255, 255, 0.1);
 
-  --color-text-primary: #f2f6ff;
-  --color-text-secondary: #b6c2d9;
-  --color-text-muted: #8190ab;
-  --color-text-link: #7ecbff;
-  /* Foreground for text/icons sitting on a saturated accent/danger fill. White on
-     every dark/light theme (accents stay saturated); high-contrast overrides to black. */
-  --color-text-on-accent: #ffffff;
+  /* ---- Text ramp ----------------------------------------------------------- */
+  --color-text-primary: #eaf2ed;
+  --color-text-secondary: #a7b8af;
+  --color-text-muted: #7a8b82;
+  --color-text-link: #24d196;
+  /* Foreground on a light/emerald accent fill: near-black ink (~9.4:1 AAA on
+     emerald). High-contrast theme overrides to pure black. */
+  --color-text-on-accent: #04140d;
+  /* Foreground on the deepened danger fill: white (~5.0:1 AA on #C93A44). */
+  --color-text-on-danger: #ffffff;
 
-  --color-accent-primary: #6f86ff;
-  --color-accent-primary-hover: #8a9dff;
-  --color-accent-success: #35c18f;
-  --color-accent-danger: #ff5d72;
-  --color-accent-warning: #ffce62;
+  /* ---- Accent + semantic --------------------------------------------------- */
+  --color-accent-primary: #24d196;
+  --color-accent-primary-hover: #33dba2;
+  --color-accent-primary-active: #1fbe88;
+  --color-accent-secondary: #1cc3c0;
+  /* Full semantic set — deliberately distinct hues, NOT the emerald accent. */
+  --color-accent-success: #4bc46b;
+  --color-accent-warning: #e8b23a;
+  --color-accent-danger: #e5484d;
+  /* Deepened danger for white-text button fills (AA); #e5484d stays the
+     icon/text/border danger color on dark surfaces. */
+  --color-accent-danger-fill: #c93a44;
+  --color-accent-info: #4f97f0;
 
-  --color-border-subtle: rgba(161, 184, 230, 0.16);
-  --color-border-strong: rgba(177, 200, 242, 0.28);
-  --color-border-glow: rgba(126, 175, 255, 0.35);
-  --color-scrollbar-track: rgba(9, 13, 20, 0.42);
-  --color-scrollbar-thumb: rgba(129, 160, 219, 0.35);
+  /* ---- Tints: subtle meaning-colored backgrounds (badges, mention rows) ----- */
+  --color-accent-tint: rgba(36, 209, 150, 0.12);
+  --color-accent-tint-strong: rgba(36, 209, 150, 0.18);
+  --color-teal-tint: rgba(28, 195, 192, 0.12);
+  --color-success-tint: rgba(75, 196, 107, 0.14);
+  --color-warning-tint: rgba(232, 178, 58, 0.14);
+  --color-danger-tint: rgba(229, 72, 77, 0.14);
+  --color-info-tint: rgba(79, 151, 240, 0.14);
 
-  --color-channel-icon: #8a97b4;
-  --color-interactive-normal: #a8b4cc;
-  --color-interactive-hover: #e4edff;
-  --color-interactive-active: #f6f8ff;
-  --color-interactive-muted: #4f5a6f;
+  /* ---- Borders: warm-green hairlines, not pure gray ------------------------ */
+  --color-border-subtle: rgba(160, 185, 170, 0.12);
+  --color-border-strong: rgba(160, 185, 170, 0.22);
+  --color-scrollbar-track: rgba(0, 0, 0, 0.2);
+  --color-scrollbar-thumb: rgba(160, 185, 170, 0.22);
 
-  --color-status-online: #35c18f;
-  --color-status-idle: #ffce62;
-  --color-status-dnd: #ff5d72;
-  --color-status-offline: #6e7991;
-  --color-status-streaming: #8b6fff;
+  /* ---- Interactive (icons, hover text) ------------------------------------- */
+  --color-channel-icon: #7a8b82;
+  --color-interactive-normal: #a7b8af;
+  --color-interactive-hover: #eaf2ed;
+  --color-interactive-active: #ffffff;
+  --color-interactive-muted: #55645c;
 
-  --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  /* ---- Presence ------------------------------------------------------------ */
+  --color-status-online: #24d196;
+  --color-status-idle: #e8b23a;
+  --color-status-dnd: #e5484d;
+  --color-status-offline: #5c6b63;
+  --color-status-streaming: #9b7bff;
+
+  /* ---- Type faces ---------------------------------------------------------- */
+  --font-primary: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  /* Display face — Fraunces (self-hosted via @fontsource-variable, CSP-safe).
+     Used ONLY on Display/Title/Heading steps, never on body/UI. */
+  --font-display: 'Fraunces Variable', 'Fraunces', Georgia, 'Times New Roman', serif;
   --font-code: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
+  /* ---- Layout metrics (unchanged names) ------------------------------------ */
   --spacing-header-height: 3.5rem;
-  /* ~56px */
   --spacing-sidebar-width: 5rem;
-  /* 80px */
   --spacing-channel-sidebar-width: 18rem;
-  /* 288px */
   --spacing-member-list-width: 15.75rem;
-  /* 252px */
-
   --sidebar-item-size: 3.25rem;
-  /* ~52px */
 
-  /* Typography scale — canonical. Mirrors Tailwind v4 so var(--text-sm) and the
-     `text-sm` utility resolve identically (no visual drift on adoption). */
+  /* ---- Type: Tailwind-mirrored raw sizes (keep for parity with text-*) ------ */
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
   --text-base: 1rem;
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
+
+  /* ---- Type: semantic steps (generate text-display … text-section utilities).
+     Each carries its intended line-height / tracking / weight. --------------- */
+  --text-display: 2rem;
+  --text-display--line-height: 1.1;
+  --text-display--letter-spacing: -0.03em;
+  --text-display--font-weight: 800;
+
+  --text-title: 1.5rem;
+  --text-title--line-height: 1.15;
+  --text-title--letter-spacing: -0.02em;
+  --text-title--font-weight: 700;
+
+  --text-heading: 1.25rem;
+  --text-heading--line-height: 1.2;
+  --text-heading--letter-spacing: -0.015em;
+  --text-heading--font-weight: 700;
+
+  --text-subhead: 1.125rem;
+  --text-subhead--line-height: 1.3;
+  --text-subhead--letter-spacing: -0.01em;
+  --text-subhead--font-weight: 600;
+
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.5;
+  --text-body--font-weight: 440;
+
+  --text-label: 0.875rem;
+  --text-label--line-height: 1.4;
+  --text-label--font-weight: 500;
+
+  --text-meta: 0.75rem;
+  --text-meta--line-height: 1.4;
+  --text-meta--letter-spacing: 0.01em;
+  --text-meta--font-weight: 500;
+
+  --text-section: 0.75rem;
+  --text-section--line-height: 1.3;
+  --text-section--letter-spacing: 0.06em;
+  --text-section--font-weight: 600;
 
   --leading-tight: 1.25;
   --leading-snug: 1.375;
@@ -94,16 +169,18 @@
   --leading-loose: 2;
 
   --font-weight-normal: 400;
+  --font-weight-body: 440;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
+  --font-weight-display: 800;
 
   /* Legacy line-height names kept as aliases (base styles still consume them). */
   --line-height-tight: var(--leading-tight);
   --line-height-normal: var(--leading-normal);
   --line-height-relaxed: var(--leading-relaxed);
 
-  /* Spacing scale — 4px base grid, aligned to Tailwind's --spacing (0.25rem * n). */
+  /* ---- Spacing: 4px base grid (aligned to Tailwind --spacing) --------------- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -117,23 +194,32 @@
   --space-11: 2.75rem;
   --space-12: 3rem;
 
-  /* Radii — sm/md/lg mirror Tailwind defaults; full = pill. */
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
+  /* ---- Radii: deliberate 4 / 8 / 12 / 16 scale; pill only where meaningful -- */
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
   --radius-full: calc(infinity * 1px);
 
-  --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 16px 30px rgba(0, 0, 0, 0.28);
-  --shadow-lg: 0 24px 48px rgba(2, 7, 16, 0.45);
-  --shadow-xl: 0 34px 70px rgba(2, 7, 16, 0.56);
+  /* ---- Elevation: near-black shadow + 1px inset top highlight (lit-from-above) */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-xl: 0 28px 64px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
-  --duration-fast: 120ms;
+  /* ---- Focus: layered ring — surface gap then emerald halo ------------------ */
+  --focus-ring-color: rgba(36, 209, 150, 0.55);
+  --focus-ring: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--focus-ring-color);
+  --focus-ring-input: 0 0 0 3px rgba(36, 209, 150, 0.25);
+
+  /* ---- Motion -------------------------------------------------------------- */
+  --duration-fast: 140ms;
   --duration-normal: 180ms;
-  --duration-slow: 280ms;
+  --duration-slow: 240ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
-  --ease-spring: cubic-bezier(0.2, 0.95, 0.35, 1.12);
+  /* Subtle spring — discrete send/react only, never hover. */
+  --ease-spring: cubic-bezier(0.2, 0.9, 0.3, 1.3);
 }
 
 @media (max-width: 768px) {
@@ -171,7 +257,7 @@
   --bg-floating: var(--color-bg-floating);
   --bg-canvas: var(--bg-primary);
   --bg-panel: var(--bg-secondary);
-  --bg-dock: #000000;
+  --bg-dock: var(--bg-tertiary);
   --bg-chat: var(--bg-primary);
   --bg-mod-subtle: var(--color-bg-mod-subtle);
   --bg-mod-strong: var(--color-bg-mod-strong);
@@ -181,13 +267,26 @@
   --text-muted: var(--color-text-muted);
   --text-link: var(--color-text-link);
   --text-on-accent: var(--color-text-on-accent);
+  --text-on-danger: var(--color-text-on-danger);
 
   --accent: var(--accent-primary);
   --accent-primary: var(--color-accent-primary);
   --accent-primary-hover: var(--color-accent-primary-hover);
+  --accent-primary-active: var(--color-accent-primary-active);
+  --accent-secondary: var(--color-accent-secondary);
   --accent-success: var(--color-accent-success);
-  --accent-danger: var(--color-accent-danger);
   --accent-warning: var(--color-accent-warning);
+  --accent-danger: var(--color-accent-danger);
+  --accent-danger-fill: var(--color-accent-danger-fill);
+  --accent-info: var(--color-accent-info);
+
+  --accent-tint: var(--color-accent-tint);
+  --accent-tint-strong: var(--color-accent-tint-strong);
+  --teal-tint: var(--color-teal-tint);
+  --success-tint: var(--color-success-tint);
+  --warning-tint: var(--color-warning-tint);
+  --danger-tint: var(--color-danger-tint);
+  --info-tint: var(--color-info-tint);
 
   --border-subtle: var(--color-border-subtle);
   --border-strong: var(--color-border-strong);
@@ -214,38 +313,38 @@
   --density-space-4: 1rem;
   --density-space-5: 1.25rem;
 
-  --app-bg-layer-one: radial-gradient(130% 90% at 0% 0%, rgba(111, 134, 255, 0.16) 0%, rgba(111, 134, 255, 0) 52%);
-  --app-bg-layer-two: radial-gradient(120% 90% at 100% 0%, rgba(53, 193, 143, 0.1) 0%, rgba(53, 193, 143, 0) 44%);
-  --app-bg-base: linear-gradient(180deg, #080c14 0%, #070a12 100%);
-  --overlay-backdrop: rgba(2, 6, 15, 0.68);
-  /* Noise texture: small repeating PNG data URL for GPU-composited grain overlay.
-     Uses background-blend-mode: overlay on consuming elements for better perf than SVG filter. */
-  --noise-texture: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
-  --glass-rail-fill-top: rgba(255, 255, 255, 0.06);
+  /* Flat, calm base — no radial ambient-glow layers, no grain (anti-slop #1/#2). */
+  --app-bg-layer-one: none;
+  --app-bg-layer-two: none;
+  --app-bg-base: var(--bg-tertiary);
+  --overlay-backdrop: rgba(6, 10, 8, 0.62);
+  --noise-texture: none;
+  /* Panel/rail fills are subtle top-lit highlights layered over solid surfaces. */
+  --glass-rail-fill-top: rgba(255, 255, 255, 0.05);
   --glass-rail-fill-bottom: rgba(255, 255, 255, 0.01);
-  --glass-panel-fill-top: rgba(255, 255, 255, 0.05);
-  --glass-panel-fill-bottom: rgba(255, 255, 255, 0.015);
-  --glass-modal-fill-top: rgba(20, 28, 42, 0.95);
-  --glass-modal-fill-bottom: rgba(12, 17, 28, 0.92);
+  --glass-panel-fill-top: rgba(255, 255, 255, 0.04);
+  --glass-panel-fill-bottom: rgba(255, 255, 255, 0.012);
+  --glass-modal-fill-top: rgba(34, 45, 39, 0.96);
+  --glass-modal-fill-bottom: rgba(27, 36, 31, 0.94);
   --panel-divider-glint: rgba(255, 255, 255, 0.03);
-  --scrollbar-auto-thumb-hover: rgba(129, 160, 219, 0.52);
-  --ambient-glow-primary: rgba(111, 134, 255, 0.18);
-  --ambient-glow-success: rgba(53, 193, 143, 0.1);
-  --ambient-glow-danger: rgba(255, 93, 114, 0.06);
-  --accent-primary-rgb: 111, 134, 255;
+  --scrollbar-auto-thumb-hover: rgba(160, 185, 170, 0.4);
+  --ambient-glow-primary: transparent;
+  --ambient-glow-success: transparent;
+  --ambient-glow-danger: transparent;
+  --accent-primary-rgb: 36, 209, 150;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
 
-  /* Sidebar Specifics */
+  /* Sidebar specifics */
   --sidebar-width: 72px;
   --sidebar-item-size: 52px;
   --sidebar-icon-size: 26px;
-  --sidebar-bg: rgba(10, 14, 23, 0.65);
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-active-indicator: var(--accent-primary);
-  --bg-code: rgba(255, 255, 255, 0.06);
+  --sidebar-bg: rgba(13, 18, 17, 0.72);
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --sidebar-active-indicator: var(--accent-secondary);
+  --bg-code: rgba(255, 255, 255, 0.05);
   --border-code: rgba(255, 255, 255, 0.04);
 }
 
@@ -268,89 +367,105 @@
 }
 
 :root[data-theme='light'] {
-  --bg-primary: #eef2fb;
-  --bg-secondary: #f7f9ff;
-  --bg-tertiary: #e4ebf8;
-  --bg-accent: #d9e2f4;
-  --bg-floating: rgba(255, 255, 255, 0.9);
-  --bg-mod-subtle: rgba(47, 70, 120, 0.08);
-  --bg-mod-strong: rgba(47, 70, 120, 0.15);
+  --bg-primary: #e7ece7;
+  --bg-secondary: #f4f7f3;
+  --bg-tertiary: #dce3dc;
+  --bg-accent: #eaefea;
+  --bg-floating: rgba(244, 247, 243, 0.94);
+  --bg-mod-subtle: rgba(22, 45, 33, 0.06);
+  --bg-mod-strong: rgba(22, 45, 33, 0.12);
 
-  --text-primary: #15233a;
-  --text-secondary: #3a4f70;
-  --text-muted: #6a7f9e;
-  --text-link: #145ec8;
+  --text-primary: #16211b;
+  --text-secondary: #4a5a50;
+  --text-muted: #6c7c72;
+  --text-link: #0c8f63;
 
-  --accent-primary: #5067f1;
-  --accent-primary-hover: #6278ff;
-  --accent-success: #1f9f72;
-  --accent-danger: #d64560;
-  --accent-warning: #b88b1f;
+  --accent-primary: #0e9e6e;
+  --accent-primary-hover: #12b47e;
+  --accent-primary-active: #0b8a60;
+  --accent-secondary: #0f9d9a;
+  --accent-success: #128a54;
+  --accent-warning: #b5841e;
+  --accent-danger: #c93a44;
+  --accent-danger-fill: #c93a44;
+  --accent-info: #2f6fd0;
+  --text-on-accent: #ffffff;
 
-  --border-subtle: rgba(67, 91, 138, 0.22);
-  --border-strong: rgba(67, 91, 138, 0.36);
-  --channel-icon: #607396;
-  --interactive-normal: #4e6285;
-  --interactive-hover: #223756;
-  --interactive-active: #132540;
-  --interactive-muted: #7487a8;
+  --accent-tint: rgba(14, 158, 110, 0.12);
+  --accent-tint-strong: rgba(14, 158, 110, 0.18);
+  --teal-tint: rgba(15, 157, 154, 0.12);
+  --success-tint: rgba(18, 138, 84, 0.14);
+  --warning-tint: rgba(181, 132, 30, 0.16);
+  --danger-tint: rgba(201, 58, 68, 0.12);
+  --info-tint: rgba(47, 111, 208, 0.12);
 
-  --status-online: #1f9f72;
-  --status-idle: #d69c2a;
-  --status-dnd: #d64560;
-  --status-offline: #7d8fab;
-  /* Tuned deep violet: reads on light surfaces where the dark #8b6fff washes out. */
-  --status-streaming: #7a3fd1;
+  --border-subtle: rgba(30, 50, 40, 0.14);
+  --border-strong: rgba(30, 50, 40, 0.24);
+  --channel-icon: #5a6c62;
+  --interactive-normal: #47564d;
+  --interactive-hover: #1b2620;
+  --interactive-active: #0e140f;
+  --interactive-muted: #8a978e;
 
-  --app-bg-layer-one: radial-gradient(120% 90% at 0% 0%, rgba(80, 103, 241, 0.2) 0%, rgba(80, 103, 241, 0) 54%);
-  --app-bg-layer-two: radial-gradient(115% 90% at 100% 0%, rgba(31, 159, 114, 0.15) 0%, rgba(31, 159, 114, 0) 48%);
-  --app-bg-base: linear-gradient(180deg, #edf2fb 0%, #e3eaf7 100%);
-  --overlay-backdrop: rgba(18, 26, 40, 0.4);
+  --status-online: #0fa968;
+  --status-idle: #b5841e;
+  --status-dnd: #c93a44;
+  --status-offline: #8a978e;
+  --status-streaming: #6d4fcb;
+
+  --app-bg-layer-one: none;
+  --app-bg-layer-two: none;
+  --app-bg-base: #dce3dc;
+  --overlay-backdrop: rgba(20, 34, 27, 0.38);
   --glass-rail-fill-top: rgba(255, 255, 255, 0.78);
-  --glass-rail-fill-bottom: rgba(223, 232, 248, 0.64);
+  --glass-rail-fill-bottom: rgba(233, 240, 233, 0.64);
   --glass-panel-fill-top: rgba(255, 255, 255, 0.72);
-  --glass-panel-fill-bottom: rgba(227, 236, 248, 0.58);
-  --glass-modal-fill-top: rgba(253, 255, 255, 0.94);
-  --glass-modal-fill-bottom: rgba(236, 243, 252, 0.94);
-  --panel-divider-glint: rgba(20, 44, 82, 0.08);
-  --scrollbar-auto-thumb-hover: rgba(88, 110, 150, 0.45);
-  --sidebar-bg: rgba(248, 251, 255, 0.74);
-  --sidebar-border: rgba(36, 58, 92, 0.14);
-  --ambient-glow-primary: rgba(80, 103, 241, 0.19);
-  --ambient-glow-success: rgba(31, 159, 114, 0.14);
-  --ambient-glow-danger: rgba(215, 59, 97, 0.08);
-  --accent-primary-rgb: 71, 111, 255;
-  --bg-code: rgba(47, 70, 120, 0.1);
-  --border-code: rgba(47, 70, 120, 0.08);
+  --glass-panel-fill-bottom: rgba(233, 240, 233, 0.58);
+  --glass-modal-fill-top: rgba(252, 254, 251, 0.95);
+  --glass-modal-fill-bottom: rgba(240, 245, 239, 0.94);
+  --panel-divider-glint: rgba(20, 44, 30, 0.08);
+  --scrollbar-auto-thumb-hover: rgba(60, 88, 74, 0.42);
+  --sidebar-bg: rgba(244, 247, 243, 0.76);
+  --sidebar-border: rgba(24, 44, 32, 0.14);
+  --ambient-glow-primary: transparent;
+  --ambient-glow-success: transparent;
+  --ambient-glow-danger: transparent;
+  --accent-primary-rgb: 14, 158, 110;
+  --bg-code: rgba(22, 45, 33, 0.08);
+  --border-code: rgba(22, 45, 33, 0.08);
 }
 
 :root[data-theme='amoled'] {
   --bg-primary: #000000;
   --bg-secondary: #000000;
   --bg-tertiary: #000000;
-  --bg-accent: #080a0f;
+  --bg-accent: #0a0f0c;
   --bg-floating: rgba(0, 0, 0, 0.98);
   --bg-mod-subtle: rgba(255, 255, 255, 0.055);
   --bg-mod-strong: rgba(255, 255, 255, 0.12);
 
-  --text-primary: #f4f7ff;
-  --text-secondary: #aebad2;
-  --text-muted: #6f7d96;
-  --text-link: #8dc2ff;
+  --text-primary: #eaf2ed;
+  --text-secondary: #a7b8af;
+  --text-muted: #6e7d74;
+  --text-link: #33dba2;
 
-  --accent-primary: #748dff;
-  --accent-primary-hover: #8da3ff;
-  --accent-success: #35c18f;
-  --accent-danger: #ff5d72;
-  --accent-warning: #ffce62;
+  --accent-primary: #24d196;
+  --accent-primary-hover: #33dba2;
+  --accent-primary-active: #1fbe88;
+  --accent-secondary: #1cc3c0;
+  --accent-success: #4bc46b;
+  --accent-warning: #e8b23a;
+  --accent-danger: #e5484d;
+  --accent-danger-fill: #c93a44;
+  --accent-info: #4f97f0;
 
   --border-subtle: rgba(255, 255, 255, 0.12);
   --border-strong: rgba(255, 255, 255, 0.22);
-  --channel-icon: #90a0bd;
-  --interactive-normal: #a9b5cd;
-  --interactive-hover: #edf2ff;
+  --channel-icon: #7f8f86;
+  --interactive-normal: #a7b8af;
+  --interactive-hover: #eaf2ed;
   --interactive-active: #ffffff;
-  --interactive-muted: #4d5871;
+  --interactive-muted: #4d5b53;
 
   --app-bg-layer-one: none;
   --app-bg-layer-two: none;
@@ -369,7 +484,7 @@
   --ambient-glow-primary: transparent;
   --ambient-glow-success: transparent;
   --ambient-glow-danger: transparent;
-  --accent-primary-rgb: 116, 141, 255;
+  --accent-primary-rgb: 36, 209, 150;
   --bg-code: rgba(255, 255, 255, 0.08);
   --border-code: rgba(255, 255, 255, 0.06);
 }
@@ -386,16 +501,28 @@
   --text-primary: #ffffff;
   --text-secondary: #e0e0e0;
   --text-muted: #b0b0b0;
-  --text-link: #66ccff;
-  /* Accents are bright here (#66b3ff/#33ff99/#ffdd00/#ff4d4d); black foreground
-     clears WCAG AA on all of them where white would not. */
+  --text-link: #3af0b0;
+  /* Accents are bright here; black foreground clears WCAG AA on all of them. */
   --text-on-accent: #000000;
+  --text-on-danger: #000000;
 
-  --accent-primary: #66b3ff;
-  --accent-primary-hover: #99ccff;
+  --accent-primary: #3af0b0;
+  --accent-primary-hover: #66f5c6;
+  --accent-primary-active: #23dc9d;
+  --accent-secondary: #34e0dd;
   --accent-success: #33ff99;
-  --accent-danger: #ff4d4d;
   --accent-warning: #ffdd00;
+  --accent-danger: #ff4d4d;
+  --accent-danger-fill: #ff4d4d;
+  --accent-info: #66b3ff;
+
+  --accent-tint: rgba(58, 240, 176, 0.2);
+  --accent-tint-strong: rgba(58, 240, 176, 0.28);
+  --teal-tint: rgba(52, 224, 221, 0.2);
+  --success-tint: rgba(51, 255, 153, 0.2);
+  --warning-tint: rgba(255, 221, 0, 0.2);
+  --danger-tint: rgba(255, 77, 77, 0.2);
+  --info-tint: rgba(102, 179, 255, 0.2);
 
   --border-subtle: rgba(255, 255, 255, 0.4);
   --border-strong: rgba(255, 255, 255, 0.6);
@@ -428,7 +555,7 @@
   --ambient-glow-primary: transparent;
   --ambient-glow-success: transparent;
   --ambient-glow-danger: transparent;
-  --accent-primary-rgb: 102, 179, 255;
+  --accent-primary-rgb: 58, 240, 176;
   --bg-code: rgba(255, 255, 255, 0.12);
   --border-code: rgba(255, 255, 255, 0.2);
 }
@@ -465,12 +592,12 @@ body,
   overflow: hidden;
   overscroll-behavior: none;
   font-family: var(--font-primary);
+  /* tnum = tabular figures (aligned timestamps/counts); cv03/cv04 = Inter's
+     open-4 / single-story-a stylistic sets for a warmer, more legible read. */
   font-feature-settings: 'tnum', 'cv03', 'cv04';
+  font-weight: var(--font-weight-body);
   color: var(--text-primary);
-  background:
-    var(--app-bg-layer-one),
-    var(--app-bg-layer-two),
-    var(--app-bg-base);
+  background: var(--app-bg-base);
   line-height: var(--line-height-normal);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -480,4 +607,3 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
-

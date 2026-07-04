@@ -66,7 +66,7 @@ export const useUIStore = create<UIState>()(
       sidebarOpen: true,
       dockPinned: true,
       theme: 'dark',
-      accentPreset: 'red',
+      accentPreset: 'emerald',
       customCss: '',
       compactMode: false,
       serverRestarting: false,
