@@ -560,9 +560,17 @@
   --border-code: rgba(255, 255, 255, 0.2);
 }
 
-* {
-  margin: 0;
-  box-sizing: border-box;
+/* Baseline reset lives in @layer base so Tailwind's layered margin/spacing
+   utilities (@layer utilities, which cascades after base) still win. Left
+   unlayered, `* { margin: 0 }` outranks every `mr-*/mt-*/space-y-*` utility in
+   the app (unlayered author styles beat layered ones regardless of
+   specificity), silently zeroing all margin utilities — the root cause of the
+   app-wide "squished spacing" regression. */
+@layer base {
+  * {
+    margin: 0;
+    box-sizing: border-box;
+  }
 }
 
 button,

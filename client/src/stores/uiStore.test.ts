@@ -8,7 +8,6 @@ describe('uiStore', () => {
       sidebarOpen: true,
       theme: 'dark',
       customCss: '',
-      compactMode: false,
       serverRestarting: false,
       commandPaletteOpen: false,
       memberPanelOpen: true,
@@ -22,7 +21,6 @@ describe('uiStore', () => {
     expect(state.sidebarOpen).toBe(true);
     expect(state.theme).toBe('dark');
     expect(state.customCss).toBe('');
-    expect(state.compactMode).toBe(false);
     expect(state.searchPanelOpen).toBe(false);
   });
 
@@ -45,13 +43,6 @@ describe('uiStore', () => {
   it('sets custom CSS', () => {
     useUIStore.getState().setCustomCss('.test { color: red; }');
     expect(useUIStore.getState().customCss).toBe('.test { color: red; }');
-  });
-
-  it('sets compact mode', () => {
-    useUIStore.getState().setCompactMode(true);
-    expect(useUIStore.getState().compactMode).toBe(true);
-    useUIStore.getState().setCompactMode(false);
-    expect(useUIStore.getState().compactMode).toBe(false);
   });
 
   it('sets server restarting', () => {

@@ -198,7 +198,7 @@ const BRAND_POINTS = [
 
 export function BrandAside() {
   return (
-    <aside className="hidden w-[22rem] shrink-0 flex-col justify-between border-r border-border-subtle bg-bg-tertiary/40 p-9 lg:flex">
+    <aside className="hidden w-[22rem] shrink-0 flex-col border-r border-border-subtle bg-bg-tertiary/40 p-9 lg:flex">
       <div>
         <div className="flex items-center gap-3">
           <AppMark size={40} />
@@ -209,7 +209,7 @@ export function BrandAside() {
         </p>
       </div>
 
-      <ul className="my-8 space-y-6">
+      <ul className="mt-10 space-y-6">
         {BRAND_POINTS.map(({ icon: Icon, title, body }) => (
           <li key={title} className="flex gap-3.5">
             <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
@@ -223,7 +223,7 @@ export function BrandAside() {
         ))}
       </ul>
 
-      <p className="text-meta text-text-muted">
+      <p className="mt-auto pt-10 text-meta text-text-muted">
         Decentralized, self-hostable, private by design.
       </p>
     </aside>

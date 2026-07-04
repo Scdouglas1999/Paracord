@@ -379,7 +379,7 @@ export function ChannelPermissionsEditor({
                 ) : (
                   <div className="flex flex-col gap-1.5">
                     <select
-                      className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-label text-text-primary outline-none transition-colors focus:border-accent-primary"
+                      className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-label text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
                       value={addTargetId}
                       onChange={(e) => setAddTargetId(e.target.value)}
                     >
@@ -402,7 +402,7 @@ export function ChannelPermissionsEditor({
               ) : (
                 <div className="flex flex-col gap-1.5">
                   <input
-                    className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-label text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent-primary"
+                    className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-label text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] placeholder:text-text-muted focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
                     placeholder="Search members…"
                     value={memberSearch}
                     onChange={(e) => setMemberSearch(e.target.value)}

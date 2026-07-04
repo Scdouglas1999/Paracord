@@ -977,8 +977,28 @@ impl Config {
             }
 
             let template = generate_config_template(&config);
-            fs::write(path, &template)?;
-            let _ = harden_secret_file_permissions(path);
+            // The template embeds freshly minted secrets (jwt_secret, LiveKit
+            // api_secret). Create the file with restrictive permissions BEFORE
+            // writing any bytes so there is no window in which another local
+            // user can read the secrets — a plain write honors the umask
+            // (typically 0644) and only chmods afterward, a TOCTOU exposure on
+            // multi-tenant hosts.
+            #[cfg(unix)]
+            {
+                use std::io::Write;
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(path)?;
+                file.write_all(template.as_bytes())?;
+            }
+            #[cfg(not(unix))]
+            {
+                fs::write(path, &template)?;
+                let _ = harden_secret_file_permissions(path);
+            }
             tracing::info!("Generated default config at '{}'", path);
             config
         };

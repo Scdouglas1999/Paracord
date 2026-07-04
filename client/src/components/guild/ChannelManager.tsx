@@ -768,7 +768,7 @@ function CategoryGroupSection({
       {isAddingInline && !collapsed && (
         <div className="ml-6 mt-1.5 space-y-2 rounded-sm border border-border-subtle bg-bg-tertiary p-2.5">
           <input
-            className="w-full rounded-sm border border-border-subtle bg-bg-secondary px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent-primary"
+            className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-1.5 text-sm text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] placeholder:text-text-muted focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
             placeholder="Channel name"
             value={inlineName}
             onChange={(e) => onInlineNameChange(e.target.value)}
@@ -780,7 +780,7 @@ function CategoryGroupSection({
           />
           <div className="flex items-center gap-2">
             <select
-              className="rounded-sm border border-border-subtle bg-bg-secondary px-2 py-1.5 text-meta text-text-secondary outline-none transition-colors focus:border-accent-primary"
+              className="rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
               value={inlineType}
               onChange={(e) => onInlineTypeChange(e.target.value as 'text' | 'voice')}
               aria-label="Channel type"
@@ -1074,7 +1074,7 @@ function SortableChannelItem({
               {followers.length} following
             </span>
             <select
-              className="rounded-sm border border-border-subtle bg-bg-tertiary px-1.5 py-1 text-meta text-text-secondary outline-none transition-colors focus:border-accent-primary"
+              className="rounded-sm border border-border-subtle bg-bg-tertiary px-1.5 py-1 text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
               value={followTargetId}
               onChange={(e) => setFollowTargetId(e.target.value)}
               disabled={followTargets.length === 0 || followersLoading || followBusy}
@@ -1139,7 +1139,7 @@ function SortableChannelItem({
                 value={draftUserLimit}
                 onChange={(e) => setDraftUserLimit(Number(e.target.value))}
                 onBlur={() => void onUpdateVoiceSettings(channel.id, draftBitrate, draftUserLimit)}
-                className="w-11 rounded-sm border border-border-subtle bg-bg-tertiary px-1 py-1 text-center text-meta text-text-secondary outline-none transition-colors focus:border-accent-primary"
+                className="w-11 rounded-sm border border-border-subtle bg-bg-tertiary px-1 py-1 text-center text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
               />
             </label>
           </div>
@@ -1158,7 +1158,7 @@ function SortableChannelItem({
             <label className="flex items-center gap-1.5" title="Slowmode">
               <span className="text-meta font-medium text-text-muted">Slow</span>
               <select
-                className="rounded-sm border border-border-subtle bg-bg-tertiary px-1.5 py-1 text-meta text-text-secondary outline-none transition-colors focus:border-accent-primary"
+                className="rounded-sm border border-border-subtle bg-bg-tertiary px-1.5 py-1 text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
                 value={channel.rate_limit_per_user ?? 0}
                 onChange={(e) => void onUpdateSlowmode(channel.id, Number(e.target.value))}
               >
@@ -1215,7 +1215,7 @@ function SortableChannelItem({
                   Disappearing messages
                 </span>
                 <select
-                  className="rounded-sm border border-border-subtle bg-bg-secondary px-2 py-1 text-meta text-text-primary outline-none transition-colors focus:border-accent-primary"
+                  className="rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1 text-meta text-text-primary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
                   value={featureSettings.disappearing_seconds}
                   onChange={(e) => void patchFeatureSettings({ disappearing_seconds: Number(e.target.value) })}
                 >

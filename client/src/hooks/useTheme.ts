@@ -291,7 +291,6 @@ export function useTheme() {
   const theme = useUIStore((s) => s.theme);
   const accentPreset = useUIStore((s) => s.accentPreset);
   const setTheme = useUIStore((s) => s.setTheme);
-  const compactMode = useUIStore((s) => s.compactMode);
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const customCss = useUIStore((s) => s.customCss);
   const settings = useAuthStore((s) => s.settings);
@@ -316,8 +315,9 @@ export function useTheme() {
     requestedTheme === 'light' || requestedTheme === 'amoled' || requestedTheme === 'dark' || requestedTheme === 'high-contrast'
       ? requestedTheme
       : 'dark';
-  const compactFromSettings = Boolean(settings?.message_display_compact);
-  const densityMode = compactMode || compactFromSettings ? 'compact' : 'default';
+  // Message density has a single source of truth: the server-synced
+  // message_display_compact setting (surfaced in Settings › Appearance › Display).
+  const densityMode = settings?.message_display_compact ? 'compact' : 'default';
 
   useEffect(() => {
     const vars = THEME_VARIABLES[activeTheme] || THEME_VARIABLES.dark;

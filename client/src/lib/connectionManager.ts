@@ -585,7 +585,9 @@ class ConnectionManager {
 
     // If we don't have a valid token, do challenge-response auth.
     // Do not require local key unlock when a token already exists.
-    if (!serverToken && !localSessionToken && candidateLocalToken) {
+    // The home session's access/refresh tokens must never be probed against a
+    // remote/federated host — only a loopback (same-machine) address may receive them.
+    if (!serverToken && !localSessionToken && candidateLocalToken && this.isLoopbackServerUrl(effectiveUrl)) {
       const verifiedToken = await this.verifyLocalSessionForServer(
         serverId,
         apiBaseUrl,
@@ -604,10 +606,13 @@ class ConnectionManager {
         serverId,
         client,
         useServerListStore.getState().getServer(serverId)?.refreshToken ?? null,
-        isLocalServerEntry || this.isLoopbackServerUrl(effectiveUrl),
+        // Promote to the global/home session only for the configured local server.
+        // A different loopback server (e.g. a second self-hosted instance on another
+        // port) is a distinct session and must not overwrite the home auth token.
+        isLocalServerEntry,
       );
       if (refreshedToken) {
-        if (isLocalServerEntry || this.isLoopbackServerUrl(effectiveUrl)) {
+        if (isLocalServerEntry) {
           localSessionToken = refreshedToken;
         }
         serverToken = refreshedToken;

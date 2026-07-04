@@ -87,7 +87,9 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
             <div className="rounded-md border border-border-subtle bg-bg-accent p-3.5 shadow-sm">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-label text-text-primary">Your Progress</span>
-                <span className="font-code text-meta tabular-nums text-text-muted">Rank #{progress?.rank ?? '-'}</span>
+                <span className="font-code text-meta tabular-nums text-text-muted">
+                  {progress?.rank != null ? `Rank #${progress.rank}` : 'Unranked'}
+                </span>
               </div>
               <div className="mt-2.5 flex items-center gap-2.5 text-meta text-text-secondary">
                 <span className="rounded-xs bg-accent-tint px-2 py-1 text-label font-semibold text-accent-primary">
@@ -160,9 +162,9 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
               )}
             </div>
 
-            {highlighted == null && currentUserId != null && progress != null && (
+            {highlighted == null && currentUserId != null && progress != null && progress.rank != null && entries.length > 0 && (
               <div className="rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-meta text-text-secondary">
-                You're just outside the top 8 — currently rank #{progress.rank ?? '-'}.
+                You're just outside the top 8 — currently rank #{progress.rank}.
               </div>
             )}
           </>

@@ -1220,11 +1220,9 @@ pub async fn wait_for_identify_or_resume(
                             let guild_ids = guilds.iter().map(|g| g.id).collect();
                             let guild_owner_ids =
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
-                            return Some((
-                                Session::new(claims.sub, guild_ids, guild_owner_ids),
-                                false,
-                                0,
-                            ));
+                            let mut session = Session::new(claims.sub, guild_ids, guild_owner_ids);
+                            session.auth_session_id = session_id.to_string();
+                            return Some((session, false, 0));
                         }
                         if op == OP_RESUME as u64 {
                             let requested_session_id =
@@ -1257,6 +1255,7 @@ pub async fn wait_for_identify_or_resume(
                                             cached.guild_owner_ids.clone(),
                                         );
                                         resumed.session_id = requested_session_id;
+                                        resumed.auth_session_id = session_id.to_string();
                                         resumed.sequence = cached.sequence.max(requested_seq);
                                         return Some((resumed, true, requested_seq));
                                     } else {
@@ -1282,11 +1281,9 @@ pub async fn wait_for_identify_or_resume(
                             let guild_ids = guilds.iter().map(|g| g.id).collect();
                             let guild_owner_ids =
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
-                            return Some((
-                                Session::new(claims.sub, guild_ids, guild_owner_ids),
-                                false,
-                                0,
-                            ));
+                            let mut session = Session::new(claims.sub, guild_ids, guild_owner_ids);
+                            session.auth_session_id = session_id.to_string();
+                            return Some((session, false, 0));
                         }
                     }
                 }
@@ -2052,6 +2049,13 @@ async fn handle_client_message(
                             "sub": session.user_id,
                             "sid": &session.session_id,
                             "session_id": &session.session_id,
+                            // The native-media transport requires the login
+                            // session id (auth_sid/auth_session_id) to verify
+                            // the session is still active; the REST join path
+                            // embeds the same claims. Without these, the
+                            // tightened accept handlers reject the token.
+                            "auth_sid": &session.auth_session_id,
+                            "auth_session_id": &session.auth_session_id,
                             "room": &media_room,
                             "iat": issued_at,
                             "exp": issued_at + 86400,

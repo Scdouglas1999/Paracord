@@ -589,7 +589,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
                           </span>
                         )}
                         {!isVoice && canManageChannels && (
-                          <div className={cn('opacity-0 transition-opacity group-hover:opacity-100', mentionCount === 0 && 'ml-auto')}>
+                          <div className={cn('opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100', mentionCount === 0 && 'ml-auto')}>
                             <Tooltip content="Edit Channel" side="top">
                               <span
                                 role="button"

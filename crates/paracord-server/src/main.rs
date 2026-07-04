@@ -664,6 +664,14 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Reconcile the advertised native-media capability with what actually came
+    // up. `native_media_enabled` was seeded from config intent, but native
+    // provisioning may have degraded to LiveKit (state.native_media == None).
+    // Voice-join handlers gate the native branch on this flag, so leaving it
+    // true would advertise native_media:true with a null cert_hash pointing
+    // clients at a dead endpoint. Track the real runtime state instead.
+    state.config.native_media_enabled = state.native_media.is_some();
+
     // ── QUIC file transfer partial upload cleanup ─────────────────────────────
     // Only when the native QUIC endpoint actually came up (it shares that
     // endpoint). If native media degraded to a LiveKit fallback, skip it.

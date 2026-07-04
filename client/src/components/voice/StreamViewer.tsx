@@ -476,7 +476,7 @@ export function StreamViewer({
         </div>
       )}
       <div
-        className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-between gap-2 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+        className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-between gap-2 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 group-focus-within:opacity-100"
       >
         <div className="min-w-0 flex items-center gap-2 sm:gap-3 pointer-events-none">
           <div

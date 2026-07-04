@@ -22,7 +22,6 @@ interface UIState {
   theme: Theme;
   accentPreset: AccentPreset;
   customCss: string;
-  compactMode: boolean;
   serverRestarting: boolean;
   commandPaletteOpen: boolean;
   memberPanelOpen: boolean;
@@ -42,7 +41,6 @@ interface UIState {
   setTheme: (theme: Theme) => void;
   setAccentPreset: (accentPreset: AccentPreset) => void;
   setCustomCss: (css: string) => void;
-  setCompactMode: (compact: boolean) => void;
   setServerRestarting: (v: boolean) => void;
   toggleCommandPalette: () => void;
   setCommandPaletteOpen: (open: boolean) => void;
@@ -68,7 +66,6 @@ export const useUIStore = create<UIState>()(
       theme: 'dark',
       accentPreset: 'emerald',
       customCss: '',
-      compactMode: false,
       serverRestarting: false,
       commandPaletteOpen: false,
       memberPanelOpen: true,
@@ -88,7 +85,6 @@ export const useUIStore = create<UIState>()(
       setTheme: (theme) => set({ theme }),
       setAccentPreset: (accentPreset) => set({ accentPreset }),
       setCustomCss: (customCss) => set({ customCss }),
-      setCompactMode: (compactMode) => set({ compactMode }),
       setServerRestarting: (serverRestarting) => set({ serverRestarting }),
       toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen })),
       setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
@@ -116,7 +112,6 @@ export const useUIStore = create<UIState>()(
         theme: state.theme,
         accentPreset: state.accentPreset,
         customCss: state.customCss,
-        compactMode: state.compactMode,
         dockPinned: state.dockPinned,
         memberPanelOpen: state.memberPanelOpen,
         sidebarCollapsed: state.sidebarCollapsed,

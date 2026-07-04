@@ -5,6 +5,11 @@ pub struct Session {
     pub guild_ids: Vec<i64>,
     pub guild_owner_ids: HashMap<i64, i64>,
     pub session_id: String,
+    /// The authenticating login-session id (the JWT `sid` claim), distinct from
+    /// `session_id` (the gateway/voice-state id). Media tokens minted on this
+    /// connection must carry it as `auth_sid` so the native-media transport can
+    /// verify the login session is still active (see `is_media_session_active`).
+    pub auth_session_id: String,
     pub sequence: u64,
     /// Cached friend user ids for presence fan-out, loaded lazily on the first
     /// presence transition and invalidated when a relationship-change event is
@@ -19,6 +24,7 @@ impl Session {
             guild_ids,
             guild_owner_ids,
             session_id: uuid::Uuid::new_v4().to_string(),
+            auth_session_id: String::new(),
             sequence: 0,
             friend_ids: None,
         }

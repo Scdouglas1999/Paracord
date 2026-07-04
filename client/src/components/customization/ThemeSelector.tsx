@@ -1,4 +1,4 @@
-import { Moon, Sun, Monitor, Eye, Check, Rows3, Rows2 } from 'lucide-react';
+import { Moon, Sun, Monitor, Eye, Check } from 'lucide-react';
 import { useUIStore, type AccentPreset } from '../../stores/uiStore';
 import { ACCENT_PRESETS } from '../../hooks/useTheme';
 import { cn } from '../../lib/utils';
@@ -46,11 +46,6 @@ const ACCENT_LABELS: Record<AccentPreset, string> = {
   slate: 'Slate',
 };
 
-const DENSITY_OPTIONS: Array<{ compact: boolean; label: string; icon: React.ReactNode }> = [
-  { compact: false, label: 'Cozy', icon: <Rows2 size={15} /> },
-  { compact: true, label: 'Compact', icon: <Rows3 size={15} /> },
-];
-
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return <div className="mb-3 text-section uppercase text-text-secondary">{children}</div>;
 }
@@ -79,14 +74,11 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
   const setTheme = useUIStore((state) => state.setTheme);
   const accentPreset = useUIStore((state) => state.accentPreset);
   const setAccentPreset = useUIStore((state) => state.setAccentPreset);
-  const compactMode = useUIStore((state) => state.compactMode);
-  const setCompactMode = useUIStore((state) => state.setCompactMode);
   const theme = currentTheme ?? storeTheme;
 
   return (
     <div className="space-y-7">
       <div>
-        <FieldLabel>Appearance</FieldLabel>
         <div className="grid grid-cols-2 gap-3">
           {THEME_OPTIONS.map((option) => {
             const active = theme === option.id;
@@ -148,39 +140,6 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
         <p className="mt-2.5 text-meta text-text-muted">
           The accent drives primary buttons, active navigation, mentions, and focus rings. Teal brand
           moments stay fixed.
-        </p>
-      </div>
-
-      <div>
-        <FieldLabel>Message Density</FieldLabel>
-        <div
-          className="inline-flex gap-0.5 rounded-sm border border-border-subtle bg-bg-tertiary p-0.5"
-          role="group"
-          aria-label="Message density"
-        >
-          {DENSITY_OPTIONS.map((option) => {
-            const active = compactMode === option.compact;
-            return (
-              <button
-                key={option.label}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setCompactMode(option.compact)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-[6px] px-3.5 py-1.5 text-label font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-1 focus-visible:ring-offset-bg-tertiary',
-                  active
-                    ? 'bg-bg-accent text-text-primary shadow-sm'
-                    : 'text-text-secondary hover:text-text-primary',
-                )}
-              >
-                {option.icon}
-                {option.label}
-              </button>
-            );
-          })}
-        </div>
-        <p className="mt-2.5 text-meta text-text-muted">
-          Compact tightens line spacing so more of the conversation fits on screen.
         </p>
       </div>
     </div>

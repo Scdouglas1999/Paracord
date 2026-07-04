@@ -770,14 +770,11 @@ where
 }
 
 /// Focus the main window and forward each deep link to the webview so the
-/// connect flow can act on it. No-op when there are no links.
+/// connect flow can act on it. A plain second launch has no link args, but it
+/// must still bring the existing window forward; otherwise desktop launchers
+/// appear to do nothing while the single-instance plugin exits the new process.
 fn forward_deep_link_urls(app: &tauri::AppHandle, urls: &[String]) {
     use tauri::{Emitter, Manager};
-    if urls.is_empty() {
-        return;
-    }
-    // Bring the existing window to the foreground so the connect flow is visible
-    // when a link is opened while the app is hidden to the tray or backgrounded.
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();

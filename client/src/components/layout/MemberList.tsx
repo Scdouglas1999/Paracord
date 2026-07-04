@@ -414,7 +414,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
                 {row.type === 'header' && (
                   <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-section uppercase text-text-muted">
                     <span className="truncate">{row.label}</span>
-                    <span className="font-code tabular-nums text-text-muted/80">{row.count}</span>
+                    <span className="font-code tabular-nums text-text-muted">{row.count}</span>
                   </div>
                 )}
                 {row.type === 'member' && renderMember(row.member)}
@@ -429,7 +429,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
                       style={{ transform: showOffline ? 'rotate(0deg)' : 'rotate(-90deg)' }}
                     />
                     <span className="truncate">Offline</span>
-                    <span className="font-code tabular-nums text-text-muted/80">{row.count}</span>
+                    <span className="font-code tabular-nums text-text-muted">{row.count}</span>
                   </button>
                 )}
                 {row.type === 'empty' && (
