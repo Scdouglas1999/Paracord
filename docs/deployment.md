@@ -147,4 +147,3 @@ LiveKit to a network. See [docs/docker-setup.md](docker-setup.md) and
 - [Deployment profiles](deployment-profiles.md) — baseline dev / single-node /
   testbed values.
 - [Known limitations](known-limitations.md) — current support boundaries.
-</content>

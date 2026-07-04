@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Download, Loader2, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { Download, Loader2, Plus, RotateCcw, Trash2, AlertTriangle, Archive } from 'lucide-react';
 import { adminApi } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { Button } from '../../components/ui/Button';
+import { EmptyState, LoadingSpinner } from '../../components/ui/Feedback';
 import { confirm } from '../../stores/confirmStore';
 
 type BackupRow = {
@@ -116,119 +117,118 @@ export function BackupsPanel() {
 
   return (
     <div>
-      <h2 className="mb-6 text-xl font-semibold text-text-primary">Backups</h2>
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="font-display text-heading text-text-primary">Backups</h2>
+          <p className="mt-1 text-body text-text-secondary">
+            Create point-in-time snapshots and restore this server from one.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-body text-text-secondary">
+            <input
+              type="checkbox"
+              checked={includeMedia}
+              onChange={(e) => setIncludeMedia(e.target.checked)}
+              className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary"
+            />
+            Include media files
+          </label>
+          <Button onClick={handleCreate} loading={creating} disabled={creating} className="gap-2">
+            {!creating && <Plus size={16} />}
+            {creating ? 'Creating…' : 'Create backup'}
+          </Button>
+        </div>
+      </header>
 
-      {/* Create backup controls */}
-      <div className="mb-8 flex flex-wrap items-center gap-5">
-        <Button
-          onClick={handleCreate}
-          disabled={creating}
-          className="inline-flex items-center gap-2"
-        >
-          {creating ? (
-            <Loader2 size={16} className="animate-spin" />
-          ) : (
-            <Plus size={16} />
-          )}
-          {creating ? 'Creating Backup...' : 'Create Backup'}
-        </Button>
-
-        <label className="card-surface inline-flex items-center gap-2 rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-4 py-3 text-sm text-text-secondary">
-          <input
-            type="checkbox"
-            checked={includeMedia}
-            onChange={(e) => setIncludeMedia(e.target.checked)}
-            className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
-          />
-          Include media files
-        </label>
+      <div className="mb-6 flex items-start gap-3 rounded-md border border-accent-warning/30 bg-warning-tint px-4 py-3">
+        <AlertTriangle size={18} className="mt-0.5 shrink-0 text-accent-warning" />
+        <p className="text-body text-text-secondary">
+          <span className="font-semibold text-text-primary">Restoring overwrites everything.</span>{' '}
+          A restore replaces current data on disk with the snapshot's contents. Download a fresh backup first, then restart the server once the restore completes.
+        </p>
       </div>
 
-      {/* Backups list */}
       {loading ? (
-        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-6 text-sm text-text-muted">
-          Loading backups...
+        <div className="rounded-md border border-border-subtle bg-bg-secondary px-6 py-10 shadow-sm">
+          <LoadingSpinner size="sm" label="Loading backups…" />
         </div>
       ) : backups.length === 0 ? (
-        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-10 text-center text-text-muted">
-          No backups yet. Create your first backup above.
+        <div className="rounded-md border border-border-subtle bg-bg-secondary px-4 shadow-sm">
+          <EmptyState
+            icon={<Archive size={20} />}
+            title="No backups yet"
+            description="You haven't captured a snapshot of this server. Create one now so you can roll back if something goes wrong."
+            action={
+              <Button onClick={handleCreate} loading={creating} disabled={creating} className="gap-2">
+                {!creating && <Plus size={16} />}
+                {creating ? 'Creating…' : 'Create first backup'}
+              </Button>
+            }
+          />
         </div>
       ) : (
-        <div className="card-surface overflow-hidden rounded-xl border border-border-subtle bg-bg-mod-subtle/40">
+        <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
           <div className="overflow-x-auto">
-          <table className="min-w-[760px] w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-border-subtle bg-bg-secondary/60">
-                <th className="px-6 py-5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Filename</th>
-                <th className="px-6 py-5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Date</th>
-                <th className="px-6 py-5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Size</th>
-                <th className="px-6 py-5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {backups.map((b) => (
-                <tr
-                  key={b.name}
-                  className="border-b border-border-subtle/50 last:border-b-0 transition-colors hover:bg-bg-mod-subtle/30"
-                >
-                  <td className="px-6 py-5 font-medium text-text-primary">
-                    <span className="font-mono text-xs">{b.name}</span>
-                  </td>
-                  <td className="px-6 py-5 text-text-secondary">
-                    {b.created_at
-                      ? new Date(b.created_at).toLocaleString()
-                      : '-'}
-                  </td>
-                  <td className="px-6 py-5 text-text-secondary">
-                    {formatBytes(b.size_bytes)}
-                  </td>
-                  <td className="px-6 py-5">
-                    <div className="flex items-center gap-4">
-                      <button
-                        onClick={() => handleRestore(b.name)}
-                        disabled={restoringName === b.name}
-                        className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary disabled:opacity-50"
-                        title="Restore backup"
-                        aria-label={`Restore backup ${b.name}`}
-                      >
-                        {restoringName === b.name ? (
-                          <Loader2 size={16} className="animate-spin" />
-                        ) : (
-                          <RotateCcw size={16} />
-                        )}
-                      </button>
-                      <button
-                        onClick={() => handleDownload(b.name)}
-                        disabled={downloadingName === b.name}
-                        className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary disabled:opacity-50"
-                        title="Download backup"
-                        aria-label={`Download backup ${b.name}`}
-                      >
-                        {downloadingName === b.name ? (
-                          <Loader2 size={16} className="animate-spin" />
-                        ) : (
-                          <Download size={16} />
-                        )}
-                      </button>
-                      <button
-                        onClick={() => handleDelete(b.name)}
-                        disabled={deletingName === b.name}
-                        className="rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-accent-danger/10 hover:text-accent-danger disabled:opacity-50"
-                        title="Delete backup"
-                        aria-label={`Delete backup ${b.name}`}
-                      >
-                        {deletingName === b.name ? (
-                          <Loader2 size={16} className="animate-spin" />
-                        ) : (
-                          <Trash2 size={16} />
-                        )}
-                      </button>
-                    </div>
-                  </td>
+            <table className="w-full min-w-[720px] text-left">
+              <thead>
+                <tr className="border-b border-border-subtle bg-bg-tertiary/40">
+                  <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Filename</th>
+                  <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Created</th>
+                  <th scope="col" className="px-5 py-3 text-section uppercase text-text-secondary">Size</th>
+                  <th scope="col" className="px-5 py-3 text-right text-section uppercase text-text-secondary">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {backups.map((b) => (
+                  <tr
+                    key={b.name}
+                    className="group/row border-b border-border-subtle/60 transition-colors last:border-b-0 hover:bg-bg-mod-subtle"
+                  >
+                    <td className="px-5 py-3">
+                      <span className="font-code text-meta text-text-primary">{b.name}</span>
+                    </td>
+                    <td className="px-5 py-3 font-code text-meta tabular-nums text-text-secondary">
+                      {b.created_at ? new Date(b.created_at).toLocaleString() : '—'}
+                    </td>
+                    <td className="px-5 py-3 font-code text-meta tabular-nums text-text-secondary">
+                      {formatBytes(b.size_bytes)}
+                    </td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-[140ms] focus-within:opacity-100 group-hover/row:opacity-100">
+                        <button
+                          onClick={() => handleRestore(b.name)}
+                          disabled={restoringName === b.name}
+                          className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors hover:bg-warning-tint hover:text-accent-warning focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+                          title="Restore backup"
+                          aria-label={`Restore backup ${b.name}`}
+                        >
+                          {restoringName === b.name ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
+                        </button>
+                        <button
+                          onClick={() => handleDownload(b.name)}
+                          disabled={downloadingName === b.name}
+                          className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors hover:bg-bg-mod-strong hover:text-text-primary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+                          title="Download backup"
+                          aria-label={`Download backup ${b.name}`}
+                        >
+                          {downloadingName === b.name ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                        </button>
+                        <button
+                          onClick={() => handleDelete(b.name)}
+                          disabled={deletingName === b.name}
+                          className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+                          title="Delete backup"
+                          aria-label={`Delete backup ${b.name}`}
+                        >
+                          {deletingName === b.name ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

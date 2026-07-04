@@ -176,5 +176,3 @@ context** (HTTPS), and browser voice uses **WebTransport**, which requires TLS.
 - Baseline profile values for dev / single-node / testbed:
   [docs/deployment-profiles.md](deployment-profiles.md).
 - Current support boundaries: [docs/known-limitations.md](known-limitations.md).
-</content>
-</invoke>

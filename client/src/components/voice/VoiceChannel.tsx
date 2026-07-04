@@ -22,29 +22,28 @@ export function VoiceChannel({ channelName, users, onJoin }: VoiceChannelProps) 
         <span className="truncate">{channelName}</span>
       </button>
 
-      {users.length > 0 && (
-        <div className="ml-7 mt-1 space-y-1">
+      {users.length > 0 ? (
+        <div className="ml-7 mt-1 space-y-0.5">
           {users.map(user => (
             <div
               key={user.id}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5"
+              className="flex items-center gap-2.5 rounded-sm px-2 py-1 transition-colors hover:bg-bg-mod-subtle"
             >
-              <div
-                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white"
-                style={{ backgroundColor: 'var(--accent-primary)' }}
-              >
+              <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-accent text-[11px] font-semibold text-text-secondary">
                 {user.username.charAt(0).toUpperCase()}
               </div>
-              <span className="truncate text-sm" style={{ color: 'var(--text-secondary)' }}>
-                {user.username}
-              </span>
-              <div className="ml-auto flex items-center gap-1">
-                {user.muted && <MicOff size={13} style={{ color: 'var(--text-muted)' }} />}
-                {user.deafened && <HeadphoneOff size={13} style={{ color: 'var(--text-muted)' }} />}
+              <span className="truncate text-label text-text-secondary">{user.username}</span>
+              <div className="ml-auto flex items-center gap-1.5">
+                {user.muted && <MicOff size={13} style={{ color: 'var(--accent-danger)' }} />}
+                {user.deafened && <HeadphoneOff size={13} style={{ color: 'var(--accent-danger)' }} />}
               </div>
             </div>
           ))}
         </div>
+      ) : (
+        <p className="ml-7 mt-0.5 pr-2 text-meta text-text-muted">
+          No one&rsquo;s here yet — hop in and others will follow.
+        </p>
       )}
     </div>
   );

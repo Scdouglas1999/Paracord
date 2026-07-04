@@ -104,16 +104,27 @@ export function StreamHoverPreview({ streamerId, streamerName }: StreamHoverPrev
   }, [room, attachPreview, streamerId, localUserId, watchedStreamerId]);
 
   return (
-    <div className="w-[260px] overflow-hidden rounded-xl border border-border-subtle bg-bg-secondary shadow-2xl">
-      <div className="border-b border-border-subtle px-3 py-2 text-xs font-semibold text-text-primary">
-        {streamerName}'s stream
+    <div
+      className="w-[260px] overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
+    >
+      <div className="flex items-center gap-1.5 border-b border-border-subtle px-3 py-2">
+        <span
+          className="inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5 text-meta font-semibold uppercase tracking-wider"
+          style={{
+            backgroundColor: 'var(--danger-tint)',
+            color: 'var(--accent-danger)',
+          }}
+        >
+          Live
+        </span>
+        <span className="truncate text-label text-text-primary">{streamerName}'s stream</span>
       </div>
       <div className="relative h-[146px] bg-bg-tertiary">
         <video ref={videoRef} className="h-full w-full object-cover" muted playsInline autoPlay />
         {!hasTrack && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-text-muted">
             <Monitor size={18} />
-            <span className="text-xs">Preparing preview...</span>
+            <span className="text-meta">Preparing preview…</span>
           </div>
         )}
       </div>

@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Upload, FileText, Hash, Volume2, Folder } from 'lucide-react';
+import { Upload, LayoutTemplate, Hash, Volume2, Folder, ChevronLeft, ArrowRight } from 'lucide-react';
 import { Modal, ModalTitle } from '../ui/Modal';
+import { Button } from '../ui/Button';
+import { ErrorBanner, EmptyState } from '../ui/Feedback';
+import { FieldLabel } from './SettingsPrimitives';
 import { useAuthStore } from '../../stores/authStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
@@ -10,6 +13,7 @@ import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { useNavigate } from 'react-router-dom';
 import { isAllowedImageMimeType } from '../../lib/security';
+import { cn } from '../../lib/utils';
 
 interface GuildTemplate {
   id: string;
@@ -29,14 +33,23 @@ interface CreateGuildModalProps {
   onClose: () => void;
 }
 
+type Tab = 'create' | 'join' | 'template';
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'create', label: 'Create' },
+  { id: 'join', label: 'Join' },
+  { id: 'template', label: 'Template' },
+];
+
 export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
   const user = useAuthStore(s => s.user);
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'create' | 'join' | 'template'>('create');
+  const [tab, setTab] = useState<Tab>('create');
   const [serverName, setServerName] = useState(`${user?.username || 'My'}'s server`);
   const [inviteCode, setInviteCode] = useState('');
   const [iconPreview, setIconPreview] = useState<string | null>(null);
   const [iconDataUrl, setIconDataUrl] = useState<string | null>(null);
+  const [iconDragActive, setIconDragActive] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -65,24 +78,26 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
     }
   }, [tab]);
 
-  const handleIconChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (!isAllowedImageMimeType(file.type)) {
-        setError('Please upload PNG, JPG, GIF, or WEBP.');
-        return;
-      }
-      setError('');
-      const objectUrl = URL.createObjectURL(file);
-      setIconPreview(objectUrl);
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          setIconDataUrl(reader.result);
-        }
-      };
-      reader.readAsDataURL(file);
+  const processIconFile = (file: File | undefined) => {
+    if (!file) return;
+    if (!isAllowedImageMimeType(file.type)) {
+      setError('Please upload PNG, JPG, GIF, or WEBP.');
+      return;
     }
+    setError('');
+    const objectUrl = URL.createObjectURL(file);
+    setIconPreview(objectUrl);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setIconDataUrl(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleIconChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    processIconFile(e.target.files?.[0]);
   };
 
   const navigateToGuild = async (guild: { id: string }) => {
@@ -165,19 +180,23 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
 
   const channelIcon = (type: number) => {
     switch (type) {
-      case 2: return <Volume2 size={14} style={{ color: 'var(--text-muted)' }} />;
-      case 4: return <Folder size={14} style={{ color: 'var(--text-muted)' }} />;
-      default: return <Hash size={14} style={{ color: 'var(--text-muted)' }} />;
+      case 2: return <Volume2 size={14} className="shrink-0 text-channel-icon" />;
+      case 4: return <Folder size={14} className="shrink-0 text-channel-icon" />;
+      default: return <Hash size={14} className="shrink-0 text-channel-icon" />;
     }
   };
 
-  const tabTitle = tab === 'create' ? 'Create a Server' : tab === 'join' ? 'Join a Server' : 'From Template';
+  const tabTitle = tab === 'create' ? 'Create a server' : tab === 'join' ? 'Join a server' : 'Start from a template';
   const tabSubtitle =
     tab === 'create'
-      ? 'Your server is where you and your friends hang out.'
+      ? 'Your server is where you and your people hang out — give it a name and make it yours.'
       : tab === 'join'
-        ? 'Enter an invite below to join an existing server.'
-        : 'Start with a pre-made server structure.';
+        ? 'Have an invite? Drop it in below to land in an existing community.'
+        : 'Skip the setup — pick a ready-made structure and rename it in one step.';
+
+  const footerAction =
+    tab === 'create' ? handleCreate : tab === 'join' ? handleJoin : handleApplyTemplate;
+  const footerLabel = tab === 'create' ? 'Create' : tab === 'join' ? 'Join Server' : 'Create from Template';
 
   return (
     <Modal
@@ -189,111 +208,93 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
     >
       <div className="max-h-[min(86dvh,42rem)] overflow-auto">
         {/* Header */}
-        <div className="px-8 pb-5 pt-8 text-center">
-          <ModalTitle id="create-guild-modal-title" className="text-xl">
-            {tabTitle}
-          </ModalTitle>
-          <p className="mt-1 text-sm" style={{ color: 'var(--text-muted)' }}>
-            {tabSubtitle}
-          </p>
+        <div className="border-b border-border-subtle px-6 pb-5 pt-6 pr-14">
+          <ModalTitle id="create-guild-modal-title">{tabTitle}</ModalTitle>
+          <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">{tabSubtitle}</p>
 
-          {error && (
-            <p
-              role="alert"
-              className="mt-3 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-sm font-medium"
-              style={{ color: 'var(--accent-danger)' }}
-            >
-              {error}
-            </p>
-          )}
-
-          {/* Tab switcher */}
-          <div className="mt-5 flex gap-2 rounded-xl p-1" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-            <button
-              className={`tab-btn flex-1 py-2 ${tab === 'create' ? 'active' : ''}`}
-              style={tab === 'create' ? { backgroundColor: 'var(--bg-primary)' } : {}}
-              onClick={() => { setTab('create'); setError(''); }}
-            >
-              Create
-            </button>
-            <button
-              className={`tab-btn flex-1 py-2 ${tab === 'join' ? 'active' : ''}`}
-              style={tab === 'join' ? { backgroundColor: 'var(--bg-primary)' } : {}}
-              onClick={() => { setTab('join'); setError(''); }}
-            >
-              Join
-            </button>
-            <button
-              className={`tab-btn flex-1 py-2 ${tab === 'template' ? 'active' : ''}`}
-              style={tab === 'template' ? { backgroundColor: 'var(--bg-primary)' } : {}}
-              onClick={() => { setTab('template'); setError(''); }}
-            >
-              Template
-            </button>
+          {/* Mode selector — a segmented control, the active step in emerald */}
+          <div className="mt-4 flex gap-1 rounded-sm bg-bg-tertiary p-1">
+            {TABS.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => { setTab(id); setError(''); }}
+                className={cn(
+                  'flex-1 rounded-sm px-3 py-1.5 text-label font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                  tab === id
+                    ? 'bg-accent-primary text-text-on-accent shadow-sm'
+                    : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
+                )}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
 
         {/* Body */}
-        <div className="px-8 pb-8 sm:px-8 sm:pb-8">
+        <div className="px-6 py-5">
+          {error && <ErrorBanner message={error} className="mb-5" />}
+
           {tab === 'create' ? (
-            <div className="space-y-6">
+            <div className="space-y-5">
               <div className="flex justify-center">
-                <label className="cursor-pointer">
+                <label
+                  onDragOver={(e) => { e.preventDefault(); setIconDragActive(true); }}
+                  onDragLeave={() => setIconDragActive(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIconDragActive(false);
+                    processIconFile(e.dataTransfer.files?.[0]);
+                  }}
+                  className={cn(
+                    'group flex h-24 w-24 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-md border-2 border-dashed text-center transition-colors duration-[140ms] ease-[var(--ease-out)]',
+                    iconDragActive
+                      ? 'border-accent-primary bg-accent-tint'
+                      : 'border-border-strong hover:border-accent-primary hover:bg-accent-tint',
+                  )}
+                >
                   <input type="file" accept="image/*" className="hidden" onChange={handleIconChange} />
-                  <div
-                    className="flex h-24 w-24 flex-col items-center justify-center rounded-full border-2 border-dashed transition-colors"
-                    style={{
-                      borderColor: 'var(--interactive-muted)',
-                      backgroundColor: iconPreview ? 'transparent' : 'var(--bg-secondary)',
-                    }}
-                  >
-                    {iconPreview ? (
-                      <img src={iconPreview} alt="Icon" className="w-full h-full rounded-full object-cover" />
-                    ) : (
-                      <>
-                        <Upload size={22} style={{ color: 'var(--text-muted)' }} />
-                        <span className="text-[10px] mt-0.5 font-semibold uppercase" style={{ color: 'var(--text-muted)' }}>
-                          Upload
-                        </span>
-                      </>
-                    )}
-                  </div>
+                  {iconPreview ? (
+                    <img src={iconPreview} alt="Server icon preview" className="h-full w-full object-cover" />
+                  ) : (
+                    <>
+                      <Upload size={20} className="text-text-muted transition-colors group-hover:text-accent-primary" />
+                      <span className="mt-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-text-muted">
+                        Upload
+                      </span>
+                    </>
+                  )}
                 </label>
               </div>
 
               <label className="block">
-                <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-                  Server Name
-                </span>
+                <FieldLabel>Server Name</FieldLabel>
                 <input
                   type="text"
                   value={serverName}
                   onChange={(e) => setServerName(e.target.value)}
-                  className="input-field mt-3"
+                  className="input-field"
                 />
               </label>
             </div>
           ) : tab === 'join' ? (
-            <div className="space-y-6">
+            <div className="space-y-5">
               <label className="block">
-                <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-                  Invite Link
-                </span>
+                <FieldLabel>Invite Link</FieldLabel>
                 <input
                   type="text"
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
                   placeholder="https://paracord.gg/hTKzmak"
-                  className="input-field mt-3"
+                  className="input-field"
                 />
               </label>
-              <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/65 px-3.5 py-3">
-                <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-                  Invites should look like
-                </span>
-                <div className="mt-1.5 text-sm leading-6" style={{ color: 'var(--text-muted)' }}>
-                  hTKzmak<br />
-                  https://paracord.gg/hTKzmak
+              <div className="rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3">
+                <div className="text-section uppercase text-text-secondary">Invites look like</div>
+                <div className="mt-1.5 space-y-0.5 font-code text-sm text-text-muted">
+                  <div>hTKzmak</div>
+                  <div>https://paracord.gg/hTKzmak</div>
                 </div>
               </div>
             </div>
@@ -301,23 +302,20 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
             /* Template tab */
             <div className="space-y-4">
               {templatesLoading ? (
-                <p className="text-center text-sm py-4" style={{ color: 'var(--text-muted)' }}>Loading templates...</p>
+                <p className="py-6 text-center text-sm text-text-muted">Loading templates…</p>
               ) : templates.length === 0 ? (
-                <div className="text-center py-6">
-                  <FileText size={32} className="mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
-                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No templates available yet.</p>
-                  <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                    Create one from an existing server's settings.
-                  </p>
-                </div>
+                <EmptyState
+                  icon={<LayoutTemplate size={20} />}
+                  title="No templates yet"
+                  description="Templates come from existing servers — open a server's settings and save its structure to reuse it here."
+                />
               ) : !selectedTemplate ? (
-                <div className="space-y-2 max-h-60 overflow-y-auto">
+                <div className="max-h-60 space-y-2 overflow-y-auto">
                   {templates.map(t => (
                     <button
                       key={t.id}
                       type="button"
-                      className="w-full text-left rounded-xl border border-border-subtle p-3 transition-colors hover:border-accent-primary/50"
-                      style={{ backgroundColor: 'var(--bg-secondary)' }}
+                      className="w-full rounded-sm border border-border-subtle bg-bg-tertiary p-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-accent-primary hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
                       aria-label={`Use template ${t.name}`}
                       onClick={() => {
                         setSelectedTemplate(t);
@@ -325,16 +323,16 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                         setError('');
                       }}
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>{t.name}</span>
-                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-label font-semibold text-text-primary">{t.name}</span>
+                        <span className="shrink-0 text-meta tabular-nums text-text-muted">
                           {t.template_data.channels.length} channels
                         </span>
                       </div>
                       {t.description && (
-                        <p className="text-xs mt-1 line-clamp-2" style={{ color: 'var(--text-muted)' }}>{t.description}</p>
+                        <p className="mt-1 line-clamp-2 text-meta text-text-secondary">{t.description}</p>
                       )}
-                      <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                      <p className="mt-1 text-meta text-text-muted">
                         Used {t.usage_count} {t.usage_count === 1 ? 'time' : 'times'}
                       </p>
                     </button>
@@ -344,46 +342,42 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                 <div className="space-y-4">
                   <button
                     type="button"
-                    className="text-xs font-medium"
-                    style={{ color: 'var(--accent-primary)' }}
+                    className="inline-flex items-center gap-1 rounded-sm text-meta font-semibold text-accent-primary outline-none transition-colors hover:text-accent-primary-hover focus-visible:shadow-[var(--focus-ring)]"
                     onClick={() => { setSelectedTemplate(null); setError(''); }}
                   >
-                    &larr; Back to templates
+                    <ChevronLeft size={14} />
+                    Back to templates
                   </button>
 
-                  <div className="rounded-xl border border-border-subtle p-3" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-                    <p className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>{selectedTemplate.name}</p>
+                  <div className="rounded-md border border-border-subtle bg-bg-tertiary p-3">
+                    <p className="text-label font-semibold text-text-primary">{selectedTemplate.name}</p>
                     {selectedTemplate.description && (
-                      <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{selectedTemplate.description}</p>
+                      <p className="mt-1 text-meta text-text-secondary">{selectedTemplate.description}</p>
                     )}
 
                     {/* Channel preview */}
-                    <div className="mt-3 space-y-1 max-h-32 overflow-y-auto">
+                    <div className="mt-3 max-h-32 space-y-1 overflow-y-auto">
                       {selectedTemplate.template_data.channels
                         .sort((a, b) => a.position - b.position)
                         .map((ch, i) => (
                           <div
                             key={i}
-                            className="flex items-center gap-1.5 text-xs"
-                            style={{
-                              color: 'var(--text-muted)',
-                              paddingLeft: ch.parent_name ? '1rem' : '0',
-                            }}
+                            className="flex items-center gap-1.5 text-meta text-text-muted"
+                            style={{ paddingLeft: ch.parent_name ? '1rem' : '0' }}
                           >
                             {channelIcon(ch.type)}
-                            <span>{ch.name}</span>
+                            <span className="truncate">{ch.name}</span>
                           </div>
                         ))}
                     </div>
 
                     {selectedTemplate.template_data.roles.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1.5">
+                      <div className="mt-3 flex flex-wrap gap-1.5">
                         {selectedTemplate.template_data.roles.map((r, i) => (
                           <span
                             key={i}
-                            className="inline-block rounded-full px-2 py-0.5 text-xs"
+                            className="inline-block rounded-xs bg-bg-mod-strong px-2 py-0.5 text-meta font-medium"
                             style={{
-                              backgroundColor: 'var(--bg-tertiary)',
                               color: r.color ? `#${r.color.toString(16).padStart(6, '0')}` : 'var(--text-secondary)',
                             }}
                           >
@@ -395,15 +389,13 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                   </div>
 
                   <label className="block">
-                    <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-                      Server Name
-                    </span>
+                    <FieldLabel>Server Name</FieldLabel>
                     <input
                       type="text"
                       aria-label="Template server name"
                       value={templateGuildName}
                       onChange={(e) => setTemplateGuildName(e.target.value)}
-                      className="input-field mt-3"
+                      className="input-field"
                     />
                   </label>
                 </div>
@@ -413,30 +405,17 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
         </div>
 
         {/* Footer */}
-        <div
-          className="flex flex-col-reverse items-stretch gap-5 border-t border-border-subtle/70 px-8 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-8 sm:py-6"
-          style={{ backgroundColor: 'var(--bg-secondary)' }}
-        >
-          <button onClick={onClose} className="btn-ghost">Cancel</button>
-          <button
-            onClick={
-              tab === 'create'
-                ? handleCreate
-                : tab === 'join'
-                  ? handleJoin
-                  : handleApplyTemplate
-            }
+        <div className="flex items-center justify-end gap-3 border-t border-border-subtle bg-bg-secondary px-6 py-4">
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={footerAction}
             disabled={loading || (tab === 'template' && !selectedTemplate)}
-            className="btn-primary min-w-[9rem]"
+            loading={loading}
+            className="min-w-[9rem] gap-1.5"
           >
-            {loading
-              ? 'Working...'
-              : tab === 'create'
-                ? 'Create'
-                : tab === 'join'
-                  ? 'Join Server'
-                  : 'Create from Template'}
-          </button>
+            {footerLabel}
+            {!loading && <ArrowRight size={16} />}
+          </Button>
         </div>
       </div>
     </Modal>

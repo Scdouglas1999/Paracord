@@ -37,7 +37,7 @@ export function SplitPane({
   };
 
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-border-subtle">
+    <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-border-subtle">
       {/* Source picker overlay */}
       <div className="absolute left-2 top-2 z-20">
         <SplitPaneSourcePicker
@@ -94,19 +94,19 @@ export function SplitPane({
 
 function EmptyPane() {
   return (
-    <div className="flex h-full min-h-[200px] items-center justify-center" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-      <div className="flex flex-col items-center gap-3">
-        <div
-          className="flex h-14 w-14 items-center justify-center rounded-2xl"
-          style={{
-            backgroundColor: 'var(--bg-mod-subtle)',
-            border: '1px solid var(--border-subtle)',
-          }}
-        >
-          <Monitor size={22} className="text-text-muted" />
+    <div
+      className="flex h-full min-h-[200px] items-center justify-center p-6"
+      style={{ backgroundColor: 'var(--bg-tertiary)' }}
+    >
+      <div className="flex max-w-[260px] flex-col items-center gap-3 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-md bg-accent-tint text-text-muted">
+          <Monitor size={22} />
         </div>
-        <div className="text-sm font-medium text-text-muted">
-          Select a source above
+        <div>
+          <div className="text-label text-text-secondary">This pane is empty</div>
+          <div className="mt-0.5 text-meta text-text-muted">
+            Pick a stream or camera from the source menu in the top-left.
+          </div>
         </div>
       </div>
     </div>

@@ -31,7 +31,7 @@ import { formatTimestamp, formatDate } from '../../lib/formatters';
 import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from '../../lib/customEmoji';
-import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
+import { isAllowedImageMimeType, safeClientResourceUrl, safeStoredImageDataUrl } from '../../lib/security';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
 import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
 import { PollMessageCard } from './PollMessageCard';
@@ -1286,6 +1286,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     const linkedThreads = linkedThreadsByStarterMessageId[msg.id] ?? [];
     const authorGuildMember = activeGuildMemberById.get(msg.author.id);
     const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
+    const authorAvatarSrc = safeStoredImageDataUrl(msg.author.avatar_hash ?? msg.author.avatar);
     // A message that pings the reader gets the mention-line treatment (§7):
     // a persistent emerald tint plus a 2px accent left border, hover-independent.
     const mentionsMe = !isOwnMessage && Boolean(msg.mention_everyone);
@@ -1355,11 +1356,27 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           <button
             type="button"
             aria-label={`Open profile for ${msg.author.username}`}
-            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border-0 p-0 text-label font-semibold text-text-on-accent shadow-sm transition-transform duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-            style={{ backgroundColor: 'var(--accent-primary)' }}
+            className="relative h-10 w-10 flex-shrink-0 overflow-hidden rounded-full border-0 p-0 shadow-sm transition-transform duration-[140ms] ease-[var(--ease-out)] active:scale-95 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             onClick={(e) => openAuthorProfile(e, msg)}
           >
-            {msg.author.username.charAt(0).toUpperCase()}
+            {authorAvatarSrc ? (
+              <img src={authorAvatarSrc} alt="" className="h-full w-full object-cover" />
+            ) : (
+              // Avatar fallback is a NEUTRAL well tinted by the author's role color
+              // when present — never the emerald accent (that stays reserved for
+              // meaning, per §1.2 / kill-list #2). No role color → warm-neutral fill.
+              <span
+                className="flex h-full w-full items-center justify-center text-label font-semibold"
+                style={{
+                  backgroundColor: authorRoleColor
+                    ? `color-mix(in srgb, ${authorRoleColor} 24%, var(--bg-mod-strong))`
+                    : 'var(--bg-mod-strong)',
+                  color: authorRoleColor ?? 'var(--text-secondary)',
+                }}
+              >
+                {msg.author.username.charAt(0).toUpperCase()}
+              </span>
+            )}
           </button>
         )}
 
@@ -1619,12 +1636,12 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                       <img
                         src={stickerSrc}
                         alt={sticker.name}
-                        className="rounded-lg object-contain"
+                        className="rounded-md object-contain"
                         style={{ width: 128, height: 128 }}
                         loading="lazy"
                       />
                     ) : (
-                      <div className="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary">
+                      <div className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                           <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
                           <polyline points="14 2 14 8 20 8" />
@@ -1647,7 +1664,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 const isFederated = Boolean(att.origin_server);
                 const federatedBadge = isFederated ? (
                   <span
-                    className="rounded-md border border-accent-primary/35 bg-accent-primary/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary"
+                    className="rounded-xs border border-accent-primary/35 bg-accent-primary/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary"
                     title={att.content_hash ? `Hash: ${att.content_hash}` : `From: ${att.origin_server}`}
                   >
                     Federated
@@ -1659,19 +1676,19 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                     return (
                       <div
                         key={att.id}
-                        className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm"
+                        className="inline-flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm"
                         style={{ maxWidth: 'fit-content' }}
                       >
                         {federatedBadge}
                         <span className="max-w-[20rem] truncate text-text-secondary">
                           {att.filename}
                         </span>
-                        <span className="rounded-md border border-border-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                        <span className="rounded-xs border border-border-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
                           Preview Off
                         </span>
                         <button
                           type="button"
-                          className="rounded-md border border-border-subtle px-2 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                          className="rounded-sm border border-border-subtle px-2 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
                           onClick={() => void downloadAttachment(att.id, att.filename)}
                           disabled={attachmentBusyId === att.id}
                         >
@@ -1684,7 +1701,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                         {isOwnMessage && !isFederated && (
                           <button
                             type="button"
-                            className="rounded-md border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
+                            className="rounded-sm border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
                             onClick={() => void deleteAttachment(msg.id, att.id)}
                             disabled={attachmentBusyId === att.id}
                           >
@@ -1723,7 +1740,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                         <img
                           src={src!}
                           alt={att.filename}
-                          className="max-w-[min(100%,400px)] rounded-lg border border-border-subtle"
+                          className="max-w-[min(100%,400px)] rounded-md border border-border-subtle"
                           style={{ maxHeight: '300px', objectFit: 'contain' }}
                         />
                       </button>
@@ -1731,14 +1748,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                         {federatedBadge}
                         <button
                           type="button"
-                          className="rounded-md border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                          className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
                           onClick={() => void openImageLightbox()}
                         >
                           Open
                         </button>
                         <button
                           type="button"
-                          className="rounded-md border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                          className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
                           onClick={() => void downloadAttachment(att.id, att.filename)}
                           disabled={attachmentBusyId === att.id}
                         >
@@ -1747,7 +1764,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                         {isOwnMessage && !isFederated && (
                           <button
                             type="button"
-                            className="rounded-md border border-accent-danger/30 bg-accent-danger/10 px-2.5 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
+                            className="rounded-sm border border-accent-danger/30 bg-accent-danger/10 px-2.5 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
                             onClick={() => void deleteAttachment(msg.id, att.id)}
                             disabled={attachmentBusyId === att.id}
                           >
@@ -1761,7 +1778,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 return (
                   <div
                     key={att.id}
-                    className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm"
+                    className="inline-flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-sm"
                     style={{ maxWidth: 'fit-content' }}
                   >
                     {federatedBadge}
@@ -1776,7 +1793,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                     {att.size && <span className="text-xs text-text-muted">({(att.size / 1024).toFixed(1)} KB)</span>}
                     <button
                       type="button"
-                      className="rounded-md border border-border-subtle px-2 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                      className="rounded-sm border border-border-subtle px-2 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
                       onClick={() => void downloadAttachment(att.id, att.filename)}
                       disabled={attachmentBusyId === att.id}
                     >
@@ -1785,7 +1802,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                     {isOwnMessage && !isFederated && (
                       <button
                         type="button"
-                        className="rounded-md border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
+                        className="rounded-sm border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15"
                         onClick={() => void deleteAttachment(msg.id, att.id)}
                         disabled={attachmentBusyId === att.id}
                       >
@@ -2179,7 +2196,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           onClick={() => setEditHistoryMsgId(null)}
         >
           <div
-            className="glass-modal absolute max-h-80 w-80 overflow-y-auto rounded-lg border border-border-subtle shadow-xl backdrop-blur-md"
+            className="glass-modal absolute max-h-80 w-80 overflow-y-auto rounded-md border border-border-subtle shadow-xl backdrop-blur-md"
             style={{
               left: Math.min(editHistoryPos.x, window.innerWidth - 340),
               top: Math.min(editHistoryPos.y, window.innerHeight - 320),

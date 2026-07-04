@@ -141,7 +141,7 @@ describe('TopBar pinned messages', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to load pinned messages: Pins endpoint unavailable.',
     );
-    expect(screen.getByText('No pinned messages in this channel yet.')).toBeInTheDocument();
+    expect(screen.queryByText('No pinned messages yet')).not.toBeInTheDocument();
   });
 
   it('shows an inline alert when unpinning a message fails', async () => {

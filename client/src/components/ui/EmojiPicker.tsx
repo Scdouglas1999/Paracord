@@ -1,7 +1,22 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
+import {
+  Search,
+  Smile,
+  Leaf,
+  Pizza,
+  Trophy,
+  Plane,
+  Lightbulb,
+  Hash,
+  Flag,
+  type LucideIcon,
+} from 'lucide-react';
 import type { GuildEmoji } from '../../types';
 import { emojiApi } from '../../api/emojis';
 import { buildGuildEmojiImageUrl, formatCustomEmojiToken } from '../../lib/customEmoji';
+import { cn } from '../../lib/utils';
+import { EmptyState } from './Feedback';
+import { Skeleton } from './Skeleton';
 
 // ---------------------------------------------------------------------------
 // Emoji data
@@ -9,14 +24,12 @@ import { buildGuildEmojiImageUrl, formatCustomEmojiToken } from '../../lib/custo
 
 interface EmojiCategory {
   name: string;
-  icon: string;
   emojis: string[];
 }
 
 const EMOJI_CATEGORIES: EmojiCategory[] = [
   {
     name: 'Smileys & People',
-    icon: '\u{1F600}',
     emojis: [
       '\u{1F600}','\u{1F603}','\u{1F604}','\u{1F601}','\u{1F606}','\u{1F605}','\u{1F923}','\u{1F602}',
       '\u{1F642}','\u{1F643}','\u{1F609}','\u{1F60A}','\u{1F607}','\u{1F970}','\u{1F60D}','\u{1F929}',
@@ -42,7 +55,6 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
   },
   {
     name: 'Animals & Nature',
-    icon: '\u{1F436}',
     emojis: [
       '\u{1F436}','\u{1F431}','\u{1F42D}','\u{1F439}','\u{1F430}','\u{1F98A}','\u{1F43B}','\u{1F43C}',
       '\u{1F43B}\u{200D}\u{2744}\u{FE0F}','\u{1F428}','\u{1F42F}','\u{1F981}','\u{1F42E}','\u{1F437}',
@@ -59,7 +71,6 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
   },
   {
     name: 'Food & Drink',
-    icon: '\u{1F354}',
     emojis: [
       '\u{1F34F}','\u{1F34E}','\u{1F350}','\u{1F34A}','\u{1F34B}','\u{1F34C}','\u{1F349}','\u{1F347}',
       '\u{1F353}','\u{1FAD0}','\u{1F348}','\u{1F352}','\u{1F351}','\u{1F96D}','\u{1F34D}','\u{1F965}',
@@ -80,7 +91,6 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
   },
   {
     name: 'Activities',
-    icon: '\u{26BD}',
     emojis: [
       '\u{26BD}','\u{1F3C0}','\u{1F3C8}','\u{26BE}','\u{1F94E}','\u{1F3BE}','\u{1F3D0}','\u{1F3C9}',
       '\u{1F94F}','\u{1F3B1}','\u{1FA80}','\u{1F3D3}','\u{1F3F8}','\u{1F3D2}','\u{1F3D1}','\u{1F94D}',
@@ -97,7 +107,6 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
   },
   {
     name: 'Travel & Places',
-    icon: '\u{2708}\u{FE0F}',
     emojis: [
       '\u{1F697}','\u{1F695}','\u{1F699}','\u{1F3CE}\u{FE0F}','\u{1F68C}','\u{1F68E}','\u{1F690}',
       '\u{1F691}','\u{1F692}','\u{1F693}','\u{1F694}','\u{1F696}','\u{1F698}','\u{1F68D}','\u{1F6B2}',
@@ -117,7 +126,6 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
   },
   {
     name: 'Objects',
-    icon: '\u{1F4A1}',
     emojis: [
       '\u{231A}','\u{1F4F1}','\u{1F4F2}','\u{1F4BB}','\u{2328}\u{FE0F}','\u{1F5A5}\u{FE0F}',
       '\u{1F5A8}\u{FE0F}','\u{1F5B1}\u{FE0F}','\u{1F5B2}\u{FE0F}','\u{1F4BE}','\u{1F4BF}','\u{1F4C0}',
@@ -142,7 +150,6 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
   },
   {
     name: 'Symbols',
-    icon: '\u{2764}\u{FE0F}',
     emojis: [
       '\u{2764}\u{FE0F}','\u{1F9E1}','\u{1F49B}','\u{1F49A}','\u{1F499}','\u{1F49C}','\u{1F5A4}',
       '\u{1F90D}','\u{1F90E}','\u{1F494}','\u{2764}\u{FE0F}\u{200D}\u{1F525}',
@@ -190,7 +197,6 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
   },
   {
     name: 'Flags',
-    icon: '\u{1F3C1}',
     emojis: [
       '\u{1F3C1}','\u{1F6A9}','\u{1F38C}','\u{1F3F4}','\u{1F3F3}\u{FE0F}',
       '\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}','\u{1F3F3}\u{FE0F}\u{200D}\u{26A7}\u{FE0F}',
@@ -211,6 +217,19 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
     ],
   },
 ];
+
+// Category navigation uses consistent lucide line icons — never emoji-as-chrome
+// (kill-list #3). Keyed by category name so the tab row stays in lockstep.
+const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  'Smileys & People': Smile,
+  'Animals & Nature': Leaf,
+  'Food & Drink': Pizza,
+  Activities: Trophy,
+  'Travel & Places': Plane,
+  Objects: Lightbulb,
+  Symbols: Hash,
+  Flags: Flag,
+};
 
 // ---------------------------------------------------------------------------
 // localStorage helpers
@@ -234,29 +253,6 @@ function loadFavorites(): string[] {
 
 function saveFavorites(favorites: string[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(favorites));
-}
-
-// ---------------------------------------------------------------------------
-// Search icon SVG (inline, no dependency)
-// ---------------------------------------------------------------------------
-
-function SearchIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="11" cy="11" r="8" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -347,7 +343,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
     for (const cat of EMOJI_CATEGORIES) {
       flat.push(...cat.emojis);
     }
-    return [{ name: 'Search Results', icon: '\u{1F50D}', emojis: flat }];
+    return [{ name: 'Search Results', emojis: flat }];
   }, [search]);
 
   const filteredServerEmojis = useMemo(() => {
@@ -436,33 +432,41 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
   // Render
   // ---------------------------------------------------------------------------
 
+  const emojiCellClass =
+    'flex aspect-square items-center justify-center rounded-sm text-[22px] leading-none outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]';
+
   const pickerContent = (
     <div
       ref={pickerRef}
-      className="popup-enter"
-      style={{
-        width: 352,
-        maxHeight: 420,
-        display: 'flex',
-        flexDirection: 'column',
-        borderRadius: '1rem',
-        background: 'linear-gradient(165deg, var(--glass-modal-fill-top), var(--glass-modal-fill-bottom))',
-        backdropFilter: 'blur(22px) saturate(150%)',
-        border: '1px solid var(--border-strong)',
-        boxShadow: 'var(--shadow-xl)',
-        overflow: 'hidden',
-        ...(popupStyle ?? {}),
-      }}
+      className="popup-enter flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
+      style={{ width: 352, maxHeight: 420, ...(popupStyle ?? {}) }}
     >
-      {/* ── Quick React Bar ── */}
-      <div
-        style={{
-          padding: '10px 12px 8px',
-          borderBottom: '1px solid var(--border-subtle)',
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      {/* ── Frequently used ── */}
+      <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-section uppercase text-text-muted">Frequently used</span>
+          {customizeMode ? (
+            <button
+              type="button"
+              onClick={() => {
+                setCustomizeMode(false);
+                setCustomizeSlot(null);
+              }}
+              className="rounded-sm px-1.5 py-0.5 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
+            >
+              Done
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setCustomizeMode(true)}
+              className="rounded-sm px-1.5 py-0.5 text-meta font-medium text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
+            >
+              Customize
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
           {favorites.map((emoji, i) => (
             <button
               key={`fav-${i}`}
@@ -475,258 +479,109 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                   onClose();
                 }
               }}
+              className={cn(
+                'flex h-9 flex-1 items-center justify-center rounded-sm text-2xl leading-none outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]',
+                customizeMode && customizeSlot === i && 'bg-accent-tint',
+              )}
               style={{
-                flex: '1 1 0',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: 36,
-                fontSize: 24,
-                lineHeight: 1,
-                background: 'transparent',
                 border: customizeMode
                   ? customizeSlot === i
                     ? '2px solid var(--accent-primary)'
                     : '2px dashed var(--border-subtle)'
-                  : '1px solid transparent',
-                borderRadius: 8,
-                cursor: 'pointer',
-                transition: 'background-color 0.12s, border-color 0.12s, transform 0.1s',
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--bg-mod-subtle)';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent';
+                  : '2px solid transparent',
               }}
             >
               {emoji}
             </button>
           ))}
         </div>
-
-        {/* Customize / Done button */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
-          {customizeMode ? (
-            <button
-              type="button"
-              onClick={() => {
-                setCustomizeMode(false);
-                setCustomizeSlot(null);
-              }}
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: 'var(--accent-primary)',
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '2px 6px',
-                borderRadius: 4,
-              }}
-            >
-              Done
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setCustomizeMode(true)}
-              style={{
-                fontSize: 12,
-                fontWeight: 500,
-                color: 'var(--text-muted)',
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '2px 6px',
-                borderRadius: 4,
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)';
-              }}
-            >
-              Customize
-            </button>
-          )}
-        </div>
       </div>
 
-      {/* ── Search ── */}
+      {/* ── Source tabs (server vs unicode) ── */}
       {!!guildId && (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 6,
-            padding: '8px 12px 2px',
-            flexShrink: 0,
-          }}
-        >
-          <button
-            type="button"
-            onClick={() => setActiveTab('unicode')}
-            style={{
-              height: 30,
-              borderRadius: 8,
-              border: '1px solid var(--border-subtle)',
-              background: activeTab === 'unicode' ? 'var(--bg-mod-strong)' : 'transparent',
-              color: 'var(--text-secondary)',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Unicode
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('server')}
-            style={{
-              height: 30,
-              borderRadius: 8,
-              border: '1px solid var(--border-subtle)',
-              background: activeTab === 'server' ? 'var(--bg-mod-strong)' : 'transparent',
-              color: 'var(--text-secondary)',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Server Emojis
-          </button>
+        <div className="flex shrink-0 gap-1 px-3 pt-2.5">
+          {(['unicode', 'server'] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                'flex-1 rounded-sm px-2 py-1.5 text-label outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                activeTab === tab
+                  ? 'bg-accent-tint text-accent-primary'
+                  : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
+              )}
+            >
+              {tab === 'unicode' ? 'Unicode' : 'Server Emojis'}
+            </button>
+          ))}
         </div>
       )}
 
-      <div style={{ padding: '8px 12px 4px', flexShrink: 0 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--bg-mod-subtle)',
-            borderRadius: 8,
-            padding: '6px 10px',
-          }}
-        >
-          <SearchIcon className="" />
+      {/* ── Inset search ── */}
+      <div className="shrink-0 px-3 pb-1 pt-2.5">
+        <div className="flex items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-2 transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+          <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
             placeholder={activeTab === 'server' ? 'Search server emojis...' : 'Search emoji...'}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              fontSize: 13,
-              color: 'var(--text-primary)',
-              lineHeight: 1.4,
-            }}
+            className="flex-1 bg-transparent text-body text-text-primary placeholder:text-text-muted outline-none"
           />
         </div>
       </div>
 
-      {/* ── Emoji Grid ── */}
+      {/* ── Grid ── */}
       <div
         ref={gridRef}
         onScroll={handleGridScroll}
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '4px 8px 8px',
-          scrollbarWidth: 'thin',
-          scrollbarColor: 'var(--scrollbar-auto-thumb) transparent',
-        }}
+        className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2 pt-1"
       >
         {activeTab === 'server' ? (
           loadingServerEmojis ? (
-            <div style={{ padding: '14px 8px', fontSize: 13, color: 'var(--text-muted)' }}>
-              Loading server emojis...
+            <div className="grid grid-cols-6 gap-1.5 p-1" aria-busy="true" aria-label="Loading server emojis">
+              {Array.from({ length: 18 }).map((_, i) => (
+                <Skeleton key={i} height={52} borderRadius="var(--radius-sm)" />
+              ))}
             </div>
           ) : !guildId ? (
-            <div style={{ padding: '14px 8px', fontSize: 13, color: 'var(--text-muted)' }}>
-              Server emojis are available in guild channels.
-            </div>
+            <EmptyState
+              icon={<Search size={20} />}
+              title="Server emojis live in a server"
+              description="Open a channel inside a community to browse and use its custom emoji."
+            />
           ) : filteredServerEmojis.length === 0 ? (
-            <div style={{ padding: '14px 8px', fontSize: 13, color: 'var(--text-muted)' }}>
-              No matching server emojis.
-            </div>
+            <EmptyState
+              icon={<Search size={20} />}
+              title={search.trim() ? 'No emoji found' : 'No custom emoji yet'}
+              description={
+                search.trim()
+                  ? `Nothing matches "${search.trim()}" here — try a shorter term.`
+                  : 'This server has not uploaded any custom emoji. Add some in Server Settings.'
+              }
+            />
           ) : (
             <div>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  color: 'var(--text-muted)',
-                  padding: '8px 4px 6px',
-                  userSelect: 'none',
-                }}
-              >
-                Server Emojis
+              <div className="text-section select-none px-1.5 pb-1.5 pt-2 uppercase text-text-muted">
+                Server emoji
               </div>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(6, 1fr)',
-                  gap: 6,
-                }}
-              >
+              <div className="grid grid-cols-6 gap-1.5">
                 {filteredServerEmojis.map((emoji) => (
                   <button
                     key={emoji.id}
                     type="button"
                     title={`:${emoji.name}:`}
                     onClick={() => handleServerEmojiClick(emoji)}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 3,
-                      width: '100%',
-                      minHeight: 56,
-                      padding: '4px 2px',
-                      background: 'transparent',
-                      border: 'none',
-                      borderRadius: 8,
-                      cursor: 'pointer',
-                      transition: 'background-color 0.1s',
-                    }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--bg-mod-subtle)';
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent';
-                    }}
+                    className="flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-sm px-1 py-1 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                   >
                     <img
                       src={buildGuildEmojiImageUrl(guildId, emoji.id)}
                       alt={emoji.name}
                       loading="lazy"
-                      style={{
-                        width: 26,
-                        height: 26,
-                        objectFit: 'contain',
-                      }}
+                      className="h-[26px] w-[26px] object-contain"
                     />
-                    <span
-                      style={{
-                        maxWidth: '100%',
-                        fontSize: 10,
-                        lineHeight: 1.2,
-                        color: 'var(--text-muted)',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                    >
+                    <span className="max-w-full truncate text-[10px] leading-tight text-text-muted">
                       {emoji.name}
                     </span>
                   </button>
@@ -742,59 +597,17 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                 categoryRefs.current[ci] = el;
               }}
             >
-              {/* Category label */}
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  color: 'var(--text-muted)',
-                  padding: '8px 4px 4px',
-                  userSelect: 'none',
-                }}
-              >
+              <div className="text-section select-none px-1.5 pb-1 pt-2 uppercase text-text-muted">
                 {cat.name}
               </div>
-
-              {/* Emoji grid */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(8, 1fr)',
-                  gap: 2,
-                }}
-              >
+              <div className="grid grid-cols-8 gap-0.5">
                 {cat.emojis.map((emoji, ei) => (
                   <button
                     key={`${cat.name}-${ei}`}
                     type="button"
                     title={emoji}
                     onClick={() => handleEmojiClick(emoji)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: '100%',
-                      aspectRatio: '1',
-                      fontSize: 22,
-                      lineHeight: 1,
-                      background: 'transparent',
-                      border: 'none',
-                      borderRadius: 8,
-                      cursor: 'pointer',
-                      transition: 'background-color 0.1s, transform 0.1s',
-                    }}
-                    onMouseEnter={(e) => {
-                      const el = e.currentTarget as HTMLElement;
-                      el.style.backgroundColor = 'var(--bg-mod-subtle)';
-                      el.style.transform = 'scale(1.18)';
-                    }}
-                    onMouseLeave={(e) => {
-                      const el = e.currentTarget as HTMLElement;
-                      el.style.backgroundColor = 'transparent';
-                      el.style.transform = 'scale(1)';
-                    }}
+                    className={emojiCellClass}
                   >
                     {emoji}
                   </button>
@@ -805,56 +618,31 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
         )}
       </div>
 
-      {/* ── Category Tabs ── */}
+      {/* ── Category nav ── */}
       {!search.trim() && activeTab === 'unicode' && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            borderTop: '1px solid var(--border-subtle)',
-            padding: '4px 6px',
-            flexShrink: 0,
-            gap: 2,
-          }}
-        >
-          {EMOJI_CATEGORIES.map((cat, i) => (
-            <button
-              key={cat.name}
-              type="button"
-              title={cat.name}
-              onClick={() => scrollToCategory(i)}
-              style={{
-                flex: '1 1 0',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: 30,
-                fontSize: 16,
-                lineHeight: 1,
-                background:
-                  activeCategory === i ? 'var(--bg-mod-strong)' : 'transparent',
-                border: 'none',
-                borderRadius: 6,
-                cursor: 'pointer',
-                transition: 'background-color 0.12s',
-                opacity: activeCategory === i ? 1 : 0.6,
-              }}
-              onMouseEnter={(e) => {
-                if (activeCategory !== i) {
-                  (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--bg-mod-subtle)';
-                  (e.currentTarget as HTMLElement).style.opacity = '0.85';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (activeCategory !== i) {
-                  (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent';
-                  (e.currentTarget as HTMLElement).style.opacity = '0.6';
-                }
-              }}
-            >
-              {cat.icon}
-            </button>
-          ))}
+        <div className="flex shrink-0 items-center gap-0.5 border-t border-border-subtle px-1.5 py-1.5">
+          {EMOJI_CATEGORIES.map((cat, i) => {
+            const Icon = CATEGORY_ICONS[cat.name] ?? Smile;
+            const active = activeCategory === i;
+            return (
+              <button
+                key={cat.name}
+                type="button"
+                title={cat.name}
+                aria-label={cat.name}
+                aria-pressed={active}
+                onClick={() => scrollToCategory(i)}
+                className={cn(
+                  'flex h-8 flex-1 items-center justify-center rounded-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                  active
+                    ? 'bg-accent-tint text-accent-primary'
+                    : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-secondary',
+                )}
+              >
+                <Icon size={18} />
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -889,36 +677,13 @@ export function QuickReactBar({ onSelect }: { onSelect: (emoji: string) => void 
   const [favorites] = useState<string[]>(loadFavorites);
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+    <div className="flex items-center gap-0.5">
       {favorites.map((emoji, i) => (
         <button
           key={`qr-${i}`}
           type="button"
           onClick={() => onSelect(emoji)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 28,
-            height: 28,
-            fontSize: 16,
-            lineHeight: 1,
-            background: 'transparent',
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-            transition: 'background-color 0.1s, transform 0.08s',
-          }}
-          onMouseEnter={(e) => {
-            const el = e.currentTarget as HTMLElement;
-            el.style.backgroundColor = 'var(--bg-mod-subtle)';
-            el.style.transform = 'scale(1.15)';
-          }}
-          onMouseLeave={(e) => {
-            const el = e.currentTarget as HTMLElement;
-            el.style.backgroundColor = 'transparent';
-            el.style.transform = 'scale(1)';
-          }}
+          className="flex h-7 w-7 items-center justify-center rounded-sm text-base leading-none outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
         >
           {emoji}
         </button>

@@ -173,7 +173,7 @@ export function AccountSetupPage() {
                 className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
               />
               <span className="text-label leading-relaxed text-text-secondary">
-                I\u2019ve written down my recovery phrase and stored it somewhere safe.
+                I’ve written down my recovery phrase and stored it somewhere safe.
               </span>
             </label>
 
@@ -198,7 +198,7 @@ export function AccountSetupPage() {
               subtitle={
                 isMigration
                   ? 'Create a cryptographic identity for your existing account so you can sign in to any server without a password.'
-                  : 'Create a device-held identity for passwordless, challenge-response sign-in. Optional \u2014 you can skip it.'
+                  : 'Create a device-held identity for passwordless, challenge-response sign-in. Optional — you can skip it.'
               }
             />
           </div>
@@ -236,7 +236,7 @@ export function AccountSetupPage() {
               required
               hint={
                 isMigration
-                  ? 'Encrypts your new account key on this device \u2014 it can differ from your server password.'
+                  ? 'Encrypts your new account key on this device — it can differ from your server password.'
                   : 'Encrypts your account key on this device. At least 10 characters.'
               }
             >
@@ -280,7 +280,7 @@ export function AccountSetupPage() {
               >
                 Sign in
               </button>
-              {' \u00b7 '}
+              {' · '}
               <button
                 type="button"
                 onClick={() => navigate('/recover')}
@@ -298,7 +298,7 @@ export function AccountSetupPage() {
               >
                 Skip for now
               </button>
-              {' \u2014 you can set this up later in Settings.'}
+              {' — you can set this up later in Settings.'}
             </p>
           )}
         </form>

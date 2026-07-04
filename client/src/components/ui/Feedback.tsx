@@ -75,6 +75,8 @@ interface EmptyStateProps {
   icon?: ReactNode;
   action?: ReactNode;
   className?: string;
+  // Set to "alert" for error states so assistive tech announces the failure.
+  role?: 'alert' | 'status';
 }
 
 // Recipe: design-spec §7 (Empty state) — left-aligned, never a centered
@@ -86,9 +88,10 @@ export function EmptyState({
   icon,
   action,
   className,
+  role,
 }: EmptyStateProps) {
   return (
-    <div className={cn('flex flex-col items-start px-2 py-8', className)}>
+    <div role={role} className={cn('flex flex-col items-start px-2 py-8', className)}>
       {icon && (
         <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-sm bg-accent-tint text-text-muted">
           {icon}

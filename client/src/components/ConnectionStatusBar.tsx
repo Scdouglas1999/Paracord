@@ -1,7 +1,37 @@
 import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { Loader2, WifiOff } from 'lucide-react';
 import { useUIStore } from '../stores/uiStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
+
+// App-wide connectivity banner (design-spec §7 Toast/banner language): a slim
+// top bar on a semantic tinted surface with a matching lucide icon and a
+// --text-label message, sliding in over --duration-normal. This is the
+// top-level variant; the layout/ConnectionStatusBar.tsx variant is owned
+// elsewhere.
+type BannerTone = 'warning' | 'danger';
+
+const TONE: Record<
+  BannerTone,
+  { surface: string; edge: string; fg: string }
+> = {
+  warning: {
+    surface: 'color-mix(in srgb, var(--accent-warning) 16%, var(--bg-secondary))',
+    edge: 'color-mix(in srgb, var(--accent-warning) 45%, transparent)',
+    fg: 'var(--accent-warning)',
+  },
+  danger: {
+    surface: 'color-mix(in srgb, var(--accent-danger) 16%, var(--bg-secondary))',
+    edge: 'color-mix(in srgb, var(--accent-danger) 45%, transparent)',
+    fg: 'var(--accent-danger)',
+  },
+};
+
+const MESSAGES: Record<string, { tone: BannerTone; text: string }> = {
+  reconnecting: { tone: 'warning', text: 'Reconnecting to the server…' },
+  disconnected: { tone: 'danger', text: 'Connection lost — retrying automatically' },
+};
 
 export function ConnectionStatusBar() {
   const status = useUIStore((s) => s.connectionStatus);
@@ -9,6 +39,7 @@ export function ConnectionStatusBar() {
     s.activeServerId ? s.servers.find((server) => server.id === s.activeServerId) : undefined
   );
   const voiceConnected = useVoiceStore((s) => s.connected);
+  const reduceMotion = useReducedMotion();
 
   // Don't show the banner until we've been connected at least once.
   // This prevents a flash of "Disconnected" on startup before the
@@ -29,41 +60,43 @@ export function ConnectionStatusBar() {
     return () => clearTimeout(timer);
   }, [status]);
 
-  if (status === 'connected' || !showBanner) return null;
-
   const apiReachable = Boolean(activeServer?.apiReachable);
-  if (apiReachable) return null;
+  const info = MESSAGES[status];
   // Voice connectivity proves the network is up; suppress the banner.
-  if (voiceConnected) return null;
+  const visible =
+    status !== 'connected' && showBanner && !apiReachable && !voiceConnected && Boolean(info);
 
-  const messages: Record<string, { text: string; color: string }> = {
-    reconnecting: { text: 'Reconnecting...', color: 'var(--status-warning, #faa61a)' },
-    disconnected: { text: 'Disconnected', color: 'var(--status-danger, #ed4245)' },
-  };
-
-  const info = messages[status];
-  if (!info) return null;
+  const tone = info ? TONE[info.tone] : TONE.danger;
+  const reconnecting = status === 'reconnecting';
 
   return (
-    <div
-      role="alert"
-      aria-live="assertive"
-      aria-atomic="true"
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        zIndex: 9999,
-        backgroundColor: info.color,
-        color: '#fff',
-        textAlign: 'center',
-        padding: '4px 8px',
-        fontSize: '13px',
-        fontWeight: 500,
-      }}
-    >
-      {info.text}
-    </div>
+    <AnimatePresence>
+      {visible && info && (
+        <motion.div
+          role="alert"
+          aria-live="assertive"
+          aria-atomic="true"
+          initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -20 }}
+          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+          className="fixed inset-x-0 top-0 z-[9999] flex items-center justify-center gap-2 px-4 py-2"
+          style={{
+            backgroundColor: tone.surface,
+            borderBottom: `1px solid ${tone.edge}`,
+            boxShadow: 'var(--shadow-md)',
+          }}
+        >
+          {reconnecting ? (
+            <Loader2 size={15} className="animate-spin" style={{ color: tone.fg }} />
+          ) : (
+            <WifiOff size={15} style={{ color: tone.fg }} />
+          )}
+          <span className="text-label" style={{ color: tone.fg }}>
+            {info.text}
+          </span>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

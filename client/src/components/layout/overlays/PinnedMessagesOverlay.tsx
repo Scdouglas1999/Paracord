@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import type { RefObject } from 'react';
-import { Pin, X } from 'lucide-react';
+import { Pin, PinOff } from 'lucide-react';
 import { extractApiError } from '../../../api/client';
 import { channelApi } from '../../../api/channels';
 import { useMessageStore } from '../../../stores/messageStore';
@@ -39,61 +39,81 @@ export function PinnedMessagesOverlay({
       onClose={onClose}
       dialogRef={dialogRef as RefObject<HTMLDivElement | null>}
       titleId="topbar-pins-title"
+      title="Pinned Messages"
+      icon={Pin}
+      closeLabel="Close pinned messages"
       panelClassName="max-h-[min(82dvh,40rem)] w-full max-w-xl"
     >
-      <div className="panel-divider flex items-center justify-between border-b px-5 py-4.5">
-        <div id="topbar-pins-title" className="font-bold text-text-primary">Pinned Messages</div>
-        <button className="command-icon-btn" onClick={onClose} aria-label="Close pinned messages"><X size={16} /></button>
-      </div>
-      <div className="max-h-[min(67dvh,31rem)] space-y-4 overflow-y-auto bg-bg-primary p-4 sm:p-5 scrollbar-thin">
-        {error && (
-          <div
-            role="alert"
-            className="rounded-xl border border-accent-danger/30 bg-accent-danger/10 px-4 py-3 text-sm text-accent-danger"
-          >
-            {error}
-          </div>
-        )}
-        {pins.map((msg) => {
-          const avatarSrc = safeStoredImageDataUrl(msg.author.avatar);
-          return (
-            <div key={msg.id} className="rounded-xl border border-border-subtle bg-bg-mod-subtle p-3.5">
-              <div className="mb-2 flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-bg-tertiary text-[10px] text-text-muted">
-                  {avatarSrc ? <img src={avatarSrc} alt="" className="h-full w-full object-cover" /> : msg.author.username[0]}
+      {error && (
+        <div
+          role="alert"
+          className="m-4 rounded-md border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
+        >
+          {error}
+        </div>
+      )}
+      {pins.length > 0 ? (
+        <ul className="divide-y divide-border-subtle">
+          {pins.map((msg) => {
+            const avatarSrc = safeStoredImageDataUrl(msg.author.avatar);
+            const pinnedAt = new Date(msg.created_at || msg.timestamp || '');
+            return (
+              <li
+                key={msg.id}
+                className="group relative px-5 py-4 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-within:bg-bg-mod-subtle"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-bg-tertiary text-meta font-semibold text-text-secondary">
+                    {avatarSrc ? <img src={avatarSrc} alt="" className="h-full w-full object-cover" /> : msg.author.username[0]}
+                  </div>
+                  <span className="text-label font-semibold text-text-primary">{msg.author.username}</span>
+                  <time className="ml-auto font-code text-meta tabular-nums text-text-muted">
+                    {Number.isNaN(pinnedAt.getTime()) ? '' : pinnedAt.toLocaleDateString()}
+                  </time>
                 </div>
-                <span className="text-sm font-semibold text-text-primary">{msg.author.username}</span>
-                <span className="ml-auto text-xs text-text-muted">{new Date(msg.created_at || msg.timestamp || '').toLocaleDateString()}</span>
-              </div>
-              <div className="mb-2 text-sm text-text-primary">{msg.content || '(attachment only)'}</div>
-              {channelId && (
-                <button
-                  type="button"
-                  className="inline-flex h-9 items-center rounded-lg border border-transparent px-3 text-sm font-semibold text-accent-danger transition-colors hover:border-accent-danger/35 hover:bg-accent-danger/12"
-                  onClick={async () => {
-                    onErrorChange?.(null);
-                    try {
-                      await unpinMessage(channelId, msg.id);
-                      const { data } = await channelApi.getPins(channelId);
-                      onPinsChange(data);
-                    } catch (err) {
-                      onErrorChange?.(`Failed to unpin message: ${extractApiError(err)}`);
-                    }
-                  }}
-                >
-                  Unpin this message
-                </button>
-              )}
+                <p className="mt-1.5 pl-[2.375rem] pr-9 text-body text-text-primary">
+                  {msg.content || <span className="italic text-text-muted">Attachment only</span>}
+                </p>
+                {channelId && (
+                  <button
+                    type="button"
+                    aria-label="Unpin this message"
+                    title="Unpin this message"
+                    className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-sm text-text-muted opacity-0 outline-none transition-[opacity,color,background-color] duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                    onClick={async () => {
+                      onErrorChange?.(null);
+                      try {
+                        await unpinMessage(channelId, msg.id);
+                        const { data } = await channelApi.getPins(channelId);
+                        onPinsChange(data);
+                      } catch (err) {
+                        onErrorChange?.(`Failed to unpin message: ${extractApiError(err)}`);
+                      }
+                    }}
+                  >
+                    <PinOff size={16} />
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        !error && (
+          <div className="flex items-start gap-3.5 px-5 py-8">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+              <Pin size={20} />
+            </span>
+            <div className="min-w-0 pt-0.5">
+              <h3 className="text-subhead text-text-primary">No pinned messages yet</h3>
+              <p className="mt-1 text-label text-text-secondary">
+                Pin a message from its <span className="font-code text-text-primary">⋯</span> menu to keep
+                the important stuff one click away for everyone here.
+              </p>
             </div>
-          );
-        })}
-        {pins.length === 0 && (
-          <div className="py-8 text-center text-text-muted">
-            <Pin size={48} className="mx-auto mb-4 opacity-20" />
-            No pinned messages in this channel yet.
           </div>
-        )}
-      </div>
+        )
+      )}
     </TopBarOverlay>
   );
 }

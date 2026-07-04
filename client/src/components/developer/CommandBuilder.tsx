@@ -10,6 +10,8 @@ import {
 import { commandApi, type CreateCommandRequest } from '../../api/commands';
 import { extractApiError } from '../../api/client';
 import { cn } from '../../lib/utils';
+import { Button } from '../ui/Button';
+import { Input, Select } from '../ui/Input';
 
 interface CommandBuilderProps {
   appId: string;
@@ -53,6 +55,23 @@ function supportsNestedOptions(type: CommandOptionType): boolean {
     type === CommandOptionType.SubCommand ||
     type === CommandOptionType.SubCommandGroup
   );
+}
+
+// A quiet inline "add" affordance shared by choices/sub-options.
+function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-meta font-semibold text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)]"
+    >
+      <Plus size={12} /> {label}
+    </button>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <span className="text-section uppercase text-text-muted">{children}</span>;
 }
 
 // ---- Option Editor ----
@@ -107,10 +126,12 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
     updateField('options', opts.length > 0 ? opts : undefined);
   };
 
+  const nameInvalid = Boolean(option.name && !NAME_REGEX.test(option.name));
+
   return (
     <div
       className={cn(
-        'rounded-lg border border-border-subtle bg-bg-primary/30 p-3 space-y-2',
+        'space-y-3 rounded-sm border border-border-subtle bg-bg-mod-subtle p-3',
         depth > 0 && 'ml-4',
       )}
     >
@@ -118,21 +139,19 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
         <button
           type="button"
           aria-label={`${expanded ? 'Collapse' : 'Expand'} option ${index + 1}`}
-          className="text-text-muted hover:text-text-primary"
+          className="flex h-6 w-6 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => setExpanded(!expanded)}
         >
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
-        <span className="text-xs font-semibold text-text-secondary">
-          Option {index + 1}
-        </span>
+        <span className="text-label text-text-primary">Option {index + 1}</span>
         {option.name && (
-          <span className="text-xs text-text-muted">({option.name})</span>
+          <code className="font-code text-meta text-text-muted">{option.name}</code>
         )}
         <button
           type="button"
           aria-label={`Remove option ${index + 1}`}
-          className="ml-auto text-accent-danger hover:text-accent-danger/80"
+          className="ml-auto flex h-6 w-6 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)]"
           onClick={onRemove}
         >
           <Trash2 size={13} />
@@ -140,24 +159,25 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
       </div>
 
       {expanded && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto]">
-            <input
-              className={cn('input-field text-xs', option.name && !NAME_REGEX.test(option.name) && 'border-accent-danger/50')}
+            <Input
+              className="h-9"
+              error={nameInvalid}
               placeholder="Name (lowercase, no spaces)"
               value={option.name}
               maxLength={32}
               onChange={(e) => updateField('name', e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-'))}
             />
-            <input
-              className="input-field text-xs"
+            <Input
+              className="h-9"
               placeholder="Description"
               value={option.description}
               maxLength={100}
               onChange={(e) => updateField('description', e.target.value)}
             />
-            <select
-              className="input-field text-xs"
+            <Select
+              className="h-9"
               value={option.type}
               onChange={(e) => {
                 const newType = Number(e.target.value) as CommandOptionType;
@@ -179,8 +199,8 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
               {Object.entries(OPTION_TYPE_LABELS).map(([val, label]) => (
                 <option key={val} value={val}>{label}</option>
               ))}
-            </select>
-            <label className="flex items-center gap-1.5 text-xs text-text-secondary">
+            </Select>
+            <label className="flex items-center gap-1.5 px-1 text-label text-text-secondary">
               <input
                 type="checkbox"
                 checked={option.required ?? false}
@@ -193,29 +213,21 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
 
           {/* Choices */}
           {supportsChoices(option.type) && (
-            <div className="space-y-1.5">
+            <div className="space-y-2 border-t border-border-subtle pt-3">
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                  Choices (optional)
-                </span>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent-primary hover:underline"
-                  onClick={addChoice}
-                >
-                  <Plus size={11} /> Add
-                </button>
+                <SectionLabel>Choices (optional)</SectionLabel>
+                <AddButton label="Add" onClick={addChoice} />
               </div>
               {(option.choices ?? []).map((choice, ci) => (
                 <div key={ci} className="flex items-center gap-2">
-                  <input
-                    className="input-field flex-1 text-xs"
+                  <Input
+                    className="h-9 flex-1"
                     placeholder="Choice name"
                     value={choice.name}
                     onChange={(e) => updateChoice(ci, 'name', e.target.value)}
                   />
-                  <input
-                    className="input-field flex-1 text-xs"
+                  <Input
+                    className="h-9 flex-1"
                     placeholder="Choice value"
                     value={String(choice.value)}
                     onChange={(e) => {
@@ -231,10 +243,10 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
                   <button
                     type="button"
                     aria-label={`Remove choice ${ci + 1} from option ${index + 1}`}
-                    className="text-accent-danger hover:text-accent-danger/80"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:shadow-[var(--focus-ring)]"
                     onClick={() => removeChoice(ci)}
                   >
-                    <Trash2 size={12} />
+                    <Trash2 size={13} />
                   </button>
                 </div>
               ))}
@@ -243,18 +255,10 @@ function OptionEditor({ option, index, depth, onChange, onRemove }: OptionEditor
 
           {/* Nested options for SubCommand / SubCommandGroup */}
           {supportsNestedOptions(option.type) && depth < 2 && (
-            <div className="space-y-1.5">
+            <div className="space-y-2 border-t border-border-subtle pt-3">
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                  Sub-Options
-                </span>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent-primary hover:underline"
-                  onClick={addNestedOption}
-                >
-                  <Plus size={11} /> Add
-                </button>
+                <SectionLabel>Sub-options</SectionLabel>
+                <AddButton label="Add" onClick={addNestedOption} />
               </div>
               {(option.options ?? []).map((sub, oi) => (
                 <OptionEditor
@@ -333,84 +337,70 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
   };
 
   return (
-    <div className="rounded-xl border border-border-subtle bg-bg-secondary/60 p-5 space-y-4">
-      <h3 className="text-sm font-semibold text-text-primary">
-        {editingCommand ? 'Edit Command' : 'Create Command'}
+    <div className="space-y-5 rounded-md border border-border-subtle bg-bg-secondary p-5 shadow-sm">
+      <h3 className="font-display text-heading text-text-primary">
+        {editingCommand ? 'Edit command' : 'Create command'}
       </h3>
 
       {error && (
-        <div role="alert" className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-xs font-medium text-accent-danger">
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-sm bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger"
+        >
           {error}
         </div>
       )}
 
       <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
         <div>
-          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-            Name
-          </label>
-          <input
+          <label className="mb-1.5 block text-section uppercase text-text-muted">Name</label>
+          <Input
             aria-label="Command name"
-            className={cn(
-              'input-field text-sm',
-              name.length > 0 && !nameValid && 'border-accent-danger/60',
-            )}
+            error={name.length > 0 && !nameValid}
             placeholder="command-name"
             value={name}
             maxLength={32}
             onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s/g, '-'))}
           />
           {name.length > 0 && !nameValid && (
-            <p className="mt-1 text-[11px] text-accent-danger">
-              Letters, numbers, hyphens, underscores only (1-32 chars)
+            <p className="mt-1 text-meta text-accent-danger">
+              Letters, numbers, hyphens, underscores only (1–32 chars)
             </p>
           )}
         </div>
         <div>
-          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-            Description
-          </label>
-          <input
+          <label className="mb-1.5 block text-section uppercase text-text-muted">Description</label>
+          <Input
             aria-label="Command description"
-            className="input-field text-sm"
             placeholder="A brief description"
             value={description}
             maxLength={100}
             onChange={(e) => setDescription(e.target.value)}
           />
-          <p className="mt-1 text-[11px] text-text-muted">{description.length}/100</p>
+          <p className="mt-1 text-meta tabular-nums text-text-muted">{description.length}/100</p>
         </div>
         <div>
-          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-            Type
-          </label>
-          <select
+          <label className="mb-1.5 block text-section uppercase text-text-muted">Type</label>
+          <Select
             aria-label="Command type"
-            className="input-field text-sm"
             value={type}
             onChange={(e) => setType(Number(e.target.value) as ApplicationCommandType)}
           >
             {Object.entries(COMMAND_TYPE_LABELS).map(([val, label]) => (
               <option key={val} value={val}>{label}</option>
             ))}
-          </select>
+          </Select>
         </div>
       </div>
 
       {/* Options builder - only for ChatInput */}
       {type === ApplicationCommandType.ChatInput && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Options
-            </span>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 rounded-lg border border-border-subtle px-2.5 py-1 text-xs font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
-              onClick={addOption}
-            >
-              <Plus size={12} /> Add Option
-            </button>
+        <div className="space-y-2.5 border-t border-border-subtle pt-4">
+          <div className="flex items-center justify-between">
+            <SectionLabel>Options</SectionLabel>
+            <Button size="sm" variant="secondary" onClick={addOption}>
+              <Plus size={13} className="mr-1" /> Add Option
+            </Button>
           </div>
           {options.map((opt, i) => (
             <OptionEditor
@@ -423,25 +413,20 @@ export function CommandBuilder({ appId, editingCommand, onSaved, onCancel }: Com
             />
           ))}
           {options.length === 0 && (
-            <p className="text-xs text-text-muted">No options. Click "Add Option" to define parameters.</p>
+            <p className="text-meta text-text-muted">
+              No parameters yet. Add an option to accept arguments from users.
+            </p>
           )}
         </div>
       )}
 
-      <div className="flex items-center gap-2">
-        <button
-          className="btn-primary"
-          disabled={!canSubmit}
-          onClick={() => void submit()}
-        >
-          {saving ? 'Saving...' : editingCommand ? 'Update Command' : 'Create Command'}
-        </button>
-        <button
-          className="rounded-lg px-3 py-1.5 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
-          onClick={onCancel}
-        >
+      <div className="flex items-center justify-end gap-2.5 border-t border-border-subtle pt-4">
+        <Button variant="ghost" onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
+        <Button disabled={!canSubmit} loading={saving} onClick={() => void submit()}>
+          {saving ? 'Saving…' : editingCommand ? 'Update Command' : 'Create Command'}
+        </Button>
       </div>
     </div>
   );

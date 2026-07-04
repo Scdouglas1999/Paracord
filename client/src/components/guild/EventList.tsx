@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Calendar, Clock, MapPin, Users, Plus, Check, Sparkles, Download, Repeat } from 'lucide-react';
+import { Calendar, Clock, MapPin, Users, Plus, Check, Download, Repeat, Bell } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { useAuthStore } from '../../stores/authStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { Permissions, hasPermission } from '../../types';
 import { Modal, ModalTitle } from '../ui/Modal';
+import { Button } from '../ui/Button';
+import { EmptyState, ErrorBanner } from '../ui/Feedback';
+import { FieldLabel } from './SettingsPrimitives';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
 import { confirm } from '../../stores/confirmStore';
@@ -41,11 +44,27 @@ const STATUS_LABELS: Record<number, string> = {
 };
 
 const STATUS_COLORS: Record<number, string> = {
-  1: 'border-accent-primary/40 bg-accent-primary/10 text-accent-primary',
-  2: 'border-accent-success/40 bg-accent-success/10 text-accent-success',
-  3: 'border-text-muted/40 bg-text-muted/10 text-text-muted',
-  4: 'border-accent-danger/40 bg-accent-danger/10 text-accent-danger',
+  1: 'border-accent-primary/40 bg-accent-tint text-accent-primary',
+  2: 'border-accent-success/40 bg-success-tint text-accent-success',
+  3: 'border-border-subtle bg-bg-mod-strong text-text-muted',
+  4: 'border-accent-danger/40 bg-danger-tint text-accent-danger',
 };
+
+// Compact management-action button: quiet neutral by default, semantic tint variants.
+const eventActionBtn = (variant: 'neutral' | 'primary' | 'success' | 'warning' | 'danger') =>
+  cn(
+    'inline-flex shrink-0 items-center gap-1.5 rounded-sm border px-3 py-1.5 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+    variant === 'neutral' &&
+      'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
+    variant === 'primary' &&
+      'border-accent-primary/40 bg-accent-tint text-accent-primary hover:bg-accent-tint-strong',
+    variant === 'success' &&
+      'border-accent-success/40 bg-success-tint text-accent-success hover:bg-success-tint',
+    variant === 'warning' &&
+      'border-accent-warning/40 bg-warning-tint text-accent-warning hover:bg-warning-tint',
+    variant === 'danger' &&
+      'border-accent-danger/40 bg-danger-tint text-accent-danger hover:bg-danger-tint',
+  );
 
 function pathSegment(value: string): string {
   return encodeURIComponent(value);
@@ -157,118 +176,95 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
       panelClassName="w-[min(92vw,32rem)]"
     >
       <div className="max-h-[min(86dvh,42rem)] overflow-auto">
-        <div className="px-8 pb-4 pt-8">
-          <ModalTitle id="event-form-title" className="text-xl">
-            {isEditing ? 'Edit Event' : 'Create Event'}
+        <div className="border-b border-border-subtle px-6 pb-5 pt-6 pr-14">
+          <ModalTitle id="event-form-title">
+            {isEditing ? 'Edit event' : 'Create an event'}
           </ModalTitle>
-          <p className="mt-1 text-sm text-text-muted">
-            {isEditing ? 'Update the event details for your server.' : 'Schedule a new event for your server.'}
+          <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">
+            {isEditing
+              ? 'Update the details and everyone who RSVP’d gets the change.'
+              : 'Give people a reason to show up — a time, a place, and what to expect.'}
           </p>
-          {error && (
-            <p
-              role="alert"
-              className="mt-3 rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-sm font-medium text-accent-danger"
-            >
-              {error}
-            </p>
-          )}
+          {error && <ErrorBanner message={error} className="mt-3" />}
         </div>
 
-        <div className="space-y-5 px-8 pb-6">
+        <div className="space-y-5 px-6 py-5">
           <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Event Name *
-            </span>
+            <FieldLabel>Event Name *</FieldLabel>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={100}
               placeholder="Movie Night"
-              className="input-field mt-2"
+              className="input-field"
             />
           </label>
 
           <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Description
-            </span>
+            <FieldLabel>Description</FieldLabel>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               maxLength={1000}
               rows={3}
               placeholder="What's this event about?"
-              className="input-field mt-2 resize-none"
+              className="input-field resize-none"
             />
           </label>
 
           <div className="flex gap-3">
             <label className="block flex-1">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Start *
-              </span>
+              <FieldLabel>Start *</FieldLabel>
               <input
                 type="datetime-local"
                 value={scheduledStart}
                 onChange={(e) => setScheduledStart(e.target.value)}
-                className="input-field mt-2"
+                className="input-field"
               />
             </label>
             <label className="block flex-1">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                End
-              </span>
+              <FieldLabel>End</FieldLabel>
               <input
                 type="datetime-local"
                 value={scheduledEnd}
                 onChange={(e) => setScheduledEnd(e.target.value)}
-                className="input-field mt-2"
+                className="input-field"
               />
             </label>
           </div>
 
           <div>
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Event Type
-            </span>
-            <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setEntityType(1)}
-                className={cn(
-                  'flex-1 rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors',
-                  entityType === 1
-                    ? 'border-accent-primary/50 bg-accent-primary/15 text-text-primary'
-                    : 'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong'
-                )}
-              >
-                Voice Channel
-              </button>
-              <button
-                type="button"
-                onClick={() => setEntityType(2)}
-                className={cn(
-                  'flex-1 rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors',
-                  entityType === 2
-                    ? 'border-accent-primary/50 bg-accent-primary/15 text-text-primary'
-                    : 'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong'
-                )}
-              >
-                External
-              </button>
+            <FieldLabel>Event Type</FieldLabel>
+            <div className="flex gap-2">
+              {([
+                { type: 1, label: 'Voice Channel' },
+                { type: 2, label: 'External' },
+              ] as const).map(({ type, label }) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setEntityType(type)}
+                  className={cn(
+                    'flex-1 rounded-sm border px-3 py-2.5 text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                    entityType === type
+                      ? 'border-accent-primary bg-accent-tint text-text-primary'
+                      : 'border-border-subtle bg-bg-tertiary text-text-secondary hover:border-border-strong hover:bg-bg-mod-subtle',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
 
           <div className="flex gap-3">
             <label className="block flex-1">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Repeat
-              </span>
+              <FieldLabel>Repeat</FieldLabel>
               <select
                 value={recurrenceRule}
                 onChange={(e) => setRecurrenceRule(e.target.value as 'none' | 'daily' | 'weekly' | 'monthly')}
-                className="input-field mt-2"
+                className="select-field"
               >
                 <option value="none">Does not repeat</option>
                 <option value="daily">Daily</option>
@@ -277,13 +273,11 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
               </select>
             </label>
             <label className="block flex-1">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Reminder
-              </span>
+              <FieldLabel>Reminder</FieldLabel>
               <select
                 value={reminderMinutes}
                 onChange={(e) => setReminderMinutes(e.target.value as 'none' | '10' | '30' | '60' | '1440')}
-                className="input-field mt-2"
+                className="select-field"
               >
                 <option value="none">No reminder</option>
                 <option value="10">10 min before</option>
@@ -296,32 +290,29 @@ function EventFormModal({ guildId, event, onClose, onSaved }: EventFormModalProp
 
           {entityType === 2 && (
             <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Location
-              </span>
+              <FieldLabel>Location</FieldLabel>
               <input
                 type="text"
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
                 maxLength={200}
                 placeholder="Where is this event?"
-                className="input-field mt-2"
+                className="input-field"
               />
             </label>
           )}
         </div>
 
-        <div className="flex flex-col-reverse items-stretch gap-5 border-t border-border-subtle/70 px-8 py-6 sm:flex-row sm:items-center sm:justify-between"
-          style={{ backgroundColor: 'var(--bg-secondary)' }}
-        >
-          <button onClick={onClose} className="btn-ghost">Cancel</button>
-          <button
+        <div className="flex items-center justify-end gap-3 border-t border-border-subtle bg-bg-secondary px-6 py-4">
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button
             onClick={() => void handleSubmit()}
             disabled={loading || !name.trim() || !scheduledStart}
-            className="btn-primary min-w-[9rem]"
+            loading={loading}
+            className="min-w-[9rem]"
           >
-            {loading ? (isEditing ? 'Saving...' : 'Creating...') : isEditing ? 'Save Changes' : 'Create Event'}
-          </button>
+            {loading ? (isEditing ? 'Saving…' : 'Creating…') : isEditing ? 'Save Changes' : 'Create Event'}
+          </Button>
         </div>
       </div>
     </Modal>
@@ -435,7 +426,7 @@ export function EventList({ guildId }: EventListProps) {
     return (
       <div className="space-y-3 p-4">
         {Array.from({ length: 3 }, (_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-xl border border-border-subtle bg-bg-mod-subtle/40" />
+          <div key={i} className="h-24 animate-pulse rounded-md border border-border-subtle bg-bg-secondary" />
         ))}
       </div>
     );
@@ -443,20 +434,22 @@ export function EventList({ guildId }: EventListProps) {
 
   return (
     <div className="space-y-6 p-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-mod-subtle text-text-secondary">
+          <div className="flex h-10 w-10 items-center justify-center rounded-md border border-border-subtle bg-bg-secondary text-accent-primary shadow-sm">
             <Calendar size={18} />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-text-primary">Events</h2>
-            <p className="text-xs text-text-muted">
+            <h2 className="font-display text-heading text-text-primary">Events</h2>
+            <p className="text-meta text-text-muted">
               {upcoming.length} upcoming event{upcoming.length !== 1 ? 's' : ''}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() =>
               window.open(
                 `/api/v1/guilds/${pathSegment(guildId)}/events.ics`,
@@ -464,59 +457,46 @@ export function EventList({ guildId }: EventListProps) {
                 'noopener,noreferrer',
               )
             }
-            className="control-pill-btn gap-1.5"
+            className="gap-1.5"
             title="Export calendar (.ics)"
           >
             <Download size={15} />
             Export
-          </button>
+          </Button>
           {canManageEvents && (
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="control-pill-btn gap-1.5"
-            >
+            <Button size="sm" onClick={() => setShowCreateModal(true)} className="gap-1.5">
               <Plus size={15} />
               New Event
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
       {loadError ? (
-        <div
-          role="alert"
-          className="rounded-xl border border-accent-danger/35 bg-accent-danger/10 px-4 py-3 text-sm text-accent-danger"
-        >
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <span>{loadError}</span>
-            <button
-              type="button"
-              onClick={fetchEvents}
-              className="inline-flex shrink-0 items-center justify-center rounded-lg border border-accent-danger/35 px-3 py-1.5 text-xs font-semibold hover:bg-accent-danger/10"
-            >
-              Retry
-            </button>
-          </div>
-        </div>
+        <ErrorBanner message={loadError} onRetry={fetchEvents} />
       ) : events.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-14 text-center">
-          <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border-subtle bg-bg-mod-subtle">
-            <Sparkles size={28} className="text-text-muted" />
-          </div>
-          <p className="text-sm font-semibold text-text-secondary">No events yet</p>
-          <p className="mt-1 text-xs text-text-muted">
-            {canManageEvents
-              ? 'Create the first event for this server!'
-              : 'Check back later for upcoming events.'}
-          </p>
-        </div>
+        <EmptyState
+          icon={<Calendar size={20} />}
+          title="No events on the calendar"
+          description={
+            canManageEvents
+              ? 'Schedule one to bring people together — a movie night, a weekly standup, or a launch party.'
+              : "Nothing scheduled yet. Check back soon — the organizers will post events here."
+          }
+          action={
+            canManageEvents ? (
+              <Button onClick={() => setShowCreateModal(true)} className="gap-1.5">
+                <Plus size={16} />
+                Create event
+              </Button>
+            ) : undefined
+          }
+        />
       ) : (
         <>
           {upcoming.length > 0 && (
             <div className="space-y-3">
-              <h3 className="px-1 text-xs font-bold uppercase tracking-wider text-text-muted/70">
-                Upcoming
-              </h3>
+              <h3 className="px-0.5 text-section uppercase text-text-muted">Upcoming</h3>
               {upcoming.map((event) => (
                 <EventCard
                   key={event.id}
@@ -536,9 +516,7 @@ export function EventList({ guildId }: EventListProps) {
 
           {past.length > 0 && (
             <div className="space-y-3">
-              <h3 className="px-1 text-xs font-bold uppercase tracking-wider text-text-muted/70">
-                Past Events
-              </h3>
+              <h3 className="px-0.5 text-section uppercase text-text-muted">Past events</h3>
               {past.map((event) => (
                 <EventCard
                   key={event.id}
@@ -606,19 +584,28 @@ function EventCard({
   const isPast = event.status === 3 || event.status === 4;
 
   return (
-    <div
+    <article
       className={cn(
-        'group rounded-xl border border-border-subtle/70 bg-bg-mod-subtle/45 p-4 transition-colors hover:border-border-strong hover:bg-bg-mod-strong/55',
+        'group overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong',
         isPast && 'opacity-60'
       )}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      {/* Cover image — framed intentionally, not a full-bleed hero */}
+      {event.image_url && (
+        <img
+          src={event.image_url}
+          alt=""
+          className="h-32 w-full border-b border-border-subtle object-cover"
+        />
+      )}
+
+      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h4 className="text-sm font-semibold text-text-primary">{event.name}</h4>
+            <h4 className="text-label font-semibold text-text-primary">{event.name}</h4>
             <span
               className={cn(
-                'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                'inline-flex items-center rounded-xs border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em]',
                 STATUS_COLORS[event.status] || STATUS_COLORS[1]
               )}
             >
@@ -627,29 +614,32 @@ function EventCard({
           </div>
 
           {event.description && (
-            <p className="text-xs leading-relaxed text-text-secondary">{event.description}</p>
+            <p className="text-meta leading-relaxed text-text-secondary">{event.description}</p>
           )}
 
-          <div className="flex flex-wrap items-center gap-4 text-xs text-text-muted">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-meta text-text-muted">
             <span className="inline-flex items-center gap-1.5">
-              <Clock size={12} />
-              {formatEventDate(event.scheduled_start)}
-              {event.scheduled_end && ` - ${formatEventDate(event.scheduled_end)}`}
+              <Clock size={13} className="shrink-0" />
+              <span className="font-code tabular-nums">
+                {formatEventDate(event.scheduled_start)}
+                {event.scheduled_end && ` – ${formatEventDate(event.scheduled_end)}`}
+              </span>
             </span>
             {event.recurrence_rule && (
               <span className="inline-flex items-center gap-1.5">
-                <Repeat size={12} />
+                <Repeat size={13} className="shrink-0" />
                 repeats {event.recurrence_rule}
               </span>
             )}
             {event.reminder_minutes && (
               <span className="inline-flex items-center gap-1.5">
-                reminder {event.reminder_minutes}m
+                <Bell size={13} className="shrink-0" />
+                {event.reminder_minutes}m before
               </span>
             )}
             {event.location && (
               <span className="inline-flex items-center gap-1.5">
-                <MapPin size={12} />
+                <MapPin size={13} className="shrink-0" />
                 {event.location}
               </span>
             )}
@@ -661,13 +651,13 @@ function EventCard({
                     `/app/guilds/${pathSegment(guildId)}/channels/${pathSegment(event.event_channel_id || '')}`,
                   )
                 }
-                className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle px-2 py-0.5 text-[11px] text-text-secondary hover:bg-bg-mod-subtle"
+                className="inline-flex items-center gap-1.5 rounded-sm border border-border-subtle px-2 py-0.5 text-meta text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
               >
                 event chat
               </button>
             )}
             <span className="inline-flex items-center gap-1.5">
-              <Users size={12} />
+              <Users size={13} className="shrink-0" />
               {event.user_count} interested
             </span>
           </div>
@@ -678,9 +668,9 @@ function EventCard({
             <button
               onClick={() => onRsvp(event.id, event.user_rsvp)}
               className={cn(
-                'inline-flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors',
+                'inline-flex shrink-0 items-center gap-1.5 rounded-sm border px-3 py-1.5 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                 event.user_rsvp
-                  ? 'border-accent-success/50 bg-accent-success/15 text-accent-success hover:bg-accent-success/25'
+                  ? 'border-accent-success/50 bg-success-tint text-accent-success hover:bg-success-tint'
                   : 'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary'
               )}
             >
@@ -690,16 +680,10 @@ function EventCard({
           )}
           {canManageEvents && (
             <>
-              <button
-                onClick={() => onEditEvent(event)}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-              >
+              <button onClick={() => onEditEvent(event)} className={eventActionBtn('neutral')}>
                 Edit
               </button>
-              <button
-                onClick={() => onRefreshEvent(event.id)}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
-              >
+              <button onClick={() => onRefreshEvent(event.id)} className={eventActionBtn('neutral')}>
                 Refresh
               </button>
               <button
@@ -710,46 +694,34 @@ function EventCard({
                     'noopener,noreferrer',
                   )
                 }
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+                className={eventActionBtn('neutral')}
               >
                 <Download size={13} />
                 iCal
               </button>
               {event.status === 1 && (
-                <button
-                  onClick={() => onUpdateEventStatus(event.id, 2)}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-accent-primary/40 bg-accent-primary/12 px-3 py-2 text-xs font-semibold text-accent-primary transition-colors hover:bg-accent-primary/20"
-                >
+                <button onClick={() => onUpdateEventStatus(event.id, 2)} className={eventActionBtn('primary')}>
                   Start
                 </button>
               )}
               {event.status === 2 && (
-                <button
-                  onClick={() => onUpdateEventStatus(event.id, 3)}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-accent-success/40 bg-accent-success/12 px-3 py-2 text-xs font-semibold text-accent-success transition-colors hover:bg-accent-success/20"
-                >
+                <button onClick={() => onUpdateEventStatus(event.id, 3)} className={eventActionBtn('success')}>
                   Complete
                 </button>
               )}
               {(event.status === 1 || event.status === 2) && (
-                <button
-                  onClick={() => onUpdateEventStatus(event.id, 4)}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-accent-warning/40 bg-accent-warning/12 px-3 py-2 text-xs font-semibold text-accent-warning transition-colors hover:bg-accent-warning/20"
-                >
+                <button onClick={() => onUpdateEventStatus(event.id, 4)} className={eventActionBtn('warning')}>
                   Cancel
                 </button>
               )}
-              <button
-                onClick={() => onDeleteEvent(event.id)}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-accent-danger/40 bg-accent-danger/12 px-3 py-2 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/20"
-              >
+              <button onClick={() => onDeleteEvent(event.id)} className={eventActionBtn('danger')}>
                 Delete
               </button>
             </>
           )}
         </div>
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -787,7 +759,7 @@ export function EventsIndicator({ guildId }: { guildId: string }) {
   if (count === 0) return null;
 
   return (
-    <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-accent-primary/20 px-1 text-[9px] font-bold text-accent-primary">
+    <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-accent-primary px-1 text-[9px] font-bold tabular-nums text-text-on-accent">
       {count}
     </span>
   );

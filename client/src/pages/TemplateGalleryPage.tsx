@@ -297,7 +297,7 @@ export function TemplateGalleryPage() {
                               >
                                 <Icon size={14} className="shrink-0 text-text-muted" />
                                 <span className="min-w-0 flex-1 truncate text-label text-text-primary">{channel.name}</span>
-                                <span className="shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
+                                <span className="shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold text-text-secondary">
                                   {channelTypeLabel(channel.type)}
                                 </span>
                               </div>

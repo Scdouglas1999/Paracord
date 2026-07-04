@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { Download, FileText, X } from 'lucide-react';
+import { Download, FileText, FileWarning, X } from 'lucide-react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
 import { formatFileSize } from '../../lib/formatters';
@@ -20,7 +20,8 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
 
   if (!safeUrl) {
     return (
-      <div className="mt-1 max-w-sm rounded-xl border border-border-subtle bg-bg-secondary p-3.5 text-sm text-text-muted">
+      <div className="mt-1 flex max-w-sm items-center gap-2.5 rounded-md border border-border-subtle bg-bg-secondary px-3.5 py-3 text-meta text-text-muted">
+        <FileWarning size={16} className="shrink-0 text-accent-warning" />
         Attachment link blocked.
       </div>
     );
@@ -34,19 +35,18 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
           <button
             type="button"
             aria-label={`Open image preview: ${filename}`}
-            className="block max-w-full rounded-xl p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary"
-            style={{ border: '1px solid var(--border-subtle)' }}
+            className="block max-w-full overflow-hidden rounded-md border border-border-subtle p-0 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:shadow-[var(--focus-ring)]"
             onClick={() => setLightbox(true)}
           >
             <img
               src={safeUrl}
               alt={filename}
-              className="max-h-72 rounded-xl object-contain"
+              className="max-h-72 object-contain"
             />
           </button>
-          <div className="mt-2 flex items-center gap-2.5">
-            <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{filename}</span>
-            <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{formatFileSize(size)}</span>
+          <div className="mt-1.5 flex items-center gap-2 text-meta text-text-muted">
+            <span className="truncate">{filename}</span>
+            <span className="tabular-nums">{formatFileSize(size)}</span>
           </div>
         </div>
 
@@ -54,7 +54,7 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
         {lightbox && (
           <div
             ref={lightboxRef}
-            className="fixed inset-0 z-50 flex items-center justify-center cursor-pointer"
+            className="fixed inset-0 z-50 flex cursor-pointer items-center justify-center"
             role="dialog"
             aria-modal="true"
             aria-label={`Image preview: ${filename}`}
@@ -65,17 +65,12 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
             <button
               type="button"
               aria-label="Close image preview"
-              className="absolute right-4 top-4 rounded-full p-2.5"
+              className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-sm border border-border-subtle bg-bg-accent text-text-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:shadow-[var(--focus-ring)]"
               onClick={closeLightbox}
-              style={{
-                backgroundColor: 'var(--bg-mod-strong)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border-subtle)',
-              }}
             >
-              <X size={20} />
+              <X size={18} />
             </button>
-            <img src={safeUrl} alt={filename} className="max-w-[90vw] max-h-[90vh] object-contain" />
+            <img src={safeUrl} alt={filename} className="max-h-[90vh] max-w-[90vw] object-contain" />
           </div>
         )}
       </>
@@ -89,11 +84,11 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
         <video
           src={safeUrl}
           controls
-          className="max-h-72 rounded-xl"
-          style={{ border: '1px solid var(--border-subtle)' }}
+          className="max-h-72 rounded-md border border-border-subtle"
         />
-        <div className="mt-2 flex items-center gap-2.5">
-          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{filename}</span>
+        <div className="mt-1.5 flex items-center gap-2 text-meta text-text-muted">
+          <span className="truncate">{filename}</span>
+          <span className="tabular-nums">{formatFileSize(size)}</span>
         </div>
       </div>
     );
@@ -103,43 +98,37 @@ export function FilePreview({ url, filename, mimeType, size }: FilePreviewProps)
   if (mimeType.startsWith('audio/')) {
     return (
       <div className="mt-1 max-w-md">
-        <div
-          className="flex items-center gap-3 rounded-xl p-3.5"
-          style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}
-        >
+        <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary p-3.5">
           <audio src={safeUrl} controls className="h-9 flex-1" />
         </div>
-        <div className="mt-2 flex items-center gap-2.5">
-          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{filename}</span>
+        <div className="mt-1.5 flex items-center gap-2 text-meta text-text-muted">
+          <span className="truncate">{filename}</span>
+          <span className="tabular-nums">{formatFileSize(size)}</span>
         </div>
       </div>
     );
   }
 
-  // Generic file card
+  // Generic / unknown-type file card — framed, with a lucide file icon and a
+  // download affordance (no emoji chrome, kill-list #3).
   return (
     <div className="mt-1 max-w-sm">
       <a
         href={safeUrl}
         download={filename}
-        className="flex items-center gap-3.5 rounded-xl p-3.5 transition-colors no-underline"
-        style={{
-          backgroundColor: 'var(--bg-secondary)',
-          border: '1px solid var(--border-subtle)',
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--bg-mod-subtle)'; }}
-        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'; }}
+        className="group flex items-center gap-3 rounded-md border border-border-subtle bg-bg-secondary p-3 no-underline outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong hover:bg-bg-accent focus-visible:shadow-[var(--focus-ring)]"
       >
-        <FileText size={32} style={{ color: 'var(--text-link)', flexShrink: 0 }} />
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium truncate" style={{ color: 'var(--text-link)' }}>
-            {filename}
-          </div>
-          <div className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            {formatFileSize(size)}
-          </div>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-bg-tertiary text-text-secondary">
+          <FileText size={20} />
         </div>
-        <Download size={20} style={{ color: 'var(--interactive-normal)', flexShrink: 0 }} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-label text-text-primary">{filename}</div>
+          <div className="text-meta tabular-nums text-text-muted">{formatFileSize(size)}</div>
+        </div>
+        <Download
+          size={18}
+          className="shrink-0 text-text-muted transition-colors duration-[140ms] ease-[var(--ease-out)] group-hover:text-accent-primary"
+        />
       </a>
     </div>
   );

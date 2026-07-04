@@ -4,6 +4,7 @@ import { X, ChevronLeft, ChevronRight, Download, ZoomIn, ZoomOut } from 'lucide-
 import { useLightboxStore } from '../../stores/lightboxStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { safeClientResourceUrl } from '../../lib/security';
+import { cn } from '../../lib/utils';
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
@@ -89,6 +90,11 @@ export function ImageLightbox() {
 
   if (!isOpen || !currentImage || !safeImageSrc) return null;
 
+  // Floating control chip — 36px, radius-sm, shadow-md, visible focus ring (§7).
+  const controlClass =
+    'flex h-9 w-9 items-center justify-center rounded-sm text-white/85 shadow-md outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-white focus-visible:shadow-[var(--focus-ring)]';
+  const chipStyle = { backgroundColor: 'rgba(0,0,0,0.45)' } as const;
+
   return createPortal(
     <div
       ref={backdropRef}
@@ -98,44 +104,50 @@ export function ImageLightbox() {
       aria-label="Image viewer"
       tabIndex={-1}
       style={{
-        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+        backgroundColor: 'var(--overlay-backdrop)',
         animation: 'overlay-enter 0.15s ease-out',
       }}
       onClick={handleBackdropClick}
     >
       {/* Top bar */}
-      <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between p-3">
-        <span className="truncate rounded-lg px-2 py-1 text-sm font-medium text-white/80" style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}>
+      <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between gap-3 p-3">
+        <span
+          className="truncate rounded-sm px-2.5 py-1 text-meta text-white/85 shadow-md"
+          style={chipStyle}
+        >
           {currentImage.filename}
           {images.length > 1 && (
-            <span className="ml-2 text-white/50">
+            <span className="ml-2 font-code text-white/55">
               {currentIndex + 1} / {images.length}
             </span>
           )}
         </span>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setZoom((z) => Math.max(z - ZOOM_STEP, MIN_ZOOM))}
-            className="rounded-lg p-2 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-            title="Zoom out"
-            aria-label="Zoom out"
-          >
-            <ZoomOut size={18} />
-          </button>
-          <span className="min-w-[3rem] text-center text-xs text-white/50">
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            onClick={() => setZoom((z) => Math.min(z + ZOOM_STEP, MAX_ZOOM))}
-            className="rounded-lg p-2 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-            title="Zoom in"
-            aria-label="Zoom in"
-          >
-            <ZoomIn size={18} />
-          </button>
+        <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 rounded-sm px-1 shadow-md" style={chipStyle}>
+            <button
+              onClick={() => setZoom((z) => Math.max(z - ZOOM_STEP, MIN_ZOOM))}
+              className="flex h-8 w-8 items-center justify-center rounded-sm text-white/80 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-white/10 hover:text-white focus-visible:shadow-[var(--focus-ring)]"
+              title="Zoom out"
+              aria-label="Zoom out"
+            >
+              <ZoomOut size={18} />
+            </button>
+            <span className="min-w-[3rem] text-center font-code text-meta text-white/60">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button
+              onClick={() => setZoom((z) => Math.min(z + ZOOM_STEP, MAX_ZOOM))}
+              className="flex h-8 w-8 items-center justify-center rounded-sm text-white/80 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-white/10 hover:text-white focus-visible:shadow-[var(--focus-ring)]"
+              title="Zoom in"
+              aria-label="Zoom in"
+            >
+              <ZoomIn size={18} />
+            </button>
+          </div>
           <button
             onClick={handleDownload}
-            className="rounded-lg p-2 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+            className={controlClass}
+            style={chipStyle}
             title="Download"
             aria-label="Download image"
           >
@@ -143,7 +155,8 @@ export function ImageLightbox() {
           </button>
           <button
             onClick={close}
-            className="rounded-lg p-2 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+            className={controlClass}
+            style={chipStyle}
             title="Close (Esc)"
             aria-label="Close image viewer"
           >
@@ -156,21 +169,23 @@ export function ImageLightbox() {
       {hasPrev && (
         <button
           onClick={prev}
-          className="absolute left-3 top-1/2 z-10 -translate-y-1/2 rounded-full p-2 text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+          className={cn(controlClass, 'absolute left-3 top-1/2 z-10 -translate-y-1/2')}
+          style={chipStyle}
           title="Previous"
           aria-label="Previous image"
         >
-          <ChevronLeft size={28} />
+          <ChevronLeft size={22} />
         </button>
       )}
       {hasNext && (
         <button
           onClick={next}
-          className="absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-full p-2 text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+          className={cn(controlClass, 'absolute right-3 top-1/2 z-10 -translate-y-1/2')}
+          style={chipStyle}
           title="Next"
           aria-label="Next image"
         >
-          <ChevronRight size={28} />
+          <ChevronRight size={22} />
         </button>
       )}
 

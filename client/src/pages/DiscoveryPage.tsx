@@ -299,7 +299,7 @@ export function DiscoveryPage() {
                         {guild.tags.slice(0, 3).map((tag) => (
                           <span
                             key={tag}
-                            className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary"
+                            className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold text-text-secondary"
                           >
                             {tag}
                           </span>

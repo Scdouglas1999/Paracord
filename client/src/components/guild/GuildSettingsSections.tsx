@@ -353,6 +353,7 @@ interface RolesSectionProps {
   onCancelRoleEditing: () => void;
   onDeleteRole: (roleId: string) => void;
   roleColorHex: (role: Role) => string;
+  memberCountByRole?: Map<string, number>;
 }
 
 export function RolesSection({
@@ -379,6 +380,7 @@ export function RolesSection({
   onCancelRoleEditing,
   onDeleteRole,
   roleColorHex,
+  memberCountByRole,
 }: RolesSectionProps) {
   const newRoleInputRef = useRef<HTMLInputElement>(null);
   const customRoles = roles.filter((role) => role.id !== guildId);
@@ -442,6 +444,7 @@ export function RolesSection({
               const roleColor = roleColorHex(role);
               const isEditing = editingRoleId === role.id;
               const isEveryone = role.id === guildId;
+              const memberCount = memberCountByRole?.get(role.id);
               return (
                 <li key={role.id}>
                   <div className="group flex flex-wrap items-center gap-3 py-3">
@@ -461,6 +464,11 @@ export function RolesSection({
                         if (e.target.value !== role.name) onRenameRole(role.id, e.target.value);
                       }}
                     />
+                    {memberCount != null && (
+                      <span className="shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-medium tabular-nums text-text-secondary">
+                        {memberCount} {memberCount === 1 ? 'member' : 'members'}
+                      </span>
+                    )}
                     {role.hoist && (
                       <span className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta font-semibold text-text-secondary">
                         Hoisted

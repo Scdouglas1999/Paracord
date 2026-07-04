@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { Search, RotateCw, AlertCircle } from 'lucide-react';
 import { extractApiError } from '../../api/client';
 import { guildApi } from '../../api/guilds';
 import type { Sticker } from '../../types/message.types';
 import { resolveResourceUrl } from '../../lib/config/apiBaseUrl';
 import { getAccessToken } from '../../lib/authToken';
 import { safeClientResourceUrl } from '../../lib/security';
+import { EmptyState } from '../ui/Feedback';
+import { Skeleton } from '../ui/Skeleton';
 
 interface StickerPickerProps {
   guildId?: string;
@@ -78,147 +81,70 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
   return (
     <div
       ref={pickerRef}
-      className="popup-enter"
-      style={{
-        width: 340,
-        maxHeight: 420,
-        display: 'flex',
-        flexDirection: 'column',
-        borderRadius: '1rem',
-        background: 'linear-gradient(165deg, var(--glass-modal-fill-top), var(--glass-modal-fill-bottom))',
-        backdropFilter: 'blur(22px) saturate(150%)',
-        border: '1px solid var(--border-strong)',
-        boxShadow: 'var(--shadow-xl)',
-        overflow: 'hidden',
-      }}
+      className="popup-enter flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
+      style={{ width: 340, maxHeight: 420 }}
     >
       {/* Header */}
-      <div
-        style={{
-          padding: '10px 12px 6px',
-          flexShrink: 0,
-          borderBottom: '1px solid var(--border-subtle)',
-        }}
-      >
-        <div
-          style={{
-            fontSize: 11,
-            fontWeight: 700,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-            color: 'var(--text-muted)',
-            marginBottom: 8,
-          }}
-        >
-          Stickers
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--bg-mod-subtle)',
-            borderRadius: 8,
-            padding: '6px 10px',
-          }}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ color: 'var(--text-muted)', flexShrink: 0 }}
-          >
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
+      <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
+        <div className="text-section mb-2 uppercase text-text-muted">Stickers</div>
+        <div className="flex items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-2 transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+          <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
             placeholder="Search stickers..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
-            style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              fontSize: 13,
-              color: 'var(--text-primary)',
-              lineHeight: 1.4,
-            }}
+            className="flex-1 bg-transparent text-body text-text-primary placeholder:text-text-muted outline-none"
           />
         </div>
       </div>
 
       {/* Sticker grid */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '8px',
-          scrollbarWidth: 'thin',
-          scrollbarColor: 'var(--scrollbar-auto-thumb) transparent',
-        }}
-      >
-        {error && (
-          <div
+      <div className="scrollbar-thin flex-1 overflow-y-auto p-2">
+        {error ? (
+          <EmptyState
             role="alert"
-            style={{ padding: '16px 8px', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}
-          >
-            <div>{error}</div>
-            {guildId && (
-              <button
-                type="button"
-                onClick={() => void fetchStickers()}
-                style={{
-                  marginTop: 10,
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 8,
-                  padding: '6px 10px',
-                  color: 'var(--text-secondary)',
-                  background: 'var(--bg-mod-subtle)',
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
-                Retry
-              </button>
-            )}
+            icon={<AlertCircle size={20} className="text-accent-danger" />}
+            title="Couldn't load stickers"
+            description={error}
+            action={
+              guildId ? (
+                <button
+                  type="button"
+                  onClick={() => void fetchStickers()}
+                  className="inline-flex items-center gap-1.5 rounded-sm bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
+                >
+                  <RotateCw size={15} />
+                  Try again
+                </button>
+              ) : undefined
+            }
+          />
+        ) : loading ? (
+          <div className="grid grid-cols-4 gap-1.5" aria-busy="true" aria-label="Loading stickers">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} borderRadius="var(--radius-sm)" className="aspect-square" />
+            ))}
           </div>
-        )}
-
-        {loading && !error && (
-          <div style={{ padding: '16px 8px', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
-            Loading stickers...
-          </div>
-        )}
-
-        {!loading && !error && filtered.length === 0 && stickers.length === 0 && (
-          <div style={{ padding: '16px 8px', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
-            {guildId ? 'This server has no stickers yet.' : 'No stickers available.'}
-          </div>
-        )}
-
-        {!loading && !error && filtered.length === 0 && stickers.length > 0 && (
-          <div style={{ padding: '16px 8px', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
-            No stickers match your search.
-          </div>
-        )}
-
-        {filtered.length > 0 && (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: 6,
-            }}
-          >
+        ) : filtered.length === 0 && stickers.length === 0 ? (
+          <EmptyState
+            icon={<Search size={20} />}
+            title={guildId ? 'No stickers yet' : 'Stickers live in a server'}
+            description={
+              guildId
+                ? "This server hasn't added any stickers. Upload some in Server Settings to react with them here."
+                : 'Open a channel inside a community to browse its sticker pack.'
+            }
+          />
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon={<Search size={20} />}
+            title="No stickers found"
+            description={`Nothing matches "${query.trim()}" — try a shorter term.`}
+          />
+        ) : (
+          <div className="grid grid-cols-4 gap-1.5">
             {filtered.map((sticker) => {
               const imageUrl = sticker.image_url ? resolveStickerImageUrl(sticker.image_url) : null;
               return (
@@ -228,57 +154,19 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
                   onClick={() => onSelect(sticker.id)}
                   title={sticker.name}
                   aria-label={`Select sticker ${sticker.name}`}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 4,
-                    background: 'transparent',
-                    border: '1px solid transparent',
-                    borderRadius: 8,
-                    cursor: 'pointer',
-                    aspectRatio: '1',
-                    transition: 'background 0.1s, border-color 0.1s',
-                  }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-mod-subtle)';
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-subtle)';
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = 'transparent';
-                  }}
+                  className="flex aspect-square items-center justify-center rounded-sm p-1 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                 >
                   {imageUrl ? (
                     <img
                       src={imageUrl}
                       alt={sticker.name}
                       loading="lazy"
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        objectFit: 'contain',
-                        borderRadius: 6,
-                        display: 'block',
-                      }}
+                      className="block h-full w-full rounded-xs object-contain"
                     />
                   ) : (
-                    <div
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 10,
-                        color: 'var(--text-muted)',
-                        textAlign: 'center',
-                        wordBreak: 'break-word',
-                        padding: 2,
-                      }}
-                    >
+                    <span className="flex h-full w-full items-center justify-center break-words p-0.5 text-center text-[10px] text-text-muted">
                       {sticker.name}
-                    </div>
+                    </span>
                   )}
                 </button>
               );
@@ -289,16 +177,7 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
 
       {/* Footer: sticker count */}
       {stickers.length > 0 && (
-        <div
-          style={{
-            padding: '5px 12px',
-            borderTop: '1px solid var(--border-subtle)',
-            flexShrink: 0,
-            fontSize: 10,
-            color: 'var(--text-muted)',
-            textAlign: 'right',
-          }}
-        >
+        <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[10px] text-text-muted">
           {filtered.length} sticker{filtered.length !== 1 ? 's' : ''}
         </div>
       )}

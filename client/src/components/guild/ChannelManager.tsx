@@ -16,7 +16,7 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Hash, Volume2, MessageSquare, Trash2, Plus, Shield, ChevronDown, ChevronRight } from 'lucide-react';
+import { GripVertical, Hash, Volume2, MessageSquare, Megaphone, Trash2, Plus, Shield, ChevronDown, ChevronRight } from 'lucide-react';
 import type { Channel, Role } from '../../types';
 import { guildApi } from '../../api/guilds';
 import { channelApi, type ChannelFeatureSettings } from '../../api/channels';
@@ -27,6 +27,8 @@ import { cn } from '../../lib/utils';
 import { ChannelPermissionsEditor } from './ChannelPermissionsEditor';
 import { confirm } from '../../stores/confirmStore';
 import { Button } from '../ui/Button';
+import { ErrorBanner } from '../ui/Feedback';
+import { FieldLabel } from './SettingsPrimitives';
 import { toast } from '../../stores/toastStore';
 
 interface ChannelManagerProps {
@@ -47,9 +49,10 @@ function channelManagerError(action: string, err: unknown): string {
 }
 
 function channelTypeIcon(type: number) {
-  if (type === 2) return <Volume2 size={14} className="text-text-muted" />;
-  if (type === 7) return <MessageSquare size={14} className="text-text-muted" />;
-  return <Hash size={14} className="text-text-muted" />;
+  if (type === 2) return <Volume2 size={16} className="shrink-0 text-channel-icon" />;
+  if (type === 7) return <MessageSquare size={16} className="shrink-0 text-channel-icon" />;
+  if (type === 5) return <Megaphone size={16} className="shrink-0 text-channel-icon" />;
+  return <Hash size={16} className="shrink-0 text-channel-icon" />;
 }
 
 function channelTypeBadge(type: number) {
@@ -381,21 +384,20 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
   }, [activeId, channels]);
 
   return (
-    <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6 card-stack">
-      <h2 className="settings-section-title !mb-0">Channels</h2>
+    <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] space-y-6 !p-8 max-sm:!p-6">
+      <div>
+        <h2 className="font-display text-heading text-text-primary">Channels</h2>
+        <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+          Organize your server into categories and channels. Drag to reorder.
+        </p>
+      </div>
 
-      {error && (
-        <div role="alert" className="rounded-lg border border-accent-danger/30 bg-accent-danger/10 px-3.5 py-2.5 text-sm text-accent-danger">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} />}
 
       {/* Create Category */}
-      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 p-4 space-y-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-          Create Category
-        </div>
-        <div className="settings-action-row">
+      <div className="rounded-sm border border-border-subtle bg-bg-tertiary p-4">
+        <FieldLabel>New category</FieldLabel>
+        <div className="flex flex-col gap-2 sm:flex-row">
           <input
             className="input-field flex-1"
             placeholder="Category name"
@@ -403,17 +405,16 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
             onChange={(e) => setNewCategoryName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void handleCreateCategory(); }}
           />
-          <Button onClick={() => void handleCreateCategory()}>
+          <Button onClick={() => void handleCreateCategory()} disabled={!newCategoryName.trim()}>
             Create
           </Button>
         </div>
+        {!hasRealCategories && (
+          <p className="mt-2 text-meta leading-relaxed text-text-muted">
+            Categories let you group related channels — like “Support”, “Off-topic”, or a project name.
+          </p>
+        )}
       </div>
-
-      {!hasRealCategories && (
-        <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/40 px-4 py-3 text-sm text-text-muted">
-          Create a category to organize channels into custom groups.
-        </div>
-      )}
 
       {/* Channel groups with drag-and-drop */}
       <DndContext
@@ -467,85 +468,110 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
 
         <DragOverlay>
           {activeDragItem && (
-            <div className="rounded-lg border border-accent-primary/40 bg-bg-secondary px-3.5 py-2.5 shadow-lg">
-              <div className="flex items-center gap-2 text-sm text-text-primary">
-                {activeDragItem.type === 'category' ? (
-                  <span className="font-semibold uppercase text-text-muted text-xs">
-                    {activeDragItem.channel.name}
-                  </span>
-                ) : (
-                  <>
-                    {channelTypeIcon(activeDragItem.channel.type)}
-                    <span>{activeDragItem.channel.name}</span>
-                  </>
-                )}
-              </div>
+            <div className="flex scale-[1.02] items-center gap-2 rounded-sm border border-accent-primary bg-bg-accent px-3 py-2 text-sm text-text-primary shadow-md">
+              {activeDragItem.type === 'category' ? (
+                <span className="text-section uppercase text-text-secondary">
+                  {activeDragItem.channel.name}
+                </span>
+              ) : (
+                <>
+                  {channelTypeIcon(activeDragItem.channel.type)}
+                  <span>{activeDragItem.channel.name}</span>
+                </>
+              )}
             </div>
           )}
         </DragOverlay>
       </DndContext>
 
       {/* Create Channel form */}
-      <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 p-4 space-y-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-          Create Channel
+      <div className="space-y-4 rounded-sm border border-border-subtle bg-bg-tertiary p-4">
+        <FieldLabel className="!mb-0">New channel</FieldLabel>
+
+        {/* Type picker — selectable tiles */}
+        <div className="grid grid-cols-3 gap-2">
+          {([
+            { value: 'text', label: 'Text', icon: Hash, hint: 'Send messages' },
+            { value: 'voice', label: 'Voice', icon: Volume2, hint: 'Talk & video' },
+            { value: 'forum', label: 'Forum', icon: MessageSquare, hint: 'Threaded posts' },
+          ] as const).map(({ value, label, icon: Icon, hint }) => {
+            const active = newChannelType === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setNewChannelType(value)}
+                aria-pressed={active}
+                className={cn(
+                  'flex flex-col items-start gap-1 rounded-sm border p-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                  active
+                    ? 'border-accent-primary bg-accent-tint'
+                    : 'border-border-subtle bg-bg-secondary hover:border-border-strong hover:bg-bg-mod-subtle',
+                )}
+              >
+                <Icon size={18} className={active ? 'text-accent-primary' : 'text-channel-icon'} />
+                <span className="text-label font-medium text-text-primary">{label}</span>
+                <span className="text-meta text-text-muted">{hint}</span>
+              </button>
+            );
+          })}
         </div>
-        <div className="settings-action-row flex-wrap">
+
+        <div className="flex flex-col gap-2 sm:flex-row">
           <input
-            className="input-field flex-1 min-w-[10rem]"
+            className="input-field flex-1"
             placeholder="Channel name"
             value={newChannelName}
             onChange={(e) => setNewChannelName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void handleCreateChannel(); }}
           />
           <select
-            className="select-field min-w-[7rem]"
-            value={newChannelType}
-            onChange={(e) => setNewChannelType(e.target.value as 'text' | 'voice' | 'forum')}
-          >
-            <option value="text">Text</option>
-            <option value="voice">Voice</option>
-            <option value="forum">Forum</option>
-          </select>
-          <select
-            className="select-field min-w-[9rem]"
+            className="select-field sm:w-48"
             value={newChannelCategoryId}
             onChange={(e) => setNewChannelCategoryId(e.target.value)}
+            aria-label="Parent category"
           >
-            <option value="">No Category</option>
+            <option value="">No category</option>
             {categories.map((cat) => (
               <option key={cat.id} value={cat.id}>{cat.name}</option>
             ))}
           </select>
-          <Button onClick={() => void handleCreateChannel()}>
+          <Button onClick={() => void handleCreateChannel()} disabled={!newChannelName.trim()}>
             Create
           </Button>
         </div>
+
         {canManageRoles && assignableRoles.length > 0 && (
-          <div className="space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Required Roles
+          <div className="space-y-2 border-t border-border-subtle pt-3">
+            <div className="text-section uppercase text-text-muted">Restrict to roles (optional)</div>
+            <div className="flex flex-wrap gap-1.5">
+              {assignableRoles.map((role) => {
+                const active = newChannelRequiredRoleIds.includes(role.id);
+                return (
+                  <button
+                    key={role.id}
+                    type="button"
+                    onClick={() => setNewChannelRequiredRoleIds((prev) => toggleRoleId(prev, role.id))}
+                    aria-pressed={active}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-meta font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                      active
+                        ? 'border-accent-primary bg-accent-tint text-text-primary'
+                        : 'border-border-subtle bg-bg-secondary text-text-secondary hover:border-border-strong hover:text-text-primary',
+                    )}
+                  >
+                    <span
+                      className="inline-block h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: roleColorHex(role) }}
+                    />
+                    {role.name}
+                  </button>
+                );
+              })}
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {assignableRoles.map((role) => (
-                <label
-                  key={role.id}
-                  className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-primary/50 px-2.5 py-2 text-sm text-text-secondary"
-                >
-                  <input
-                    type="checkbox"
-                    checked={newChannelRequiredRoleIds.includes(role.id)}
-                    onChange={() => setNewChannelRequiredRoleIds((prev) => toggleRoleId(prev, role.id))}
-                    className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
-                  />
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: roleColorHex(role) }}
-                  />
-                  <span className="truncate">{role.name}</span>
-                </label>
-              ))}
-            </div>
+            <p className="text-meta leading-relaxed text-text-muted">
+              Only members with a selected role will see this channel. Leave empty to make it public.
+            </p>
           </div>
         )}
       </div>
@@ -646,6 +672,7 @@ function CategoryGroupSection({
     [group.channels]
   );
 
+  const [collapsed, setCollapsed] = useState(false);
   const isEditing = editingCategoryId === group.id;
   const isAddingInline = addingInCategoryId === group.id;
   const parentIdForCreate = group.isReal ? group.id : null;
@@ -653,10 +680,10 @@ function CategoryGroupSection({
   return (
     <div ref={setNodeRef} style={style}>
       {/* Category header */}
-      <div className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5">
+      <div className="group/cat flex items-center gap-1.5 rounded-sm px-1.5 py-1.5 transition-colors hover:bg-bg-mod-subtle">
         {isSortableCategory && (
           <button
-            className="cursor-grab text-text-muted hover:text-text-secondary active:cursor-grabbing"
+            className="cursor-grab text-text-muted opacity-0 outline-none transition-opacity hover:text-text-secondary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] active:cursor-grabbing group-hover/cat:opacity-100"
             aria-label={`Reorder ${group.name} category`}
             title={`Reorder ${group.name} category`}
             {...attributes}
@@ -665,9 +692,18 @@ function CategoryGroupSection({
             <GripVertical size={14} />
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-xs text-text-muted outline-none transition-colors hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
+          aria-label={collapsed ? `Expand ${group.name}` : `Collapse ${group.name}`}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+        </button>
         {isEditing ? (
           <input
-            className="input-field flex-1 !py-1 text-sm"
+            className="input-field flex-1 !min-h-0 !py-1 text-sm"
             value={editingCategoryName}
             onChange={(e) => onEditCategoryNameChange(e.target.value)}
             onKeyDown={(e) => {
@@ -679,12 +715,13 @@ function CategoryGroupSection({
         ) : (
           <span
             className={cn(
-              'flex-1 text-xs font-semibold uppercase tracking-wide',
-              group.isReal ? 'text-text-primary cursor-pointer' : 'text-text-muted'
+              'flex-1 truncate text-section uppercase',
+              group.isReal ? 'cursor-pointer text-text-secondary' : 'text-text-muted'
             )}
             onDoubleClick={() => {
               if (group.isReal) onStartEditCategory(group.id, group.name);
             }}
+            title={group.isReal ? 'Double-click to rename' : undefined}
           >
             {group.name}
           </span>
@@ -693,45 +730,45 @@ function CategoryGroupSection({
           <>
             {isEditing ? (
               <div className="flex items-center gap-1">
-                <Button size="sm" className="!py-1 !px-2.5 text-xs" onClick={() => void onSaveRename(group.id)}>
+                <Button size="sm" onClick={() => void onSaveRename(group.id)}>
                   Save
                 </Button>
-                <button className="rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary" onClick={onCancelEdit}>
+                <Button variant="ghost" size="sm" onClick={onCancelEdit}>
                   Cancel
-                </button>
+                </Button>
               </div>
             ) : (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cat:opacity-100">
                 <button
-                  className="rounded p-1 text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+                  className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-bg-mod-strong hover:text-text-primary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)]"
                   title="Add channel"
                   aria-label={`Add channel to ${group.name}`}
                   onClick={() => onStartInlineAdd(group.id)}
                 >
-                  <Plus size={14} />
+                  <Plus size={15} />
                 </button>
                 <button
-                  className="rounded p-1 text-text-muted transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
+                  className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)]"
                   title="Delete category"
                   aria-label={`Delete ${group.name} category`}
                   onClick={() => void onDeleteCategory(group.id)}
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={15} />
                 </button>
               </div>
             )}
           </>
         )}
         {!group.isReal && !isVirtualGroup(group.id) && (
-          <span className="text-[10px] text-text-muted">Uncategorized</span>
+          <span className="text-meta text-text-muted">Uncategorized</span>
         )}
       </div>
 
       {/* Inline add channel */}
-      {isAddingInline && (
-        <div className="mx-2 mt-2 rounded-lg border border-border-subtle bg-bg-mod-subtle p-2.5 space-y-2">
+      {isAddingInline && !collapsed && (
+        <div className="ml-6 mt-1.5 space-y-2 rounded-sm border border-border-subtle bg-bg-tertiary p-2.5">
           <input
-            className="w-full rounded-md border border-border-subtle bg-bg-primary px-2.5 py-1.5 text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-border-strong"
+            className="w-full rounded-sm border border-border-subtle bg-bg-secondary px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent-primary"
             placeholder="Channel name"
             value={inlineName}
             onChange={(e) => onInlineNameChange(e.target.value)}
@@ -743,32 +780,27 @@ function CategoryGroupSection({
           />
           <div className="flex items-center gap-2">
             <select
-              className="rounded-md border border-border-subtle bg-bg-primary px-2 py-1 text-xs text-text-secondary"
+              className="rounded-sm border border-border-subtle bg-bg-secondary px-2 py-1.5 text-meta text-text-secondary outline-none transition-colors focus:border-accent-primary"
               value={inlineType}
               onChange={(e) => onInlineTypeChange(e.target.value as 'text' | 'voice')}
+              aria-label="Channel type"
             >
               <option value="text">Text</option>
               <option value="voice">Voice</option>
             </select>
-            <button
-              className="rounded-md bg-accent-primary px-3 py-1 text-xs font-semibold text-on-accent hover:bg-accent-primary/80"
-              onClick={() => void onInlineCreate(parentIdForCreate)}
-            >
+            <Button size="sm" onClick={() => void onInlineCreate(parentIdForCreate)}>
               Create
-            </button>
-            <button
-              className="rounded-md px-2 py-1 text-xs text-text-muted hover:text-text-primary"
-              onClick={onCancelInlineAdd}
-            >
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onCancelInlineAdd}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
       {/* Channels in this group */}
       <SortableContext items={channelIds} strategy={verticalListSortingStrategy}>
-        <div className="mt-1 space-y-1">
+        <div className={cn('mt-0.5 space-y-0.5', collapsed && 'hidden')}>
           {group.channels.map((ch) => (
             <SortableChannelItem
               key={ch.id}
@@ -785,7 +817,9 @@ function CategoryGroupSection({
             />
           ))}
           {group.channels.length === 0 && (
-            <div className="px-4 py-2 text-xs text-text-muted">No channels</div>
+            <div className="px-6 py-1.5 text-meta text-text-muted">
+              {group.isReal ? 'No channels here yet — add one with the + above.' : 'No channels here yet.'}
+            </div>
           )}
         </div>
       </SortableContext>
@@ -1004,19 +1038,19 @@ function SortableChannelItem({
   }, [isHighlighted]);
 
   return (
-    <div ref={setNodeRef} style={style} className="ml-3 space-y-0">
+    <div ref={setNodeRef} style={style} className="ml-5">
       {/* Main channel row */}
       <div
         ref={rowRef}
         data-channel-id={channel.id}
         data-highlighted-channel={isHighlighted ? channel.id : undefined}
         className={cn(
-          'flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle/70 px-3 py-2.5',
-          isHighlighted && 'border-accent-primary/60 bg-accent-primary/10 ring-2 ring-accent-primary/25',
+          'group/row flex items-center gap-2 rounded-sm px-2 py-1.5 transition-colors hover:bg-bg-mod-subtle',
+          isHighlighted && 'bg-accent-tint ring-1 ring-inset ring-accent-primary',
         )}
       >
         <button
-          className="cursor-grab text-text-muted hover:text-text-secondary active:cursor-grabbing"
+          className="cursor-grab text-text-muted opacity-0 outline-none transition-opacity hover:text-text-secondary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] active:cursor-grabbing group-hover/row:opacity-100"
           aria-label={`Reorder ${channel.name || 'channel'}`}
           title={`Reorder ${channel.name || 'channel'}`}
           {...attributes}
@@ -1025,22 +1059,22 @@ function SortableChannelItem({
           <GripVertical size={14} />
         </button>
         {channelTypeIcon(channel.type)}
-        <span className="flex-1 truncate text-sm text-text-primary">{channel.name || 'unnamed'}</span>
-        <span className="rounded border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
+        <span className="flex-1 truncate text-label text-text-primary">{channel.name || 'unnamed'}</span>
+        <span className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-text-secondary">
           {channelTypeBadge(channel.type)}
         </span>
         {roleCount > 0 && (
-          <span className="rounded border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
+          <span className="rounded-xs bg-accent-tint px-1.5 py-0.5 text-[10px] font-semibold text-accent-primary">
             {roleCount} role{roleCount !== 1 ? 's' : ''}
           </span>
         )}
         {isAnnouncement && (
-          <div className="flex items-center gap-1.5 ml-1">
-            <span className="rounded border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
-              Follows: {followers.length}
+          <div className="ml-1 flex items-center gap-1.5">
+            <span className="text-meta tabular-nums text-text-muted">
+              {followers.length} following
             </span>
             <select
-              className="rounded border border-border-subtle bg-bg-primary px-1 py-0.5 text-[10px] text-text-secondary"
+              className="rounded-sm border border-border-subtle bg-bg-tertiary px-1.5 py-1 text-meta text-text-secondary outline-none transition-colors focus:border-accent-primary"
               value={followTargetId}
               onChange={(e) => setFollowTargetId(e.target.value)}
               disabled={followTargets.length === 0 || followersLoading || followBusy}
@@ -1059,28 +1093,28 @@ function SortableChannelItem({
             {activeFollow ? (
               <button
                 type="button"
-                className="rounded border border-accent-danger/35 bg-accent-danger/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15 disabled:opacity-60"
+                className="rounded-sm border border-accent-danger/40 bg-danger-tint px-2 py-1 text-meta font-semibold text-accent-danger outline-none transition-colors hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                 onClick={() => void removeFollow()}
                 disabled={!followTargetId || followBusy || followersLoading}
               >
-                {followBusy ? '...' : 'Unfollow'}
+                {followBusy ? '…' : 'Unfollow'}
               </button>
             ) : (
               <button
                 type="button"
-                className="rounded border border-accent-primary/35 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent-primary transition-colors hover:bg-accent-primary/20 disabled:opacity-60"
+                className="rounded-sm border border-accent-primary/40 bg-accent-tint px-2 py-1 text-meta font-semibold text-accent-primary outline-none transition-colors hover:bg-accent-tint-strong focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                 onClick={() => void addFollow()}
                 disabled={!followTargetId || followBusy || followersLoading}
               >
-                {followBusy ? '...' : 'Follow'}
+                {followBusy ? '…' : 'Follow'}
               </button>
             )}
           </div>
         )}
         {isVoice && (
-          <div className="flex items-center gap-2 ml-1">
-            <label className="flex items-center gap-1" title="Audio bitrate">
-              <span className="text-[10px] font-medium text-text-muted">Bitrate</span>
+          <div className="ml-1 flex items-center gap-3">
+            <label className="flex items-center gap-1.5" title="Audio bitrate">
+              <span className="text-meta font-medium text-text-muted">Bitrate</span>
               <input
                 type="range"
                 min={8000}
@@ -1092,12 +1126,12 @@ function SortableChannelItem({
                 onTouchEnd={() => void onUpdateVoiceSettings(channel.id, draftBitrate, draftUserLimit)}
                 className="w-16 accent-accent-primary"
               />
-              <span className="text-[10px] text-text-muted w-8 tabular-nums">
+              <span className="w-8 text-meta tabular-nums text-text-muted">
                 {Math.round(draftBitrate / 1000)}k
               </span>
             </label>
-            <label className="flex items-center gap-1" title="User limit (0 = unlimited)">
-              <span className="text-[10px] font-medium text-text-muted">Limit</span>
+            <label className="flex items-center gap-1.5" title="User limit (0 = unlimited)">
+              <span className="text-meta font-medium text-text-muted">Limit</span>
               <input
                 type="number"
                 min={0}
@@ -1105,26 +1139,26 @@ function SortableChannelItem({
                 value={draftUserLimit}
                 onChange={(e) => setDraftUserLimit(Number(e.target.value))}
                 onBlur={() => void onUpdateVoiceSettings(channel.id, draftBitrate, draftUserLimit)}
-                className="w-10 rounded border border-border-subtle bg-bg-primary px-1 py-0.5 text-[10px] text-text-secondary text-center"
+                className="w-11 rounded-sm border border-border-subtle bg-bg-tertiary px-1 py-1 text-center text-meta text-text-secondary outline-none transition-colors focus:border-accent-primary"
               />
             </label>
           </div>
         )}
         {!isVoice && channel.type !== 4 && (
           <>
-            <label className="flex items-center gap-1 cursor-pointer" title="NSFW channel">
+            <label className="flex cursor-pointer items-center gap-1.5" title="NSFW channel">
               <input
                 type="checkbox"
                 checked={channel.nsfw ?? false}
                 onChange={(e) => void onToggleNsfw(channel.id, e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-border-subtle accent-accent-danger"
+                className="h-3.5 w-3.5 rounded-xs border-border-subtle accent-accent-danger"
               />
-              <span className="text-[10px] font-medium text-text-muted">NSFW</span>
+              <span className="text-meta font-medium text-text-muted">NSFW</span>
             </label>
-            <label className="flex items-center gap-1" title="Slowmode">
-              <span className="text-[10px] font-medium text-text-muted">Slow</span>
+            <label className="flex items-center gap-1.5" title="Slowmode">
+              <span className="text-meta font-medium text-text-muted">Slow</span>
               <select
-                className="rounded border border-border-subtle bg-bg-primary px-1 py-0.5 text-[10px] text-text-secondary"
+                className="rounded-sm border border-border-subtle bg-bg-tertiary px-1.5 py-1 text-meta text-text-secondary outline-none transition-colors focus:border-accent-primary"
                 value={channel.rate_limit_per_user ?? 0}
                 onChange={(e) => void onUpdateSlowmode(channel.id, Number(e.target.value))}
               >
@@ -1139,49 +1173,49 @@ function SortableChannelItem({
         {channel.type !== 4 && !isVoice && (
           <button
             className={cn(
-              'rounded p-1 text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary',
-              featuresExpanded && 'text-accent-primary bg-accent-primary/10',
+              'flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-bg-mod-strong hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]',
+              featuresExpanded && 'bg-accent-tint text-accent-primary',
             )}
             onClick={() => void handleToggleFeatures()}
             title="Advanced channel features"
             aria-label={`${featuresExpanded ? 'Hide' : 'Show'} advanced features for ${channel.name || 'channel'}`}
           >
-            {featuresExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            {featuresExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
           </button>
         )}
         <button
-          className="rounded p-1 text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-accent-primary"
+          className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-bg-mod-strong hover:text-accent-primary focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => onEditPermissions(channel)}
           title="Edit permissions"
           aria-label={`Edit permissions for ${channel.name || 'channel'}`}
         >
-          <Shield size={14} />
+          <Shield size={15} />
         </button>
         <button
-          className="rounded p-1 text-text-muted transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
+          className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => void onDelete(channel.id)}
           title="Delete channel"
           aria-label={`Delete ${channel.name || 'channel'}`}
         >
-          <Trash2 size={14} />
+          <Trash2 size={15} />
         </button>
       </div>
 
       {/* Advanced feature settings panel */}
       {featuresExpanded && channel.type !== 4 && !isVoice && (
-        <div className="rounded-b-lg border border-t-0 border-border-subtle bg-bg-primary/40 px-4 py-3 space-y-3">
+        <div className="ml-6 mt-1 space-y-3 rounded-sm border border-border-subtle bg-bg-tertiary px-4 py-3">
           {featuresBusy && (
-            <p className="text-[11px] text-text-muted">Loading...</p>
+            <p className="text-meta text-text-muted">Loading…</p>
           )}
           {!featuresBusy && featureSettings && (
             <>
               {/* Disappearing messages */}
               <div className="flex items-center gap-3">
-                <span className="text-[11px] font-medium text-text-secondary w-36 shrink-0">
+                <span className="w-36 shrink-0 text-meta font-medium text-text-secondary">
                   Disappearing messages
                 </span>
                 <select
-                  className="rounded border border-border-subtle bg-bg-secondary px-2 py-1 text-[11px] text-text-primary"
+                  className="rounded-sm border border-border-subtle bg-bg-secondary px-2 py-1 text-meta text-text-primary outline-none transition-colors focus:border-accent-primary"
                   value={featureSettings.disappearing_seconds}
                   onChange={(e) => void patchFeatureSettings({ disappearing_seconds: Number(e.target.value) })}
                 >
@@ -1193,32 +1227,32 @@ function SortableChannelItem({
 
               {/* Anonymous posting */}
               <label className="flex items-center gap-3 cursor-pointer">
-                <span className="text-[11px] font-medium text-text-secondary w-36 shrink-0">
+                <span className="w-36 shrink-0 text-meta font-medium text-text-secondary">
                   Anonymous posting
                 </span>
                 <input
                   type="checkbox"
                   checked={featureSettings.anonymous_posting_enabled}
                   onChange={(e) => void patchFeatureSettings({ anonymous_posting_enabled: e.target.checked })}
-                  className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
+                  className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary"
                 />
-                <span className="text-[11px] text-text-muted">
+                <span className="text-meta text-text-muted">
                   {featureSettings.anonymous_posting_enabled ? 'Enabled' : 'Disabled'}
                 </span>
               </label>
 
               {/* Adaptive slowmode */}
               <label className="flex items-center gap-3 cursor-pointer">
-                <span className="text-[11px] font-medium text-text-secondary w-36 shrink-0">
+                <span className="w-36 shrink-0 text-meta font-medium text-text-secondary">
                   Adaptive slowmode
                 </span>
                 <input
                   type="checkbox"
                   checked={featureSettings.adaptive_slowmode_enabled}
                   onChange={(e) => void patchFeatureSettings({ adaptive_slowmode_enabled: e.target.checked })}
-                  className="h-4 w-4 rounded border-border-subtle accent-accent-primary"
+                  className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary"
                 />
-                <span className="text-[11px] text-text-muted">
+                <span className="text-meta text-text-muted">
                   {featureSettings.adaptive_slowmode_enabled ? 'Enabled' : 'Disabled'}
                 </span>
               </label>
@@ -1226,7 +1260,7 @@ function SortableChannelItem({
               {/* Slowmode exempt roles */}
               {assignableRoles.length > 0 && (
                 <div className="space-y-1.5">
-                  <span className="text-[11px] font-medium text-text-secondary">
+                  <span className="text-meta font-medium text-text-secondary">
                     Slowmode exempt roles
                   </span>
                   <div className="flex flex-wrap gap-1.5">
@@ -1241,9 +1275,9 @@ function SortableChannelItem({
                           type="button"
                           onClick={() => toggleExemptRole(role.id)}
                           className={cn(
-                            'flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] font-medium transition-colors',
+                            'flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-meta font-medium outline-none transition-colors focus-visible:shadow-[var(--focus-ring)]',
                             isExempt
-                              ? 'border-accent-primary/40 bg-accent-primary/15 text-accent-primary'
+                              ? 'border-accent-primary bg-accent-tint text-accent-primary'
                               : 'border-border-subtle bg-bg-secondary text-text-muted hover:border-border-strong hover:text-text-secondary',
                           )}
                         >
@@ -1261,7 +1295,7 @@ function SortableChannelItem({
             </>
           )}
           {!featuresBusy && !featureSettings && (
-            <p className="text-[11px] text-text-muted">Could not load feature settings.</p>
+            <p className="text-meta text-text-muted">Could not load feature settings.</p>
           )}
         </div>
       )}

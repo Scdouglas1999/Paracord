@@ -2,7 +2,22 @@ import { useEffect, useRef, useState } from 'react';
 import { Track, RoomEvent, type RemoteTrackPublication } from 'livekit-client';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useAuthStore } from '../../stores/authStore';
-import { VideoOff } from 'lucide-react';
+import { Maximize2 } from 'lucide-react';
+import { cn } from '../../lib/utils';
+
+/** Circular initial-avatar shown when a participant's camera is off. */
+function TileAvatar({ name, size }: { name: string; size: number }) {
+  const initial = name.trim().charAt(0).toUpperCase() || '?';
+  return (
+    <div
+      className="flex flex-shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-accent font-semibold text-text-secondary"
+      style={{ height: size, width: size, fontSize: Math.round(size * 0.4) }}
+      aria-hidden
+    >
+      {initial}
+    </div>
+  );
+}
 
 interface VideoTile {
   participantId: string;
@@ -149,7 +164,7 @@ export function VideoGrid({ layout = 'grid' }: { layout?: VideoGridLayout }) {
 
   if (layout === 'pip') {
     return (
-      <div className="flex gap-1.5 rounded-xl bg-black/40 p-1.5 backdrop-blur-sm">
+      <div className="flex gap-1.5 rounded-md border border-border-subtle bg-bg-floating p-1.5 shadow-md backdrop-blur-md">
         {tiles.map((tile) => (
           <VideoTileView
             key={tile.participantId}
@@ -203,6 +218,7 @@ function VideoTileView({
   compactSize?: 'default' | 'small';
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const room = useVoiceStore((s) => s.room);
   const [hasTrack, setHasTrack] = useState(false);
 
@@ -301,12 +317,20 @@ function VideoTileView({
   const isMe = currentUserId != null && tile.participantId === currentUserId;
   const displayName = isMe ? 'You' : tile.username;
 
+  const requestFullscreen = () => {
+    const el = containerRef.current;
+    if (el?.requestFullscreen) void el.requestFullscreen().catch(() => {});
+  };
+
   return (
     <div
-      className="relative overflow-hidden rounded-xl border bg-bg-mod-subtle transition-shadow duration-200"
+      ref={containerRef}
+      className="group relative overflow-hidden rounded-md bg-bg-tertiary transition-shadow duration-[var(--duration-normal)] ease-[var(--ease-out)]"
       style={{
-        borderColor: isSpeaking ? 'var(--accent-success)' : 'var(--border-subtle)',
-        boxShadow: isSpeaking ? '0 0 12px rgba(34, 197, 94, 0.3)' : 'none',
+        // Speaking = an emerald ring (design-spec §7 tile), not a color wash/glow.
+        boxShadow: isSpeaking
+          ? 'inset 0 0 0 2px var(--accent-primary), var(--shadow-sm)'
+          : 'inset 0 0 0 1px var(--border-subtle), var(--shadow-sm)',
         ...(fill
           ? { height: '100%', width: '100%' }
           : {
@@ -331,16 +355,35 @@ function VideoTileView({
         }}
       />
       {!hasTrack && (
-        <div className="flex h-full w-full items-center justify-center">
-          <div className="flex flex-col items-center gap-2">
-            <VideoOff size={compact ? 16 : 24} className="text-text-muted" />
-            {!compact && <span className="text-xs text-text-muted">No video</span>}
-          </div>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-bg-secondary">
+          <TileAvatar name={displayName} size={compact ? 34 : 56} />
+          {!compact && <span className="text-meta text-text-muted">Camera off</span>}
         </div>
       )}
-      {/* Name badge */}
-      <div className={`absolute bottom-1 left-1 flex items-center gap-1 rounded-lg bg-black/60 backdrop-blur-sm ${compact ? 'px-1.5 py-0.5' : 'bottom-2 left-2 gap-1.5 px-2.5 py-1'}`}>
-        <span className={`font-medium text-white ${compact ? 'text-[10px]' : 'text-xs'}`}>{displayName}</span>
+
+      {/* Per-tile controls — revealed on hover and keyboard focus (a11y §8). */}
+      {hasTrack && !compact && (
+        <button
+          type="button"
+          onClick={requestFullscreen}
+          aria-label={`Fullscreen ${displayName}'s video`}
+          className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-sm bg-bg-floating text-interactive-normal opacity-0 shadow-sm outline-none backdrop-blur-md transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-interactive-hover focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100 group-focus-within:opacity-100"
+        >
+          <Maximize2 size={15} />
+        </button>
+      )}
+
+      {/* Name pill — bottom-left, floating surface + meta type (design-spec §7). */}
+      <div
+        className={cn(
+          'absolute bottom-2 left-2 flex items-center gap-1.5 rounded-sm bg-bg-floating px-2 py-1 backdrop-blur-md',
+          compact && 'bottom-1 left-1 gap-1 px-1.5 py-0.5',
+        )}
+      >
+        {isSpeaking && <span className="h-1.5 w-1.5 rounded-full bg-accent-primary" />}
+        <span className={cn('text-meta font-semibold text-text-primary', compact && 'text-[10px] leading-none')}>
+          {displayName}
+        </span>
       </div>
     </div>
   );

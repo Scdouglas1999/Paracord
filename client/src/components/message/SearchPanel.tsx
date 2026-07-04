@@ -1,12 +1,38 @@
-import { useEffect, useRef, useState } from 'react';
-import { Search, X, Loader2 } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Search, SearchX, X, Loader2 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { channelApi } from '../../api/channels';
 import { useUIStore } from '../../stores/uiStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
 import { formatTimestamp } from '../../lib/formatters';
+import { EmptyState, ErrorBanner } from '../ui/Feedback';
 import type { Message } from '../../types';
+
+// Wraps case-insensitive matches of `query` in an accent-tint mention chip so the
+// reason a row surfaced reads at a glance (design-spec §7 mention chip).
+function highlightMatches(text: string, query: string): ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const lower = text.toLowerCase();
+  const lowerQ = q.toLowerCase();
+  const parts: ReactNode[] = [];
+  let start = 0;
+  let idx = lower.indexOf(lowerQ);
+  let key = 0;
+  while (idx !== -1) {
+    if (idx > start) parts.push(text.slice(start, idx));
+    parts.push(
+      <mark key={key++} className="rounded-xs bg-accent-tint px-0.5 text-accent-primary">
+        {text.slice(idx, idx + q.length)}
+      </mark>,
+    );
+    start = idx + q.length;
+    idx = lower.indexOf(lowerQ, start);
+  }
+  if (start < text.length) parts.push(text.slice(start));
+  return parts;
+}
 
 export function SearchPanel() {
   const { channelId } = useParams();
@@ -14,6 +40,7 @@ export function SearchPanel() {
   const setSearchPanelOpen = useUIStore((s) => s.setSearchPanelOpen);
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
   const allChannels = Object.values(channelsByGuild).flat();
+  const currentChannel = allChannels.find((c) => c.id === channelId);
   const myUserId = useAuthStore((s) => s.user?.id ?? null);
 
   const [query, setQuery] = useState('');
@@ -116,21 +143,21 @@ export function SearchPanel() {
     <div className="flex h-full w-80 shrink-0 flex-col border-l border-border-subtle bg-bg-secondary">
       {/* Header */}
       <div className="flex h-[var(--spacing-header-height)] shrink-0 items-center justify-between border-b border-border-subtle/50 px-4">
-        <span className="text-sm font-semibold text-text-primary">Search</span>
+        <span className="text-subhead text-text-primary">Search</span>
         <button
           type="button"
           onClick={() => setSearchPanelOpen(false)}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+          className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           aria-label="Close search"
         >
           <X size={16} />
         </button>
       </div>
 
-      {/* Search input */}
-      <div className="px-3 pt-3 pb-2">
-        <div className="relative">
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+      {/* Search input + filters */}
+      <div className="border-b border-border-subtle/60 px-3 pb-3 pt-3">
+        <div className="flex items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-2 transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+          <Search size={16} className="shrink-0 text-text-muted" />
           <label htmlFor="message-search-query" className="sr-only">
             Search messages
           </label>
@@ -138,8 +165,8 @@ export function SearchPanel() {
             id="message-search-query"
             ref={inputRef}
             type="text"
-            placeholder="Search messages..."
-            className="h-9 w-full rounded-lg border border-border-subtle bg-bg-mod-subtle/60 py-1 pl-9 pr-3 text-sm text-text-primary placeholder:text-text-muted outline-none transition-all focus:border-accent-primary/50 focus:bg-bg-mod-strong"
+            placeholder="Search this channel…"
+            className="flex-1 bg-transparent text-body text-text-primary placeholder:text-text-muted outline-none"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -157,39 +184,40 @@ export function SearchPanel() {
             <input
               id="message-search-author"
               type="text"
-              placeholder="Author name filter"
-              className="h-8 flex-1 rounded-md border border-border-subtle bg-bg-mod-subtle/60 px-2.5 text-xs text-text-primary placeholder:text-text-muted outline-none transition-colors focus:border-accent-primary/50"
+              placeholder="Filter by author"
+              className="h-8 flex-1 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 text-meta text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
               value={authorQuery}
               onChange={(e) => setAuthorQuery(e.target.value)}
             />
             <button
               type="button"
               onClick={() => setOnlyMine((current) => !current)}
-              className={`h-8 rounded-md border px-2.5 text-xs font-semibold transition-colors ${
+              aria-pressed={onlyMine}
+              className={`h-8 rounded-full border px-3 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
                 onlyMine
-                  ? 'border-accent-primary/60 bg-accent-primary/20 text-accent-primary'
-                  : 'border-border-subtle bg-bg-mod-subtle/60 text-text-secondary hover:text-text-primary'
+                  ? 'border-transparent bg-accent-tint text-accent-primary'
+                  : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
               }`}
             >
-              From Me
+              From me
             </button>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <label className="flex flex-col gap-1">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">From</span>
+              <span className="text-section uppercase text-text-muted">From</span>
               <input
                 type="date"
-                className="h-8 rounded-md border border-border-subtle bg-bg-mod-subtle/60 px-2.5 text-xs text-text-secondary outline-none transition-colors focus:border-accent-primary/50"
+                className="h-8 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
                 value={fromDate}
                 onChange={(e) => setFromDate(e.target.value)}
                 aria-label="From date"
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">To</span>
+              <span className="text-section uppercase text-text-muted">To</span>
               <input
                 type="date"
-                className="h-8 rounded-md border border-border-subtle bg-bg-mod-subtle/60 px-2.5 text-xs text-text-secondary outline-none transition-colors focus:border-accent-primary/50"
+                className="h-8 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 text-meta text-text-secondary outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
                 value={toDate}
                 onChange={(e) => setToDate(e.target.value)}
                 aria-label="To date"
@@ -200,50 +228,73 @@ export function SearchPanel() {
       </div>
 
       {/* Results */}
-      <div className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-3">
+      <div className="scrollbar-thin flex-1 overflow-y-auto px-2 py-2">
         {isLoading && (
           <div className="flex items-center justify-center py-10" aria-live="polite" aria-busy="true">
-            <Loader2 size={20} className="animate-spin text-text-muted" />
-            <span className="sr-only">Searching messages...</span>
+            <Loader2 size={20} className="animate-spin text-accent-primary" />
+            <span className="sr-only">Searching messages…</span>
           </div>
         )}
 
-        {!isLoading && error && (
-          <div role="alert" className="px-3 py-8 text-center text-sm text-accent-danger">{error}</div>
-        )}
+        {!isLoading && error && <ErrorBanner className="m-2" message={error} />}
 
         {!isLoading && !error && hasSearched && results.length === 0 && (
-          <div className="px-3 py-8 text-center text-sm text-text-muted">No results found</div>
+          <EmptyState
+            icon={<SearchX size={20} />}
+            title="Nothing turned up"
+            description={
+              currentChannel
+                ? `Nothing matches "${query.trim()}" in #${currentChannel.name} yet. Try fewer words or widen the date range.`
+                : `Nothing matches "${query.trim()}" yet. Try fewer words or widen the date range.`
+            }
+          />
         )}
 
-        {!isLoading && !hasSearched && !query.trim() && (
-          <div className="px-3 py-8 text-center text-sm text-text-muted">
-            Search for messages, users, or keywords
-          </div>
+        {!isLoading && !error && !hasSearched && !query.trim() && (
+          <EmptyState
+            icon={<Search size={20} />}
+            title="Find any message"
+            description={
+              currentChannel
+                ? `Search #${currentChannel.name} by keyword, author, or date. Matches jump you straight to the message.`
+                : 'Search by keyword, author, or date. Matches jump you straight to the message.'
+            }
+          />
         )}
 
         {!isLoading && results.length > 0 && (
-          <div className="space-y-1">
-            {results.map((msg) => (
-              <button
-                type="button"
-                key={msg.id}
-                className="w-full rounded-lg p-2.5 text-left transition-colors hover:bg-bg-mod-subtle"
-                onClick={() => navigateToMessage(msg)}
-              >
-                <div className="mb-1 flex items-baseline justify-between gap-2">
-                  <span className="truncate text-xs font-semibold text-text-primary">
-                    {msg.author.username}
-                  </span>
-                  <span className="shrink-0 text-[10px] text-text-muted">
-                    {formatTimestamp(msg.created_at || msg.timestamp || '')}
-                  </span>
-                </div>
-                <p className="line-clamp-2 text-xs text-text-secondary">
-                  {msg.content || <span className="italic text-text-muted">(attachment)</span>}
-                </p>
-              </button>
-            ))}
+          <div className="flex flex-col gap-0.5">
+            {results.map((msg) => {
+              const msgChannel = allChannels.find((c) => c.id === msg.channel_id);
+              const content = msg.content ?? '';
+              return (
+                <button
+                  type="button"
+                  key={msg.id}
+                  className="flex flex-col gap-1 rounded-sm px-2 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                  onClick={() => navigateToMessage(msg)}
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate text-label font-semibold text-text-primary">
+                      {msg.author.username}
+                    </span>
+                    <span className="shrink-0 font-code text-[11px] text-text-muted">
+                      {formatTimestamp(msg.created_at || msg.timestamp || '')}
+                    </span>
+                  </div>
+                  <p className="line-clamp-2 text-meta leading-relaxed text-text-secondary">
+                    {content ? (
+                      highlightMatches(content, query)
+                    ) : (
+                      <span className="italic text-text-muted">Attachment or embed</span>
+                    )}
+                  </p>
+                  {msgChannel && (
+                    <span className="text-[11px] text-text-muted">#{msgChannel.name}</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

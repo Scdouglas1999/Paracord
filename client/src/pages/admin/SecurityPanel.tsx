@@ -1,7 +1,11 @@
 import { Fragment, useState, useEffect } from 'react';
+import { RotateCw, ShieldCheck } from 'lucide-react';
 import { adminApi, type SecurityEvent } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
+import { Input } from '../../components/ui/Input';
+import { Button } from '../../components/ui/Button';
+import { EmptyState, LoadingSpinner } from '../../components/ui/Feedback';
 
 export function SecurityPanel() {
   const [events, setEvents] = useState<SecurityEvent[]>([]);
@@ -85,133 +89,157 @@ export function SecurityPanel() {
 
   return (
     <div>
-      <div className="mb-6 flex items-end justify-between gap-4">
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-text-primary">Security Events</h2>
-          <p className="text-sm text-text-muted">Recent authentication and admin activity.</p>
+          <h2 className="font-display text-heading text-text-primary">Security events</h2>
+          <p className="mt-1 text-body text-text-secondary">
+            Authentication and administrative activity, newest first.
+          </p>
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => setReloadKey((key) => key + 1)}
-          className="control-pill-btn h-10 px-4 text-sm"
+          className="gap-2"
         >
+          <RotateCw size={15} />
           Refresh
-        </button>
-      </div>
+        </Button>
+      </header>
 
-      <div className="mb-6 flex gap-3">
+      <div className="mb-5 flex flex-wrap gap-2">
         <label htmlFor="admin-security-action-filter" className="sr-only">
           Filter security events by exact action
         </label>
-        <input
+        <Input
           id="admin-security-action-filter"
           type="text"
           value={actionFilter}
           onChange={(e) => setActionFilter(e.target.value)}
-          placeholder="Exact action (e.g. auth.login)"
-          className="input-field max-w-md"
+          onKeyDown={(e) => e.key === 'Enter' && applyFilter()}
+          placeholder="Exact action, e.g. auth.login"
+          className="max-w-xs"
         />
-        <button
-          onClick={applyFilter}
-          className="control-pill-btn h-10 px-4 text-sm"
-        >
-          Apply
-        </button>
+        <Button variant="outline" onClick={applyFilter}>Apply</Button>
       </div>
 
       {loading ? (
-        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-6 text-sm text-text-muted">
-          Loading security events...
+        <div className="rounded-md border border-border-subtle bg-bg-secondary px-6 py-10 shadow-sm">
+          <LoadingSpinner size="sm" label="Loading security events…" />
         </div>
       ) : events.length === 0 ? (
-        <div className="card-surface rounded-xl border border-border-subtle bg-bg-mod-subtle/60 px-6 py-10 text-center text-text-muted">
-          No security events found.
+        <div className="rounded-md border border-border-subtle bg-bg-secondary px-4 shadow-sm">
+          <EmptyState
+            icon={<ShieldCheck size={20} />}
+            title={appliedAction ? `No events matched "${appliedAction}"` : 'No security events recorded yet'}
+            description={
+              appliedAction
+                ? 'No audit entries match that exact action. Check the action name or clear the filter to see everything.'
+                : 'Sign-ins, permission changes, and admin actions will show up here as they happen.'
+            }
+            action={
+              appliedAction ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setActionFilter('');
+                    setAppliedAction('');
+                    setCursorStack([]);
+                    setCursor(null);
+                    setReloadKey((k) => k + 1);
+                  }}
+                >
+                  Clear filter
+                </Button>
+              ) : undefined
+            }
+          />
         </div>
       ) : (
-        <div className="card-surface overflow-hidden rounded-xl border border-border-subtle bg-bg-mod-subtle/40">
+        <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
           <div className="overflow-x-auto">
-          <table className="min-w-[960px] w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-border-subtle bg-bg-secondary/60">
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Time</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Action</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Actor</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Target</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">IP</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Session</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((event) => {
-                const details = formatDetails(event);
-                const expanded = expandedEventId === event.id;
-                return (
-                  <Fragment key={event.id}>
-                    <tr className="border-b border-border-subtle/50 align-top hover:bg-bg-mod-subtle/20">
-                      <td className="px-4 py-3 text-text-secondary">{new Date(event.created_at).toLocaleString()}</td>
-                      <td className="px-4 py-3 font-medium text-text-primary">{event.action}</td>
-                      <td className="px-4 py-3 text-text-secondary">{event.actor_user_id || '-'}</td>
-                      <td className="px-4 py-3 text-text-secondary">{event.target_user_id || '-'}</td>
-                      <td className="px-4 py-3 text-text-secondary">{event.ip_address || '-'}</td>
-                      <td className="px-4 py-3 text-text-secondary">{event.session_id || '-'}</td>
-                      <td className="px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedEventId(expanded ? null : event.id)}
-                          disabled={details.length === 0}
-                          className="control-pill-btn h-8 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"
-                          aria-expanded={expanded}
-                          aria-controls={`security-event-details-${event.id}`}
-                        >
-                          {expanded ? 'Hide' : 'View'}
-                        </button>
-                      </td>
-                    </tr>
-                    {expanded && (
-                      <tr id={`security-event-details-${event.id}`} className="border-b border-border-subtle/50 bg-bg-secondary/50">
-                        <td colSpan={7} className="px-4 py-4">
-                          <dl className="space-y-3">
-                            {details.map(([label, value]) => (
-                              <div key={label}>
-                                <dt className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</dt>
-                                <dd>
-                                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border-subtle bg-bg-primary/60 p-3 font-mono text-xs text-text-secondary">
-                                    {value}
-                                  </pre>
-                                </dd>
-                              </div>
-                            ))}
-                          </dl>
+            <table className="w-full min-w-[900px] text-left">
+              <thead>
+                <tr className="border-b border-border-subtle bg-bg-tertiary/40">
+                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Time</th>
+                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Action</th>
+                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Actor</th>
+                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Target</th>
+                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">IP</th>
+                  <th scope="col" className="px-4 py-3 text-section uppercase text-text-secondary">Session</th>
+                  <th scope="col" className="px-4 py-3 text-right text-section uppercase text-text-secondary">Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map((event) => {
+                  const details = formatDetails(event);
+                  const expanded = expandedEventId === event.id;
+                  return (
+                    <Fragment key={event.id}>
+                      <tr className="border-b border-border-subtle/60 align-top transition-colors hover:bg-bg-mod-subtle">
+                        <td className="px-4 py-3 font-code text-meta tabular-nums text-text-secondary">
+                          {new Date(event.created_at).toLocaleString()}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 font-code text-meta text-text-primary">
+                            {event.action}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 font-code text-meta text-text-secondary">{event.actor_user_id || '—'}</td>
+                        <td className="px-4 py-3 font-code text-meta text-text-secondary">{event.target_user_id || '—'}</td>
+                        <td className="px-4 py-3 font-code text-meta text-text-secondary">{event.ip_address || '—'}</td>
+                        <td className="px-4 py-3 font-code text-meta text-text-secondary">{event.session_id || '—'}</td>
+                        <td className="px-4 py-3 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setExpandedEventId(expanded ? null : event.id)}
+                            disabled={details.length === 0}
+                            aria-expanded={expanded}
+                            aria-controls={`security-event-details-${event.id}`}
+                          >
+                            {expanded ? 'Hide' : 'View'}
+                          </Button>
                         </td>
                       </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+                      {expanded && (
+                        <tr id={`security-event-details-${event.id}`} className="border-b border-border-subtle/60 bg-bg-tertiary/40">
+                          <td colSpan={7} className="px-4 py-4">
+                            <dl className="space-y-3">
+                              {details.map(([label, value]) => (
+                                <div key={label}>
+                                  <dt className="mb-1 text-section uppercase text-text-muted">{label}</dt>
+                                  <dd>
+                                    <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-border-subtle bg-bg-tertiary p-3 font-code text-meta text-text-secondary">
+                                      {value}
+                                    </pre>
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
       {(cursorStack.length > 0 || nextCursor !== null) && (
         <div className="mt-4 flex items-center justify-between">
-          <button
-            onClick={goPreviousPage}
-            disabled={cursorStack.length === 0}
-            className="control-pill-btn h-10 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          <Button variant="secondary" size="sm" onClick={goPreviousPage} disabled={cursorStack.length === 0}>
             Previous
-          </button>
-          <span className="text-sm text-text-muted">
-            Page {pageIndex} · Showing {events.length} events
+          </Button>
+          <span className="font-code text-meta tabular-nums text-text-muted">
+            Page {pageIndex} · {events.length} events
           </span>
-          <button
-            onClick={goNextPage}
-            disabled={nextCursor === null}
-            className="control-pill-btn h-10 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          <Button variant="secondary" size="sm" onClick={goNextPage} disabled={nextCursor === null}>
             Next
-          </button>
+          </Button>
         </div>
       )}
     </div>

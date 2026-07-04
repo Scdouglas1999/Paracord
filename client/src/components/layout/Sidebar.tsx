@@ -260,16 +260,16 @@ export function Sidebar() {
             onKeyDown={(e) => handleGuildContextMenuKey(e, guild.id)}
             aria-label={guild.name}
             className={cn(
-              // Guild icon recipe: 48px, idle radius-full morphing to radius-md
-              // squircle on hover/active over 180ms; press scales, never lifts.
+              // Guild icon recipe (§7): 48px, idle radius-full morphing to a
+              // radius-md squircle on hover/active over 180ms; press scales,
+              // never lifts. Active is signalled by the teal left pill + squircle,
+              // not an emerald ring wash.
               'group relative flex h-12 w-12 items-center justify-center overflow-hidden outline-none transition-[border-radius,background-color,color,box-shadow] duration-[180ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]',
-              isActive
-                ? 'z-10 rounded-md ring-2 ring-accent-primary'
-                : 'rounded-full hover:rounded-md',
+              isActive ? 'z-10 rounded-md' : 'rounded-full hover:rounded-md',
               !iconSrc &&
                 (isActive
                   ? 'bg-accent-tint text-accent-primary'
-                  : 'bg-white/10 text-white/80 hover:bg-accent-tint hover:text-accent-primary')
+                  : 'bg-bg-mod-strong text-text-secondary hover:bg-accent-tint hover:text-accent-primary')
             )}
           >
             {iconSrc ? (
@@ -317,15 +317,19 @@ export function Sidebar() {
         }}
       >
         <nav
-          aria-label="Server dock"
+          aria-label="Servers"
           aria-expanded={dockExpanded}
           className={cn(
-            'dock-surface relative z-30 flex h-full max-h-[780px] flex-col items-center gap-4 px-2 py-4 transition-[width,transform] duration-200',
+            // The rail is the deepest surface — it reads as the --bg-tertiary
+            // gutter itself (from the wrapping <aside>), not a floating card
+            // (kill-list #1/#7). Collapsed, it thins to a grab strip that reveals
+            // on hover/focus; the pin toggle + keyboard shortcut drive width.
+            'relative z-30 flex h-full max-h-[780px] flex-col items-center gap-4 px-2 py-4 transition-[width,transform] duration-[180ms] ease-[var(--ease-out)]',
             dockExpanded ? 'w-[60px]' : 'w-[18px] translate-x-1'
           )}
         >
           {!dockExpanded && (
-            <div className="mt-2 h-10 w-1.5 rounded-full bg-white/28" />
+            <div className="mt-2 h-10 w-1 rounded-full bg-interactive-muted transition-colors duration-[140ms] ease-[var(--ease-out)]" />
           )}
           {dockExpanded && (
             <>
@@ -346,7 +350,7 @@ export function Sidebar() {
                       'group flex h-12 w-12 shrink-0 items-center justify-center outline-none transition-[border-radius,background-color,color] duration-[180ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]',
                       isHome
                         ? 'rounded-md bg-accent-primary text-text-on-accent shadow-sm'
-                        : 'rounded-full bg-white/10 text-white/80 hover:rounded-md hover:bg-accent-tint hover:text-accent-primary'
+                        : 'rounded-full bg-bg-mod-strong text-text-secondary hover:rounded-md hover:bg-accent-tint hover:text-accent-primary'
                     )}
                   >
                     <Home size={20} />
@@ -354,7 +358,7 @@ export function Sidebar() {
                 </Tooltip>
               </div>
 
-              <div className="h-px w-6 shrink-0 bg-white/15" />
+              <div className="h-px w-6 shrink-0 bg-border-strong" />
 
               {/* Guild List */}
               <div className="flex w-full flex-1 flex-col items-center gap-2 overflow-x-visible overflow-y-auto pb-1 pt-1.5 scrollbar-none">
@@ -362,9 +366,9 @@ export function Sidebar() {
                   // Multi-server: group guilds under server labels
                   serverGroups.map((group, gi) => (
                     <div key={group.url} className="flex w-full flex-col items-center gap-2">
-                      {gi > 0 && <div className="h-px w-6 shrink-0 bg-white/15" />}
+                      {gi > 0 && <div className="h-px w-6 shrink-0 bg-border-strong" />}
                       <Tooltip side="right" content={group.label}>
-                        <div className="w-10 truncate text-center text-[9px] font-bold uppercase tracking-wider text-white/40">
+                        <div className="w-10 truncate text-center text-[10px] font-semibold uppercase tracking-wider text-text-muted">
                           {group.label}
                         </div>
                       </Tooltip>
@@ -389,7 +393,7 @@ export function Sidebar() {
                                 <button
                                   aria-label={`${folder.collapsed ? 'Expand' : 'Collapse'} folder ${folder.name}`}
                                   onClick={() => toggleCollapsed(folder.id)}
-                                  className="flex w-11 items-center justify-center gap-0.5 rounded-lg py-0.5 transition-colors hover:bg-white/10"
+                                  className="flex w-11 items-center justify-center gap-0.5 rounded-sm py-0.5 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                                 >
                                   {folder.color && (
                                     <div
@@ -398,9 +402,9 @@ export function Sidebar() {
                                     />
                                   )}
                                   {folder.collapsed ? (
-                                    <ChevronRight size={12} className="shrink-0 text-white/50" />
+                                    <ChevronRight size={12} className="shrink-0 text-text-muted" />
                                   ) : (
-                                    <ChevronDown size={12} className="shrink-0 text-white/50" />
+                                    <ChevronDown size={12} className="shrink-0 text-text-muted" />
                                   )}
                                 </button>
                               </Tooltip>
@@ -415,7 +419,7 @@ export function Sidebar() {
                                     {folderGuilds.slice(0, 4).map((g, i) => (
                                       <div
                                         key={g.id}
-                                        className="absolute rounded-md bg-white/15 border border-white/10"
+                                        className="absolute overflow-hidden rounded-xs border border-border-subtle bg-bg-mod-strong"
                                         style={{
                                           width: 20,
                                           height: 20,
@@ -434,13 +438,13 @@ export function Sidebar() {
                                                 className="h-full w-full object-cover"
                                               />
                                             ) : (
-                                              <span className="flex h-full w-full items-center justify-center text-[7px] font-bold text-white/80">
+                                              <span className="flex h-full w-full items-center justify-center text-[7px] font-bold text-text-secondary">
                                                 {g.name.charAt(0).toUpperCase()}
                                               </span>
                                             );
                                           })()
                                         ) : (
-                                          <span className="flex h-full w-full items-center justify-center text-[7px] font-bold text-white/80">
+                                          <span className="flex h-full w-full items-center justify-center text-[7px] font-bold text-text-secondary">
                                             {g.name.charAt(0).toUpperCase()}
                                           </span>
                                         )}
@@ -451,7 +455,7 @@ export function Sidebar() {
                               ) : (
                                 folderGuilds.map((guild) => renderGuildIcon(guild))
                               )}
-                              <div className="h-px w-6 shrink-0 bg-white/10" />
+                              <div className="h-px w-6 shrink-0 bg-border-subtle" />
                             </div>
                           );
                         })}
@@ -465,8 +469,8 @@ export function Sidebar() {
                   {/* Multi-server count indicator */}
                   {serverGroups && serverGroups.length > 1 && (
                     <Tooltip side="right" content={`Connected to ${serverGroups.length} servers`}>
-                      <div className="flex items-center justify-center rounded-xs bg-white/8 px-2 py-1">
-                        <span className="text-[9px] font-bold uppercase tracking-wider text-white/50">
+                      <div className="flex items-center justify-center rounded-xs bg-bg-mod-subtle px-2 py-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
                           {serverGroups.length} srv
                         </span>
                       </div>
@@ -477,7 +481,7 @@ export function Sidebar() {
                     <button
                       aria-label="Add a server"
                       onClick={() => setShowCreateModal(true)}
-                      className="group flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-dashed border-white/30 text-status-online outline-none transition-[border-radius,background-color,border-color] duration-[180ms] ease-[var(--ease-out)] hover:rounded-md hover:border-accent-primary hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]"
+                      className="group flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-dashed border-border-strong text-accent-primary outline-none transition-[border-radius,background-color,border-color] duration-[180ms] ease-[var(--ease-out)] hover:rounded-md hover:border-accent-primary hover:bg-accent-tint focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]"
                     >
                       <Plus size={20} />
                     </button>
@@ -523,8 +527,8 @@ export function Sidebar() {
                       onClick={toggleDockPinned}
                       aria-label={dockPinned ? 'Unpin server dock' : 'Pin server dock'}
                       className={cn(
-                        'mt-1 flex h-7 w-7 items-center justify-center rounded-sm text-white/45 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-white/12 hover:text-white/85 focus-visible:shadow-[var(--focus-ring)]',
-                        dockPinned && 'bg-white/12 text-white/80'
+                        'mt-1 flex h-7 w-7 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]',
+                        dockPinned && 'bg-bg-mod-strong text-text-primary'
                       )}
                     >
                       {dockPinned ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
@@ -541,7 +545,7 @@ export function Sidebar() {
         <>
           <div className="fixed inset-0 z-50" onClick={() => { setContextMenu(null); setFolderSubmenuOpen(false); }} />
           <div
-            className="glass-modal fixed z-50 min-w-[200px] rounded-xl p-1.5"
+            className="glass-modal fixed z-50 min-w-[200px] rounded-md p-1.5"
             style={{ left: contextMenu.x + 10, top: contextMenu.y }}
             role="menu"
             aria-label="Server actions"
@@ -554,7 +558,7 @@ export function Sidebar() {
               }}
               autoFocus
               role="menuitem"
-              className="w-full rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+              className="w-full rounded-sm px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-accent-tint hover:text-text-primary"
               onClick={async () => {
                 const gid = contextMenu.guildId;
                 if (!useChannelStore.getState().channelsByGuild[gid]?.length) {
@@ -576,7 +580,7 @@ export function Sidebar() {
                 serverMenuItemRefs.current[1] = node;
               }}
               role="menuitem"
-              className="w-full rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+              className="w-full rounded-sm px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-accent-tint hover:text-text-primary"
               onClick={() => {
                 const gid = contextMenu.guildId;
                 const next = mutedGuildIds.includes(gid)
@@ -600,9 +604,9 @@ export function Sidebar() {
               }}
               role="menuitem"
               className={cn(
-                'w-full rounded-md px-3 py-2 text-left text-sm transition-colors',
+                'w-full rounded-sm px-3 py-2 text-left text-sm transition-colors',
                 canCreateInviteInContext
-                  ? 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
+                  ? 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
                   : 'cursor-not-allowed text-text-muted opacity-60'
               )}
               disabled={!canCreateInviteInContext}
@@ -640,7 +644,7 @@ export function Sidebar() {
                         serverMenuItemRefs.current[3] = node;
                       }}
                       role="menuitem"
-                      className="w-full rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+                      className="w-full rounded-sm px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-accent-tint hover:text-text-primary"
                       onClick={() => {
                         removeGuildFromFolder(containingFolder.id, gid);
                         setContextMenu(null);
@@ -658,7 +662,7 @@ export function Sidebar() {
                       role="menuitem"
                       aria-haspopup="menu"
                       aria-expanded={folderSubmenuOpen}
-                      className="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+                      className="flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-accent-tint hover:text-text-primary"
                       onClick={() => {
                         if (folderSubmenuOpen) {
                           closeFolderSubmenu();
@@ -678,7 +682,7 @@ export function Sidebar() {
                     </button>
                     {folderSubmenuOpen && (
                       <div
-                        className="glass-modal absolute left-full top-0 z-50 ml-1 min-w-[160px] rounded-xl p-1.5"
+                        className="glass-modal absolute left-full top-0 z-50 ml-1 min-w-[160px] rounded-md p-1.5"
                         role="menu"
                         aria-label="Folder choices"
                         tabIndex={-1}
@@ -691,7 +695,7 @@ export function Sidebar() {
                               folderChoiceRefs.current[folderIndex] = node;
                             }}
                             role="menuitem"
-                            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+                            className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-accent-tint hover:text-text-primary"
                             onClick={() => {
                               addGuildToFolder(f.id, gid);
                               closeFolderSubmenu();
@@ -710,7 +714,7 @@ export function Sidebar() {
                             folderChoiceRefs.current[folders.length] = node;
                           }}
                           role="menuitem"
-                          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+                          className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-accent-tint hover:text-text-primary"
                           onClick={() => {
                             closeFolderSubmenu();
                             setShowCreateFolder(true);
@@ -727,7 +731,7 @@ export function Sidebar() {
                       serverMenuItemRefs.current[5] = node;
                     }}
                     role="menuitem"
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+                    className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-accent-tint hover:text-text-primary"
                     onClick={() => {
                       setShowCreateFolder(true);
                       setContextMenu(null);
@@ -745,7 +749,7 @@ export function Sidebar() {
                 serverMenuItemRefs.current[6] = node;
               }}
               role="menuitem"
-              className="w-full rounded-md px-3 py-2 text-left text-sm text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+              className="w-full rounded-sm px-3 py-2 text-left text-sm text-text-muted transition-colors hover:bg-accent-tint hover:text-text-primary"
               onClick={() => {
                 void copyServerIdToClipboard(contextMenu.guildId);
                 setContextMenu(null);
@@ -761,7 +765,7 @@ export function Sidebar() {
                     serverMenuItemRefs.current[7] = node;
                   }}
                   role="menuitem"
-                  className="w-full rounded-md px-3 py-2 text-left text-sm text-accent-danger transition-colors hover:bg-accent-danger hover:text-white"
+                  className="w-full rounded-sm px-3 py-2 text-left text-sm text-accent-danger transition-colors hover:bg-accent-danger hover:text-white"
                   onClick={async () => {
                     try {
                       await useGuildStore.getState().leaveGuild(contextMenu.guildId);
@@ -791,7 +795,7 @@ export function Sidebar() {
       )}
       {showCreateFolder && (
         <>
-          <div className="fixed inset-0 z-50 bg-black/50" onClick={closeCreateFolderDialog} />
+          <div className="fixed inset-0 z-50 modal-backdrop" onClick={closeCreateFolderDialog} />
           <div
             ref={createFolderDialogRef}
             className="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-strong bg-bg-accent p-5 shadow-xl"

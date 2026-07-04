@@ -10,6 +10,7 @@ import { SCHEDULED_MESSAGE_MIN_LEAD_MS } from '../../lib/constants';
 import { Modal, ModalCloseButton } from '../ui/Modal';
 import { Skeleton } from '../ui/Skeleton';
 import { EmptyState, ErrorBanner } from '../ui/Feedback';
+import { Button } from '../ui/Button';
 
 const STATUS_SCHEDULED = 0;
 const STATUS_SENT = 1;
@@ -186,24 +187,24 @@ export function ScheduledMessagesPanel({
             <Clock3 size={18} className="text-accent-primary" />
             <h2
               id="scheduled-messages-title"
-              className="text-xl font-semibold text-text-primary"
+              className="text-title text-text-primary"
             >
               Scheduled messages
             </h2>
           </div>
-          <p className="mt-1 text-sm text-text-secondary">
+          <p className="mt-1 text-label text-text-secondary">
             {channelName ? `#${channelName}` : 'This channel'}
           </p>
         </div>
 
-        <div className="space-y-3 px-6 pb-6 sm:px-7 sm:pb-7">
+        <div className="px-6 pb-6 sm:px-7 sm:pb-7">
           {loading && (
-            <div className="space-y-3" aria-busy="true" aria-label="Loading scheduled messages">
+            <div className="flex flex-col" aria-busy="true" aria-label="Loading scheduled messages">
               {[0, 1, 2].map((i) => (
-                <div key={i} className="rounded-xl border border-border-subtle bg-bg-mod-subtle px-3 py-2.5">
-                  <Skeleton width="40%" height={12} borderRadius="0.25rem" />
-                  <div className="mt-2">
-                    <Skeleton width="85%" height={14} borderRadius="0.25rem" />
+                <div key={i} className="border-t border-border-subtle py-3 first:border-t-0 first:pt-1">
+                  <Skeleton width="42%" height={12} borderRadius="var(--radius-xs)" />
+                  <div className="mt-2.5">
+                    <Skeleton width="85%" height={14} borderRadius="var(--radius-xs)" />
                   </div>
                 </div>
               ))}
@@ -216,36 +217,38 @@ export function ScheduledMessagesPanel({
 
           {!loading && !loadError && sorted.length === 0 && (
             <EmptyState
-              icon={<Clock3 size={28} />}
-              title="No scheduled messages"
-              description="Messages you schedule in this channel will appear here."
+              icon={<Clock3 size={20} />}
+              title="Nothing scheduled"
+              description="No messages scheduled — pick a time in the composer to queue one, and it'll send itself even while you're away."
+              action={<Button onClick={onClose}>Back to composer</Button>}
             />
           )}
 
-          {!loading &&
-            !loadError &&
-            sorted.map((item) => {
+          {!loading && !loadError && sorted.length > 0 && (
+            <div className="flex flex-col">
+            {sorted.map((item) => {
               const isEditing = editingId === item.id;
               const isPending = item.status === STATUS_SCHEDULED;
               return (
                 <div
                   key={item.id}
-                  className="border border-border-subtle bg-bg-mod-subtle px-3 py-2.5"
-                  style={{ borderRadius: '12px' }}
+                  className="group border-t border-border-subtle py-3 first:border-t-0 first:pt-1"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                      <div className="flex items-center gap-2 text-section uppercase text-text-secondary">
                         <span>{statusLabel(item.status)}</span>
                         <span aria-hidden>·</span>
-                        <span className="normal-case">{formatTimestamp(item.send_at)}</span>
+                        <span className="font-code normal-case tabular-nums tracking-normal text-text-muted">
+                          {formatTimestamp(item.send_at)}
+                        </span>
                       </div>
                       {item.status === STATUS_FAILED && item.error && (
-                        <p className="mt-1 text-xs text-accent-danger">{item.error}</p>
+                        <p className="mt-1 text-meta text-accent-danger">{item.error}</p>
                       )}
                     </div>
                     {isPending && !isEditing && (
-                      <div className="flex flex-shrink-0 items-center gap-1">
+                      <div className="flex flex-shrink-0 items-center gap-1 opacity-0 transition-opacity duration-[140ms] ease-[var(--ease-out)] group-hover:opacity-100 group-focus-within:opacity-100">
                         <button
                           type="button"
                           onClick={() => beginEdit(item)}
@@ -278,7 +281,7 @@ export function ScheduledMessagesPanel({
                         aria-label="Scheduled message content"
                       />
                       <label className="block">
-                        <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                        <span className="text-section uppercase text-text-secondary">
                           Send at
                         </span>
                         <input
@@ -293,7 +296,7 @@ export function ScheduledMessagesPanel({
                       {editError && (
                         <div
                           role="alert"
-                          className="rounded-lg border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-xs font-semibold text-accent-danger"
+                          className="rounded-sm border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-meta font-semibold text-accent-danger"
                         >
                           {editError}
                         </div>
@@ -302,7 +305,7 @@ export function ScheduledMessagesPanel({
                         <button
                           type="button"
                           onClick={cancelEdit}
-                          className="btn-secondary px-3 py-1.5 text-sm"
+                          className="btn-secondary px-3 py-1.5 text-label"
                         >
                           Cancel
                         </button>
@@ -310,20 +313,22 @@ export function ScheduledMessagesPanel({
                           type="button"
                           onClick={() => saveEdit(item.id)}
                           disabled={savingId === item.id}
-                          className="btn-primary px-3 py-1.5 text-sm"
+                          className="btn-primary px-3 py-1.5 text-label"
                         >
                           {savingId === item.id ? 'Saving…' : 'Save'}
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <p className="mt-1.5 whitespace-pre-wrap break-words text-sm text-text-primary">
-                      {item.content || <span className="text-text-muted">(no content)</span>}
+                    <p className="mt-1.5 whitespace-pre-wrap break-words text-body text-text-primary">
+                      {item.content || <span className="italic text-text-muted">Attachment only</span>}
                     </p>
                   )}
                 </div>
               );
             })}
+            </div>
+          )}
         </div>
     </Modal>
   );

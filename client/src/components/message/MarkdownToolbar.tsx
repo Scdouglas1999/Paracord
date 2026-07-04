@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { Bold, Italic, Strikethrough, Code, Quote, Link, Eye, FileCode2 } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
@@ -193,6 +194,10 @@ export function resolveMarkdownShortcut(event: ShortcutEventLike): MarkdownToolb
   return matched?.id ?? null;
 }
 
+// Visual dividers split the group into text-emphasis / code / structure segments —
+// the "segmented" affordance from the spec without breaking the flat action list.
+const DIVIDER_AFTER: ReadonlySet<MarkdownToolbarActionId> = new Set(['strikethrough', 'code_block']);
+
 export function MarkdownToolbar({ textareaRef, onContentChange }: MarkdownToolbarProps) {
   const handleClick = (button: ToolbarButton) => {
     const textarea = textareaRef.current;
@@ -201,25 +206,30 @@ export function MarkdownToolbar({ textareaRef, onContentChange }: MarkdownToolba
   };
 
   return (
-    <div className="flex items-center gap-0.5 px-1 py-1">
+    <div role="toolbar" aria-label="Text formatting" className="flex items-center gap-0.5">
       {TOOLBAR_BUTTONS.map((button) => (
-        <Tooltip
-          key={button.label}
-          content={button.shortcut ? `${button.label} (${button.shortcut})` : button.label}
-        >
-          <button
-            type="button"
-            aria-label={button.shortcut ? `${button.label} (${button.shortcut})` : button.label}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => handleClick(button)}
-            className={cn(
-              'flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors',
-              'hover:bg-bg-mod-subtle hover:text-text-primary',
-            )}
-          >
-            {button.icon}
-          </button>
-        </Tooltip>
+        <Fragment key={button.id}>
+          <Tooltip content={button.shortcut ? `${button.label} · ${button.shortcut}` : button.label}>
+            <button
+              type="button"
+              aria-label={button.shortcut ? `${button.label} (${button.shortcut})` : button.label}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => handleClick(button)}
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal',
+                'transition-[color,background-color,transform] duration-[140ms] ease-[var(--ease-out)]',
+                'hover:bg-bg-mod-subtle hover:text-text-primary',
+                'active:scale-[0.97] active:bg-accent-tint active:text-accent-primary',
+                'focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]',
+              )}
+            >
+              {button.icon}
+            </button>
+          </Tooltip>
+          {DIVIDER_AFTER.has(button.id) && (
+            <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-border-subtle" />
+          )}
+        </Fragment>
       ))}
     </div>
   );

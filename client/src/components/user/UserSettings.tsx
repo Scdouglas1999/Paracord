@@ -1328,17 +1328,17 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         Refresh
                       </Button>
                     </div>
-                    <div className="mt-3 space-y-2">
+                    <div className="mt-3 divide-y divide-border-subtle border-t border-border-subtle">
                       {sessionsLoading && sessions.length === 0 && (
-                        <>
-                          <Skeleton height={58} borderRadius="var(--radius-md)" />
-                          <Skeleton height={58} borderRadius="var(--radius-md)" />
-                        </>
+                        <div className="space-y-2 py-4">
+                          <Skeleton height={40} borderRadius="var(--radius-sm)" />
+                          <Skeleton height={40} borderRadius="var(--radius-sm)" />
+                        </div>
                       )}
                       {sessions.map((session) => (
                         <div
                           key={session.id}
-                          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3"
+                          className="flex flex-wrap items-center justify-between gap-3 py-3.5"
                         >
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
@@ -1367,7 +1367,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         </div>
                       ))}
                       {!sessionsLoading && sessions.length === 0 && (
-                        <p className="rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3 text-sm text-text-secondary">
+                        <p className="py-4 text-sm text-text-secondary">
                           No other devices are signed in right now.
                         </p>
                       )}

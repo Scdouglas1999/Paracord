@@ -70,7 +70,7 @@ describe('GifPicker', () => {
 
     render(<GifPicker onSelect={vi.fn()} onClose={vi.fn()} />);
 
-    expect(await screen.findByText('No GIFs found.')).toBeInTheDocument();
+    expect(await screen.findByText('No GIFs found')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Select GIF Zero Height' })).toBeNull();
   });
 });

@@ -75,12 +75,10 @@ export function SplitPaneSourcePicker({
     <div ref={containerRef} className="relative z-20">
       <button
         onClick={() => setIsOpen((prev) => !prev)}
-        className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors"
+        className="flex items-center gap-1.5 rounded-sm border border-border-subtle px-2.5 py-1.5 text-meta font-medium shadow-sm outline-none backdrop-blur-md transition-[color,background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:shadow-[var(--focus-ring)]"
         style={{
           backgroundColor: 'color-mix(in srgb, var(--bg-floating) 85%, transparent)',
           color: source.type === 'none' ? 'var(--text-muted)' : 'var(--text-primary)',
-          border: '1px solid var(--border-subtle)',
-          backdropFilter: 'blur(8px)',
         }}
       >
         {source.type === 'stream' && <Monitor size={12} />}
@@ -91,20 +89,16 @@ export function SplitPaneSourcePicker({
 
       {isOpen && (
         <div
-          className="absolute left-0 top-full mt-1 min-w-[200px] rounded-xl border p-1.5 shadow-xl"
-          style={{
-            backgroundColor: 'var(--bg-floating)',
-            borderColor: 'var(--border-subtle)',
-            backdropFilter: 'blur(16px)',
-          }}
+          className="absolute left-0 top-full mt-1 min-w-[210px] rounded-md border border-border-subtle p-1 shadow-lg"
+          style={{ backgroundColor: 'var(--bg-floating)', backdropFilter: 'blur(16px)' }}
         >
           {/* None option */}
           <button
             onClick={() => { onSourceChange({ type: 'none' }); setIsOpen(false); }}
-            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors ${
+            className={`flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-meta outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
               source.type === 'none'
-                ? 'bg-accent-primary/15 text-text-primary'
-                : 'text-text-secondary hover:bg-bg-mod-subtle'
+                ? 'bg-accent-tint text-text-primary'
+                : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
             }`}
           >
             <X size={13} className="text-text-muted" />
@@ -114,7 +108,7 @@ export function SplitPaneSourcePicker({
           {/* Streams section */}
           {activeStreamers.length > 0 && (
             <>
-              <div className="mx-2 mt-2 mb-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              <div className="mx-1.5 mb-1 mt-2 text-section uppercase text-text-muted">
                 Streams
               </div>
               {activeStreamers.map((userId) => {
@@ -127,16 +121,16 @@ export function SplitPaneSourcePicker({
                   <button
                     key={`stream-${userId}`}
                     onClick={() => { onSourceChange({ type: 'stream', userId }); setIsOpen(false); }}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors ${
+                    className={`flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-meta outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
                       isSelected
-                        ? 'bg-accent-primary/15 text-text-primary'
-                        : 'text-text-secondary hover:bg-bg-mod-subtle'
+                        ? 'bg-accent-tint text-text-primary'
+                        : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
                     }`}
                   >
                     <Monitor size={13} className="shrink-0 text-accent-danger" />
                     <span className="truncate">{displayName}</span>
                     {inOther && (
-                      <span className="ml-auto shrink-0 rounded bg-bg-mod-strong px-1.5 py-0.5 text-[10px] text-text-muted">
+                      <span className="ml-auto shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta text-text-muted">
                         other pane
                       </span>
                     )}
@@ -149,7 +143,7 @@ export function SplitPaneSourcePicker({
           {/* Webcams section */}
           {webcamTiles.length > 0 && (
             <>
-              <div className="mx-2 mt-2 mb-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              <div className="mx-1.5 mb-1 mt-2 text-section uppercase text-text-muted">
                 Cameras
               </div>
               {webcamTiles.map((tile) => {
@@ -160,16 +154,16 @@ export function SplitPaneSourcePicker({
                   <button
                     key={`webcam-${tile.participantId}`}
                     onClick={() => { onSourceChange({ type: 'webcam', userId: tile.participantId }); setIsOpen(false); }}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors ${
+                    className={`flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-meta outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
                       isSelected
-                        ? 'bg-accent-primary/15 text-text-primary'
-                        : 'text-text-secondary hover:bg-bg-mod-subtle'
+                        ? 'bg-accent-tint text-text-primary'
+                        : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
                     }`}
                   >
                     <Video size={13} className="shrink-0 text-accent-primary" />
                     <span className="truncate">{displayName}</span>
                     {inOther && (
-                      <span className="ml-auto shrink-0 rounded bg-bg-mod-strong px-1.5 py-0.5 text-[10px] text-text-muted">
+                      <span className="ml-auto shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 text-meta text-text-muted">
                         other pane
                       </span>
                     )}
@@ -180,8 +174,8 @@ export function SplitPaneSourcePicker({
           )}
 
           {activeStreamers.length === 0 && webcamTiles.length === 0 && (
-            <div className="px-2.5 py-3 text-center text-xs text-text-muted">
-              No active sources available
+            <div className="px-2.5 py-3 text-meta text-text-muted">
+              No one is streaming or on camera right now.
             </div>
           )}
         </div>

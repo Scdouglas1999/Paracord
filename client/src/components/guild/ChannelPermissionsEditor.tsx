@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, Shield, Trash2, Plus, User, X } from 'lucide-react';
+import { Shield, Trash2, Plus, User, RotateCcw } from 'lucide-react';
 import { channelApi } from '../../api/channels';
 import { extractApiError } from '../../api/client';
 import type { ChannelOverwrite, Role } from '../../types';
 import { Permissions } from '../../types';
 import { cn } from '../../lib/utils';
 import { useMemberStore } from '../../stores/memberStore';
-import { LoadingSpinner } from '../ui/Feedback';
+import { LoadingSpinner, ErrorBanner } from '../ui/Feedback';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 
@@ -18,22 +18,41 @@ interface ChannelPermissionsEditorProps {
   onClose: () => void;
 }
 
-const PERMISSION_FLAGS: { key: keyof typeof Permissions; label: string }[] = [
-  { key: 'VIEW_CHANNEL', label: 'View Channel' },
-  { key: 'SEND_MESSAGES', label: 'Send Messages' },
-  { key: 'READ_MESSAGE_HISTORY', label: 'Read Message History' },
-  { key: 'ATTACH_FILES', label: 'Attach Files' },
-  { key: 'EMBED_LINKS', label: 'Embed Links' },
-  { key: 'ADD_REACTIONS', label: 'Add Reactions' },
-  { key: 'MANAGE_MESSAGES', label: 'Manage Messages' },
-  { key: 'MANAGE_CHANNELS', label: 'Manage Channel' },
-  { key: 'MENTION_EVERYONE', label: 'Mention Everyone' },
-  { key: 'USE_EXTERNAL_EMOJIS', label: 'Use External Emojis' },
-  { key: 'CONNECT', label: 'Connect (Voice)' },
-  { key: 'SPEAK', label: 'Speak (Voice)' },
-  { key: 'MUTE_MEMBERS', label: 'Mute Members' },
-  { key: 'DEAFEN_MEMBERS', label: 'Deafen Members' },
-  { key: 'MOVE_MEMBERS', label: 'Move Members' },
+type PermKey = keyof typeof Permissions;
+
+// Overrides grouped by category — headed with --text-section labels and divided,
+// never tiled as identical cards (kill-list #5).
+const PERMISSION_GROUPS: { group: string; perms: { key: PermKey; label: string }[] }[] = [
+  {
+    group: 'General',
+    perms: [
+      { key: 'VIEW_CHANNEL', label: 'View Channel' },
+      { key: 'MANAGE_CHANNELS', label: 'Manage Channel' },
+    ],
+  },
+  {
+    group: 'Messages',
+    perms: [
+      { key: 'SEND_MESSAGES', label: 'Send Messages' },
+      { key: 'READ_MESSAGE_HISTORY', label: 'Read Message History' },
+      { key: 'ATTACH_FILES', label: 'Attach Files' },
+      { key: 'EMBED_LINKS', label: 'Embed Links' },
+      { key: 'ADD_REACTIONS', label: 'Add Reactions' },
+      { key: 'MANAGE_MESSAGES', label: 'Manage Messages' },
+      { key: 'MENTION_EVERYONE', label: 'Mention Everyone' },
+      { key: 'USE_EXTERNAL_EMOJIS', label: 'Use External Emojis' },
+    ],
+  },
+  {
+    group: 'Voice',
+    perms: [
+      { key: 'CONNECT', label: 'Connect' },
+      { key: 'SPEAK', label: 'Speak' },
+      { key: 'MUTE_MEMBERS', label: 'Mute Members' },
+      { key: 'DEAFEN_MEMBERS', label: 'Deafen Members' },
+      { key: 'MOVE_MEMBERS', label: 'Move Members' },
+    ],
+  },
 ];
 
 function permissionEditorError(action: string, err: unknown): string {
@@ -73,6 +92,12 @@ interface EditingOverwrite {
   allow: bigint;
   deny: bigint;
 }
+
+const PERM_STATES: { value: PermState; label: string }[] = [
+  { value: 'deny', label: 'Deny' },
+  { value: 'inherit', label: 'Inherit' },
+  { value: 'allow', label: 'Allow' },
+];
 
 export function ChannelPermissionsEditor({
   channelId,
@@ -153,25 +178,29 @@ export function ChannelPermissionsEditor({
     });
   };
 
-  const handleTogglePerm = (flag: bigint, current: PermState) => {
+  const applyPermState = (flag: bigint, next: PermState) => {
     if (!editing) return;
     let nextAllow = editing.allow;
     let nextDeny = editing.deny;
-
-    // Cycle: inherit -> allow -> deny -> inherit
-    if (current === 'inherit') {
+    if (next === 'allow') {
       nextAllow |= flag;
       nextDeny &= ~flag;
-    } else if (current === 'allow') {
-      nextAllow &= ~flag;
+    } else if (next === 'deny') {
       nextDeny |= flag;
+      nextAllow &= ~flag;
     } else {
       nextAllow &= ~flag;
       nextDeny &= ~flag;
     }
-
     setEditing({ ...editing, allow: nextAllow, deny: nextDeny });
   };
+
+  const resetOverrides = () => {
+    if (!editing) return;
+    setEditing({ ...editing, allow: 0n, deny: 0n });
+  };
+
+  const hasOverrides = editing ? editing.allow !== 0n || editing.deny !== 0n : false;
 
   const handleSave = async () => {
     if (!editing) return;
@@ -270,33 +299,30 @@ export function ChannelPermissionsEditor({
     >
       <div>
         {/* Header */}
-        <div className="flex items-center gap-3 border-b border-border-subtle px-6 py-4">
-          <Shield size={18} className="text-accent-primary" />
-          <div className="flex-1 min-w-0">
-            <div id="channel-permissions-title" className="text-sm font-semibold text-text-primary">
+        <div className="flex items-center gap-3 border-b border-border-subtle bg-bg-secondary px-6 py-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+            <Shield size={18} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div id="channel-permissions-title" className="font-display text-heading text-text-primary">
               Permissions
             </div>
-            <div className="truncate text-xs text-text-muted">#{channelName}</div>
+            <div className="truncate font-code text-meta text-text-muted">#{channelName}</div>
           </div>
-          <button
-            className="rounded-lg px-3 py-1.5 text-sm text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
-            onClick={onClose}
-          >
-            Close
-          </button>
+          <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
         </div>
 
         <div className="flex max-h-[70vh] min-h-[20rem]">
           {/* Left panel: list of overwrites */}
-          <div className="flex w-48 flex-shrink-0 flex-col border-r border-border-subtle">
-            <div className="px-3 pt-3 pb-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted px-1 mb-1.5">
-                Overwrites
-              </div>
+          <div className="flex w-52 shrink-0 flex-col border-r border-border-subtle bg-bg-secondary/40">
+            <div className="px-3 pb-2 pt-3">
+              <div className="mb-1.5 px-1 text-section uppercase text-text-muted">Overrides</div>
               {loading ? (
-                <LoadingSpinner size="sm" className="px-1 py-1.5" label="Loading..." />
+                <LoadingSpinner size="sm" className="px-1 py-1.5" label="Loading…" />
               ) : overwrites.length === 0 ? (
-                <div className="text-xs text-text-muted px-1">No overwrites</div>
+                <p className="px-1 text-meta leading-relaxed text-text-muted">
+                  No overrides yet. Add a role or member below to fine-tune access.
+                </p>
               ) : (
                 <div className="space-y-0.5">
                   {overwrites.map((ow) => (
@@ -304,21 +330,21 @@ export function ChannelPermissionsEditor({
                       key={ow.target_id}
                       onClick={() => startEditing(ow)}
                       className={cn(
-                        'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors',
+                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
                         selectedOverwriteId === ow.target_id
-                          ? 'bg-accent-primary/20 text-text-primary'
+                          ? 'bg-accent-tint text-text-primary'
                           : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
                       )}
                     >
                       {ow.target_type === 1 ? (
-                        <User size={10} className="flex-shrink-0 text-text-muted" />
+                        <User size={13} className="shrink-0 text-text-muted" />
                       ) : (
                         <span
-                          className="h-2 w-2 flex-shrink-0 rounded-full"
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
                           style={{ backgroundColor: getRoleColor(ow.target_id) }}
                         />
                       )}
-                      <span className="flex-1 truncate text-xs">{getTargetName(ow.target_id, ow.target_type)}</span>
+                      <span className="flex-1 truncate text-label">{getTargetName(ow.target_id, ow.target_type)}</span>
                     </button>
                   ))}
                 </div>
@@ -326,76 +352,73 @@ export function ChannelPermissionsEditor({
             </div>
 
             {/* Add overwrite */}
-            <div className="mt-auto border-t border-border-subtle px-3 py-3 space-y-2">
-              <div className="flex items-center gap-1">
-                <button
-                  className={cn(
-                    'flex-1 rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors',
-                    targetMode === 'role'
-                      ? 'bg-accent-primary/20 text-accent-primary'
-                      : 'text-text-muted hover:text-text-secondary'
-                  )}
-                  onClick={() => { setTargetMode('role'); setMemberSearch(''); }}
-                >
-                  Role
-                </button>
-                <button
-                  className={cn(
-                    'flex-1 rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors',
-                    targetMode === 'member'
-                      ? 'bg-accent-primary/20 text-accent-primary'
-                      : 'text-text-muted hover:text-text-secondary'
-                  )}
-                  onClick={() => { setTargetMode('member'); setAddTargetId(''); }}
-                >
-                  Member
-                </button>
+            <div className="mt-auto space-y-2 border-t border-border-subtle px-3 py-3">
+              <div className="flex items-center gap-1 rounded-sm bg-bg-tertiary p-1">
+                {(['role', 'member'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    className={cn(
+                      'flex-1 rounded-sm px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.04em] outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                      targetMode === mode
+                        ? 'bg-accent-primary text-text-on-accent'
+                        : 'text-text-muted hover:text-text-secondary'
+                    )}
+                    onClick={() => {
+                      setTargetMode(mode);
+                      if (mode === 'role') setMemberSearch('');
+                      else setAddTargetId('');
+                    }}
+                  >
+                    {mode === 'role' ? 'Role' : 'Member'}
+                  </button>
+                ))}
               </div>
               {targetMode === 'role' ? (
                 availableRolesToAdd.length === 0 ? (
-                  <div className="text-xs text-text-muted">All roles added</div>
+                  <div className="px-1 text-meta text-text-muted">Every role already has an override.</div>
                 ) : (
                   <div className="flex flex-col gap-1.5">
                     <select
-                      className="w-full rounded-md border border-border-subtle bg-bg-secondary px-2 py-1.5 text-xs text-text-primary outline-none focus:border-accent-primary"
+                      className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-label text-text-primary outline-none transition-colors focus:border-accent-primary"
                       value={addTargetId}
                       onChange={(e) => setAddTargetId(e.target.value)}
                     >
-                      <option value="">Select role...</option>
+                      <option value="">Select role…</option>
                       {availableRolesToAdd.map((r) => (
                         <option key={r.id} value={r.id}>{r.id === guildId ? '@everyone' : r.name}</option>
                       ))}
                     </select>
-                    <button
-                      className="flex w-full items-center justify-center gap-1 rounded-md bg-accent-primary px-2 py-1.5 text-xs font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
+                    <Button
+                      size="sm"
                       onClick={() => void handleAddTarget(addTargetId, 0)}
                       disabled={!addTargetId || saving}
+                      className="w-full gap-1"
                     >
-                      <Plus size={12} />
+                      <Plus size={13} />
                       Add
-                    </button>
+                    </Button>
                   </div>
                 )
               ) : (
                 <div className="flex flex-col gap-1.5">
                   <input
-                    className="w-full rounded-md border border-border-subtle bg-bg-secondary px-2 py-1.5 text-xs text-text-primary outline-none placeholder:text-text-muted focus:border-accent-primary"
-                    placeholder="Search members..."
+                    className="w-full rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5 text-label text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent-primary"
+                    placeholder="Search members…"
                     value={memberSearch}
                     onChange={(e) => setMemberSearch(e.target.value)}
                   />
-                  <div className="max-h-28 overflow-y-auto space-y-0.5">
+                  <div className="max-h-28 space-y-0.5 overflow-y-auto">
                     {filteredMembers.length === 0 ? (
-                      <div className="text-xs text-text-muted px-1">No members found</div>
+                      <div className="px-1 text-meta text-text-muted">No members match that search.</div>
                     ) : (
                       filteredMembers.map((m) => (
                         <button
                           key={m.user.id}
-                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+                          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-label text-text-secondary outline-none transition-colors hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
                           onClick={() => void handleAddTarget(m.user.id, 1)}
                           disabled={saving}
                         >
-                          <User size={10} className="flex-shrink-0 text-text-muted" />
+                          <User size={13} className="shrink-0 text-text-muted" />
                           <span className="truncate">{m.nick || m.user.username}</span>
                         </button>
                       ))
@@ -408,131 +431,117 @@ export function ChannelPermissionsEditor({
 
           {/* Right panel: permission editor */}
           <div className="flex flex-1 flex-col overflow-hidden">
-            {error && (
-              <div role="alert" className="mx-4 mt-4 rounded-lg border border-accent-danger/30 bg-accent-danger/10 px-3 py-2 text-xs text-accent-danger">
-                {error}
-              </div>
-            )}
+            {error && <ErrorBanner message={error} className="mx-4 mt-4" />}
 
             {editing ? (
-              <div className="flex flex-1 flex-col overflow-y-auto">
-                <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
-                  <div className="flex items-center gap-2">
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-5 py-3">
+                  <div className="flex min-w-0 items-center gap-2">
                     {editing.targetType === 1 ? (
-                      <User size={12} className="flex-shrink-0 text-text-muted" />
+                      <User size={14} className="shrink-0 text-text-muted" />
                     ) : (
                       <span
-                        className="h-2.5 w-2.5 rounded-full"
+                        className="h-2.5 w-2.5 shrink-0 rounded-full"
                         style={{ backgroundColor: getRoleColor(editing.targetId) }}
                       />
                     )}
-                    <span className="text-sm font-semibold text-text-primary">
+                    <span className="truncate text-label font-semibold text-text-primary">
                       {getTargetName(editing.targetId, editing.targetType)}
                     </span>
                   </div>
                   <button
-                    className="rounded p-1 text-text-muted transition-colors hover:bg-accent-danger/10 hover:text-accent-danger"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-danger-tint hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
                     title="Remove overwrite"
                     aria-label={`Remove permission overwrite for ${getTargetName(editing.targetId, editing.targetType)}`}
                     onClick={() => void handleDelete(editing.targetId)}
                     disabled={saving}
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={15} />
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1">
-                  <div className="mb-2 grid grid-cols-3 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                    <span>Permission</span>
-                    <span className="text-center text-accent-success">Allow</span>
-                    <span className="text-center text-accent-danger">Deny</span>
-                  </div>
-                  {PERMISSION_FLAGS.map(({ key, label }) => {
-                    const flag = Permissions[key];
-                    const state = computePermState(flag, editing.allow, editing.deny);
-                    return (
-                      <div
-                        key={key}
-                        className="grid grid-cols-3 items-center rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-bg-mod-subtle"
-                      >
-                        <span className="text-xs text-text-secondary">{label}</span>
-                        <div className="flex justify-center">
-                          <button
-                            onClick={() => handleTogglePerm(flag, state)}
-                            className={cn(
-                              'h-5 w-5 rounded border transition-all',
-                              state === 'allow'
-                                ? 'border-accent-success bg-accent-success text-on-accent'
-                                : 'border-border-subtle bg-transparent hover:border-accent-success/50'
-                            )}
-                            title="Allow"
-                            aria-label={`Allow ${label}`}
-                          >
-                            {state === 'allow' && (
-                              <Check size={12} strokeWidth={3} aria-hidden="true" />
-                            )}
-                          </button>
-                        </div>
-                        <div className="flex justify-center">
-                          <button
-                            onClick={() => {
-                              const nextState: PermState = state === 'deny' ? 'inherit' : 'deny';
-                              const flag2 = Permissions[key];
-                              let nextAllow = editing.allow;
-                              let nextDeny = editing.deny;
-                              if (nextState === 'deny') {
-                                nextAllow &= ~flag2;
-                                nextDeny |= flag2;
-                              } else {
-                                nextDeny &= ~flag2;
-                              }
-                              setEditing({ ...editing, allow: nextAllow, deny: nextDeny });
-                            }}
-                            className={cn(
-                              'h-5 w-5 rounded border transition-all',
-                              state === 'deny'
-                                ? 'border-accent-danger bg-accent-danger text-on-accent'
-                                : 'border-border-subtle bg-transparent hover:border-accent-danger/50'
-                            )}
-                            title="Deny"
-                            aria-label={`Deny ${label}`}
-                          >
-                            {state === 'deny' && (
-                              <X size={12} strokeWidth={3} aria-hidden="true" />
-                            )}
-                          </button>
-                        </div>
+                <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+                  {PERMISSION_GROUPS.map(({ group, perms }) => (
+                    <div key={group}>
+                      <div className="mb-2 text-section uppercase text-text-muted">{group}</div>
+                      <div className="divide-y divide-border-subtle">
+                        {perms.map(({ key, label }) => {
+                          const flag = Permissions[key];
+                          const state = computePermState(flag, editing.allow, editing.deny);
+                          return (
+                            <div key={key} className="flex items-center justify-between gap-3 py-2">
+                              <span className="min-w-0 truncate text-label text-text-secondary">{label}</span>
+                              <div className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-tertiary p-0.5">
+                                {PERM_STATES.map(({ value, label: stateLabel }) => {
+                                  const active = state === value;
+                                  return (
+                                    <button
+                                      key={value}
+                                      type="button"
+                                      onClick={() => applyPermState(flag, value)}
+                                      aria-pressed={active}
+                                      aria-label={`${stateLabel} ${label}`}
+                                      title={stateLabel}
+                                      className={cn(
+                                        'rounded-xs px-2.5 py-1 text-[11px] font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                                        active && value === 'allow' && 'bg-accent-success text-text-on-accent',
+                                        active && value === 'deny' && 'bg-accent-danger text-text-on-danger',
+                                        active && value === 'inherit' && 'bg-bg-mod-strong text-text-primary',
+                                        !active && 'text-text-muted hover:text-text-secondary',
+                                      )}
+                                    >
+                                      {stateLabel}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
 
-                <div className="border-t border-border-subtle px-4 py-3 flex gap-2 justify-end">
+                <div className="flex items-center justify-between gap-2 border-t border-border-subtle px-5 py-3">
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => {
-                      setEditing(null);
-                      setSelectedOverwriteId(null);
-                    }}
+                    onClick={resetOverrides}
+                    disabled={!hasOverrides || saving}
+                    className="gap-1.5"
                   >
-                    Cancel
+                    <RotateCcw size={14} />
+                    Reset to inherit
                   </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => void handleSave()}
-                    disabled={saving}
-                    loading={saving}
-                  >
-                    Save
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setEditing(null);
+                        setSelectedOverwriteId(null);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={() => void handleSave()} disabled={saving} loading={saving}>
+                      Save
+                    </Button>
+                  </div>
                 </div>
               </div>
             ) : (
-              <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-                {overwrites.length === 0
-                  ? 'Add a role or member to configure permission overwrites'
-                  : 'Select an overwrite to edit its permissions'}
+              <div className="flex flex-1 flex-col items-start justify-center px-6 py-8">
+                <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-sm bg-accent-tint text-text-muted">
+                  <Shield size={20} />
+                </div>
+                <h3 className="text-subhead text-text-primary">Fine-tune who can do what</h3>
+                <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-text-secondary">
+                  {overwrites.length === 0
+                    ? 'Add a role or member on the left, then allow or deny individual permissions for #' + channelName + '.'
+                    : 'Pick an override on the left to allow or deny permissions for it.'}
+                </p>
               </div>
             )}
           </div>

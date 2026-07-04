@@ -32,35 +32,25 @@ export function VoiceParticipants({
   if (participants.length === 0) return null;
 
   return (
-    <div
-      className="mb-2 mt-0.5 ml-10 space-y-1 border-l pl-2.5"
-      style={{ borderColor: 'var(--border-subtle)' }}
-    >
+    <div className="mb-2 ml-[1.375rem] mt-0.5 space-y-0.5 border-l border-border-subtle pl-3">
       {participants.map((vs) => {
         const isSpeaking = speakingUsers.has(vs.user_id);
         return (
-          <div
-            key={vs.user_id}
-            className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5"
-          >
+          <div key={vs.user_id} className="flex items-center gap-2.5 rounded-sm px-2 py-1">
             <div
               className={cn(
-                'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white transition-shadow duration-200',
-                isSpeaking
-                  ? 'ring-2 ring-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]'
-                  : ''
+                'flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-primary text-meta font-semibold text-text-on-accent transition-shadow duration-[140ms] ease-[var(--ease-out)]',
+                isSpeaking &&
+                  'ring-2 ring-accent-primary shadow-[0_0_8px_rgba(var(--accent-primary-rgb),0.55)]',
               )}
-              style={{ backgroundColor: 'var(--accent-primary)' }}
             >
               {(vs.username || vs.user_id).charAt(0).toUpperCase()}
             </div>
-            <span className="truncate text-[13px] font-medium text-text-secondary">
+            <span className="truncate text-label text-text-secondary">
               {vs.username || `User ${vs.user_id.slice(0, 6)}`}
             </span>
-            <div className="ml-auto flex items-center gap-1">
-              {vs.self_video && (
-                <Video size={13} className="text-accent-primary" />
-              )}
+            <div className="ml-auto flex items-center gap-1.5">
+              {vs.self_video && <Video size={14} className="text-accent-primary" />}
               {vs.self_stream && (
                 <button
                   type="button"
@@ -72,16 +62,15 @@ export function VoiceParticipants({
                       navigate(`/app/guilds/${gId}/channels/${channel.id}`);
                     }
                   }}
-                  className="inline-flex items-center rounded px-1 py-0.5 text-[9px] font-bold uppercase leading-none tracking-wider text-accent-danger transition-colors hover:bg-accent-danger/20 cursor-pointer"
-                  style={{ backgroundColor: 'rgba(255, 93, 114, 0.15)' }}
+                  className="inline-flex items-center rounded-xs bg-danger-tint px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-wide text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger/20 focus-visible:shadow-[var(--focus-ring)]"
                   title={`Watch ${vs.username || 'user'}'s stream`}
                   aria-label={`Watch ${vs.username || 'user'}'s stream`}
                 >
                   Live
                 </button>
               )}
-              {vs.self_mute && <MicOff size={13} className="text-text-muted" />}
-              {vs.self_deaf && <HeadphoneOff size={13} className="text-text-muted" />}
+              {vs.self_mute && <MicOff size={14} className="text-accent-danger" />}
+              {vs.self_deaf && <HeadphoneOff size={14} className="text-accent-danger" />}
             </div>
           </div>
         );

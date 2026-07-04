@@ -111,6 +111,6 @@ describe('TopBar inbox', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to load inbox: Read-state service unavailable.',
     );
-    expect(screen.queryByText("You're all caught up! No unread messages.")).not.toBeInTheDocument();
+    expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
   });
 });

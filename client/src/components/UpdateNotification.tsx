@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
-import { X } from 'lucide-react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { ArrowDownToLine, CheckCircle2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { safeExternalUrl } from '../lib/security';
 import { isTauri } from '../lib/tauriEnv';
+import { Button } from './ui/Button';
 
 const GITHUB_OWNER = (import.meta.env.VITE_GITHUB_OWNER as string | undefined)?.trim() || 'Scoduglas1999';
 const GITHUB_REPO = (import.meta.env.VITE_GITHUB_REPO as string | undefined)?.trim() || 'Paracord';
@@ -133,6 +135,7 @@ function getErrorMessage(error: unknown): string {
 
 export function UpdateNotification() {
   const runningInTauri = useMemo(() => isTauri(), []);
+  const reduceMotion = useReducedMotion();
   const activeUpdateRef = useRef<Update | null>(null);
   const statusRef = useRef<UpdateStatus>('idle');
   const visibleRef = useRef(false);
@@ -282,17 +285,35 @@ export function UpdateNotification() {
 
   if (!runningInTauri || !visible || !updateInfo) return null;
 
+  const downloaded = status === 'downloaded';
+  const StatusIcon = downloaded ? CheckCircle2 : ArrowDownToLine;
+  const statusColor = downloaded ? 'var(--accent-success)' : 'var(--accent-info)';
+
+  // Toast recipe (design-spec §7): bg-accent surface, hairline border, radius-md,
+  // shadow-lg, a leading semantic state icon, --text-label title and --text-meta body.
   return (
-    <div className="fixed bottom-4 right-4 z-[140] w-[min(24rem,calc(100vw-1.5rem))] rounded-xl border border-border-subtle bg-[color:var(--bg-floating)] p-3 shadow-xl backdrop-blur">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-text-primary">New release available</div>
-          <div className="mt-1 text-xs text-text-secondary">
+    <motion.div
+      role="status"
+      aria-live="polite"
+      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+      className="fixed bottom-4 right-4 z-[140] w-[min(24rem,calc(100vw-1.5rem))] rounded-md border border-border-subtle bg-bg-accent p-4 shadow-lg"
+    >
+      <div className="flex items-start gap-3">
+        <StatusIcon size={18} style={{ color: statusColor, flexShrink: 0, marginTop: '1px' }} />
+        <div className="min-w-0 flex-1">
+          <div className="text-label text-text-primary">
+            {downloaded ? 'Update ready to install' : 'New release available'}
+          </div>
+          <div className="mt-0.5 text-meta text-text-secondary">
             Paracord {updateInfo.version}
-            {updateInfo.publishedAt ? ` - ${new Date(updateInfo.publishedAt).toLocaleDateString()}` : ''}
+            {updateInfo.publishedAt
+              ? ` · ${new Date(updateInfo.publishedAt).toLocaleDateString()}`
+              : ''}
           </div>
           <a
-            className="mt-1 inline-block text-xs text-text-link hover:underline"
+            className="mt-1 inline-block rounded-sm text-meta font-medium text-text-link outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
             href={updateInfo.htmlUrl}
             target="_blank"
             rel="noreferrer"
@@ -301,7 +322,7 @@ export function UpdateNotification() {
           </a>
         </div>
         <button
-          className="icon-btn !h-7 !w-7 shrink-0 text-text-muted hover:text-text-primary"
+          className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           onClick={onDismiss}
           type="button"
           aria-label="Dismiss update notification"
@@ -310,31 +331,35 @@ export function UpdateNotification() {
         </button>
       </div>
 
-      <div className="mt-3 text-xs text-text-muted">
-        {status === 'downloaded' ? `Downloaded ${updateInfo.assetName}` : updateInfo.assetName}
+      <div className="mt-3 truncate font-code text-meta text-text-muted" title={updateInfo.assetName}>
+        {downloaded ? `Downloaded ${updateInfo.assetName}` : updateInfo.assetName}
       </div>
 
-      {errorText && <div className="mt-2 text-xs text-accent-danger">{errorText}</div>}
+      {errorText && (
+        <div className="mt-2 rounded-sm bg-danger-tint px-2.5 py-1.5 text-meta text-accent-danger">
+          {errorText}
+        </div>
+      )}
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {status === 'downloaded' ? (
-          <button className="btn-primary !min-h-9 !px-3 !text-sm" onClick={onRestartAndInstall} type="button">
+      <div className="mt-3.5 flex flex-wrap items-center gap-2">
+        {downloaded ? (
+          <Button size="sm" onClick={onRestartAndInstall}>
             Restart to install
-          </button>
+          </Button>
         ) : (
-          <button
-            className="btn-primary !min-h-9 !px-3 !text-sm"
+          <Button
+            size="sm"
             onClick={onDownload}
-            type="button"
+            loading={status === 'downloading'}
             disabled={status === 'checking' || status === 'downloading'}
           >
-            {status === 'downloading' ? 'Downloading...' : 'Download update'}
-          </button>
+            {status === 'downloading' ? 'Downloading…' : 'Download update'}
+          </Button>
         )}
-        <button className="btn-ghost !min-h-9 !px-3 !text-sm" onClick={onDismiss} type="button">
-          {status === 'downloaded' ? 'Later' : 'Dismiss'}
-        </button>
+        <Button size="sm" variant="ghost" onClick={onDismiss}>
+          {downloaded ? 'Later' : 'Dismiss'}
+        </Button>
       </div>
-    </div>
+    </motion.div>
   );
 }

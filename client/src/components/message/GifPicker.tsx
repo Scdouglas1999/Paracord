@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { Search, WifiOff, RotateCw } from 'lucide-react';
 import { tenorApi } from '../../api/tenor';
 import { safeExternalUrl } from '../../lib/security';
-import { LoadingSpinner } from '../ui/Feedback';
+import { EmptyState } from '../ui/Feedback';
+import { Skeleton } from '../ui/Skeleton';
 
 interface TenorGif {
   id: string;
@@ -108,148 +110,87 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
   return (
     <div
       ref={pickerRef}
-      className="popup-enter"
-      style={{
-        width: 400,
-        maxHeight: 460,
-        display: 'flex',
-        flexDirection: 'column',
-        borderRadius: '1rem',
-        background: 'linear-gradient(165deg, var(--glass-modal-fill-top), var(--glass-modal-fill-bottom))',
-        backdropFilter: 'blur(22px) saturate(150%)',
-        border: '1px solid var(--border-strong)',
-        boxShadow: 'var(--shadow-xl)',
-        overflow: 'hidden',
-      }}
+      className="popup-enter flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
+      style={{ width: 400, maxHeight: 460 }}
     >
-      {/* Search input */}
-      <div style={{ padding: '10px 12px 6px', flexShrink: 0 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--bg-mod-subtle)',
-            borderRadius: 8,
-            padding: '6px 10px',
-          }}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ color: 'var(--text-muted)', flexShrink: 0 }}
-          >
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
+      {/* Inset search */}
+      <div className="shrink-0 px-3 pb-1.5 pt-3">
+        <div className="flex items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2.5 py-2 transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+          <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
             placeholder="Search GIFs..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
-            style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              fontSize: 13,
-              color: 'var(--text-primary)',
-              lineHeight: 1.4,
-            }}
+            className="flex-1 bg-transparent text-body text-text-primary placeholder:text-text-muted outline-none"
           />
         </div>
       </div>
 
       {/* GIF grid */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '4px 8px 8px',
-          scrollbarWidth: 'thin',
-          scrollbarColor: 'var(--scrollbar-auto-thumb) transparent',
-        }}
-      >
-        {error && (
-          <div style={{ padding: '16px 8px', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
-            {error}
+      <div className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2 pt-1">
+        {error ? (
+          <EmptyState
+            role="alert"
+            icon={<WifiOff size={20} className="text-accent-danger" />}
+            title="GIF search is offline"
+            description={error}
+            action={
+              <button
+                type="button"
+                onClick={() => void fetchGifs(query)}
+                className="inline-flex items-center gap-1.5 rounded-sm bg-accent-primary px-3.5 py-2 text-label font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:bg-accent-primary-active focus-visible:shadow-[var(--focus-ring)]"
+              >
+                <RotateCw size={15} />
+                Try again
+              </button>
+            }
+          />
+        ) : loading && visibleGifs.length === 0 ? (
+          <div className="p-1 [column-gap:0.5rem] [columns:2]" aria-busy="true" aria-label="Loading GIFs">
+            {[168, 120, 148, 132, 176, 112].map((h, i) => (
+              <div key={i} className="mb-2 [break-inside:avoid]">
+                <Skeleton height={h} borderRadius="var(--radius-sm)" />
+              </div>
+            ))}
           </div>
-        )}
-
-        {loading && visibleGifs.length === 0 && !error && (
-          <div className="py-4">
-            <LoadingSpinner size="sm" />
-          </div>
-        )}
-
-        {!loading && !error && visibleGifs.length === 0 && (
-          <div style={{ padding: '16px 8px', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
-            No GIFs found.
-          </div>
-        )}
-
-        {visibleGifs.length > 0 && (
-          <div style={{ columns: 2, columnGap: 6 }}>
-            {visibleGifs.map(({ gif, renderData }) => {
-              return (
-                <button
-                  key={gif.id}
-                  type="button"
-                  onClick={() => handleSelect(gif)}
-                  title={gif.title || 'GIF'}
-                  aria-label={`Select GIF ${gif.title || gif.id}`}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    padding: 0,
-                    marginBottom: 6,
-                    background: 'transparent',
-                    border: 'none',
-                    borderRadius: 8,
-                    cursor: 'pointer',
-                    overflow: 'hidden',
-                    breakInside: 'avoid',
-                    aspectRatio: String(renderData.aspectRatio),
-                  }}
-                >
-                  <img
-                    src={renderData.thumbUrl}
-                    alt={gif.title || 'GIF'}
-                    loading="lazy"
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      objectFit: 'cover',
-                      borderRadius: 8,
-                      display: 'block',
-                    }}
-                  />
-                </button>
-              );
-            })}
+        ) : visibleGifs.length === 0 ? (
+          <EmptyState
+            icon={<Search size={20} />}
+            title="No GIFs found"
+            description={
+              query.trim()
+                ? `Nothing matches "${query.trim()}" — try a broader search.`
+                : 'Search Tenor for a reaction, moment, or meme to drop in chat.'
+            }
+          />
+        ) : (
+          <div className="p-1 [column-gap:0.5rem] [columns:2]">
+            {visibleGifs.map(({ gif, renderData }) => (
+              <button
+                key={gif.id}
+                type="button"
+                onClick={() => handleSelect(gif)}
+                title={gif.title || 'GIF'}
+                aria-label={`Select GIF ${gif.title || gif.id}`}
+                className="mb-2 block w-full overflow-hidden rounded-sm outline-none transition-[box-shadow] duration-[140ms] ease-[var(--ease-out)] [break-inside:avoid] hover:shadow-md focus-visible:shadow-[var(--focus-ring)]"
+                style={{ aspectRatio: String(renderData.aspectRatio) }}
+              >
+                <img
+                  src={renderData.thumbUrl}
+                  alt={gif.title || 'GIF'}
+                  loading="lazy"
+                  className="block h-full w-full rounded-sm object-cover"
+                />
+              </button>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Powered by Tenor attribution */}
-      <div
-        style={{
-          padding: '6px 12px',
-          borderTop: '1px solid var(--border-subtle)',
-          flexShrink: 0,
-          fontSize: 10,
-          color: 'var(--text-muted)',
-          textAlign: 'right',
-        }}
-      >
+      {/* Attribution */}
+      <div className="shrink-0 border-t border-border-subtle px-3 py-1.5 text-right text-[10px] text-text-muted">
         Powered by Tenor
       </div>
     </div>

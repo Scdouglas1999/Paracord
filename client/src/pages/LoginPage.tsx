@@ -349,7 +349,7 @@ export function LoginPage() {
           <form onSubmit={handleForgotPassword} className="flex flex-col gap-6 p-8">
             <AuthHeading
               title="Reset your password"
-              subtitle="Enter your email or username and we\u2019ll generate a reset token you can redeem below."
+              subtitle="Enter your email or username and we’ll generate a reset token you can redeem below."
             />
 
             {error && <ErrorBanner message={error} />}

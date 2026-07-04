@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
-import { Upload, X, FileText, AlertTriangle } from 'lucide-react';
+import { UploadCloud, X, FileText, AlertTriangle } from 'lucide-react';
 import { isAllowedImageMimeType } from '../../lib/security';
 import { formatFileSize } from '../../lib/formatters';
 
@@ -49,13 +49,14 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
 
   return (
     <div>
-      {/* Drop zone */}
+      {/* Drop zone (design-spec §7 Input): dashed --border-strong, drag-over lifts to
+          an --accent-tint fill with an --accent-primary border. */}
       <button
         type="button"
-        className="cursor-pointer rounded-xl border-2 border-dashed p-7 text-center transition-colors"
+        className="w-full cursor-pointer rounded-md border border-dashed px-6 py-7 text-center outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]"
         style={{
-          borderColor: isDragOver ? 'var(--accent-primary)' : 'var(--border-subtle)',
-          backgroundColor: isDragOver ? 'var(--bg-mod-subtle)' : 'transparent',
+          borderColor: isDragOver ? 'var(--accent-primary)' : 'var(--border-strong)',
+          backgroundColor: isDragOver ? 'var(--accent-tint)' : 'transparent',
         }}
         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
         onDragLeave={() => setIsDragOver(false)}
@@ -63,13 +64,13 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
         onClick={() => fileInputRef.current?.click()}
         aria-label="Select files to upload"
       >
-        <Upload size={32} style={{ color: 'var(--text-muted)', margin: '0 auto 8px' }} />
-        <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
-          Drag and drop files here
-        </div>
-        <div className="mt-1.5 text-sm" style={{ color: 'var(--text-muted)' }}>
-          or click to browse
-        </div>
+        <UploadCloud
+          size={26}
+          className="mx-auto mb-2.5"
+          style={{ color: isDragOver ? 'var(--accent-primary)' : 'var(--text-muted)' }}
+        />
+        <div className="text-label text-text-primary">Drop files to attach</div>
+        <div className="mt-1 text-meta text-text-muted">or click to browse your device</div>
       </button>
       <input
         ref={fileInputRef}
@@ -81,44 +82,47 @@ export function FileUpload({ onFilesSelected, stagedFiles, onRemoveFile }: FileU
 
       {/* Staged files */}
       {stagedFiles.length > 0 && (
-        <div className="mt-4 space-y-2.5">
-          {stagedFiles.map((file, i) => (
-            <div
-              key={i}
-              className="group flex items-center gap-3.5 rounded-lg px-3.5 py-2.5"
-              style={{ backgroundColor: 'var(--bg-secondary)' }}
-            >
-              {canPreviewImage(file) ? (
-                <img
-                  src={stagedImagePreviews[i] || ''}
-                  alt={file.name}
-                  className="h-11 w-11 rounded-md object-cover"
-                />
-              ) : (
-                <FileText size={20} style={{ color: 'var(--text-muted)' }} />
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="truncate text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{file.name}</div>
-                <div className="text-sm" style={{ color: 'var(--text-muted)' }}>{formatFileSize(file.size)}</div>
-              </div>
-              {file.size > ONE_GB && (
-                <div className="flex items-center gap-1 text-sm" style={{ color: 'var(--accent-warning)' }}>
-                  <AlertTriangle size={14} />
-                  P2P transfer
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => onRemoveFile(i)}
-                className="rounded p-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-                style={{ color: 'var(--text-muted)' }}
-                aria-label={`Remove ${file.name}`}
-                title={`Remove ${file.name}`}
+        <div className="mt-4 space-y-1.5">
+          {stagedFiles.map((file, i) => {
+            const oversize = file.size > ONE_GB;
+            return (
+              <div
+                key={i}
+                className="group flex items-center gap-3 rounded-sm bg-bg-mod-subtle px-3 py-2 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong"
               >
-                <X size={16} />
-              </button>
-            </div>
-          ))}
+                {canPreviewImage(file) ? (
+                  <img
+                    src={stagedImagePreviews[i] || ''}
+                    alt={file.name}
+                    className="h-10 w-10 shrink-0 rounded-sm object-cover"
+                  />
+                ) : (
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-bg-tertiary text-text-muted">
+                    <FileText size={18} />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-label text-text-primary">{file.name}</div>
+                  <div className="text-meta tabular-nums text-text-muted">{formatFileSize(file.size)}</div>
+                </div>
+                {oversize && (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-xs bg-warning-tint px-2 py-0.5 text-meta font-semibold text-accent-warning">
+                    <AlertTriangle size={12} />
+                    P2P transfer
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onRemoveFile(i)}
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted opacity-0 outline-none transition-[color,background-color,opacity] duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                  aria-label={`Remove ${file.name}`}
+                  title={`Remove ${file.name}`}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

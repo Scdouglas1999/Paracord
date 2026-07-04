@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Bug, Home, RefreshCw, RotateCcw } from 'lucide-react';
 import { safeExternalUrl } from '../lib/security';
+import { Button } from './ui/Button';
 
 interface Props {
   children: ReactNode;
@@ -56,47 +58,48 @@ export class ErrorBoundary extends Component<Props, State> {
     const remainingRetries = Math.max(0, MAX_RETRIES - this.state.retryCount);
 
     return (
-      <div className="flex min-h-screen items-center justify-center bg-bg-primary px-4 py-8">
-        <div className="w-full max-w-2xl rounded-2xl border border-border-subtle bg-bg-secondary p-6 shadow-lg">
-          <h1 className="text-xl font-bold text-accent-danger">Application Error</h1>
-          <p className="mt-2 text-sm text-text-secondary">
-            A rendering error interrupted this screen. You can retry, return home, or reload the app.
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary px-4 py-10">
+        <div className="w-full max-w-2xl rounded-md border border-border-subtle bg-bg-secondary p-8 shadow-md">
+          <div className="flex h-11 w-11 items-center justify-center rounded-sm bg-danger-tint text-accent-danger">
+            <Bug size={22} />
+          </div>
+          <h1 className="mt-5 font-display text-title text-text-primary">
+            Something broke on our end
+          </h1>
+          <p className="mt-2 max-w-prose text-body text-text-secondary">
+            A rendering error interrupted this screen — your account and messages are safe.
+            Retry the view, head back home, or reload the app to recover.
           </p>
 
-          <details className="mt-4 rounded-xl border border-border-subtle bg-bg-mod-subtle/40 p-3">
-            <summary className="cursor-pointer text-sm font-semibold text-text-primary">
-              Error details
+          <details className="mt-6 overflow-hidden rounded-sm border border-border-subtle bg-bg-tertiary">
+            <summary className="cursor-pointer list-none px-3.5 py-2.5 text-label text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:text-text-primary">
+              Technical details
             </summary>
-            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border-subtle bg-bg-primary p-3 text-xs text-text-muted">
+            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-border-subtle px-3.5 py-3 font-code text-meta text-text-muted">
               {this.state.error?.toString()}
               {'\n\n'}
               {this.state.errorInfo?.componentStack}
             </pre>
           </details>
 
-          <div className="mt-5 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={this.resetBoundary}
-              disabled={remainingRetries === 0}
-            >
+          <div className="mt-6 flex flex-wrap items-center gap-2.5">
+            <Button onClick={this.resetBoundary} disabled={remainingRetries === 0}>
+              <RotateCcw size={16} className="mr-1.5" />
               {remainingRetries > 0 ? `Retry (${remainingRetries} left)` : 'Retry limit reached'}
-            </button>
-            <a
-              href="/app"
-              className="btn-ghost inline-flex items-center justify-center"
-            >
-              Return Home
-            </a>
-            <button type="button" className="btn-ghost" onClick={() => window.location.reload()}>
-              Reload App
-            </button>
+            </Button>
+            <Button variant="secondary" onClick={() => (window.location.href = '/app')}>
+              <Home size={16} className="mr-1.5" />
+              Return home
+            </Button>
+            <Button variant="ghost" onClick={() => window.location.reload()}>
+              <RefreshCw size={16} className="mr-1.5" />
+              Reload app
+            </Button>
             <a
               href={BUG_REPORT_URL}
               target="_blank"
               rel="noreferrer"
-              className="ml-auto text-xs font-semibold text-text-link hover:underline"
+              className="ml-auto rounded-sm px-1 text-meta font-semibold text-text-link outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:underline focus-visible:shadow-[var(--focus-ring)]"
             >
               Report bug
             </a>

@@ -12,7 +12,6 @@ import {
   HelpCircle,
   Volume2,
   MessageSquare,
-  X,
   PanelLeftClose,
   PanelLeftOpen,
   Wifi,
@@ -333,14 +332,14 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
           onClick={onClick}
           disabled={disabled}
           className={cn(
-            'architect-top-icon relative',
-            active && 'architect-top-icon-active',
-            disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-text-muted'
+            'relative inline-flex h-9 w-9 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]',
+            active && 'bg-accent-tint text-accent-primary hover:bg-accent-tint-strong hover:text-accent-primary',
+            disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-interactive-muted',
           )}
         >
-          <Icon size={isMobile ? 17 : 16} />
+          <Icon size={18} />
           {badge != null && badge > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-primary px-1 text-[9px] font-bold text-white">
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-primary px-1 text-[10px] font-bold tabular-nums text-text-on-accent">
               {badge > 99 ? '99+' : badge}
             </span>
           )}
@@ -349,24 +348,21 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
     </div>
   );
 
+  const ChannelIcon = isVoice ? Volume2 : isForum ? MessageSquare : Hash;
+
   return (
-    <div className="z-10 flex min-h-[80px] w-full shrink-0 items-start justify-between px-4 pb-3 pt-4 sm:px-5 sm:pb-3.5 sm:pt-4.5 md:px-6">
+    <div className="z-10 flex h-[3.25rem] w-full shrink-0 items-center justify-between gap-2 border-b border-border-subtle bg-bg-secondary px-3 sm:px-4">
       {/* Left: channel info */}
-      <div className="mr-2 flex min-w-0 flex-1 items-start overflow-hidden sm:mr-3">
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
         {!isMobile && (
           <button
             type="button"
             onClick={toggleSidebar}
-            className={cn(
-              'mr-3.5 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors',
-              sidebarOpen
-                ? 'border-border-subtle bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary'
-                : 'border-border-subtle/80 bg-bg-mod-subtle/40 text-text-muted hover:bg-bg-mod-subtle hover:text-text-primary'
-            )}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
             title={sidebarOpen ? 'Collapse channel sidebar' : 'Expand channel sidebar'}
             aria-label={sidebarOpen ? 'Collapse channel sidebar' : 'Expand channel sidebar'}
           >
-            {sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+            {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           </button>
         )}
         {isMobile && (
@@ -376,7 +372,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
               if (!sidebarOpen) toggleSidebar();
               setSidebarCollapsed(false);
             }}
-            className="mr-2.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border-subtle/70 bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
             title="Open sidebar"
             aria-label="Open sidebar"
           >
@@ -384,49 +380,47 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
           </button>
         )}
         {isDM ? (
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-bg-mod-strong text-sm font-semibold text-text-primary">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-text-on-accent">
               {recipientName?.charAt(0).toUpperCase() || '?'}
-            </div>
-            <div className="min-w-0">
-              <span className="block truncate text-[17px] font-semibold leading-tight text-text-primary">
-                {recipientName || 'Direct Message'}
-              </span>
-              <span className="mt-1 block truncate text-xs text-text-muted">Direct conversation</span>
-            </div>
+            </span>
+            <span className="truncate text-[15px] font-semibold text-text-primary">
+              {recipientName || 'Direct Message'}
+            </span>
+            <span className="hidden h-4 w-px shrink-0 bg-border-strong sm:block" aria-hidden />
+            <span className="hidden truncate text-label text-text-secondary sm:block">Direct message</span>
           </div>
         ) : (
-          <div className="flex min-w-0 flex-col pt-0.5">
-            <div className="flex min-w-0 items-center gap-2">
-              {isVoice ? (
-                <Volume2 size={15} className="shrink-0 text-text-muted" />
-              ) : isForum ? (
-                <MessageSquare size={15} className="shrink-0 text-text-muted" />
-              ) : (
-                <Hash size={15} className="shrink-0 text-text-muted" />
-              )}
-              <span className="truncate text-[17px] font-semibold leading-tight text-text-primary">
-                {`# ${channelName || 'channel'}`}
-              </span>
-            </div>
-            <span className="mt-1 block max-w-[54ch] truncate text-xs text-text-muted">
-              {channelTopic || 'Conversation and collaboration'}
+          <div className="flex min-w-0 items-center gap-2">
+            <ChannelIcon size={18} className="shrink-0 text-channel-icon" />
+            <span className="truncate text-[15px] font-semibold text-text-primary">
+              {channelName || 'channel'}
             </span>
+            {channelTopic && (
+              <>
+                <span className="hidden h-4 w-px shrink-0 bg-border-strong md:block" aria-hidden />
+                <span className="hidden min-w-0 truncate text-label text-text-secondary md:block">
+                  {channelTopic}
+                </span>
+              </>
+            )}
           </div>
         )}
       </div>
 
       {/* Right: action buttons */}
-      <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+      <div className="flex shrink-0 items-center gap-0.5">
         {systemAudioCaptureActive && (
-          <TopBarIcon
-            icon={AlertTriangle}
-            onClick={() => { }}
-            active
-            tooltip="System audio capture is active"
-            disabled
-            className="text-amber-400"
-          />
+          <Tooltip content="System audio capture is active" side="bottom">
+            <button
+              type="button"
+              disabled
+              aria-label="System audio capture is active"
+              className="inline-flex h-9 w-9 cursor-default items-center justify-center rounded-sm bg-warning-tint text-accent-warning"
+            >
+              <AlertTriangle size={18} />
+            </button>
+          </Tooltip>
         )}
         {isDM && (dmChannelId || channelId) && (
           <Tooltip content={isInDmCall ? 'End Call' : 'Start Voice Call'} side="bottom">
@@ -435,12 +429,12 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
               onClick={() => void handleDmCallToggle()}
               disabled={dmCallLoading}
               className={cn(
-                'architect-top-icon',
-                isInDmCall ? 'text-accent-danger hover:bg-accent-danger/10' : 'text-accent-success hover:bg-accent-success/10',
+                'inline-flex h-9 w-9 items-center justify-center rounded-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+                isInDmCall ? 'text-accent-danger hover:bg-danger-tint' : 'text-accent-success hover:bg-success-tint',
                 dmCallLoading && 'cursor-not-allowed opacity-40'
               )}
             >
-              {isInDmCall ? <PhoneOff size={isMobile ? 17 : 16} /> : <Phone size={isMobile ? 17 : 16} />}
+              {isInDmCall ? <PhoneOff size={18} /> : <Phone size={18} />}
             </button>
           </Tooltip>
         )}
@@ -487,7 +481,7 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
         {/* Connection latency indicator */}
         {connectionStatus === 'connected' && (
           <Tooltip content={`Latency: ${connectionLatency}ms`} side="bottom">
-            <div className="hidden items-center gap-1 rounded-lg border border-border-subtle/60 px-2 py-1 md:flex">
+            <div className="ml-1 hidden items-center gap-1.5 rounded-sm border border-border-subtle px-2 py-1 md:flex">
               <Wifi size={12} className={cn(
                 connectionLatency < 100
                   ? 'text-accent-success'
@@ -525,45 +519,40 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
         onClose={() => setShowSummary(false)}
         dialogRef={summaryDialogRef as RefObject<HTMLDivElement | null>}
         titleId="topbar-summary-title"
+        title="Catch Up Summary"
+        icon={Sparkles}
+        closeLabel="Close summary"
         panelClassName="max-h-[min(82dvh,40rem)] w-full max-w-2xl"
+        bodyClassName="p-4 sm:p-5"
       >
-              <div className="panel-divider flex items-center justify-between border-b px-5 py-4.5">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={16} className="text-accent-primary" />
-                  <div id="topbar-summary-title" className="font-bold text-text-primary">Catch Up Summary</div>
-                </div>
-                <button className="command-icon-btn" onClick={() => setShowSummary(false)} aria-label="Close summary"><X size={16} /></button>
+        {summaryLoading ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-label text-text-muted">
+            <Loader2 size={16} className="animate-spin" />
+            <span>Reading the last few hours…</span>
+          </div>
+        ) : summaryError ? (
+          <div
+            role="alert"
+            className="rounded-md border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
+          >
+            {summaryError}
+          </div>
+        ) : (
+          <>
+            {summaryMeta && (
+              <div className="mb-3 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-meta text-text-muted">
+                <span>Provider <span className="font-semibold text-text-secondary">{summaryMeta.provider}</span></span>
+                <span aria-hidden>·</span>
+                <span>Model <span className="font-semibold text-text-secondary">{summaryMeta.model}</span></span>
+                <span aria-hidden>·</span>
+                <span className="tabular-nums"><span className="font-semibold text-text-secondary">{summaryMeta.messageCount}</span> messages</span>
               </div>
-              <div className="max-h-[min(67dvh,31rem)] overflow-y-auto bg-bg-primary p-4 sm:p-5 scrollbar-thin">
-                {summaryLoading ? (
-                  <div className="flex items-center justify-center gap-2 py-12 text-text-muted">
-                    <Loader2 size={16} className="animate-spin" />
-                    <span>Generating summary...</span>
-                  </div>
-                ) : summaryError ? (
-                  <div
-                    role="alert"
-                    className="rounded-xl border border-accent-danger/30 bg-accent-danger/10 px-4 py-3 text-sm text-accent-danger"
-                  >
-                    {summaryError}
-                  </div>
-                ) : (
-                  <>
-                    {summaryMeta && (
-                      <div className="mb-3 text-xs text-text-muted">
-                        Provider: <span className="font-semibold text-text-secondary">{summaryMeta.provider}</span>
-                        {' · '}
-                        Model: <span className="font-semibold text-text-secondary">{summaryMeta.model}</span>
-                        {' · '}
-                        Messages: <span className="font-semibold text-text-secondary">{summaryMeta.messageCount}</span>
-                      </div>
-                    )}
-                    <pre className="whitespace-pre-wrap rounded-xl border border-border-subtle bg-bg-mod-subtle p-4 text-sm leading-6 text-text-secondary">
-                      {summaryText || 'No summary available.'}
-                    </pre>
-                  </>
-                )}
-              </div>
+            )}
+            <pre className="whitespace-pre-wrap rounded-md border border-border-subtle bg-bg-mod-subtle p-4 text-body leading-relaxed text-text-secondary">
+              {summaryText || 'No summary available.'}
+            </pre>
+          </>
+        )}
       </TopBarOverlay>
 
       {/* Pins overlay */}
@@ -583,76 +572,71 @@ export function TopBar({ channelName, channelTopic, isVoice, isForum, isDM, reci
         onClose={() => setShowFollowManager(false)}
         dialogRef={followDialogRef as RefObject<HTMLDivElement | null>}
         titleId="topbar-follows-title"
+        title="Channel Follows"
+        icon={Share2}
+        closeLabel="Close channel follows"
         panelClassName="max-h-[min(82dvh,40rem)] w-full max-w-xl"
+        bodyClassName="p-4 sm:p-5"
       >
-        <div className="panel-divider flex items-center justify-between border-b px-5 py-4.5">
-          <div id="topbar-follows-title" className="font-bold text-text-primary">
-            Channel Follows
-          </div>
-          <button
-            className="command-icon-btn"
-            onClick={() => setShowFollowManager(false)}
-            aria-label="Close channel follows"
+        {followError && (
+          <div
+            role="alert"
+            className="mb-3 rounded-md border border-accent-danger/30 bg-danger-tint px-4 py-3 text-label text-accent-danger"
           >
-            <X size={16} />
-          </button>
-        </div>
-        <div className="max-h-[min(67dvh,31rem)] space-y-3 overflow-y-auto bg-bg-primary p-4 sm:p-5 scrollbar-thin">
-          {followError && (
-            <div
-              role="alert"
-              className="rounded-xl border border-accent-danger/30 bg-accent-danger/10 px-4 py-3 text-sm text-accent-danger"
-            >
-              {followError}
+            {followError}
+          </div>
+        )}
+        {followersLoading ? (
+          <div className="py-6 text-center text-label text-text-muted">Loading follows…</div>
+        ) : followTargets.length > 0 ? (
+          <ul className="divide-y divide-border-subtle">
+            {followTargets.map((targetChannel) => {
+              const existing = followers.find(
+                (entry) => entry.target_channel_id === targetChannel.id,
+              );
+              const busy = followBusyTargetId === targetChannel.id;
+              return (
+                <li key={targetChannel.id} className="flex items-center justify-between gap-3 py-2.5">
+                  <span className="flex min-w-0 items-center gap-1.5 text-label font-medium text-text-primary">
+                    <Hash size={15} className="shrink-0 text-channel-icon" />
+                    <span className="truncate">{targetChannel.name}</span>
+                  </span>
+                  {existing ? (
+                    <button
+                      type="button"
+                      className="inline-flex h-8 shrink-0 items-center rounded-sm bg-bg-mod-subtle px-3 text-meta font-semibold text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+                      onClick={() => void removeFollower(targetChannel.id)}
+                      disabled={busy}
+                    >
+                      {busy ? 'Removing…' : 'Unfollow'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="inline-flex h-8 shrink-0 items-center rounded-sm bg-accent-primary px-3 text-meta font-semibold text-text-on-accent shadow-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+                      onClick={() => void addFollower(targetChannel.id, targetChannel.guild_id || '')}
+                      disabled={busy || !targetChannel.guild_id}
+                    >
+                      {busy ? 'Adding…' : 'Follow'}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <div className="flex items-start gap-3.5 py-6">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+              <Share2 size={20} />
+            </span>
+            <div className="min-w-0 pt-0.5">
+              <h3 className="text-subhead text-text-primary">Nothing to follow into yet</h3>
+              <p className="mt-1 text-label text-text-secondary">
+                Create another text channel in this space to cross-post announcements from here.
+              </p>
             </div>
-          )}
-          {followersLoading ? (
-            <div className="py-6 text-center text-sm text-text-muted">Loading follows...</div>
-          ) : (
-            <div className="space-y-2">
-              {followTargets.map((targetChannel) => {
-                const existing = followers.find(
-                  (entry) => entry.target_channel_id === targetChannel.id,
-                );
-                const busy = followBusyTargetId === targetChannel.id;
-                return (
-                  <div
-                    key={targetChannel.id}
-                    className="flex items-center justify-between rounded-xl border border-border-subtle bg-bg-mod-subtle/40 px-3 py-2.5"
-                  >
-                    <span className="truncate text-sm font-medium text-text-primary">
-                      # {targetChannel.name}
-                    </span>
-                    {existing ? (
-                      <button
-                        type="button"
-                        className="rounded-md border border-accent-danger/35 bg-accent-danger/10 px-2.5 py-1 text-xs font-semibold text-accent-danger transition-colors hover:bg-accent-danger/15 disabled:opacity-60"
-                        onClick={() => void removeFollower(targetChannel.id)}
-                        disabled={busy}
-                      >
-                        {busy ? 'Removing...' : 'Unfollow'}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="rounded-md border border-accent-primary/40 bg-accent-primary/10 px-2.5 py-1 text-xs font-semibold text-accent-primary transition-colors hover:bg-accent-primary/20 disabled:opacity-60"
-                        onClick={() => void addFollower(targetChannel.id, targetChannel.guild_id || '')}
-                        disabled={busy || !targetChannel.guild_id}
-                      >
-                        {busy ? 'Adding...' : 'Follow'}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-              {followTargets.length === 0 && (
-                <div className="rounded-xl border border-border-subtle bg-bg-mod-subtle/40 px-4 py-6 text-center text-sm text-text-muted">
-                  No eligible text channels available for follows.
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </TopBarOverlay>
 
       {/* Inbox overlay */}

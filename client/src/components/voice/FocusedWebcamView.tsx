@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Track, RoomEvent, type RemoteTrackPublication } from 'livekit-client';
 import { useVoiceStore } from '../../stores/voiceStore';
-import { VideoOff } from 'lucide-react';
 
 interface FocusedWebcamViewProps {
   participantId: string;
@@ -107,12 +106,14 @@ export function FocusedWebcamView({ participantId, username, isLocal }: FocusedW
     };
   }, [room, participantId, isLocal]);
 
+  const initial = username.trim().charAt(0).toUpperCase() || '?';
+
   return (
     <div
-      className="relative h-full w-full overflow-hidden"
+      className="relative h-full w-full overflow-hidden bg-bg-tertiary transition-shadow duration-[var(--duration-normal)] ease-[var(--ease-out)]"
       style={{
-        borderColor: isSpeaking ? 'var(--accent-success)' : undefined,
-        boxShadow: isSpeaking ? '0 0 12px rgba(34, 197, 94, 0.3)' : 'none',
+        // Speaking = an emerald inset ring on the spotlight, never a color wash.
+        boxShadow: isSpeaking ? 'inset 0 0 0 2px var(--accent-primary)' : 'none',
       }}
     >
       <video
@@ -127,19 +128,21 @@ export function FocusedWebcamView({ participantId, username, isLocal }: FocusedW
         }}
       />
       {!hasTrack && (
-        <div className="flex h-full w-full items-center justify-center" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-          <div className="flex flex-col items-center gap-3">
-            <VideoOff size={28} className="text-text-muted" />
-            <span className="text-sm text-text-muted">No camera track</span>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-bg-secondary">
+          <div
+            className="flex items-center justify-center rounded-full border border-border-subtle bg-bg-accent text-2xl font-semibold text-text-secondary"
+            style={{ height: 84, width: 84 }}
+            aria-hidden
+          >
+            {initial}
           </div>
+          <span className="text-label text-text-muted">{username}&rsquo;s camera is off</span>
         </div>
       )}
-      {/* Name badge */}
-      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/60 px-2.5 py-1 backdrop-blur-sm">
-        {isSpeaking && (
-          <div className="h-2 w-2 rounded-full bg-accent-success animate-pulse" />
-        )}
-        <span className="text-xs font-medium text-white">{username}</span>
+      {/* Name pill — floating surface + meta type (design-spec §7). */}
+      <div className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-sm bg-bg-floating px-2.5 py-1 backdrop-blur-md">
+        {isSpeaking && <span className="h-1.5 w-1.5 rounded-full bg-accent-primary" />}
+        <span className="text-meta font-semibold text-text-primary">{username}</span>
       </div>
     </div>
   );

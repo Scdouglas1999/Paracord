@@ -6,7 +6,8 @@ import { commandApi } from '../api/commands';
 import { extractApiError } from '../api/client';
 import type { ApplicationCommand } from '../types/commands';
 import { confirm } from '../stores/confirmStore';
-import { ErrorBanner, LoadingSpinner } from '../components/ui/Feedback';
+import { Button } from '../components/ui/Button';
+import { ErrorBanner, LoadingSpinner, EmptyState } from '../components/ui/Feedback';
 import { writeClipboardText } from '../lib/clipboard';
 import { CreateBotForm } from './developer/CreateBotForm';
 import { BotAppCard } from './developer/BotAppCard';
@@ -251,29 +252,34 @@ export function DeveloperPage() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
       <div className="mx-auto w-full max-w-3xl space-y-8">
-        <div className="flex items-center gap-3">
-          <Bot size={24} className="text-accent-primary" />
-          <h1 className="text-xl font-bold text-text-primary">Developer Portal</h1>
-          <div className="ml-auto flex items-center gap-2">
+        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border-subtle pb-6">
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
+              <Bot size={22} />
+            </span>
+            <div>
+              <h1 className="font-display text-title text-text-primary">Developer portal</h1>
+              <p className="mt-0.5 text-body text-text-secondary">
+                Build bots and apps that automate and extend your server.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
             <a
               href="/api/docs"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
+              className="inline-flex h-9 items-center gap-2 rounded-sm border border-border-subtle bg-transparent px-3 text-label font-semibold text-text-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
             >
-              <BookOpen size={14} />
-              API Docs
+              <BookOpen size={15} />
+              API docs
             </a>
-            <button
-              type="button"
-              onClick={() => void fetchApps()}
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-bg-mod-subtle px-3 text-sm font-semibold text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary"
-            >
-              <RefreshCw size={14} />
+            <Button variant="outline" onClick={() => void fetchApps()} className="gap-2">
+              <RefreshCw size={15} />
               Refresh
-            </button>
+            </Button>
           </div>
-        </div>
+        </header>
 
         {error && <ErrorBanner message={error} onRetry={() => void fetchApps()} />}
         {loading && <LoadingSpinner size="sm" label="Loading developer apps..." />}
@@ -372,11 +378,17 @@ export function DeveloperPage() {
           })}
 
           {!loading && apps.length === 0 && (
-            <div className="rounded-xl border border-border-subtle bg-bg-secondary/40 px-6 py-10 text-center">
-              <Bot size={36} className="mx-auto mb-3 text-text-muted" />
-              <p className="text-sm text-text-muted">
-                No bot applications yet. Create one to get started.
-              </p>
+            <div className="rounded-md border border-border-subtle bg-bg-secondary px-4 shadow-sm">
+              <EmptyState
+                icon={<Bot size={20} />}
+                title="You haven't created any apps yet"
+                description="Build a bot to automate moderation, post updates, or add slash commands to your server. Everything starts with an application."
+                action={
+                  <Button onClick={() => document.getElementById('new-bot-name')?.focus()}>
+                    Create application
+                  </Button>
+                }
+              />
             </div>
           )}
         </div>

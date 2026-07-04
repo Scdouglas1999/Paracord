@@ -73,64 +73,53 @@ export function VoiceControls() {
 
   if (!connected) return null;
 
+  // Shared control base — 40px, radius-sm, layered focus ring, tactile press.
+  const ctrl =
+    'flex h-10 w-10 items-center justify-center rounded-sm outline-none transition-[background-color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97] disabled:opacity-70';
+  const idle = 'text-interactive-normal hover:bg-bg-mod-subtle hover:text-interactive-hover';
+  const activeOn = 'bg-accent-tint text-accent-primary hover:bg-accent-tint-strong';
+  const activeDanger = 'bg-danger-tint text-accent-danger';
+
   return (
     <>
-    <div className="px-4 py-3">
-      <div
-        className="rounded-xl border border-border-subtle/60 overflow-hidden"
-        style={{ backgroundColor: 'color-mix(in srgb, var(--bg-mod-subtle) 70%, transparent)' }}
-      >
+    <div className="px-3 py-3">
+      <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-accent shadow-sm">
         {/* Connection status header */}
-        <div className="flex items-center gap-3 px-5 pt-4 pb-3">
-          <Signal size={16} className="voice-connected-pulse shrink-0" style={{ color: 'var(--accent-success)' }} />
+        <div className="flex items-center gap-2.5 px-4 pb-3 pt-3.5">
+          <Signal size={16} className="voice-connected-pulse shrink-0" style={{ color: 'var(--status-online)' }} />
           <div className="min-w-0 flex-1">
-            <div className="text-[12px] font-semibold tracking-wide" style={{ color: 'var(--accent-success)' }}>
+            <div className="text-meta font-semibold" style={{ color: 'var(--status-online)' }}>
               Voice Connected
             </div>
-            <div className="truncate text-[14px] font-medium text-text-secondary leading-snug">
-              {channelName}
-            </div>
+            <div className="truncate text-label text-text-primary">{channelName}</div>
           </div>
         </div>
 
-        {/* Divider */}
-        <div className="mx-3.5 h-px bg-border-subtle/40 my-2" />
+        <div className="h-px bg-border-subtle" />
 
         {/* Action buttons row */}
-        <div className="flex items-center gap-4 px-5 py-4">
+        <div className="flex items-center gap-1.5 px-3 py-3">
           <button
             onClick={toggleMute}
-            className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+            className={`${ctrl} ${selfMute ? activeDanger : idle}`}
             aria-label={selfMute ? 'Unmute' : 'Mute'}
             title={selfMute ? 'Unmute' : 'Mute'}
-            style={{
-              backgroundColor: selfMute ? 'var(--accent-danger)' : 'transparent',
-              color: selfMute ? '#fff' : 'var(--text-muted)',
-            }}
           >
             {selfMute ? <MicOff size={18} /> : <Mic size={18} />}
           </button>
           <button
             onClick={toggleDeaf}
-            className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+            className={`${ctrl} ${selfDeaf ? activeDanger : idle}`}
             aria-label={selfDeaf ? 'Undeafen' : 'Deafen'}
             title={selfDeaf ? 'Undeafen' : 'Deafen'}
-            style={{
-              backgroundColor: selfDeaf ? 'var(--accent-danger)' : 'transparent',
-              color: selfDeaf ? '#fff' : 'var(--text-muted)',
-            }}
           >
             {selfDeaf ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
           </button>
           <button
             onClick={toggleVideo}
-            className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+            className={`${ctrl} ${selfVideo ? activeOn : idle}`}
             aria-label={selfVideo ? 'Turn Off Camera' : 'Turn On Camera'}
             title={selfVideo ? 'Turn Off Camera' : 'Turn On Camera'}
-            style={{
-              backgroundColor: selfVideo ? 'var(--accent-primary)' : 'transparent',
-              color: selfVideo ? '#fff' : 'var(--text-muted)',
-            }}
           >
             {selfVideo ? <VideoOff size={18} /> : <Video size={18} />}
           </button>
@@ -153,15 +142,10 @@ export function VoiceControls() {
                 }
               }
             }}
-            className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+            className={`${ctrl} ${selfStream ? activeOn : idle}`}
             disabled={startingStream}
             aria-label={selfStream ? 'Stop Sharing' : 'Share Screen'}
             title={selfStream ? 'Stop Sharing' : 'Share Screen'}
-            style={{
-              backgroundColor: selfStream ? 'var(--accent-primary)' : 'transparent',
-              color: selfStream ? '#fff' : 'var(--text-muted)',
-              opacity: startingStream ? 0.65 : 1,
-            }}
           >
             {selfStream ? <MonitorOff size={18} /> : <Monitor size={18} />}
           </button>
@@ -170,7 +154,7 @@ export function VoiceControls() {
           <div className="flex-1" />
 
           <button
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-accent-danger/20 hover:text-accent-danger"
+            className={`${ctrl} text-interactive-normal hover:bg-danger-tint hover:text-accent-danger`}
             onClick={() => void leaveChannel()}
             aria-label="Disconnect"
             title="Disconnect"

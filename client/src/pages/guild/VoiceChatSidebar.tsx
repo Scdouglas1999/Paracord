@@ -27,14 +27,14 @@ export function VoiceChatSidebar({
   onClose,
 }: VoiceChatSidebarProps) {
   const header = (
-    <div className="flex shrink-0 items-center justify-between border-b border-border-subtle/70 px-4 py-3">
-      <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+    <div className="flex shrink-0 items-center justify-between border-b border-border-subtle px-4 py-3">
+      <div className="flex items-center gap-2 text-label font-semibold text-text-primary">
         <MessageSquare size={16} className="text-text-muted" />
-        {isStage ? 'Stage Chat' : 'Voice Channel Chat'}
+        {isStage ? 'Stage chat' : 'Voice channel chat'}
       </div>
       <button
         onClick={onClose}
-        className="text-text-muted hover:text-text-primary transition-colors"
+        className="flex h-8 w-8 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
         aria-label="Close voice chat"
         title="Close voice chat"
       >

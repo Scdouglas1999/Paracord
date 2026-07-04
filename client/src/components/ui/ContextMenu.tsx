@@ -119,7 +119,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
             id={`context-menu-item-${i}`}
             role="menuitem"
             className={cn(
-              'flex w-full items-center justify-between gap-3 rounded-sm px-2.5 py-1.5 text-left text-sm outline-none transition-colors duration-[120ms] ease-[var(--ease-out)]',
+              'flex w-full items-center justify-between gap-3 rounded-sm px-2.5 py-1.5 text-left text-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)]',
               item.danger ? 'text-accent-danger' : 'text-text-secondary',
               item.disabled && 'cursor-not-allowed opacity-50',
               active &&

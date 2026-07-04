@@ -1,8 +1,71 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
+import { Check } from 'lucide-react';
 import { adminApi } from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { Button } from '../../components/ui/Button';
+import { Input, Textarea } from '../../components/ui/Input';
+
+function Field({
+  label,
+  htmlFor,
+  hint,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-2">
+      <label htmlFor={htmlFor} className="block text-label font-medium text-text-secondary">
+        {label}
+      </label>
+      {children}
+      {hint && <p className="text-meta text-text-muted">{hint}</p>}
+    </div>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+  description,
+  ariaLabel,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label: string;
+  description: string;
+  ariaLabel: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-1">
+      <div className="min-w-0">
+        <p className="text-label font-semibold text-text-primary">{label}</p>
+        <p className="text-meta text-text-muted">{description}</p>
+      </div>
+      <button
+        onClick={onChange}
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={ariaLabel}
+        className={`relative h-6 w-11 shrink-0 rounded-full outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${
+          checked ? 'bg-accent-primary' : 'bg-bg-mod-strong'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-[140ms] ease-[var(--ease-out)] ${
+            checked ? 'translate-x-[1.375rem]' : 'translate-x-0.5'
+          }`}
+        />
+      </button>
+    </div>
+  );
+}
 
 export function SettingsPanel() {
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -39,200 +102,140 @@ export function SettingsPanel() {
 
   return (
     <div>
-      <h2 className="mb-6 text-xl font-semibold text-text-primary">Server Settings</h2>
+      <header className="mb-6">
+        <h2 className="font-display text-heading text-text-primary">Server settings</h2>
+        <p className="mt-1 text-body text-text-secondary">
+          Configure how this deployment behaves for everyone on it.
+        </p>
+      </header>
 
-      <div className="card-stack-roomy max-w-xl">
-        {/* Server Name */}
-        <div>
-          <label className="mb-3 block text-sm font-medium text-text-secondary">
-            Server Name
-          </label>
-          <input
-            aria-label="Server Name"
-            type="text"
-            value={settings.server_name || ''}
-            onChange={(e) => update('server_name', e.target.value)}
-            className="input-field"
-          />
-        </div>
-
-        {/* Server Description */}
-        <div>
-          <label className="mb-3 block text-sm font-medium text-text-secondary">
-            Server Description
-          </label>
-          <textarea
-            aria-label="Server Description"
-            value={settings.server_description || ''}
-            onChange={(e) => update('server_description', e.target.value)}
-            rows={3}
-            className="input-field resize-none"
-          />
-        </div>
-
-        {/* Registration Toggle */}
-        <div className="card-surface flex items-center justify-between rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-          <div>
-            <p className="font-medium text-text-primary">Open Registration</p>
-            <p className="text-sm text-text-muted">Allow new users to register accounts</p>
-          </div>
-          <button
-            onClick={() =>
-              update('registration_enabled', settings.registration_enabled === 'true' ? 'false' : 'true')
-            }
-            type="button"
-            role="switch"
-            aria-checked={settings.registration_enabled === 'true'}
-            aria-label="Toggle open registration"
-            className={`relative h-7 w-12 rounded-full transition-colors ${
-              settings.registration_enabled === 'true'
-                ? 'bg-accent-success'
-                : 'bg-bg-mod-strong'
-            }`}
-          >
-            <div
-              className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                settings.registration_enabled === 'true' ? 'translate-x-5' : 'translate-x-0.5'
-              }`}
+      <div className="max-w-xl space-y-8">
+        <section className="space-y-5">
+          <Field label="Server name" htmlFor="setting-server-name">
+            <Input
+              id="setting-server-name"
+              aria-label="Server Name"
+              type="text"
+              value={settings.server_name || ''}
+              onChange={(e) => update('server_name', e.target.value)}
             />
-          </button>
-        </div>
+          </Field>
 
-        {/* Max guilds per user */}
-        <div>
-          <label className="mb-3 block text-sm font-medium text-text-secondary">
-            Max Guilds Per User
-          </label>
-          <input
-            aria-label="Max Guilds Per User"
-            type="number"
-            value={settings.max_guilds_per_user || '100'}
-            onChange={(e) => update('max_guilds_per_user', e.target.value)}
-            className="input-field"
-          />
-        </div>
-
-        {/* Max members per guild */}
-        <div>
-          <label className="mb-3 block text-sm font-medium text-text-secondary">
-            Max Members Per Guild
-          </label>
-          <input
-            aria-label="Max Members Per Guild"
-            type="number"
-            value={settings.max_members_per_guild || '1000'}
-            onChange={(e) => update('max_members_per_guild', e.target.value)}
-            className="input-field"
-          />
-        </div>
-
-        {/* ── Guild Storage ─────────────────────────────────── */}
-        <div className="border-t border-border-subtle pt-6">
-          <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-text-secondary">
-            Guild Storage Limits
-          </h3>
-        </div>
-
-        <div>
-          <label className="mb-3 block text-sm font-medium text-text-secondary">
-            Max Guild Storage Quota (MB)
-          </label>
-          <input
-            aria-label="Max Guild Storage Quota in MB"
-            type="number"
-            value={settings.max_guild_storage_quota || ''}
-            onChange={(e) => update('max_guild_storage_quota', e.target.value)}
-            placeholder="No limit"
-            className="input-field"
-          />
-          <p className="mt-1 text-xs text-text-muted">
-            Upper limit for per-guild storage quotas (in MB). Guild owners cannot set a quota higher than this.
-          </p>
-        </div>
-
-        {/* ── Federation File Cache ─────────────────────────── */}
-        <div className="border-t border-border-subtle pt-6">
-          <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-text-secondary">
-            Federation File Cache
-          </h3>
-        </div>
-
-        <div className="card-surface flex items-center justify-between rounded-xl border border-border-subtle bg-bg-mod-subtle/70 px-6 py-6">
-          <div>
-            <p className="font-medium text-text-primary">Federation File Cache</p>
-            <p className="text-sm text-text-muted">Cache files fetched from federated servers locally</p>
-          </div>
-          <button
-            onClick={() =>
-              update('federation_file_cache_enabled', settings.federation_file_cache_enabled === 'true' ? 'false' : 'true')
-            }
-            type="button"
-            role="switch"
-            aria-checked={settings.federation_file_cache_enabled === 'true'}
-            aria-label="Toggle federation file cache"
-            className={`relative h-7 w-12 rounded-full transition-colors ${
-              settings.federation_file_cache_enabled === 'true'
-                ? 'bg-accent-success'
-                : 'bg-bg-mod-strong'
-            }`}
-          >
-            <div
-              className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                settings.federation_file_cache_enabled === 'true' ? 'translate-x-5' : 'translate-x-0.5'
-              }`}
+          <Field label="Server description" htmlFor="setting-server-description">
+            <Textarea
+              id="setting-server-description"
+              aria-label="Server Description"
+              value={settings.server_description || ''}
+              onChange={(e) => update('server_description', e.target.value)}
+              rows={3}
+              className="resize-none"
             />
-          </button>
-        </div>
+          </Field>
 
-        <div>
-          <label className="mb-3 block text-sm font-medium text-text-secondary">
-            Federation Cache Max Size (MB)
-          </label>
-          <input
-            aria-label="Federation Cache Max Size in MB"
-            type="number"
-            value={settings.federation_file_cache_max_size || ''}
-            onChange={(e) => update('federation_file_cache_max_size', e.target.value)}
-            placeholder="No limit"
-            className="input-field"
-          />
-        </div>
+          <div className="rounded-md border border-border-subtle bg-bg-tertiary/40 px-4 py-3">
+            <Toggle
+              checked={settings.registration_enabled === 'true'}
+              onChange={() =>
+                update('registration_enabled', settings.registration_enabled === 'true' ? 'false' : 'true')
+              }
+              label="Open registration"
+              description="Allow anyone to create a new account on this server."
+              ariaLabel="Toggle open registration"
+            />
+          </div>
 
-        <div>
-          <label className="mb-3 block text-sm font-medium text-text-secondary">
-            Federation Cache TTL (hours)
-          </label>
-          <input
-            aria-label="Federation Cache TTL in hours"
-            type="number"
-            value={settings.federation_file_cache_ttl_hours || ''}
-            onChange={(e) => update('federation_file_cache_ttl_hours', e.target.value)}
-            placeholder="Default"
-            className="input-field"
-          />
-          <p className="mt-1 text-xs text-text-muted">
-            How long cached federated files are kept before re-fetching from the origin server.
-          </p>
-        </div>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="Max guilds per user" htmlFor="setting-max-guilds">
+              <Input
+                id="setting-max-guilds"
+                aria-label="Max Guilds Per User"
+                type="number"
+                value={settings.max_guilds_per_user || '100'}
+                onChange={(e) => update('max_guilds_per_user', e.target.value)}
+              />
+            </Field>
+            <Field label="Max members per guild" htmlFor="setting-max-members">
+              <Input
+                id="setting-max-members"
+                aria-label="Max Members Per Guild"
+                type="number"
+                value={settings.max_members_per_guild || '1000'}
+                onChange={(e) => update('max_members_per_guild', e.target.value)}
+              />
+            </Field>
+          </div>
+        </section>
 
-        {/* Save button */}
-        <div className="settings-action-row">
-          <Button
-            onClick={handleSave}
-            disabled={saving}
-            style={
-              saved
-                ? {
-                    backgroundColor: 'var(--accent-success)',
-                    borderColor: 'color-mix(in srgb, var(--accent-success) 72%, white 28%)',
-                    boxShadow:
-                      '0 10px 24px color-mix(in srgb, var(--accent-success) 40%, transparent), 0 0 0 1px color-mix(in srgb, var(--accent-success) 62%, white 38%) inset',
-                  }
-                : undefined
-            }
+        <section className="space-y-5 border-t border-border-subtle pt-7">
+          <h3 className="text-section uppercase text-text-secondary">Guild storage limits</h3>
+          <Field
+            label="Max guild storage quota (MB)"
+            htmlFor="setting-storage-quota"
+            hint="Upper limit for per-guild storage quotas. Guild owners cannot set a quota higher than this."
           >
-            {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Changes'}
+            <Input
+              id="setting-storage-quota"
+              aria-label="Max Guild Storage Quota in MB"
+              type="number"
+              value={settings.max_guild_storage_quota || ''}
+              onChange={(e) => update('max_guild_storage_quota', e.target.value)}
+              placeholder="No limit"
+            />
+          </Field>
+        </section>
+
+        <section className="space-y-5 border-t border-border-subtle pt-7">
+          <h3 className="text-section uppercase text-text-secondary">Federation file cache</h3>
+          <div className="rounded-md border border-border-subtle bg-bg-tertiary/40 px-4 py-3">
+            <Toggle
+              checked={settings.federation_file_cache_enabled === 'true'}
+              onChange={() =>
+                update('federation_file_cache_enabled', settings.federation_file_cache_enabled === 'true' ? 'false' : 'true')
+              }
+              label="Cache federated files"
+              description="Store files fetched from federated servers locally to serve them faster."
+              ariaLabel="Toggle federation file cache"
+            />
+          </div>
+
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="Cache max size (MB)" htmlFor="setting-cache-size">
+              <Input
+                id="setting-cache-size"
+                aria-label="Federation Cache Max Size in MB"
+                type="number"
+                value={settings.federation_file_cache_max_size || ''}
+                onChange={(e) => update('federation_file_cache_max_size', e.target.value)}
+                placeholder="No limit"
+              />
+            </Field>
+            <Field
+              label="Cache TTL (hours)"
+              htmlFor="setting-cache-ttl"
+              hint="How long cached files are kept before re-fetching from the origin."
+            >
+              <Input
+                id="setting-cache-ttl"
+                aria-label="Federation Cache TTL in hours"
+                type="number"
+                value={settings.federation_file_cache_ttl_hours || ''}
+                onChange={(e) => update('federation_file_cache_ttl_hours', e.target.value)}
+                placeholder="Default"
+              />
+            </Field>
+          </div>
+        </section>
+
+        <div className="flex items-center gap-3 border-t border-border-subtle pt-6">
+          <Button onClick={handleSave} loading={saving} disabled={saving}>
+            {saving ? 'Saving…' : 'Save changes'}
           </Button>
+          {saved && (
+            <span className="inline-flex items-center gap-1.5 text-label font-medium text-accent-success">
+              <Check size={16} />
+              Saved
+            </span>
+          )}
         </div>
       </div>
     </div>

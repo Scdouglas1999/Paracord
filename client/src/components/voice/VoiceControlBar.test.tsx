@@ -132,8 +132,7 @@ describe('VoiceControlBar', () => {
   it('surfaces a stream audio warning affordance', () => {
     voiceState.current.streamAudioWarning = 'System audio was not captured.';
     render(<VoiceControlBar />);
-    const warnBtn = document.querySelector('button.text-amber-300') as HTMLButtonElement;
-    expect(warnBtn).not.toBeNull();
+    const warnBtn = screen.getByRole('button', { name: 'Show screen share warning' });
     fireEvent.click(warnBtn);
     expect(screen.getByText('System audio was not captured.')).toBeInTheDocument();
   });

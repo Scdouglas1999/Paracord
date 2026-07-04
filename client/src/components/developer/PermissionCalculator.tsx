@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { Check, Copy, ShieldAlert } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Permissions } from '../../types';
 
@@ -53,6 +55,8 @@ const PERMISSION_FLAGS = (Object.keys(Permissions) as PermissionKey[]).map((key)
 const ADMIN = Permissions.ADMINISTRATOR;
 
 export function PermissionCalculator({ value, onChange }: PermissionCalculatorProps) {
+  const [copied, setCopied] = useState(false);
+
   const current = (() => {
     try {
       return BigInt(value);
@@ -62,6 +66,7 @@ export function PermissionCalculator({ value, onChange }: PermissionCalculatorPr
   })();
 
   const isAdmin = (current & ADMIN) !== 0n;
+  const enabledCount = PERMISSION_FLAGS.filter((p) => (current & p.mask) !== 0n).length;
 
   const toggle = (mask: bigint) => {
     let next = current ^ mask;
@@ -73,9 +78,24 @@ export function PermissionCalculator({ value, onChange }: PermissionCalculatorPr
 
   const isChecked = (mask: bigint) => (current & mask) !== 0n;
 
+  const copyValue = async () => {
+    try {
+      await navigator.clipboard.writeText(current.toString());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // clipboard unavailable — no-op
+    }
+  };
+
   return (
-    <div className="space-y-3">
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-section uppercase text-text-muted">Permissions</span>
+        <span className="text-meta tabular-nums text-text-muted">{enabledCount} enabled</span>
+      </div>
+
+      <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
         {PERMISSION_FLAGS.map((perm) => {
           const isAdminRow = perm.mask === ADMIN;
           const disabled = isAdmin && !isAdminRow;
@@ -83,10 +103,10 @@ export function PermissionCalculator({ value, onChange }: PermissionCalculatorPr
             <label
               key={perm.key}
               className={cn(
-                'flex items-start gap-2.5 rounded-lg border px-3 py-2 transition-colors',
+                'flex items-start gap-2.5 rounded-sm border px-3 py-2 transition-colors duration-[140ms] ease-[var(--ease-out)]',
                 isAdminRow
-                  ? 'border-accent-danger/40 bg-accent-danger/5 hover:bg-accent-danger/10'
-                  : 'border-border-subtle bg-bg-primary/40 hover:bg-bg-mod-subtle',
+                  ? 'border-accent-danger/35 bg-danger-tint hover:bg-accent-danger/20'
+                  : 'border-border-subtle bg-bg-mod-subtle hover:bg-bg-mod-strong',
                 disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
               )}
             >
@@ -98,16 +118,36 @@ export function PermissionCalculator({ value, onChange }: PermissionCalculatorPr
                 className="mt-0.5 accent-accent-primary disabled:cursor-not-allowed"
               />
               <div className="min-w-0 flex-1">
-                <span className="text-xs font-semibold text-text-primary">{perm.name}</span>
-                <p className="mt-0.5 text-[11px] text-text-muted">{perm.description}</p>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-label text-text-primary">{perm.name}</span>
+                  {isAdminRow && (
+                    <span className="inline-flex items-center gap-1 rounded-xs bg-danger-tint px-1.5 py-0.5 text-meta font-semibold text-accent-danger">
+                      <ShieldAlert size={11} />
+                      Elevated
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-meta text-text-muted">{perm.description}</p>
               </div>
             </label>
           );
         })}
       </div>
-      <div className="rounded-lg border border-border-subtle bg-bg-primary/40 px-3 py-2">
-        <span className="text-xs text-text-muted">Permission value: </span>
-        <code className="text-xs font-semibold text-text-secondary">{current.toString()}</code>
+
+      {/* Computed bitfield readout (design-spec §2 code face) with copy. */}
+      <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-3.5 py-2.5">
+        <span className="text-section shrink-0 uppercase text-text-muted">Bitfield</span>
+        <code className="min-w-0 flex-1 truncate font-code text-meta text-text-primary">
+          {current.toString()}
+        </code>
+        <button
+          type="button"
+          onClick={() => void copyValue()}
+          aria-label="Copy permission value"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+        >
+          {copied ? <Check size={15} className="text-accent-success" /> : <Copy size={15} />}
+        </button>
       </div>
     </div>
   );

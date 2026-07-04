@@ -141,7 +141,7 @@ export default function MediaTest() {
     cn(
       'inline-flex h-9 items-center justify-center rounded-sm px-3.5 text-label font-semibold transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
       active
-        ? 'bg-accent-danger-fill text-text-on-danger hover:brightness-110'
+        ? 'bg-accent-danger-fill text-text-on-danger hover:brightness-95'
         : 'bg-bg-mod-subtle text-text-secondary hover:bg-bg-mod-strong hover:text-text-primary',
     );
 
@@ -198,7 +198,7 @@ export default function MediaTest() {
             className={cn(
               'inline-flex h-10 items-center justify-center rounded-sm px-5 text-label font-semibold shadow-sm transition-colors duration-[140ms] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] disabled:cursor-wait disabled:opacity-70',
               connected
-                ? 'bg-accent-danger-fill text-text-on-danger hover:brightness-110'
+                ? 'bg-accent-danger-fill text-text-on-danger hover:brightness-95'
                 : 'bg-accent-primary text-text-on-accent hover:bg-accent-primary-hover active:bg-accent-primary-active',
             )}
           >

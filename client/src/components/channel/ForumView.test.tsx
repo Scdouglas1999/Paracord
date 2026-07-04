@@ -100,7 +100,7 @@ describe('ForumView tag accessibility', () => {
 
     render(<ForumView channelId="channel-1" channelName="forum" />);
 
-    const search = await screen.findByPlaceholderText('Search posts...');
+    const search = await screen.findByPlaceholderText('Search posts…');
     await user.type(search, 'release{Enter}');
 
     await waitFor(() => {
@@ -115,7 +115,7 @@ describe('ForumView tag accessibility', () => {
     render(<ForumView channelId="channel-1" channelName="forum" />);
 
     await user.click(await screen.findByRole('button', { name: 'New Post' }));
-    await user.type(screen.getByPlaceholderText('Post title'), 'Bad post');
+    await user.type(screen.getByPlaceholderText("What's this discussion about?"), 'Bad post');
     await user.click(screen.getByRole('button', { name: 'Create Post' }));
 
     await waitFor(() => {

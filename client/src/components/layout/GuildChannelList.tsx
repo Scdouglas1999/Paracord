@@ -279,12 +279,12 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
       {showGuildMenu && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setShowGuildMenu(false)} />
-          <div className="glass-modal animation-scale-in absolute left-5 top-[88px] z-50 w-56 origin-top-left rounded-xl p-1.5">
+          <div className="glass-modal animation-scale-in absolute left-5 top-[88px] z-50 w-56 origin-top-left rounded-md p-1.5">
             <button
               className={cn(
-                'group flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition-colors',
+                'group flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm transition-colors',
                 canManageGuild
-                  ? 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary'
+                  ? 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
                   : 'cursor-not-allowed text-text-muted opacity-60'
               )}
               disabled={!canManageGuild}
@@ -296,9 +296,9 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
             </button>
             <button
               className={cn(
-                'flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition-colors',
+                'flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm transition-colors',
                 inviteChannelId && canCreateInvite
-                  ? 'text-accent-primary hover:bg-bg-mod-subtle hover:text-text-primary'
+                  ? 'text-accent-primary hover:bg-accent-tint hover:text-text-primary'
                   : 'cursor-not-allowed text-text-muted opacity-60'
               )}
               disabled={!inviteChannelId || !canCreateInvite}
@@ -320,7 +320,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
               <Plus size={14} />
             </button>
             <button
-              className="group flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+              className="group flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-accent-tint hover:text-text-primary"
               onClick={() => {
                 setShowGuildMenu(false);
                 removeVersionedStorageItem(
@@ -334,7 +334,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
             </button>
             <div className="my-1 mx-2 h-px bg-border-subtle" />
             <button
-              className="w-full rounded-md px-3 py-2 text-left text-sm text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+              className="w-full rounded-sm px-3 py-2 text-left text-sm text-text-muted transition-colors hover:bg-accent-tint hover:text-text-primary"
               onClick={() => {
                 void copyIdToClipboard(currentGuild.id, 'Server');
                 setShowGuildMenu(false);
@@ -346,7 +346,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
               <>
                 <div className="my-1 mx-2 h-px bg-border-subtle" />
                 <button
-                  className="w-full rounded-md px-3 py-2 text-left text-sm text-accent-danger transition-colors hover:bg-accent-danger hover:text-white"
+                  className="w-full rounded-sm px-3 py-2 text-left text-sm text-accent-danger transition-colors hover:bg-accent-danger hover:text-white"
                   onClick={async () => {
                     setShowGuildMenu(false);
                     try {
@@ -682,7 +682,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
         <>
           <div className="fixed inset-0 z-50" onClick={() => setChannelContextMenu(null)} />
           <div
-            className="glass-modal fixed z-50 min-w-[160px] rounded-xl p-1.5"
+            className="glass-modal fixed z-50 min-w-[160px] rounded-md p-1.5"
             style={{ left: channelContextMenu.x + 10, top: channelContextMenu.y }}
             role="menu"
             aria-label="Channel actions"
@@ -697,7 +697,7 @@ export function GuildChannelList({ guildId }: GuildChannelListProps) {
             <button
               autoFocus
               role="menuitem"
-              className="w-full rounded-md px-3 py-2 text-left text-sm text-text-muted transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+              className="w-full rounded-sm px-3 py-2 text-left text-sm text-text-muted transition-colors hover:bg-accent-tint hover:text-text-primary"
               onClick={() => {
                 void copyIdToClipboard(channelContextMenu.channelId, 'Channel');
                 setChannelContextMenu(null);

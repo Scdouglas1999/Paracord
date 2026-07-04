@@ -3,8 +3,11 @@ import { AppWindow, ImageOff, Monitor, RefreshCw, Volume2, X } from 'lucide-reac
 
 import type { ScreenShareSource } from '../../lib/media/mediaEngine';
 import { Modal } from '../ui/Modal';
+import { EmptyState } from '../ui/Feedback';
+import { Button } from '../ui/Button';
 import { logVoiceDiagnostic } from '../../lib/desktopDiagnostics';
 import { isSafeImageDataUrl, safeClientResourceUrl } from '../../lib/security';
+import { cn } from '../../lib/utils';
 
 interface ScreenSharePickerModalProps {
   sources: ScreenShareSource[];
@@ -16,6 +19,8 @@ interface ScreenSharePickerModalProps {
   loadThumbnail: (sourceId: string) => Promise<string | null>;
 }
 
+type SourceFilter = 'all' | 'screen' | 'window';
+
 function ScreenShareSourceCard({
   source,
   onSelect,
@@ -25,29 +30,23 @@ function ScreenShareSourceCard({
   onSelect: (source: ScreenShareSource) => void;
   thumbnailUrl?: string | null;
 }) {
-  const icon = source.kind === 'window' ? <AppWindow size={18} /> : <Monitor size={18} />;
+  const icon = source.kind === 'window' ? <AppWindow size={16} /> : <Monitor size={16} />;
   const safeThumbnailUrl = typeof thumbnailUrl === 'string'
     ? safeClientResourceUrl(thumbnailUrl) ?? (isSafeImageDataUrl(thumbnailUrl) ? thumbnailUrl : null)
     : thumbnailUrl;
 
+  // Selectable tile (design-spec §7): resting hairline, hover/focus lifts to an
+  // --accent-primary ring over an --accent-tint wash.
   return (
     <button
       type="button"
       onClick={() => onSelect(source)}
-      className="w-full rounded-2xl border p-3 text-left transition-colors hover:border-accent-primary/45 hover:bg-bg-mod-subtle"
-      style={{
-        borderColor: 'var(--border-subtle)',
-        backgroundColor: 'var(--bg-secondary)',
-      }}
+      className="group rounded-md border border-border-subtle bg-bg-secondary p-2.5 text-left outline-none ring-0 ring-accent-primary transition-[border-color,box-shadow,background-color] duration-[140ms] ease-[var(--ease-out)] hover:border-accent-primary hover:bg-accent-tint hover:ring-2 focus-visible:shadow-[var(--focus-ring)]"
     >
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2.5">
         <div
-          className="relative overflow-hidden rounded-2xl border"
-          style={{
-            borderColor: 'var(--border-subtle)',
-            backgroundColor: 'var(--bg-tertiary)',
-            aspectRatio: '16 / 9',
-          }}
+          className="relative overflow-hidden rounded-sm border border-border-subtle"
+          style={{ backgroundColor: 'var(--bg-tertiary)', aspectRatio: '16 / 9' }}
         >
           {typeof safeThumbnailUrl === 'string' ? (
             <img
@@ -59,51 +58,44 @@ function ScreenShareSourceCard({
           ) : safeThumbnailUrl === undefined ? (
             <div className="flex h-full w-full items-center justify-center gap-2 text-text-muted">
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              <span className="text-xs font-medium">Loading preview...</span>
+              <span className="text-meta font-medium">Loading preview…</span>
             </div>
           ) : (
             <div className="flex h-full w-full items-center justify-center gap-2 text-text-muted">
               <ImageOff size={16} />
-              <span className="text-xs font-medium">Preview unavailable</span>
+              <span className="text-meta font-medium">Preview unavailable</span>
             </div>
           )}
-          <div
-            className="absolute left-3 top-3 flex h-9 w-9 items-center justify-center rounded-xl border"
-            style={{
-              borderColor: 'rgba(255,255,255,0.12)',
-              backgroundColor: 'rgba(15, 18, 24, 0.76)',
-              color: 'white',
-            }}
-          >
+          <div className="absolute left-2 top-2 flex h-7 w-7 items-center justify-center rounded-sm border border-white/10 bg-black/65 text-white">
             {icon}
           </div>
         </div>
 
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-text-primary">{source.title}</div>
+          <div className="truncate text-label text-text-primary">{source.title}</div>
           {source.appName && (
-            <div className="mt-1 truncate text-xs text-text-secondary">{source.appName}</div>
+            <div className="mt-0.5 truncate text-meta text-text-secondary">{source.appName}</div>
           )}
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {source.audioSupported && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/35 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+              <span className="inline-flex items-center gap-1 rounded-xs bg-accent-tint px-1.5 py-0.5 text-meta font-semibold text-accent-primary">
                 <Volume2 size={11} />
                 Audio
               </span>
             )}
             {source.requiresOsPicker && (
-              <span className="inline-flex items-center rounded-full border border-amber-400/35 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                System Chooser
+              <span className="inline-flex items-center rounded-xs bg-warning-tint px-1.5 py-0.5 text-meta font-semibold text-accent-warning">
+                System chooser
               </span>
             )}
             {source.isSelf && (
-              <span className="inline-flex items-center rounded-full border border-accent-danger/35 bg-accent-danger/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-accent-danger">
-                Paracord Window
+              <span className="inline-flex items-center rounded-xs bg-danger-tint px-1.5 py-0.5 text-meta font-semibold text-accent-danger">
+                Paracord window
               </span>
             )}
           </div>
           {source.isSelf && (
-            <div className="mt-2 text-[11px] text-text-muted">
+            <div className="mt-1.5 text-meta text-text-muted">
               Sharing this can create a recursive mirror effect.
             </div>
           )}
@@ -123,12 +115,20 @@ export function ScreenSharePickerModal({
   loadThumbnail,
 }: ScreenSharePickerModalProps) {
   const [thumbnails, setThumbnails] = useState<Record<string, string | null | undefined>>({});
+  const [filter, setFilter] = useState<SourceFilter>('all');
 
-  const groupedSources = useMemo(() => {
-    const displays = sources.filter((source) => source.kind !== 'window');
-    const windows = sources.filter((source) => source.kind === 'window');
-    return { displays, windows };
+  const { displays, windows } = useMemo(() => {
+    return {
+      displays: sources.filter((source) => source.kind !== 'window'),
+      windows: sources.filter((source) => source.kind === 'window'),
+    };
   }, [sources]);
+
+  const visibleSources = useMemo(() => {
+    if (filter === 'screen') return displays;
+    if (filter === 'window') return windows;
+    return sources;
+  }, [filter, displays, windows, sources]);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,103 +166,109 @@ export function ScreenSharePickerModal({
     };
   }, [sources, loadThumbnail]);
 
+  const filters: { key: SourceFilter; label: string; count: number }[] = [
+    { key: 'all', label: 'All', count: sources.length },
+    { key: 'screen', label: 'Screens', count: displays.length },
+    { key: 'window', label: 'Windows', count: windows.length },
+  ];
+
   return (
     <Modal
       open
       onClose={onClose}
       labelledBy="screen-share-picker-title"
-      panelClassName="w-[min(94vw,56rem)] rounded-3xl"
+      describedBy="screen-share-picker-subtitle"
+      panelClassName="w-[min(94vw,56rem)]"
     >
-      <div className="max-h-[min(88dvh,48rem)] overflow-auto">
-        <div
-          className="sticky top-0 z-10 border-b px-6 py-5 backdrop-blur-xl sm:px-7"
-          style={{
-            borderColor: 'var(--border-subtle)',
-            backgroundColor: 'color-mix(in srgb, var(--bg-primary) 92%, transparent)',
-          }}
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 id="screen-share-picker-title" className="text-xl font-bold text-text-primary">
-                Share your screen
-              </h2>
-              <p className="mt-1 text-sm text-text-secondary">
-                Choose what to share with the call. Desktop capture runs natively in Paracord.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={onRefresh} className="icon-btn" aria-label="Refresh sources">
-                <RefreshCw size={18} />
-              </button>
-              <button type="button" onClick={onClose} className="icon-btn" aria-label="Close">
-                <X size={18} />
-              </button>
+      <div className="flex max-h-[min(88dvh,48rem)] flex-col">
+        <div className="flex items-start justify-between gap-4 border-b border-border-subtle px-6 pb-4 pt-6">
+          <div className="min-w-0">
+            <h2 id="screen-share-picker-title" className="font-display text-title text-text-primary">
+              Share your screen
+            </h2>
+            <p id="screen-share-picker-subtitle" className="mt-1 text-body text-text-secondary">
+              Choose what to share with the call. Desktop capture runs natively in Paracord.
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onRefresh}
+              aria-label="Refresh sources"
+              className="flex h-9 w-9 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+            >
+              <RefreshCw size={18} className={loading ? 'animate-spin' : undefined} />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="flex h-9 w-9 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {(sources.length > 0 || loading) && (
+          <div className="flex items-center gap-1 border-b border-border-subtle px-6 py-3">
+            <div className="inline-flex items-center gap-0.5 rounded-sm bg-bg-tertiary p-0.5">
+              {filters.map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setFilter(f.key)}
+                  disabled={f.count === 0 && f.key !== 'all'}
+                  className={cn(
+                    'rounded-xs px-3 py-1.5 text-label outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
+                    filter === f.key
+                      ? 'bg-bg-accent text-text-primary shadow-sm'
+                      : 'text-text-secondary hover:text-text-primary',
+                  )}
+                >
+                  {f.label}
+                  <span className="ml-1.5 tabular-nums text-text-muted">{f.count}</span>
+                </button>
+              ))}
             </div>
           </div>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
           {error && (
-            <div className="mt-4 rounded-2xl border border-accent-danger/35 bg-accent-danger/10 px-3 py-2 text-sm font-medium text-accent-danger">
+            <div className="mb-4 rounded-sm bg-danger-tint px-3 py-2 text-meta font-medium text-accent-danger">
               {error}
             </div>
           )}
-        </div>
 
-        <div className="space-y-6 px-6 py-6 sm:px-7">
           {loading ? (
-            <div className="flex min-h-48 items-center justify-center">
-              <div className="flex items-center gap-3 rounded-2xl border border-border-subtle bg-bg-secondary px-4 py-3 text-sm text-text-secondary">
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                Loading sources...
-              </div>
+            <div className="flex min-h-48 items-center justify-center gap-3 text-body text-text-secondary">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              Looking for screens and windows…
             </div>
+          ) : sources.length === 0 ? (
+            <EmptyState
+              icon={<Monitor size={20} />}
+              title="No windows available to share yet"
+              description="Open an app or bring a screen into view, then refresh to pick what your call sees."
+              action={
+                <Button variant="secondary" onClick={onRefresh}>
+                  <RefreshCw size={16} className="mr-1.5" />
+                  Refresh sources
+                </Button>
+              }
+            />
           ) : (
-            <>
-              {groupedSources.displays.length > 0 && (
-                <section>
-                  <div className="mb-3 text-xs font-bold uppercase tracking-[0.18em] text-text-muted">
-                    Screens
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {groupedSources.displays.map((source) => (
-                      <ScreenShareSourceCard
-                        key={source.id}
-                        source={source}
-                        onSelect={onSelect}
-                        thumbnailUrl={thumbnails[source.id]}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              {groupedSources.windows.length > 0 && (
-                <section>
-                  <div className="mb-3 text-xs font-bold uppercase tracking-[0.18em] text-text-muted">
-                    Windows
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {groupedSources.windows.map((source) => (
-                      <ScreenShareSourceCard
-                        key={source.id}
-                        source={source}
-                        onSelect={onSelect}
-                        thumbnailUrl={thumbnails[source.id]}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              {sources.length === 0 && !loading && (
-                <div className="flex min-h-48 items-center justify-center rounded-3xl border border-border-subtle bg-bg-secondary px-6 py-10 text-center">
-                  <div>
-                    <div className="text-base font-semibold text-text-primary">No shareable sources found</div>
-                    <div className="mt-2 text-sm text-text-secondary">
-                      Refresh the list or reopen any screen/window you want to share.
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+              {visibleSources.map((source) => (
+                <ScreenShareSourceCard
+                  key={source.id}
+                  source={source}
+                  onSelect={onSelect}
+                  thumbnailUrl={thumbnails[source.id]}
+                />
+              ))}
+            </div>
           )}
         </div>
       </div>

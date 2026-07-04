@@ -1,12 +1,16 @@
 import { useState, useEffect } from 'react';
-import { Copy, Check, Link, RefreshCw } from 'lucide-react';
+import { Copy, Check, Link as LinkIcon, RefreshCw } from 'lucide-react';
 import { inviteApi } from '../../api/invites';
 import { getStoredServerUrl } from '../../lib/config/apiBaseUrl';
 import { toPortableUri } from '../../lib/portableLinks';
 import { Modal, ModalTitle } from '../ui/Modal';
+import { Button } from '../ui/Button';
 import { ErrorBanner } from '../ui/Feedback';
+import { FieldLabel } from './SettingsPrimitives';
 import { extractApiError } from '../../api/client';
 import { writeClipboardText } from '../../lib/clipboard';
+import { toast } from '../../stores/toastStore';
+import { cn } from '../../lib/utils';
 
 interface InviteModalProps {
   guildName: string;
@@ -108,6 +112,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       setCopyError(null);
       await writeClipboardText(portableLink);
       setCopiedPortable(true);
+      toast.success('Invite link copied to clipboard.');
       setTimeout(() => setCopiedPortable(false), 2000);
     } catch (err) {
       setCopyError(`Failed to copy portable invite link: ${extractApiError(err)}`);
@@ -119,6 +124,7 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
       setCopyError(null);
       await writeClipboardText(inviteCode);
       setCopiedCode(true);
+      toast.success('Invite code copied to clipboard.');
       setTimeout(() => setCopiedCode(false), 2000);
     } catch (err) {
       setCopyError(`Failed to copy invite code: ${extractApiError(err)}`);
@@ -135,37 +141,35 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
     >
       <div className="max-h-[min(86dvh,42rem)] overflow-auto">
         {/* Header */}
-        <div className="px-8 pb-5 pt-8">
-          <ModalTitle id="invite-modal-title" className="text-2xl font-semibold">
-            Invite friends to {guildName}
-          </ModalTitle>
+        <div className="border-b border-border-subtle px-6 pb-5 pt-6 pr-14">
+          <ModalTitle id="invite-modal-title">Invite friends to {guildName}</ModalTitle>
+          <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">
+            Share a link or code — anyone with it can join the conversation.
+          </p>
         </div>
 
         {/* Body */}
-        <div className="space-y-7 px-8 pb-8">
+        <div className="space-y-6 px-6 py-5">
           {inviteError && <ErrorBanner message={inviteError} />}
-
           {copyError && <ErrorBanner message={copyError} />}
 
           {/* Portable invite link (primary) */}
           <div>
-            <label className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-              <Link size={12} />
+            <FieldLabel className="flex items-center gap-1.5">
+              <LinkIcon size={13} className="text-text-muted" />
               Portable invite link
-            </label>
-            <p className="mt-3 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              Share this link with anyone -- it works from any device, even on a different network.
-            </p>
+            </FieldLabel>
             <div
-              className="mt-3 flex items-center overflow-hidden rounded-xl"
-              style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)' }}
+              className={cn(
+                'flex items-stretch overflow-hidden rounded-sm border border-border-subtle bg-bg-tertiary transition-opacity',
+                optionsDirty && 'opacity-60',
+              )}
             >
               <input
                 type="text"
-                value={loading ? 'Generating...' : portableLink}
+                value={loading ? 'Generating…' : portableLink}
                 readOnly
-                className="flex-1 bg-transparent px-4 py-3 text-[15px] outline-none"
-                style={{ color: 'var(--text-primary)', opacity: optionsDirty ? 0.5 : 1 }}
+                className="min-w-0 flex-1 bg-transparent px-3.5 py-2.5 text-sm text-text-primary outline-none"
               />
               <button
                 onClick={handleCopyPortable}
@@ -177,33 +181,37 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                       ? 'Copy portable invite link (apply changed options first)'
                       : 'Copy portable invite link'
                 }
-                className="inline-flex items-center justify-center px-4 py-3 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                style={{ backgroundColor: copiedPortable ? 'var(--accent-success)' : 'var(--accent-primary)' }}
+                className={cn(
+                  'inline-flex shrink-0 items-center gap-1.5 px-4 text-label font-semibold text-text-on-accent outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60',
+                  copiedPortable ? 'bg-accent-success' : 'bg-accent-primary hover:bg-accent-primary-hover active:bg-accent-primary-active',
+                )}
               >
                 {copiedPortable ? (
-                  <span className="flex items-center gap-1"><Check size={14} /> Copied!</span>
+                  <><Check size={15} /> Copied</>
                 ) : (
-                  <span className="flex items-center gap-1"><Copy size={14} /> Copy</span>
+                  <><Copy size={15} /> Copy</>
                 )}
               </button>
             </div>
+            <p className="mt-1.5 text-meta leading-relaxed text-text-muted">
+              Works from any device, even on a different network.
+            </p>
           </div>
 
           {/* Raw invite code (secondary) */}
           <div>
-            <label className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-              Invite code
-            </label>
+            <FieldLabel>Invite code</FieldLabel>
             <div
-              className="mt-3 flex items-center overflow-hidden rounded-xl"
-              style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)' }}
+              className={cn(
+                'flex items-stretch overflow-hidden rounded-sm border border-border-subtle bg-bg-tertiary transition-opacity',
+                optionsDirty && 'opacity-60',
+              )}
             >
               <input
                 type="text"
-                value={loading ? 'Generating...' : inviteCode}
+                value={loading ? 'Generating…' : inviteCode}
                 readOnly
-                className="flex-1 bg-transparent px-4 py-2.5 font-mono text-[14px] outline-none"
-                style={{ color: 'var(--text-muted)', opacity: optionsDirty ? 0.5 : 1 }}
+                className="min-w-0 flex-1 bg-transparent px-3.5 py-2 font-code text-sm text-text-secondary outline-none"
               />
               <button
                 onClick={handleCopyCode}
@@ -215,31 +223,31 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                       ? 'Copy invite code (apply changed options first)'
                       : 'Copy invite code'
                 }
-                className="inline-flex items-center justify-center px-3 py-2.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                style={{ color: copiedCode ? 'var(--accent-success)' : 'var(--text-secondary)' }}
+                className={cn(
+                  'inline-flex shrink-0 items-center gap-1.5 px-3.5 text-meta font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] hover:bg-bg-mod-subtle disabled:cursor-not-allowed disabled:opacity-60',
+                  copiedCode ? 'text-accent-success' : 'text-text-secondary hover:text-text-primary',
+                )}
               >
                 {copiedCode ? (
-                  <span className="flex items-center gap-1"><Check size={12} /> Copied</span>
+                  <><Check size={13} /> Copied</>
                 ) : (
-                  <span className="flex items-center gap-1"><Copy size={12} /> Copy</span>
+                  <><Copy size={13} /> Copy</>
                 )}
               </button>
             </div>
           </div>
 
-          {/* Settings */}
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-            <label className="flex-1">
-              <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-                Expire After
-              </span>
+          {/* Options */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="block">
+              <FieldLabel>Expire After</FieldLabel>
               <select
                 value={expiration}
                 onChange={(e) => {
                   setExpiration(e.target.value);
                   setOptionsDirty(true);
                 }}
-                className="select-field mt-3"
+                className="select-field"
               >
                 <option value="30min">30 minutes</option>
                 <option value="1hr">1 hour</option>
@@ -250,17 +258,15 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
                 <option value="never">Never</option>
               </select>
             </label>
-            <label className="flex-1">
-              <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-                Max Uses
-              </span>
+            <label className="block">
+              <FieldLabel>Max Uses</FieldLabel>
               <select
                 value={maxUses}
                 onChange={(e) => {
                   setMaxUses(e.target.value);
                   setOptionsDirty(true);
                 }}
-                className="select-field mt-3"
+                className="select-field"
               >
                 <option value="1">1 use</option>
                 <option value="5">5 uses</option>
@@ -273,22 +279,22 @@ export function InviteModal({ guildName, channelId, onClose }: InviteModalProps)
             </label>
           </div>
 
-          {/* Regenerate action -- option changes only take effect when applied here. */}
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          {/* Regenerate — option changes only take effect when applied here. */}
+          <div className="flex flex-col gap-3 border-t border-border-subtle pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-meta leading-relaxed text-text-muted">
               {optionsDirty
-                ? 'Options changed -- regenerate to apply them to a fresh link.'
+                ? 'Options changed — regenerate to apply them to a fresh link.'
                 : 'Regenerating revokes the current link and issues a new one.'}
             </p>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
               onClick={handleRegenerate}
               disabled={loading}
-              className="btn-ghost gap-2 border border-[color:var(--border-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
+              className="shrink-0 gap-2"
             >
-              <RefreshCw size={14} className={loading ? 'animate-spin' : undefined} />
-              {loading ? 'Regenerating...' : 'Regenerate'}
-            </button>
+              <RefreshCw size={15} className={loading ? 'animate-spin' : undefined} />
+              {loading ? 'Regenerating…' : 'Regenerate'}
+            </Button>
           </div>
         </div>
       </div>

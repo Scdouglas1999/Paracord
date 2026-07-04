@@ -1,10 +1,24 @@
-import { useMemo } from 'react';
-import { Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Signal, Radio } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Radio } from 'lucide-react';
+import { ConnectionQuality, RoomEvent } from 'livekit-client';
 import { useNavigate } from 'react-router-dom';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useVoice } from '../../hooks/useVoice';
+
+// Map the transport's live connection quality onto a semantic presence color +
+// human label. Unknown resolves to "online" — being connected at all is a link.
+function qualityMeta(quality: ConnectionQuality): { color: string; label: string } {
+  switch (quality) {
+    case ConnectionQuality.Poor:
+      return { color: 'var(--status-idle)', label: 'Connection unstable' };
+    case ConnectionQuality.Lost:
+      return { color: 'var(--status-dnd)', label: 'Connection lost' };
+    default:
+      return { color: 'var(--status-online)', label: 'Connection stable' };
+  }
+}
 
 export function MiniVoiceBar() {
   const channelId = useVoiceStore((s) => s.channelId);
@@ -13,6 +27,7 @@ export function MiniVoiceBar() {
   const selfDeaf = useVoiceStore((s) => s.selfDeaf);
   const pttEngaged = useVoiceStore((s) => s.pttEngaged);
   const leaveChannel = useVoiceStore((s) => s.leaveChannel);
+  const room = useVoiceStore((s) => s.room);
   // Route mute/deaf through useVoice so the gateway broadcast lives in one place
   // and can't diverge from VoiceControlBar.
   const { toggleMute, toggleDeaf } = useVoice();
@@ -21,10 +36,28 @@ export function MiniVoiceBar() {
   const isPttMode = (rawNotifications?.['voiceInputMode'] ?? 'voice_activity') === 'push_to_talk';
   const navigate = useNavigate();
 
+  const [quality, setQuality] = useState<ConnectionQuality>(ConnectionQuality.Unknown);
+
+  useEffect(() => {
+    if (!room) {
+      setQuality(ConnectionQuality.Unknown);
+      return;
+    }
+    const local = room.localParticipant;
+    setQuality(local?.connectionQuality ?? ConnectionQuality.Unknown);
+    const onChange = () => setQuality(room.localParticipant?.connectionQuality ?? ConnectionQuality.Unknown);
+    room.on(RoomEvent.ConnectionQualityChanged, onChange);
+    return () => {
+      room.off(RoomEvent.ConnectionQualityChanged, onChange);
+    };
+  }, [room]);
+
   const channelName = useMemo(
     () => channels.find((c) => c.id === channelId)?.name ?? 'Voice Channel',
     [channels, channelId],
   );
+
+  const { color: qualityColor, label: qualityLabel } = qualityMeta(quality);
 
   const handleToggleMute = () => {
     void toggleMute();
@@ -34,11 +67,11 @@ export function MiniVoiceBar() {
     void toggleDeaf();
   };
 
+  const ctrl =
+    'flex h-8 w-8 items-center justify-center rounded-sm outline-none transition-[background-color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]';
+
   return (
-    <div
-      className="flex items-center gap-2 border-t border-border-subtle/60 px-3 py-2"
-      style={{ backgroundColor: 'color-mix(in srgb, var(--bg-secondary) 92%, transparent)' }}
-    >
+    <div className="flex items-center gap-2 border-t border-border-subtle bg-bg-secondary px-3 py-2">
       {/* Connection info — clickable to navigate to voice channel */}
       <button
         onClick={() => {
@@ -46,16 +79,27 @@ export function MiniVoiceBar() {
             navigate(`/app/guilds/${guildId}/channels/${channelId}`);
           }
         }}
-        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1 transition-colors hover:bg-bg-mod-subtle"
+        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm px-1.5 py-1 outline-none transition-colors hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
       >
-        <Signal size={14} className="voice-connected-pulse shrink-0" style={{ color: 'var(--accent-success)' }} />
+        {/* Connection-quality dot — semantic presence color. Labeled so the
+            state is announced, not conveyed by color alone (design-spec §8). */}
+        <span
+          className="relative flex h-2.5 w-2.5 shrink-0 items-center justify-center"
+          role="img"
+          aria-label={qualityLabel}
+          title={qualityLabel}
+        >
+          <span
+            className="voice-connected-pulse absolute inline-flex h-2.5 w-2.5 rounded-full opacity-60"
+            style={{ backgroundColor: qualityColor }}
+          />
+          <span className="relative inline-flex h-2 w-2 rounded-full" style={{ backgroundColor: qualityColor }} />
+        </span>
         <div className="min-w-0 flex-1 text-left">
-          <div className="text-[11px] font-semibold leading-tight" style={{ color: 'var(--accent-success)' }}>
+          <div className="text-[11px] font-semibold leading-tight" style={{ color: qualityColor }}>
             Voice Connected
           </div>
-          <div className="truncate text-[13px] font-medium leading-snug text-text-secondary">
-            {channelName}
-          </div>
+          <div className="truncate text-meta font-medium text-text-secondary">{channelName}</div>
         </div>
       </button>
 
@@ -67,16 +111,18 @@ export function MiniVoiceBar() {
           // indicator, not a toggle; mark it disabled so keyboard and AT users
           // get an honest non-interactive control instead of a silent no-op.
           disabled={isPttMode}
-          className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
+          className={`${ctrl} ${
+            isPttMode
+              ? pttEngaged
+                ? 'bg-accent-tint text-accent-primary'
+                : 'bg-danger-tint text-accent-danger'
+              : selfMute
+                ? 'bg-danger-tint text-accent-danger'
+                : 'text-interactive-normal hover:bg-bg-mod-subtle hover:text-interactive-hover'
+          }`}
           aria-label={isPttMode ? (pttEngaged ? 'Transmitting (PTT)' : 'Push to Talk (muted)') : selfMute ? 'Unmute' : 'Mute'}
           title={isPttMode ? (pttEngaged ? 'Transmitting (PTT)' : 'Push to Talk (muted)') : undefined}
-          style={{
-            backgroundColor: isPttMode
-              ? pttEngaged ? 'var(--accent-success)' : 'var(--accent-danger)'
-              : selfMute ? 'var(--accent-danger)' : 'transparent',
-            color: (isPttMode || selfMute) ? '#fff' : 'var(--text-muted)',
-            cursor: isPttMode ? 'default' : undefined,
-          }}
+          style={{ cursor: isPttMode ? 'default' : undefined }}
         >
           {isPttMode
             ? pttEngaged ? <Radio size={15} className="animate-pulse" /> : <MicOff size={15} />
@@ -85,17 +131,13 @@ export function MiniVoiceBar() {
         </button>
         <button
           onClick={handleToggleDeaf}
-          className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
+          className={`${ctrl} ${selfDeaf ? 'bg-danger-tint text-accent-danger' : 'text-interactive-normal hover:bg-bg-mod-subtle hover:text-interactive-hover'}`}
           aria-label={selfDeaf ? 'Undeafen' : 'Deafen'}
-          style={{
-            backgroundColor: selfDeaf ? 'var(--accent-danger)' : 'transparent',
-            color: selfDeaf ? '#fff' : 'var(--text-muted)',
-          }}
         >
           {selfDeaf ? <HeadphoneOff size={15} /> : <Headphones size={15} />}
         </button>
         <button
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-accent-danger/20 hover:text-accent-danger"
+          className={`${ctrl} text-interactive-normal hover:bg-danger-tint hover:text-accent-danger`}
           onClick={() => void leaveChannel()}
           aria-label="Disconnect"
         >

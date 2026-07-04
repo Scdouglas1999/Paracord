@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Users } from 'lucide-react';
 import type { Role } from '../../types/index';
 import { UserProfilePopup } from '../user/UserProfile';
 import { useMemberStore } from '../../stores/memberStore';
@@ -17,6 +17,7 @@ import { extractApiError } from '../../api/client';
 import { writeClipboardText } from '../../lib/clipboard';
 import { getHighestRoleColor } from '../../lib/colors';
 import { toast } from '../../stores/toastStore';
+import { cn } from '../../lib/utils';
 
 interface MemberWithUser {
   user_id: string;
@@ -27,6 +28,7 @@ interface MemberWithUser {
   bot?: boolean;
   status?: 'online' | 'idle' | 'dnd' | 'offline';
   activityText?: string | null;
+  streaming?: boolean;
 }
 
 interface MemberListProps {
@@ -112,6 +114,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
         bot: m.user.bot,
         status: derivedStatus,
         activityText: formatActivityLabel(activity),
+        streaming: Boolean(voiceState?.self_stream),
       };
     });
   }, [propMembers, storeMembers, presences, getPresence, activeServerId, voiceParticipants, selectedGuildId, isAuthenticated, selfUserId]);
@@ -160,10 +163,11 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
 
   const renderMember = (member: MemberWithUser) => {
     const roleColor = getHighestRoleColor(member.roles, roles);
+    const offline = member.status === 'offline';
     return (
     <button
       key={member.user_id}
-      className="group flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-3 text-left transition-all hover:border-border-subtle hover:bg-bg-mod-subtle"
+      className="group flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
       onClick={(e) => handleMemberClick(e, member)}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -177,43 +181,53 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
         }
       }}
     >
-      <div className="relative flex-shrink-0">
-        <div
-          className="flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold text-white"
-          style={{
-            backgroundColor: roleColor ?? 'var(--accent-primary)',
-            opacity: member.status === 'offline' ? 0.4 : 1,
-          }}
+      <div className="relative shrink-0" style={{ opacity: offline ? 0.55 : 1 }}>
+        <span
+          className="block rounded-full"
+          style={
+            member.streaming
+              ? {
+                  padding: '2px',
+                  background:
+                    'linear-gradient(135deg, var(--accent-secondary), var(--accent-primary))',
+                }
+              : undefined
+          }
         >
-          {(member.nick || member.username).charAt(0).toUpperCase()}
-        </div>
-        <div
-          className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2"
+          <span
+            className="flex h-8 w-8 items-center justify-center rounded-full text-label font-semibold text-white"
+            style={{ backgroundColor: roleColor ?? 'var(--accent-primary)' }}
+          >
+            {(member.nick || member.username).charAt(0).toUpperCase()}
+          </span>
+        </span>
+        <span
+          className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full"
           style={{
             backgroundColor: getStatusColor(member.status),
-            borderColor: 'var(--bg-secondary)',
+            boxShadow: '0 0 0 2px var(--bg-secondary)',
           }}
         />
       </div>
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <div
-            className="truncate text-sm font-semibold transition-colors group-hover:text-text-primary"
-            style={{
-              opacity: member.status === 'offline' ? 0.4 : 1,
-              color: roleColor ?? 'var(--text-secondary)',
-            }}
+          <span
+            className={cn(
+              'truncate text-label font-medium',
+              offline && 'text-text-muted',
+            )}
+            style={offline ? undefined : { color: roleColor ?? 'var(--text-secondary)' }}
           >
             {member.nick || member.username}
-          </div>
+          </span>
           {member.bot && (
-            <span className="shrink-0 rounded-md border border-accent-primary/35 bg-accent-primary/12 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
+            <span className="shrink-0 rounded-xs bg-accent-tint px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
               Bot
             </span>
           )}
         </div>
-        {member.activityText && member.status !== 'offline' && (
-          <div className="truncate text-xs text-text-muted">{member.activityText}</div>
+        {member.activityText && !offline && (
+          <div className="truncate text-meta text-text-muted">{member.activityText}</div>
         )}
       </div>
     </button>
@@ -264,12 +278,12 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
     const row = virtualRows[index];
     if (!row) return 52;
     switch (row.type) {
-      case 'stats': return 76;
-      case 'header': return 38;
-      case 'offlineToggle': return 42;
-      case 'empty': return 80;
-      case 'member': return 52;
-      default: return 52;
+      case 'stats': return 46;
+      case 'header': return 30;
+      case 'offlineToggle': return 34;
+      case 'empty': return 104;
+      case 'member': return 50;
+      default: return 50;
     }
   }, [virtualRows]);
 
@@ -294,40 +308,43 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
         role="complementary"
         aria-label="Member list"
       >
-        <div className="mb-4 text-center">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Members</div>
-          <div className="mt-1 text-sm font-semibold text-text-primary">{members.length}</div>
+        <div className="mb-4 flex flex-col items-center">
+          <div className="text-section uppercase text-text-muted">Members</div>
+          <div className="mt-0.5 font-code text-meta tabular-nums text-text-secondary">{members.length}</div>
         </div>
 
-        <div className="flex w-full flex-1 flex-col items-center gap-3">
+        <div className="flex w-full flex-1 flex-col items-center gap-2.5">
           {isMemberListLoading ? (
             Array.from({ length: 7 }, (_, i) => (
-              <div
-                key={i}
-                className="h-10 w-10 animate-pulse rounded-xl border border-border-subtle bg-bg-mod-subtle"
-              />
+              <div key={i} className="h-9 w-9 animate-pulse rounded-full bg-bg-mod-subtle" />
             ))
           ) : compactMembers.length > 0 ? (
-            compactMembers.map((member) => (
+            compactMembers.map((member) => {
+              const roleColor = getHighestRoleColor(member.roles, roles);
+              return (
               <button
                 key={member.user_id}
                 title={member.nick || member.username}
-                className="group relative flex h-10 w-10 items-center justify-center rounded-xl border border-transparent bg-bg-mod-subtle/65 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:border-border-subtle hover:bg-bg-mod-strong"
-                style={{ opacity: member.status === 'offline' ? 0.45 : 1 }}
+                className="group relative flex h-9 w-9 items-center justify-center rounded-full text-label font-semibold text-white outline-none transition-transform duration-[140ms] ease-[var(--ease-out)] hover:brightness-110 active:scale-95 focus-visible:shadow-[var(--focus-ring)]"
+                style={{
+                  backgroundColor: roleColor ?? 'var(--accent-primary)',
+                  opacity: member.status === 'offline' ? 0.5 : 1,
+                }}
                 onClick={(e) => handleMemberClick(e, member)}
               >
                 {(member.nick || member.username).charAt(0).toUpperCase()}
                 <span
-                  className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2"
+                  className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full"
                   style={{
                     backgroundColor: getStatusColor(member.status),
-                    borderColor: 'var(--bg-secondary)',
+                    boxShadow: '0 0 0 2px var(--bg-secondary)',
                   }}
                 />
               </button>
-            ))
+              );
+            })
           ) : (
-            <div className="pt-2 text-center text-[11px] text-text-muted">No members</div>
+            <p className="px-1 pt-2 text-center text-meta text-text-muted">No one online yet</p>
           )}
         </div>
 
@@ -389,33 +406,43 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
                 }}
               >
                 {row.type === 'stats' && (
-                  <div className="mb-8 rounded-2xl border border-border-subtle bg-bg-mod-subtle/60 px-3.5 py-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">Members</div>
-                    <div className="mt-0.5 text-base font-semibold text-text-primary">{members.length}</div>
+                  <div className="mb-3 flex items-baseline justify-between border-b border-border-subtle px-2 pb-2.5">
+                    <span className="text-section uppercase text-text-muted">Members</span>
+                    <span className="font-code text-meta tabular-nums text-text-secondary">{members.length}</span>
                   </div>
                 )}
                 {row.type === 'header' && (
-                  <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-text-muted">
-                    {row.label} — {row.count}
+                  <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-section uppercase text-text-muted">
+                    <span className="truncate">{row.label}</span>
+                    <span className="font-code tabular-nums text-text-muted/80">{row.count}</span>
                   </div>
                 )}
                 {row.type === 'member' && renderMember(row.member)}
                 {row.type === 'offlineToggle' && (
                   <button
-                    className="category-header w-full rounded-lg px-3 py-2 hover:bg-bg-mod-subtle"
+                    className="flex w-full items-center gap-1.5 rounded-sm px-2 py-1.5 text-section uppercase text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-secondary focus-visible:shadow-[var(--focus-ring)]"
                     onClick={() => setShowOffline(!showOffline)}
                   >
                     <ChevronDown
                       size={12}
-                      className="transition-transform"
+                      className="shrink-0 transition-transform duration-[140ms] ease-[var(--ease-out)]"
                       style={{ transform: showOffline ? 'rotate(0deg)' : 'rotate(-90deg)' }}
                     />
-                    Offline — {row.count}
+                    <span className="truncate">Offline</span>
+                    <span className="font-code tabular-nums text-text-muted/80">{row.count}</span>
                   </button>
                 )}
                 {row.type === 'empty' && (
-                  <div className="flex flex-col items-center justify-center py-8 px-4">
-                    <p className="text-xs text-center text-text-muted">No members to display</p>
+                  <div className="flex items-start gap-3 px-2 py-6">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+                      <Users size={18} />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-label font-semibold text-text-primary">Nobody&apos;s here yet</p>
+                      <p className="mt-0.5 text-meta text-text-secondary">
+                        Members show up as they join and come online.
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
@@ -428,7 +455,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
         <>
           <div className="fixed inset-0 z-50" onClick={() => setContextMenuMember(null)} />
           <div
-            className="glass-modal fixed z-50 min-w-[200px] rounded-xl p-1.5"
+            className="glass-modal fixed z-50 min-w-[200px] rounded-md p-1"
             style={{ left: contextMenuMember.x + 10, top: contextMenuMember.y }}
             role="menu"
             aria-label="Member actions"
@@ -443,7 +470,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
             <button
               autoFocus
               role="menuitem"
-              className="w-full rounded-md px-3 py-2 text-left text-sm text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary"
+              className="w-full rounded-sm px-2.5 py-1.5 text-left text-label text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint hover:text-text-primary focus-visible:bg-accent-tint focus-visible:text-text-primary"
               onClick={() => {
                 void copyMemberIdToClipboard(contextMenuMember.userId);
                 setContextMenuMember(null);

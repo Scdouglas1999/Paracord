@@ -347,6 +347,19 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
     () => members.filter((member) => member.user.id !== guild?.owner_id),
     [members, guild?.owner_id]
   );
+  // Members holding each role, for the count badge on role rows. Everyone carries
+  // the base @everyone role (id === guildId), so it maps to the full member count.
+  const memberCountByRole = useMemo(() => {
+    const counts = new Map<string, number>();
+    counts.set(memberRoleId, members.length);
+    for (const member of members) {
+      for (const roleId of member.roles || []) {
+        if (roleId === memberRoleId) continue;
+        counts.set(roleId, (counts.get(roleId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [members, memberRoleId]);
   const nativeBotEntries = useMemo(() => {
     const settings = guild?.bot_settings;
     if (!settings || typeof settings !== 'object') return [] as Array<{ id: string; name: string; description: string }>;
@@ -910,7 +923,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   return (
     <div
       className={cn(
-        'relative h-full min-h-0 overflow-hidden rounded-[1rem] border border-border-subtle bg-bg-primary',
+        'relative h-full min-h-0 overflow-hidden rounded-lg border border-border-subtle bg-bg-primary',
         isMobile ? 'flex flex-col' : 'flex'
       )}
       onKeyDown={handleKeyDown}
@@ -951,7 +964,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
                 <button
                   key={item.id}
                   onClick={() => selectMobileSection(item.id)}
-                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
+                  className="flex w-full items-center gap-3 rounded-sm px-4 py-3.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-mod-subtle active:bg-bg-mod-strong"
                 >
                   <span className="text-text-muted">{item.icon}</span>
                   <span className="flex-1 text-left">{item.label}</span>
@@ -1118,6 +1131,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
                 onCancelRoleEditing={cancelRoleEditing}
                 onDeleteRole={(roleId) => void deleteRole(roleId)}
                 roleColorHex={roleColorHex}
+                memberCountByRole={memberCountByRole}
               />
             )}
 

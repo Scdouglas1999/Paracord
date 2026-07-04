@@ -5,6 +5,11 @@ import { useUIStore } from '../../stores/uiStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { gateway } from '../../gateway/manager';
 
+const RETRY_BUTTON =
+  'ml-1 inline-flex h-7 items-center rounded-sm border border-current/30 px-2.5 text-meta font-semibold ' +
+  'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-current/10 ' +
+  'focus-visible:shadow-[var(--focus-ring)]';
+
 export function ConnectionStatusBar() {
   const connectionStatus = useUIStore((s) => s.connectionStatus);
   const voiceConnected = useVoiceStore((s) => s.connected);
@@ -12,7 +17,7 @@ export function ConnectionStatusBar() {
   const [prevStatus, setPrevStatus] = useState(connectionStatus);
 
   useEffect(() => {
-    // Show brief "Connected" banner when reconnecting → connected
+    // Show a brief "back online" banner when reconnecting → connected.
     if (connectionStatus === 'connected' && (prevStatus === 'reconnecting' || prevStatus === 'disconnected')) {
       setShowConnected(true);
       const timer = setTimeout(() => setShowConnected(false), 2000);
@@ -21,7 +26,7 @@ export function ConnectionStatusBar() {
     setPrevStatus(connectionStatus);
   }, [connectionStatus, prevStatus]);
 
-  // When voice is active but gateway dropped, kick off an immediate reconnect
+  // When voice is active but the gateway dropped, kick off an immediate reconnect
   // since voice connectivity proves the network is reachable.
   useEffect(() => {
     if (voiceConnected && connectionStatus === 'disconnected') {
@@ -38,44 +43,38 @@ export function ConnectionStatusBar() {
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: 'auto', opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
-          transition={{ duration: 0.2 }}
+          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
           className="overflow-hidden"
         >
           {connectionStatus === 'reconnecting' && (
-            <div className="mx-4 mb-3 mt-2 flex items-center justify-center gap-2 rounded-xl bg-accent-warning/15 px-4 py-2 text-xs font-semibold text-accent-warning">
-              <RefreshCw size={13} className="animate-spin" />
-              Reconnecting...
+            <div className="mx-4 mb-3 mt-2 flex items-center justify-center gap-2 rounded-md bg-warning-tint px-4 py-1.5 text-label font-medium text-accent-warning">
+              <RefreshCw size={14} className="animate-spin" />
+              Reconnecting to server…
             </div>
           )}
           {connectionStatus === 'disconnected' && (
             voiceConnected ? (
-              <div className="mx-4 mb-3 mt-2 flex items-center justify-center gap-2 rounded-xl bg-accent-warning/15 px-4 py-2 text-xs font-semibold text-accent-warning">
-                <RefreshCw size={13} className="animate-spin" />
-                Chat disconnected — Retrying...
-                <button
-                  onClick={() => void gateway.connectAll()}
-                  className="ml-1 rounded-md border border-accent-warning/35 bg-accent-warning/10 px-2 py-0.5 text-[11px] font-semibold transition-colors hover:bg-accent-warning/20"
-                >
+              <div className="mx-4 mb-3 mt-2 flex items-center justify-center gap-2 rounded-md bg-warning-tint px-4 py-1.5 text-label font-medium text-accent-warning">
+                <RefreshCw size={14} className="animate-spin" />
+                Chat connection dropped — retrying…
+                <button onClick={() => void gateway.connectAll()} className={RETRY_BUTTON}>
                   Retry now
                 </button>
               </div>
             ) : (
-              <div className="mx-4 mb-3 mt-2 flex items-center justify-center gap-2 rounded-xl bg-accent-danger/15 px-4 py-2 text-xs font-semibold text-accent-danger">
-                <WifiOff size={13} />
-                Disconnected
-                <button
-                  onClick={() => void gateway.connectAll()}
-                  className="ml-1 rounded-md border border-accent-danger/35 bg-accent-danger/10 px-2 py-0.5 text-[11px] font-semibold transition-colors hover:bg-accent-danger/20"
-                >
+              <div className="mx-4 mb-3 mt-2 flex items-center justify-center gap-2 rounded-md bg-danger-tint px-4 py-1.5 text-label font-medium text-accent-danger">
+                <WifiOff size={14} />
+                You&apos;re offline — messages will send once you reconnect.
+                <button onClick={() => void gateway.connectAll()} className={RETRY_BUTTON}>
                   Retry now
                 </button>
               </div>
             )
           )}
           {connectionStatus === 'connected' && showConnected && (
-            <div className="mx-4 mb-3 mt-2 flex items-center justify-center gap-2 rounded-xl bg-accent-success/15 px-4 py-2 text-xs font-semibold text-accent-success">
-              <Wifi size={13} />
-              Connected
+            <div className="mx-4 mb-3 mt-2 flex items-center justify-center gap-2 rounded-md bg-success-tint px-4 py-1.5 text-label font-medium text-accent-success">
+              <Wifi size={14} />
+              Back online
             </div>
           )}
         </motion.div>

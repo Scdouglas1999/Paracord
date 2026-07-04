@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { Check, Copy } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 interface IntentSelectorProps {
@@ -35,24 +37,42 @@ const INTENTS: IntentInfo[] = [
 ];
 
 export function IntentSelector({ value, onChange }: IntentSelectorProps) {
+  const [copied, setCopied] = useState(false);
+
   const toggle = (bit: number) => {
     const mask = 1 << bit;
     onChange(value ^ mask);
   };
 
   const isChecked = (bit: number) => ((value >> bit) & 1) === 1;
+  const enabledCount = INTENTS.filter((i) => isChecked(i.bit)).length;
+
+  const copyValue = async () => {
+    try {
+      await navigator.clipboard.writeText(String(value));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // clipboard unavailable — no-op
+    }
+  };
 
   return (
-    <div className="space-y-2">
-      <div className="grid gap-2 sm:grid-cols-2">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-section uppercase text-text-muted">Gateway intents</span>
+        <span className="text-meta tabular-nums text-text-muted">{enabledCount} enabled</span>
+      </div>
+
+      <div className="grid gap-1.5 sm:grid-cols-2">
         {INTENTS.map((intent) => (
           <label
             key={intent.bit}
             className={cn(
-              'flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 transition-colors',
+              'flex cursor-pointer items-start gap-2.5 rounded-sm border px-3 py-2 transition-colors duration-[140ms] ease-[var(--ease-out)]',
               intent.privileged
-                ? 'border-yellow-500/40 bg-yellow-500/5 hover:bg-yellow-500/10'
-                : 'border-border-subtle bg-bg-primary/40 hover:bg-bg-mod-subtle',
+                ? 'border-accent-warning/35 bg-warning-tint hover:bg-accent-warning/20'
+                : 'border-border-subtle bg-bg-mod-subtle hover:bg-bg-mod-strong',
             )}
           >
             <input
@@ -62,24 +82,33 @@ export function IntentSelector({ value, onChange }: IntentSelectorProps) {
               className="mt-0.5 accent-accent-primary"
             />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-semibold text-text-primary">
-                  {intent.name}
-                </span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-label text-text-primary">{intent.name}</span>
                 {intent.privileged && (
-                  <span className="rounded bg-yellow-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase text-yellow-400">
+                  <span className="rounded-xs bg-warning-tint px-1.5 py-0.5 text-meta font-semibold uppercase text-accent-warning">
                     Privileged
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 text-[11px] text-text-muted">{intent.description}</p>
+              <p className="mt-0.5 text-meta text-text-muted">{intent.description}</p>
             </div>
           </label>
         ))}
       </div>
-      <p className="text-xs text-text-muted">
-        Intent value: <code className="rounded bg-bg-primary/60 px-1.5 py-0.5 text-text-secondary">{value}</code>
-      </p>
+
+      {/* Computed intent bitfield readout with copy (design-spec §2 code face). */}
+      <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-bg-tertiary px-3.5 py-2.5">
+        <span className="text-section shrink-0 uppercase text-text-muted">Value</span>
+        <code className="min-w-0 flex-1 truncate font-code text-meta text-text-primary">{value}</code>
+        <button
+          type="button"
+          onClick={() => void copyValue()}
+          aria-label="Copy intent value"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+        >
+          {copied ? <Check size={15} className="text-accent-success" /> : <Copy size={15} />}
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useRef,
+  useState,
   type ReactNode,
   type RefObject,
 } from 'react';
@@ -51,7 +53,31 @@ const PANEL_MOTION = {
   },
 } as const;
 
+// prefers-reduced-motion (design-spec §5/§8): drop transforms, keep the fade only.
+const PANEL_MOTION_REDUCED = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+} as const;
+
 const MODAL_TRANSITION = { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const };
+
+// Local reduced-motion probe. Modal mocks framer-motion in several consuming
+// tests to a bare { motion, AnimatePresence }, so we read the media query
+// directly instead of framer-motion's useReducedMotion. Guarded for jsdom, where
+// matchMedia is unavailable.
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setReduced(mq.matches);
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return reduced;
+}
 
 export interface ModalProps {
   open: boolean;
@@ -118,6 +144,10 @@ export function Modal({
 }: ModalProps) {
   const internalRef = useRef<HTMLDivElement>(null);
   const ref = panelRef ?? internalRef;
+  const reduceMotion = usePrefersReducedMotion();
+  const panelMotion = reduceMotion
+    ? PANEL_MOTION_REDUCED
+    : PANEL_MOTION[placement];
 
   // Only trap/escape from here when the consumer hasn't taken it over.
   useFocusTrap(ref, open && manageFocus, manageFocus ? onClose : undefined);
@@ -142,9 +172,9 @@ export function Modal({
             aria-describedby={describedBy}
             aria-label={labelledBy ? undefined : ariaLabel}
             tabIndex={-1}
-            initial={PANEL_MOTION[placement].initial}
-            animate={PANEL_MOTION[placement].animate}
-            exit={PANEL_MOTION[placement].exit}
+            initial={panelMotion.initial}
+            animate={panelMotion.animate}
+            exit={panelMotion.exit}
             transition={MODAL_TRANSITION}
             className={cn(
               'relative overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl',

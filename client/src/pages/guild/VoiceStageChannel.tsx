@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { EyeOff, LayoutList, Monitor, PanelLeft, PictureInPicture2 } from 'lucide-react';
+import { EyeOff, LayoutList, Mic, Monitor, PanelLeft, PictureInPicture2 } from 'lucide-react';
 import { RoomEvent, Track } from 'livekit-client';
 import { StreamViewer } from '../../components/voice/StreamViewer';
 import { VideoGrid } from '../../components/voice/VideoGrid';
@@ -543,9 +543,9 @@ export function VoiceStageChannel({
           {/* Video Area */}
           <div className="flex min-h-0 flex-1 flex-col relative bg-black/40 group/video">
             {!isStage && (watchedStreamerId || videoLayout === 'side') && (
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 rounded-xl bg-bg-primary/80 px-2 py-1.5 shadow-xl backdrop-blur-xl border border-white/5 opacity-0 group-hover/video:opacity-100 group-focus-within/video:opacity-100 transition-opacity">
-                <span className="pl-1 text-xs font-semibold text-text-muted">View</span>
-                <div className="h-4 w-px bg-white/10 mx-1" />
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1 rounded-md border border-border-subtle bg-bg-floating px-1.5 py-1.5 shadow-lg backdrop-blur-md opacity-0 group-hover/video:opacity-100 group-focus-within/video:opacity-100 transition-opacity">
+                <span className="px-1 text-section uppercase text-text-muted">View</span>
+                <div className="mx-0.5 h-4 w-px bg-border-strong" />
                 {([
                   { mode: 'top' as const, icon: LayoutList, label: 'Top' },
                   { mode: 'side' as const, icon: PanelLeft, label: 'Side' },
@@ -557,9 +557,9 @@ export function VoiceStageChannel({
                     title={label}
                     aria-label={`Use ${label} video layout`}
                     onClick={() => setVideoLayout(mode)}
-                    className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${videoLayout === mode
-                      ? 'bg-accent-primary text-white shadow-md'
-                      : 'text-text-secondary hover:bg-white/10 hover:text-white'
+                    className={`flex h-8 w-8 items-center justify-center rounded-sm outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] ${videoLayout === mode
+                      ? 'bg-accent-primary text-text-on-accent shadow-sm'
+                      : 'text-interactive-normal hover:bg-bg-mod-subtle hover:text-interactive-hover'
                       }`}
                   >
                     <Icon size={16} />
@@ -624,33 +624,36 @@ export function VoiceStageChannel({
               <>
                 <VideoGrid layout="grid" />
                 <div className="min-h-0 flex-1 overflow-hidden">
-                  <div className="relative flex h-full min-h-[240px] items-center justify-center overflow-hidden bg-bg-mod-subtle/30 sm:min-h-[300px]">
-                    <div className="pointer-events-none absolute -top-12 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full blur-3xl" style={{ backgroundColor: 'var(--ambient-glow-primary)' }} />
-                    <div className="relative mx-3 flex w-full max-w-md flex-col items-center rounded-2xl border border-border-subtle bg-bg-mod-subtle/70 px-8 py-10 text-center sm:mx-4 sm:px-12 sm:py-12">
-                      <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-border-subtle bg-bg-primary/70 text-text-secondary">
-                        <Monitor size={20} />
+                  <div className="flex h-full min-h-[240px] items-center bg-bg-primary px-6 sm:min-h-[300px] sm:px-10">
+                    <div className="w-full max-w-md">
+                      <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
+                        {isStage ? <Mic size={20} /> : <Monitor size={20} />}
                       </div>
-                      <div className="text-base font-semibold text-text-primary">
-                        {isStage ? 'Stage discussion is live' : 'Choose a stream from the sidebar'}
-                      </div>
-                      <div className="mt-1 text-sm text-text-secondary">
+                      <h3 className="font-display text-heading text-text-primary">
+                        {isStage ? 'The stage is live' : 'Pick a stream to watch'}
+                      </h3>
+                      <p className="mt-2 max-w-prose text-body text-text-secondary">
                         {isStage ? (
                           <>
-                            Speakers: <span className="font-semibold text-text-primary">{stageSpeakers.length}</span> · Audience:{' '}
-                            <span className="font-semibold text-text-primary">{stageAudience.length}</span>
+                            <span className="font-semibold tabular-nums text-text-primary">{stageSpeakers.length}</span>{' '}
+                            {stageSpeakers.length === 1 ? 'speaker' : 'speakers'} on stage and{' '}
+                            <span className="font-semibold tabular-nums text-text-primary">{stageAudience.length}</span> in the
+                            audience. Their audio is already playing.
                           </>
                         ) : (
                           <>
-                            Use the red <span className="font-semibold text-accent-danger">LIVE</span> buttons beside voice participants to switch streams.
+                            Hit the{' '}
+                            <span className="font-semibold text-accent-danger">LIVE</span> badge next to anyone in
+                            the voice list to bring their screen share here.
                           </>
                         )}
-                      </div>
-                      <div className="mt-4 text-xs text-text-muted">
+                      </p>
+                      <div className="mt-4 font-code text-meta text-text-muted">
                         {!isStage && activeStreamers.length > 0
-                          ? `${activeStreamers.length} stream${activeStreamers.length === 1 ? '' : 's'} currently live`
+                          ? `${activeStreamers.length} stream${activeStreamers.length === 1 ? '' : 's'} live right now`
                           : isStage
                             ? `${stageParticipants.length} participant${stageParticipants.length === 1 ? '' : 's'} in this stage`
-                            : 'No active streams right now'}
+                            : 'No one is streaming yet'}
                       </div>
                     </div>
                   </div>

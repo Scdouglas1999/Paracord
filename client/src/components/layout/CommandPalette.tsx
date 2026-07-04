@@ -285,6 +285,7 @@ export function CommandPalette() {
   }, [open, setOpen]);
 
   let flatIndex = 0;
+  const activeItemId = flatItems[selectedIndex]?.id;
 
   return (
     <Modal
@@ -296,99 +297,118 @@ export function CommandPalette() {
       labelledBy="command-palette-title"
       placement="top"
       size="md"
-      panelClassName="border border-border-strong/50"
+      panelClassName="border-border-strong"
     >
       <h2 id="command-palette-title" className="sr-only">Command Palette</h2>
-            {/* Search input */}
-            <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3.5">
-              <Search size={18} className="shrink-0 text-text-muted" />
-              <input
-                ref={inputRef}
-                autoFocus
-                aria-label="Search command palette"
-                className="flex-1 bg-transparent px-1 py-0.5 text-[15px] text-text-primary outline-none placeholder:text-text-muted"
-                placeholder="Where would you like to go?"
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setSelectedIndex(0);
-                }}
-              />
-              <kbd className="flex items-center gap-0.5 rounded border border-border-subtle bg-bg-mod-subtle px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
-                ESC
-              </kbd>
-            </div>
+      {/* Search input — top inset, on the deeper tertiary surface */}
+      <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-3.5">
+        <Search size={18} className="shrink-0 text-text-muted" />
+        <input
+          ref={inputRef}
+          autoFocus
+          aria-controls="command-palette-list"
+          aria-activedescendant={activeItemId ? `command-item-${activeItemId}` : undefined}
+          aria-label="Search command palette"
+          className="flex-1 bg-transparent px-1 py-0.5 text-body text-text-primary outline-none placeholder:text-text-muted"
+          placeholder="Jump to a channel, space, or setting…"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setSelectedIndex(0);
+          }}
+        />
+        <kbd className="rounded-xs bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta font-semibold text-text-muted">
+          ESC
+        </kbd>
+      </div>
 
-            {/* Results */}
-            <div ref={listRef} className="max-h-[400px] overflow-y-auto p-2 scrollbar-thin">
-              {groupedItems.length > 0 ? (
-                groupedItems.map((group) => (
-                  <div key={group.category} className="mb-3 space-y-1.5">
-                    <div className="mt-5 first:mt-0 px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest text-text-muted">
-                      {group.category}
-                    </div>
-                    {group.items.map((item) => {
-                      const currentIndex = flatIndex++;
-                      const isSelected = currentIndex === selectedIndex;
-                      return (
-                        <button
-                          key={item.id}
-                          data-index={currentIndex}
-                          onClick={() => handleSelect(item)}
-                          onMouseEnter={() => setSelectedIndex(currentIndex)}
-                          className={cn(
-                            'flex w-full items-center gap-3 rounded-xl px-5 py-3.5 text-left transition-colors',
-                            isSelected
-                              ? 'bg-accent-primary/12 text-text-primary'
-                              : 'text-text-secondary hover:bg-bg-mod-subtle'
-                          )}
-                        >
-                          <div className={cn(
-                            'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors',
-                            isSelected ? 'bg-accent-primary/20 text-accent-primary' : 'bg-bg-mod-subtle text-text-muted'
-                          )}>
-                            {item.icon}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-[13px] font-semibold">{item.label}</div>
-                            {item.sublabel && (
-                              <div className="truncate text-[11px] text-text-muted">{item.sublabel}</div>
-                            )}
-                          </div>
-                          {isSelected && (
-                            <ArrowRight size={14} className="shrink-0 text-accent-primary" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ))
-              ) : (
-                <div className="flex flex-col items-center justify-center px-4 py-10">
-                  <Search size={32} className="mb-3 text-text-muted/40" />
-                  <div className="text-sm font-medium text-text-muted">No results found</div>
-                  <div className="mt-1 text-xs text-text-muted/70">Try a different search term</div>
-                </div>
-              )}
+      {/* Results */}
+      <div
+        ref={listRef}
+        id="command-palette-list"
+        role="listbox"
+        aria-label="Command palette results"
+        className="max-h-[420px] overflow-y-auto p-2 scrollbar-thin"
+      >
+        {groupedItems.length > 0 ? (
+          groupedItems.map((group) => (
+            <div key={group.category} className="mb-1.5 last:mb-0">
+              <div className="px-3 pb-1 pt-3 text-section uppercase text-text-muted first:pt-1">
+                {group.category}
+              </div>
+              {group.items.map((item) => {
+                const currentIndex = flatIndex++;
+                const isSelected = currentIndex === selectedIndex;
+                return (
+                  <button
+                    key={item.id}
+                    id={`command-item-${item.id}`}
+                    role="option"
+                    aria-selected={isSelected}
+                    data-index={currentIndex}
+                    tabIndex={-1}
+                    onClick={() => handleSelect(item)}
+                    onMouseEnter={() => setSelectedIndex(currentIndex)}
+                    className={cn(
+                      'flex w-full items-center gap-3 rounded-sm px-3 py-2.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)]',
+                      isSelected
+                        ? 'bg-accent-tint text-text-primary'
+                        : 'text-text-secondary hover:bg-bg-mod-subtle'
+                    )}
+                  >
+                    <span className={cn(
+                      'flex h-5 w-5 shrink-0 items-center justify-center transition-colors',
+                      isSelected ? 'text-accent-primary' : 'text-text-muted'
+                    )}>
+                      {item.icon}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-label font-semibold">{item.label}</span>
+                      {item.sublabel && (
+                        <span className="block truncate text-meta text-text-muted">{item.sublabel}</span>
+                      )}
+                    </span>
+                    {isSelected ? (
+                      <kbd className="shrink-0 rounded-xs bg-bg-mod-strong px-1.5 py-0.5 font-code text-meta tabular-nums text-text-secondary">
+                        ↵
+                      </kbd>
+                    ) : (
+                      <ArrowRight size={14} className="shrink-0 text-text-muted opacity-0" aria-hidden />
+                    )}
+                  </button>
+                );
+              })}
             </div>
+          ))
+        ) : (
+          <div className="px-3 py-8">
+            <div className="text-label font-semibold text-text-primary">
+              Nothing matches “{query.trim()}”
+            </div>
+            <p className="mt-1 text-meta text-text-secondary">
+              Try a command name, a channel, or a space you belong to.
+            </p>
+          </div>
+        )}
+      </div>
 
-            {/* Footer hints */}
-            <div className="flex items-center justify-between border-t border-border-subtle/60 px-4 py-2">
-              <div className="flex items-center gap-3 text-[10px] text-text-muted">
-                <span className="flex items-center gap-1">
-                  <kbd className="rounded border border-border-subtle/60 bg-bg-mod-subtle/60 px-1 py-0.5 font-mono text-[9px]">&uarr;</kbd>
-                  <kbd className="rounded border border-border-subtle/60 bg-bg-mod-subtle/60 px-1 py-0.5 font-mono text-[9px]">&darr;</kbd>
-                  navigate
-                </span>
-                <span className="flex items-center gap-1">
-                  <kbd className="rounded border border-border-subtle/60 bg-bg-mod-subtle/60 px-1 py-0.5 font-mono text-[9px]">&crarr;</kbd>
-                  select
-                </span>
-              </div>
-              <div className="text-[10px] text-text-muted">
-                {flatItems.length} result{flatItems.length !== 1 ? 's' : ''}
-              </div>
-            </div>
+      {/* Footer hints */}
+      <div className="flex items-center justify-between border-t border-border-subtle px-4 py-2">
+        <div className="flex items-center gap-3 text-meta text-text-muted">
+          <span className="flex items-center gap-1">
+            <kbd className="rounded-xs bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&uarr;</kbd>
+            <kbd className="rounded-xs bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&darr;</kbd>
+            navigate
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="rounded-xs bg-bg-mod-strong px-1 py-0.5 font-code text-[10px] text-text-secondary">&crarr;</kbd>
+            select
+          </span>
+        </div>
+        <div className="font-code text-meta tabular-nums text-text-muted">
+          {flatItems.length} result{flatItems.length !== 1 ? 's' : ''}
+        </div>
+      </div>
     </Modal>
   );
 }

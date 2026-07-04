@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { Slash, User, MessageSquare } from 'lucide-react';
 import { useCommandStore } from '../../stores/commandStore';
 import type { ApplicationCommand } from '../../types/commands';
 import { ApplicationCommandType } from '../../types/commands';
@@ -14,6 +16,11 @@ export interface SlashCommandPopupProps {
 
 const MAX_VISIBLE = 10;
 
+// Popover recipe (design-spec §7): --bg-floating, radius-md, 1px --border-subtle,
+// --shadow-lg, 180ms rise+fade enter.
+const POPOVER_CLASS =
+  'absolute bottom-full left-2 right-2 z-30 mb-2 rounded-md border border-border-subtle bg-bg-floating shadow-lg';
+
 export function SlashCommandPopup({
   query,
   guildId,
@@ -23,6 +30,7 @@ export function SlashCommandPopup({
 }: SlashCommandPopupProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const reduceMotion = useReducedMotion();
   const guildCommands = useCommandStore((s) => s.guildCommands);
   const loading = useCommandStore((s) => s.loading);
   const fetchGuildCommands = useCommandStore((s) => s.fetchGuildCommands);
@@ -86,75 +94,84 @@ export function SlashCommandPopup({
 
   if (!visible) return null;
 
+  const enter = reduceMotion
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 } }
+    : { initial: { opacity: 0, y: 6 }, animate: { opacity: 1, y: 0 } };
+  const transition = { duration: 0.18, ease: [0.22, 1, 0.36, 1] as const };
+
   if (loading && commands.length === 0) {
     return (
-      <div className="absolute bottom-full left-3 right-3 z-30 mb-2 rounded-xl border border-border-subtle bg-bg-floating p-3 shadow-lg backdrop-blur-lg">
-        <LoadingSpinner size="sm" label="Loading commands..." />
-      </div>
+      <motion.div {...enter} transition={transition} className={`${POPOVER_CLASS} p-3`}>
+        <LoadingSpinner size="sm" label="Loading commands…" />
+      </motion.div>
     );
   }
 
   if (filteredCommands.length === 0) {
     return (
-      <div className="absolute bottom-full left-3 right-3 z-30 mb-2 rounded-xl border border-border-subtle bg-bg-floating p-3 shadow-lg backdrop-blur-lg">
-        <div className="text-sm text-text-muted">No matching commands</div>
-      </div>
+      <motion.div {...enter} transition={transition} className={`${POPOVER_CLASS} px-3 py-2.5`}>
+        <p className="text-meta text-text-secondary">
+          No commands match{' '}
+          <span className="font-semibold text-text-primary">/{query}</span> — check the spelling or
+          browse this server&rsquo;s apps.
+        </p>
+      </motion.div>
     );
   }
 
   return (
-    <div
-      ref={listRef}
-      className="absolute bottom-full left-3 right-3 z-30 mb-2 max-h-80 overflow-y-auto rounded-xl border border-border-subtle bg-bg-floating shadow-lg backdrop-blur-lg"
+    <motion.div
+      {...enter}
+      transition={transition}
+      className={`${POPOVER_CLASS} max-h-80 overflow-y-auto p-1`}
     >
-      {filteredCommands.map((cmd, i) => (
-        <button
-          key={cmd.id}
-          type="button"
-          className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors ${
-            i === selectedIndex
-              ? 'bg-accent-primary/15 text-text-primary'
-              : 'text-text-secondary hover:bg-bg-mod-subtle'
-          }`}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            onSelectCommand(cmd);
-          }}
-          onMouseEnter={() => setSelectedIndex(i)}
-        >
-          <span
-            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-xs font-bold"
-            style={{ backgroundColor: 'var(--bg-mod-strong)', color: 'var(--text-muted)' }}
-          >
-            {commandTypeIndicator(cmd.type)}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-                /{cmd.name}
+      <div ref={listRef} className="flex flex-col gap-0.5">
+        {filteredCommands.map((cmd, i) => {
+          const selected = i === selectedIndex;
+          return (
+            <button
+              key={cmd.id}
+              type="button"
+              className={`flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                selected
+                  ? 'bg-accent-tint text-text-primary'
+                  : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
+              }`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onSelectCommand(cmd);
+              }}
+              onMouseEnter={() => setSelectedIndex(i)}
+            >
+              <span
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-sm ${
+                  selected ? 'bg-accent-tint-strong text-accent-primary' : 'bg-bg-mod-strong text-text-muted'
+                }`}
+              >
+                <CommandTypeIcon type={cmd.type} />
               </span>
-            </div>
-            {cmd.description && (
-              <div className="truncate text-xs" style={{ color: 'var(--text-muted)' }}>
-                {cmd.description}
+              <div className="min-w-0 flex-1">
+                <span className="text-label text-text-primary">/{cmd.name}</span>
+                {cmd.description && (
+                  <span className="block truncate text-meta text-text-secondary">{cmd.description}</span>
+                )}
               </div>
-            )}
-          </div>
-        </button>
-      ))}
-    </div>
+            </button>
+          );
+        })}
+      </div>
+    </motion.div>
   );
 }
 
-function commandTypeIndicator(type: ApplicationCommandType): string {
+function CommandTypeIcon({ type }: { type: ApplicationCommandType }) {
   switch (type) {
-    case ApplicationCommandType.ChatInput:
-      return '/';
     case ApplicationCommandType.User:
-      return '\u{1F464}';
+      return <User size={14} strokeWidth={2} />;
     case ApplicationCommandType.Message:
-      return '\u{1F4AC}';
+      return <MessageSquare size={14} strokeWidth={2} />;
+    case ApplicationCommandType.ChatInput:
     default:
-      return '/';
+      return <Slash size={14} strokeWidth={2} />;
   }
 }

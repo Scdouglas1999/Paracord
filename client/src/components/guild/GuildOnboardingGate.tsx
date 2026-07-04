@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, UserRoundCheck, X } from 'lucide-react';
+import { ShieldCheck, UserRoundCheck, Check, X } from 'lucide-react';
 import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
-import { LoadingSpinner } from '../ui/Feedback';
+import { ErrorBanner } from '../ui/Feedback';
+import { Button } from '../ui/Button';
 import { cn } from '../../lib/utils';
 
 interface GuildOnboardingGateProps {
@@ -150,43 +151,58 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
   if (loading) return null;
   if (!payload || !hasConfig || isComplete || dismissed) return null;
 
+  const helperCopy = requiresRules && !acceptedRules
+    ? 'Accept the server rules to continue.'
+    : payload.settings.role_options.length > 0
+      ? `${selectedRoleIds.length} role${selectedRoleIds.length === 1 ? '' : 's'} selected — you can change these later.`
+      : "You're all set. Continue when you're ready.";
+
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-bg-tertiary/70 p-4 backdrop-blur-sm">
-      <div className="glass-modal w-full max-w-2xl rounded-2xl border border-border-subtle">
-        <div className="flex items-center justify-between border-b border-border-subtle/70 px-6 py-4">
-          <div>
-            <h3 className="text-lg font-semibold text-text-primary">
+      <div className="w-full max-w-2xl overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-border-subtle bg-bg-secondary px-6 py-5">
+          <div className="min-w-0">
+            <div className="text-section uppercase text-accent-primary">Getting started</div>
+            <h3 className="mt-1 font-display text-title text-text-primary">
               {payload.settings.welcome_title || 'Welcome'}
             </h3>
             {payload.settings.welcome_body && (
-              <p className="mt-1 text-sm text-text-secondary">{payload.settings.welcome_body}</p>
+              <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">
+                {payload.settings.welcome_body}
+              </p>
             )}
           </div>
           <button
             type="button"
             onClick={() => setDismissed(true)}
-            className="icon-btn"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
             aria-label="Dismiss onboarding"
           >
             <X size={16} />
           </button>
         </div>
 
-        <div className="space-y-5 px-6 py-5">
+        <div className="space-y-6 px-6 py-5">
           {payload.settings.rules_text && (
-            <section className="space-y-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/50 p-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-                <ShieldCheck size={16} />
-                Server Rules
+            <section className="space-y-3">
+              <div className="flex items-center gap-2 text-section uppercase text-text-muted">
+                <ShieldCheck size={15} className="text-text-secondary" />
+                Server rules
               </div>
-              <div className="max-h-40 overflow-y-auto whitespace-pre-wrap text-sm text-text-secondary">
+              <div className="scrollbar-thin max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-border-subtle bg-bg-tertiary px-4 py-3 text-sm leading-relaxed text-text-secondary">
                 {payload.settings.rules_text}
               </div>
-              <label className="flex items-center gap-2 text-sm text-text-secondary">
+              <label
+                className={cn(
+                  'flex cursor-pointer items-center gap-3 rounded-sm px-1 py-1.5 text-sm transition-colors',
+                  acceptedRules ? 'text-text-primary' : 'text-text-secondary hover:text-text-primary',
+                )}
+              >
                 <input
                   type="checkbox"
                   checked={acceptedRules}
                   onChange={(event) => setAcceptedRules(event.target.checked)}
+                  className="h-4 w-4 rounded-xs border-border-subtle accent-accent-primary"
                 />
                 I have read and agree to follow these rules.
               </label>
@@ -194,9 +210,9 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
           )}
 
           {payload.settings.role_options.length > 0 && (
-            <section className="space-y-3 rounded-xl border border-border-subtle bg-bg-mod-subtle/50 p-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-                <UserRoundCheck size={16} />
+            <section className="space-y-3">
+              <div className="flex items-center gap-2 text-section uppercase text-text-muted">
+                <UserRoundCheck size={15} className="text-text-secondary" />
                 {payload.settings.role_prompt || 'Pick your interests'}
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
@@ -206,31 +222,44 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
                     <label
                       key={option.id}
                       className={cn(
-                        'cursor-pointer rounded-lg border px-3 py-2 text-sm transition-colors',
+                        'group flex cursor-pointer items-start gap-3 rounded-sm border px-3 py-2.5 text-sm transition-colors duration-[140ms] ease-[var(--ease-out)]',
                         checked
-                          ? 'border-accent-primary/50 bg-accent-primary/10 text-text-primary'
-                          : 'border-border-subtle bg-bg-primary/40 text-text-secondary',
+                          ? 'border-accent-primary bg-accent-tint'
+                          : 'border-border-subtle bg-bg-tertiary hover:border-border-strong hover:bg-bg-mod-subtle',
                       )}
                     >
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(event) => {
-                            setSelectedRoleIds((prev) =>
-                              event.target.checked
-                                ? Array.from(new Set([...prev, option.role_id]))
-                                : prev.filter((id) => id !== option.role_id),
-                            );
-                          }}
-                        />
-                        <span className="font-medium text-text-primary">
+                      <span
+                        className={cn(
+                          'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border transition-colors',
+                          checked
+                            ? 'border-accent-primary bg-accent-primary text-text-on-accent'
+                            : 'border-border-strong bg-transparent',
+                        )}
+                      >
+                        {checked && <Check size={11} strokeWidth={3} />}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) => {
+                          setSelectedRoleIds((prev) =>
+                            event.target.checked
+                              ? Array.from(new Set([...prev, option.role_id]))
+                              : prev.filter((id) => id !== option.role_id),
+                          );
+                        }}
+                        className="sr-only"
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-medium text-text-primary">
                           {option.label || `Role ${option.role_id}`}
                         </span>
-                      </div>
-                      {option.description && (
-                        <p className="mt-1 text-xs text-text-muted">{option.description}</p>
-                      )}
+                        {option.description && (
+                          <span className="mt-0.5 block text-meta text-text-muted">
+                            {option.description}
+                          </span>
+                        )}
+                      </span>
                     </label>
                   );
                 })}
@@ -238,27 +267,19 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
             </section>
           )}
 
-          {error && (
-            <div className="rounded-lg border border-accent-danger/40 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger">
-              {error}
-            </div>
-          )}
+          {error && <ErrorBanner message={error} />}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border-subtle/70 px-6 py-4">
-          <button type="button" className="btn-ghost" onClick={() => setDismissed(true)}>
-            Later
-          </button>
-          <button type="button" className="btn-primary" onClick={() => void submit()} disabled={!canSubmit}>
-            {saving ? (
-              <span className="inline-flex items-center gap-2">
-                <LoadingSpinner size="sm" />
-                Saving...
-              </span>
-            ) : (
-              'Complete Onboarding'
-            )}
-          </button>
+        <div className="flex flex-col gap-3 border-t border-border-subtle bg-bg-secondary px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-meta text-text-muted">{helperCopy}</p>
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="ghost" onClick={() => setDismissed(true)}>
+              Later
+            </Button>
+            <Button onClick={() => void submit()} disabled={!canSubmit} loading={saving}>
+              {saving ? 'Saving…' : 'Complete Onboarding'}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

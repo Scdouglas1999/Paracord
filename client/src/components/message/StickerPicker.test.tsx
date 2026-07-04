@@ -81,7 +81,7 @@ describe('StickerPicker', () => {
 
     render(<StickerPicker guildId="g1" onSelect={vi.fn()} onClose={vi.fn()} />);
 
-    expect(await screen.findByText('This server has no stickers yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No stickers yet')).toBeInTheDocument();
   });
 
   it('falls back to the sticker name for unsafe image URLs', async () => {
@@ -127,9 +127,9 @@ describe('StickerPicker', () => {
       'Failed to load stickers: Sticker service is offline.',
     );
 
-    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
 
-    expect(await screen.findByText('This server has no stickers yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No stickers yet')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Outside' }));
 

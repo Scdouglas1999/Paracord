@@ -1,5 +1,9 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff } from 'lucide-react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff, Type, Loader2 } from 'lucide-react';
+import { cn } from '../../lib/utils';
+import { Input, Select } from '../ui/Input';
+import { Button } from '../ui/Button';
 import { useMessageStore } from '../../stores/messageStore';
 import { useMemberStore } from '../../stores/memberStore';
 import { useFileUpload } from '../../hooks/useFileUpload';
@@ -33,6 +37,21 @@ interface MessageInputProps {
   replyingTo?: { id: string; author: string; content: string } | null;
   onCancelReply?: () => void;
 }
+
+// 36px icon control (design-spec §7 Icon button): radius-sm, --interactive-normal →
+// --interactive-hover on a --bg-mod-subtle wash, press = scale(.97), layered focus
+// ring, 44px min touch target on coarse pointers.
+const ICON_BTN =
+  'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-interactive-normal ' +
+  'transition-[color,background-color,transform] duration-[140ms] ease-[var(--ease-out)] ' +
+  'hover:bg-bg-mod-subtle hover:text-interactive-hover active:scale-[0.97] ' +
+  'focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ' +
+  'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ' +
+  '[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11';
+
+// Emerald active affordance for the composer toggles (formatting / poll / schedule).
+const ICON_BTN_ACTIVE =
+  'bg-accent-tint text-accent-primary hover:bg-accent-tint-strong hover:text-accent-primary';
 
 const POLL_DURATION_OPTIONS = [
   { label: 'No end time', minutes: 0 },
@@ -100,6 +119,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { upload, uploading } = useFileUpload(channelId);
   const { triggerTyping } = useTyping(channelId);
+  const reduceMotion = useReducedMotion();
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
   const activeChannel = useMemo(
     () => Object.values(channelsByGuild).flat().find((channel) => channel.id === channelId),
@@ -526,69 +546,75 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     });
   };
 
+  const busy = uploading || creatingPoll || schedulingMessage;
+  const sendDisabled =
+    busy ||
+    (showScheduleComposer
+      ? !content.trim() || !scheduledAt
+      : !showPollComposer && !content.trim() && stagedFiles.length === 0);
+  const nearLimit = content.length > MAX_MESSAGE_LENGTH * 0.9;
+  const overLimit = content.length > MAX_MESSAGE_LENGTH;
+  const popoverEnter = reduceMotion
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 } }
+    : { initial: { opacity: 0, y: 6 }, animate: { opacity: 1, y: 0 } };
+  const popoverTransition = { duration: 0.18, ease: [0.22, 1, 0.36, 1] as const };
+
   return (
     <div
-      className="relative w-full px-4 pb-[calc(var(--safe-bottom)+1.25rem)] pt-2 sm:px-6 sm:pb-8"
+      className="relative flex w-full flex-col gap-2 px-4 pb-[calc(var(--safe-bottom)+1.25rem)] pt-2 sm:px-6 sm:pb-8"
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
     >
       {isAnonymousChannel && (
-        <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent-primary/30 bg-accent-primary/10 px-3 py-2 text-xs text-accent-primary">
-          <EyeOff size={13} className="shrink-0" />
+        <div className="flex items-center gap-2 rounded-sm border border-accent-primary/30 bg-accent-tint px-3 py-2 text-meta text-accent-primary">
+          <EyeOff size={14} className="shrink-0" />
           <span>Messages in this channel are posted anonymously</span>
         </div>
       )}
 
       {replyingTo && (
-        <div className="flex flex-wrap items-center gap-2 rounded-t-2xl border border-b-0 border-border-subtle bg-bg-mod-subtle px-3 py-2 text-xs text-text-muted sm:px-4 sm:py-2.5 sm:text-sm">
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-bg-secondary px-3 py-1.5 text-meta text-text-muted">
           <span>Replying to</span>
-          <span style={{ color: 'var(--text-primary)' }} className="font-medium">{replyingTo.author}</span>
-          <span className="truncate flex-1" style={{ color: 'var(--text-muted)' }}>{replyingTo.content}</span>
+          <span className="font-semibold text-text-primary">{replyingTo.author}</span>
+          <span className="min-w-0 flex-1 truncate text-text-muted">{replyingTo.content}</span>
           <button
             onClick={onCancelReply}
-            className="command-icon-btn h-8 w-8"
+            className={cn(ICON_BTN, 'h-7 w-7')}
             aria-label="Cancel reply"
             title="Cancel reply"
           >
-            <X size={16} />
+            <X size={15} />
           </button>
         </div>
       )}
 
       {stagedFiles.length > 0 && (
-        <div
-          className="flex gap-2 overflow-x-auto border border-b-0 border-border-subtle bg-bg-mod-subtle px-3 py-2.5 sm:px-4 sm:py-3"
-          style={{
-            borderTopLeftRadius: replyingTo ? '0' : '1rem',
-            borderTopRightRadius: replyingTo ? '0' : '1rem',
-          }}
-        >
+        <div className="flex gap-2 overflow-x-auto pb-1">
           {stagedFiles.map((file, i) => (
             <div
               key={i}
-              className="group relative flex flex-shrink-0 items-center gap-2.5 rounded-xl border border-border-subtle bg-bg-primary/70 p-2.5"
-              style={{
-                maxWidth: 'min(180px, 48vw)',
-              }}
+              className="relative flex flex-shrink-0 items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-2 py-1.5"
+              style={{ maxWidth: 'min(220px, 60vw)' }}
             >
               {canPreviewImageFile(file) ? (
                 <img
                   src={stagedImagePreviews[i] || ''}
                   alt={file.name}
-                  className="h-16 w-16 rounded-md object-cover"
+                  className="h-10 w-10 rounded-xs object-cover"
                 />
               ) : (
-                <FileText size={24} style={{ color: 'var(--text-muted)' }} />
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xs bg-bg-mod-subtle text-text-muted">
+                  <FileText size={18} />
+                </span>
               )}
               <div className="min-w-0">
-                <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{file.name}</div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{formatFileSize(file.size)}</div>
+                <div className="truncate text-label text-text-primary">{file.name}</div>
+                <div className="text-meta tabular-nums text-text-muted">{formatFileSize(file.size)}</div>
               </div>
               <button
                 onClick={() => removeFile(i)}
-                className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border border-border-subtle opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
-                style={{ backgroundColor: 'var(--accent-danger)', color: '#fff' }}
+                className="ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-bg-mod-strong text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger hover:text-text-on-danger focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 aria-label={`Remove ${file.name}`}
                 title={`Remove ${file.name}`}
               >
@@ -600,124 +626,110 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       )}
 
       {showPollComposer && (
-        <div
-          className="border border-b-0 border-border-subtle bg-bg-mod-subtle px-3 py-3 sm:px-4 sm:py-3.5"
-          style={{
-            borderTopLeftRadius: (replyingTo || stagedFiles.length > 0) ? '0' : '1rem',
-            borderTopRightRadius: (replyingTo || stagedFiles.length > 0) ? '0' : '1rem',
-          }}
-        >
-          <div className="mb-2.5 flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-              <BarChart3 size={13} />
+        <div className="rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5 text-section uppercase text-text-secondary">
+              <BarChart3 size={14} className="text-accent-primary" />
               Poll
             </span>
-            <button
-              type="button"
-              onClick={togglePollComposer}
-              className="rounded-md border border-border-subtle px-2 py-1 text-[11px] font-semibold text-text-muted transition-colors hover:text-text-primary"
-            >
+            <Button variant="ghost" size="sm" onClick={togglePollComposer}>
               Close
-            </button>
+            </Button>
           </div>
 
           <label className="block">
-            <span className="text-xs font-medium text-text-secondary">Question</span>
-            <input
+            <span className="text-label text-text-secondary">Question</span>
+            <Input
               type="text"
               maxLength={300}
               value={pollQuestion}
               onChange={(e) => setPollQuestion(e.target.value)}
-              className="mt-1.5 h-9 w-full rounded-lg border border-border-subtle bg-bg-primary/80 px-3 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary/45"
-              placeholder="Ask a question..."
+              className="mt-1.5"
+              placeholder="What should everyone weigh in on?"
             />
           </label>
 
           <div className="mt-3 flex flex-col gap-2">
             {pollOptions.map((option, index) => (
               <div key={index} className="flex items-center gap-2">
-                <input
+                <Input
                   type="text"
                   value={option}
                   maxLength={100}
                   onChange={(e) => updatePollOption(index, e.target.value)}
-                  className="h-9 min-w-0 flex-1 rounded-lg border border-border-subtle bg-bg-primary/80 px-3 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary/45"
                   placeholder={`Option ${index + 1}`}
                 />
                 <button
                   type="button"
                   onClick={() => removePollOption(index)}
                   disabled={pollOptions.length <= 2}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border-subtle text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
+                  className={ICON_BTN}
                   aria-label={`Remove option ${index + 1}`}
                 >
-                  <MinusCircle size={15} />
+                  <MinusCircle size={16} />
                 </button>
               </div>
             ))}
           </div>
 
-          <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
-            <button
-              type="button"
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
               onClick={addPollOption}
               disabled={pollOptions.length >= 10}
-              className="inline-flex items-center gap-1 rounded-md border border-border-subtle px-2.5 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:text-text-primary disabled:opacity-50"
             >
-              <PlusCircle size={13} />
-              Add Option
-            </button>
-            <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+              <PlusCircle size={14} className="mr-1.5" />
+              Add option
+            </Button>
+            <label className="inline-flex items-center gap-2 text-label text-text-secondary">
               <input
                 type="checkbox"
                 checked={pollAllowMultiselect}
                 onChange={(e) => setPollAllowMultiselect(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-border-subtle bg-bg-primary"
+                className="h-4 w-4 rounded-xs accent-[color:var(--accent-primary)]"
               />
               Allow multiple answers
             </label>
-            <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+            <label className="inline-flex items-center gap-2 text-label text-text-secondary">
               <span>Duration</span>
-              <select
-                value={pollDurationMinutes}
-                onChange={(e) => setPollDurationMinutes(Number(e.target.value))}
-                className="h-8 rounded-md border border-border-subtle bg-bg-primary/80 px-2 text-xs text-text-primary outline-none transition-colors focus:border-accent-primary/45"
-              >
-                {POLL_DURATION_OPTIONS.map((option) => (
-                  <option key={option.minutes} value={option.minutes}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+              <span className="inline-block w-40">
+                <Select
+                  value={pollDurationMinutes}
+                  onChange={(e) => setPollDurationMinutes(Number(e.target.value))}
+                >
+                  {POLL_DURATION_OPTIONS.map((option) => (
+                    <option key={option.minutes} value={option.minutes}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </span>
             </label>
           </div>
         </div>
       )}
 
       {showScheduleComposer && (
-        <div
-          className="mt-2 border border-border-subtle bg-bg-mod-subtle px-3 py-2.5"
-          style={{ borderRadius: '12px' }}
-        >
+        <div className="rounded-md border border-border-subtle bg-bg-secondary p-4 shadow-sm">
           <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-              Send At
-            </span>
-            <input
+            <span className="text-section uppercase text-text-secondary">Send At</span>
+            <Input
               type="datetime-local"
               value={scheduledAt}
               onChange={(e) => setScheduledAt(e.target.value)}
-              className="input-field mt-1.5"
+              className="mt-1.5"
               min={toDatetimeLocalValue(Date.now() + SCHEDULED_MESSAGE_MIN_LEAD_MS)}
             />
           </label>
-          <button
-            type="button"
+          <Button
+            variant="link"
+            size="sm"
+            className="mt-2 h-auto px-0"
             onClick={() => setShowScheduledPanel(true)}
-            className="mt-2 text-xs font-semibold text-accent-primary hover:underline"
           >
             {scheduledCount > 0 ? `View scheduled (${scheduledCount})` : 'View scheduled'}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -732,8 +744,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
       {submitError && (
         <div
-          className="mt-2 rounded-lg border border-accent-danger/40 bg-accent-danger/10 px-3 py-2 text-xs font-semibold"
-          style={{ color: 'var(--accent-danger)' }}
+          className="rounded-md border border-accent-danger/40 bg-danger-tint px-3 py-2 text-meta font-semibold text-accent-danger"
           role="alert"
         >
           {submitError}
@@ -741,19 +752,47 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       )}
 
       <div
-        className={`architect-input-shell group relative flex min-h-[58px] items-center gap-2 border px-3 py-2 shadow-2xl backdrop-blur-xl transition-colors sm:min-h-[62px] sm:px-3.5 sm:py-2.5 ${isDragOver ? 'border-2 border-dashed border-accent-primary/70 bg-bg-primary/95' : 'border-white/10 bg-bg-mod-subtle/80 hover:bg-bg-primary/90 hover:border-white/15'
-          }`}
-        style={{
-          borderTopLeftRadius: (replyingTo || stagedFiles.length > 0 || showPollComposer) ? '16px' : '24px',
-          borderTopRightRadius: (replyingTo || stagedFiles.length > 0 || showPollComposer) ? '16px' : '24px',
-          borderBottomLeftRadius: '24px',
-          borderBottomRightRadius: '24px',
-        }}
+        className={cn(
+          'group relative flex min-h-[52px] items-end gap-1 rounded-md border px-2 py-1.5 transition-colors duration-[140ms] ease-[var(--ease-out)]',
+          isDragOver
+            ? 'border-2 border-dashed border-accent-primary bg-accent-tint'
+            : 'border-border-subtle bg-bg-tertiary shadow-sm focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]',
+        )}
       >
+        {nearLimit && (
+          <span
+            className={cn(
+              'pointer-events-none absolute -top-6 right-1 rounded-xs px-1.5 py-0.5 text-meta tabular-nums',
+              overLimit ? 'bg-danger-tint text-accent-danger' : 'text-text-muted',
+            )}
+          >
+            {content.length}/{MAX_MESSAGE_LENGTH}
+          </span>
+        )}
+
+        {/* Upload progress — indeterminate accent sweep while attachments upload. */}
+        {uploading && (
+          reduceMotion ? (
+            <span className="pointer-events-none absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-accent-primary/70" />
+          ) : (
+            <span className="pointer-events-none absolute inset-x-2 bottom-0 h-0.5 overflow-hidden rounded-full">
+              <motion.span
+                className="block h-full w-1/3 rounded-full bg-accent-primary"
+                animate={{ x: ['-120%', '360%'] }}
+                transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
+              />
+            </span>
+          )
+        )}
+
         {showFormattingTools && (
-          <div className="absolute bottom-full left-3 right-3 z-10 mb-2 rounded-2xl border border-border-subtle bg-bg-primary/95 px-2 py-1.5 shadow-lg">
+          <motion.div
+            {...popoverEnter}
+            transition={popoverTransition}
+            className="absolute bottom-full left-2 right-2 z-10 mb-2 rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg"
+          >
             <MarkdownToolbar textareaRef={textareaRef} onContentChange={setContent} />
-          </div>
+          </motion.div>
         )}
 
         {/* Slash command popup */}
@@ -773,14 +812,18 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
         {/* @mention autocomplete */}
         {mentionQuery !== null && mentionResults.length > 0 && (
-          <div className="absolute bottom-full left-3 right-3 z-20 mb-2 max-h-64 overflow-y-auto rounded-xl border border-border-subtle bg-bg-floating shadow-lg backdrop-blur-lg">
+          <motion.div
+            {...popoverEnter}
+            transition={popoverTransition}
+            className="absolute bottom-full left-2 right-2 z-20 mb-2 max-h-64 overflow-y-auto rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg"
+          >
             {mentionResults.map((member, i) => (
               <button
                 key={member.user.id}
                 type="button"
-                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors ${i === mentionIndex
-                    ? 'bg-accent-primary/15 text-text-primary'
-                    : 'text-text-secondary hover:bg-bg-mod-subtle'
+                className={`flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${i === mentionIndex
+                    ? 'bg-accent-tint text-text-primary'
+                    : 'text-text-secondary hover:bg-accent-tint hover:text-text-primary'
                   }`}
                 onMouseDown={(e) => {
                   e.preventDefault();
@@ -788,18 +831,18 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
                 }}
                 onMouseEnter={() => setMentionIndex(i)}
               >
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-primary text-[11px] font-semibold text-white">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-tint-strong text-meta font-semibold text-accent-primary">
                   {member.user.username.charAt(0).toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <span className="font-medium">{member.nick || member.user.username}</span>
+                </span>
+                <span className="min-w-0 flex-1 truncate">
+                  <span className="text-label text-text-primary">{member.nick || member.user.username}</span>
                   {member.nick && (
-                    <span className="ml-1.5 text-xs text-text-muted">@{member.user.username}</span>
+                    <span className="ml-1.5 text-meta text-text-muted">@{member.user.username}</span>
                   )}
-                </div>
+                </span>
               </button>
             ))}
-          </div>
+          </motion.div>
         )}
 
         <button
@@ -810,7 +853,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
             }
             fileInputRef.current?.click();
           }}
-          className="command-icon-btn h-8 w-8 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+          className={ICON_BTN}
           disabled={showPollComposer}
           aria-label="Attach files"
           title="Attach files"
@@ -821,43 +864,34 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         <button
           type="button"
           onClick={() => setShowFormattingTools((prev) => !prev)}
-          className={`command-icon-btn h-8 w-8 flex-shrink-0 border transition-colors ${showFormattingTools
-              ? 'border-accent-primary/45 bg-accent-primary/15 text-accent-primary'
-              : 'border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary'
-            }`}
+          className={cn(ICON_BTN, showFormattingTools && ICON_BTN_ACTIVE)}
           aria-label="Formatting tools"
           title="Formatting tools"
         >
-          <FileText size={17} />
+          <Type size={18} />
         </button>
 
         {canCreatePoll && (
           <button
             type="button"
             onClick={togglePollComposer}
-            className={`command-icon-btn h-8 w-8 flex-shrink-0 border transition-colors ${showPollComposer
-                ? 'border-accent-primary/45 bg-accent-primary/15 text-accent-primary'
-                : 'border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary'
-              }`}
+            className={cn(ICON_BTN, showPollComposer && ICON_BTN_ACTIVE)}
             aria-label={showPollComposer ? 'Poll composer enabled' : 'Create a poll'}
             title={showPollComposer ? 'Poll composer enabled' : 'Create a poll'}
           >
-            <BarChart3 size={16} />
+            <BarChart3 size={18} />
           </button>
         )}
 
         <button
           type="button"
           onClick={() => setShowScheduleComposer((prev) => !prev)}
-          className={`command-icon-btn h-8 w-8 flex-shrink-0 border transition-colors ${showScheduleComposer
-              ? 'border-accent-primary/45 bg-accent-primary/15 text-accent-primary'
-              : 'border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary'
-            }`}
+          className={cn(ICON_BTN, showScheduleComposer && ICON_BTN_ACTIVE)}
           aria-label={showScheduleComposer ? 'Scheduling enabled' : 'Schedule message'}
           title={showScheduleComposer ? 'Scheduling enabled' : 'Schedule message'}
           disabled={showPollComposer}
         >
-          <Clock3 size={16} />
+          <Clock3 size={18} />
         </button>
 
         <input
@@ -882,24 +916,20 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           rows={1}
           maxLength={MAX_MESSAGE_LENGTH}
           disabled={showPollComposer}
-          className="flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-6 outline-none placeholder:text-text-muted disabled:cursor-not-allowed disabled:opacity-70"
-          style={{
-            color: 'var(--text-primary)',
-            maxHeight: '50vh',
-            lineHeight: '1.45rem',
-          }}
+          className="flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body text-text-primary outline-none placeholder:text-text-muted disabled:cursor-not-allowed disabled:opacity-70"
+          style={{ maxHeight: '50vh' }}
         />
 
         {guildId && (
           <div className="relative">
             <button
-              className="command-icon-btn h-8 w-8 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+              className={ICON_BTN}
               onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowEmojiPicker(false); }}
               disabled={showPollComposer}
               aria-label="Stickers"
               title="Stickers"
             >
-              {/* Sticker icon: a square with a folded corner */}
+              {/* Sticker icon: a square with a folded corner (lucide-style stroke). */}
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M15.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.5L15.5 2z" />
                 <polyline points="15 2 15 9 22 9" />
@@ -931,7 +961,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
         <div className="relative">
           <button
-            className="command-icon-btn h-8 w-8 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+            className={ICON_BTN}
             onClick={() => { setShowGifPicker(!showGifPicker); setShowEmojiPicker(false); setShowStickerPicker(false); }}
             disabled={showPollComposer}
             aria-label="GIF"
@@ -961,7 +991,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
         <div className="relative">
           <button
-            className="command-icon-btn h-8 w-8 flex-shrink-0 border border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+            className={ICON_BTN}
             onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowGifPicker(false); setShowStickerPicker(false); }}
             disabled={showPollComposer}
             aria-label="Emoji"
@@ -984,21 +1014,35 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           )}
         </div>
 
-        <button
+        <motion.button
           onClick={() => void handleSubmit()}
-          disabled={uploading || creatingPoll || schedulingMessage || (showScheduleComposer ? (!content.trim() || !scheduledAt) : (!showPollComposer && !content.trim() && stagedFiles.length === 0))}
-          className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-mod-subtle text-text-secondary transition-colors hover:bg-bg-mod-strong hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={sendDisabled}
+          whileTap={reduceMotion || sendDisabled ? undefined : { scale: [1, 1.08, 1] }}
+          transition={{ duration: 0.32, ease: [0.2, 0.9, 0.3, 1.3] }}
+          className={cn(
+            'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11',
+            sendDisabled
+              ? 'cursor-not-allowed bg-bg-mod-subtle text-interactive-muted'
+              : 'bg-accent-primary text-text-on-accent shadow-sm hover:bg-accent-primary-hover active:bg-accent-primary-active',
+          )}
           aria-label={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
           title={showScheduleComposer ? (schedulingMessage ? 'Scheduling message' : 'Schedule message') : 'Send message'}
         >
-          {showScheduleComposer ? <Clock3 size={17} /> : <Send size={17} />}
-        </button>
+          {busy ? (
+            <Loader2 size={17} className="animate-spin" />
+          ) : showScheduleComposer ? (
+            <Clock3 size={17} />
+          ) : (
+            <Send size={17} />
+          )}
+        </motion.button>
       </div>
 
       {isDragOver && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-2xl border-2 border-dashed border-accent-primary/50 bg-bg-primary/60 backdrop-blur-sm">
-          <div className="text-lg font-semibold" style={{ color: 'var(--accent-primary)' }}>
-            Drop files to upload
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-md border-2 border-dashed border-accent-primary/50 bg-bg-primary/60 backdrop-blur-sm">
+          <div className="inline-flex items-center gap-2 text-subhead text-accent-primary">
+            <Plus size={20} />
+            Drop files to attach
           </div>
         </div>
       )}
