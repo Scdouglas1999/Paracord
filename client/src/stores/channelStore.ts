@@ -5,6 +5,8 @@ import { guildApi } from '../api/guilds';
 import { channelApi } from '../api/channels';
 import { extractApiError } from '../api/client';
 import { toast } from './toastStore';
+import { useServerListStore } from './serverListStore';
+import { connectionManager } from '../lib/connectionManager';
 
 function normalizeChannel(channel: Channel): Channel {
   return {
@@ -37,6 +39,10 @@ function reindexGuild(
 interface ChannelState {
   // Channels indexed by guild ID. Key '' is used for DMs.
   channelsByGuild: Record<string, Channel[]>;
+  // DM channels indexed by serverId — the cross-server DM source for the
+  // unified sidebar. channelsByGuild[''] mirrors the active server for
+  // back-compat readers (DMList/UserProfile).
+  dmChannelsByServer: Record<string, Channel[]>;
   // Fast channel lookup by channel ID.
   channelsById: Record<string, Channel>;
   // Flat accessor for the currently viewed guild (kept for backward compat)
@@ -51,6 +57,8 @@ interface ChannelState {
   selectGuild: (guildId: string | null) => void;
   setChannels: (channels: Channel[]) => void;
   setDmChannels: (channels: Channel[]) => void;
+  setDmChannelsForServer: (serverId: string, channels: Channel[]) => void;
+  loadAllDmChannels: () => Promise<void>;
   createChannel: (guildId: string, data: Parameters<typeof guildApi.createChannel>[1]) => Promise<Channel>;
   updateChannelData: (channelId: string, data: Partial<Channel>) => Promise<void>;
   deleteChannel: (channelId: string) => Promise<void>;
@@ -70,6 +78,7 @@ const RETRY_BASE_DELAY_MS = 500;
 
 export const useChannelStore = create<ChannelState>()((set, get) => ({
   channelsByGuild: {},
+  dmChannelsByServer: {},
   channelsById: {},
   channels: [],
   guildChannelsLoaded: {},
@@ -181,6 +190,45 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
         channels: state.selectedGuildId ? state.channels : normalized,
       };
     }),
+
+  setDmChannelsForServer: (serverId, channels) =>
+    set((state) => {
+      const normalized = channels.map(normalizeChannel);
+      const dmChannelsByServer = { ...state.dmChannelsByServer, [serverId]: normalized };
+      // Only the active server's DMs mirror into channelsByGuild[''] + the
+      // derived index, so back-compat readers (DMList/UserProfile) keep seeing
+      // the active server. Background servers land only in dmChannelsByServer.
+      const activeServerId = useServerListStore.getState().activeServerId;
+      if (serverId !== activeServerId) {
+        return { dmChannelsByServer };
+      }
+      const channelsById = reindexGuild(state.channelsById, state.channelsByGuild[''] || [], normalized);
+      return {
+        dmChannelsByServer,
+        channelsByGuild: { ...state.channelsByGuild, '': normalized },
+        channelsById,
+        channels: state.selectedGuildId ? state.channels : normalized,
+      };
+    }),
+
+  loadAllDmChannels: async () => {
+    const { servers } = useServerListStore.getState();
+    const connected = servers.filter((s) => s.connected);
+    await Promise.all(
+      connected.map(async (server) => {
+        const client = connectionManager.getApiClient(server.id);
+        if (!client) return;
+        try {
+          // Mirror dmApi.list()'s request path against the per-server client.
+          const { data } = await client.get<Channel[]>('/users/@me/dms');
+          get().setDmChannelsForServer(server.id, data);
+        } catch {
+          // Swallow per-server errors so an unreachable background server
+          // degrades gracefully (§9 flag 2) — other servers still load.
+        }
+      }),
+    );
+  },
 
   createChannel: async (guildId, channelData) => {
     const { data } = await guildApi.createChannel(guildId, channelData);

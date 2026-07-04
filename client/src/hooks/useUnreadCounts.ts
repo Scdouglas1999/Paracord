@@ -1,6 +1,9 @@
 import { useEffect, useMemo } from 'react';
 import { useChannelStore } from '../stores/channelStore';
+import { useGuildStore } from '../stores/guildStore';
 import { useReadStateStore } from '../stores/readStateStore';
+import { useServerListStore } from '../stores/serverListStore';
+import { LOCAL_SERVER_ID } from '../lib/connectionManager';
 import type { Channel, ReadState } from '../types';
 
 interface GuildUnreadInfo {
@@ -42,32 +45,52 @@ export function computeGuildUnread(
   return null;
 }
 
+function recordToMap(record: Record<string, ReadState>): Map<string, ReadState> {
+  return new Map(Object.entries(record));
+}
+
 /**
  * Provides per-guild unread counts and mention counts based on read states.
  * Also exposes per-channel unread status for use in the channel sidebar.
  *
- * Read state is sourced from the shared read-state store, which dispatch and
- * mark-read call sites update directly, so counts stay live without polling.
+ * Read state is the serverId-scoped `byServer` cache. Each guild resolves to its
+ * originating server via `guild.server_url → serverId` so the cross-server merge
+ * reads the right per-server bucket; `computeGuildUnread` stays pure and is fed a
+ * per-server map. Updates arrive via the store (dispatch, mark-read, gateway
+ * (re)connect refresh) so counts stay live without polling.
  */
 export function useUnreadCounts(mutedGuildIds: string[]) {
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
-  const readStateRecord = useReadStateStore((s) => s.readStates);
+  const byServer = useReadStateStore((s) => s.byServer);
+  const guilds = useGuildStore((s) => s.guilds);
+  const servers = useServerListStore((s) => s.servers);
+  const activeServerId = useServerListStore((s) => s.activeServerId);
 
-  // Pull an authoritative snapshot once on mount; subsequent updates arrive via
+  // Pull authoritative snapshots once on mount; subsequent updates arrive via
   // the store (dispatch, mark-read, and gateway (re)connect refresh).
   useEffect(() => {
     void useReadStateStore.getState().refresh();
   }, []);
 
-  const readStates = useMemo(() => Object.values(readStateRecord), [readStateRecord]);
+  const activeId = activeServerId ?? LOCAL_SERVER_ID;
 
-  const readStateMap = useMemo(() => {
-    const map = new Map<string, ReadState>();
-    for (const rs of readStates) {
-      map.set(rs.channel_id, rs);
+  // guildId → serverId: which server's read-state bucket holds this guild's
+  // channels. Built once from guild.server_url so the merge reads the right
+  // bucket; falls back to the active server (covers guilds without a resolvable
+  // server_url — see layout-spec §9 flag 3). `servers` is a dep so the map
+  // recomputes when connections/attribution change.
+  const serverIdByGuild = useMemo(() => {
+    const map = new Map<string, string>();
+    const getServerByUrl = useServerListStore.getState().getServerByUrl;
+    for (const guild of guilds) {
+      const resolved = guild.server_url ? getServerByUrl(guild.server_url)?.id : undefined;
+      map.set(guild.id, resolved ?? activeId);
     }
     return map;
-  }, [readStates]);
+  }, [guilds, servers, activeId]);
+
+  const serverIdForGuild = (guildId: string): string =>
+    guildId ? (serverIdByGuild.get(guildId) ?? activeId) : activeId;
 
   // A new array identity each render would bust every downstream memo; derive a
   // stable key + Set from the muted-guild ids instead of depending on the array.
@@ -78,18 +101,21 @@ export function useUnreadCounts(mutedGuildIds: string[]) {
     const result = new Map<string, GuildUnreadInfo>();
     for (const [guildId, channels] of Object.entries(channelsByGuild)) {
       if (!guildId || mutedSet.has(guildId)) continue;
-      const info = computeGuildUnread(channels, readStateMap);
+      const map = recordToMap(byServer[serverIdForGuild(guildId)] ?? {});
+      const info = computeGuildUnread(channels, map);
       if (info) result.set(guildId, info);
     }
     return result;
-  }, [channelsByGuild, readStateMap, mutedSet]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelsByGuild, byServer, serverIdByGuild, mutedSet, activeId]);
 
   const isChannelUnread = useMemo(() => {
     const set = new Set<string>();
-    for (const channels of Object.values(channelsByGuild)) {
+    for (const [guildId, channels] of Object.entries(channelsByGuild)) {
+      const record = byServer[serverIdForGuild(guildId)] ?? {};
       for (const channel of channels) {
         if (channel.type === 4) continue;
-        const rs = readStateMap.get(channel.id);
+        const rs = record[channel.id];
         if (!rs) {
           if (channel.last_message_id) set.add(channel.id);
           continue;
@@ -100,17 +126,26 @@ export function useUnreadCounts(mutedGuildIds: string[]) {
       }
     }
     return set;
-  }, [channelsByGuild, readStateMap]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelsByGuild, byServer, serverIdByGuild, activeId]);
 
   const channelMentionCounts = useMemo(() => {
     const map = new Map<string, number>();
-    for (const rs of readStates) {
-      if (rs.mention_count > 0) {
-        map.set(rs.channel_id, rs.mention_count);
+    for (const [guildId, channels] of Object.entries(channelsByGuild)) {
+      const record = byServer[serverIdForGuild(guildId)] ?? {};
+      for (const channel of channels) {
+        const rs = record[channel.id];
+        if (rs && rs.mention_count > 0) {
+          map.set(channel.id, rs.mention_count);
+        }
       }
     }
     return map;
-  }, [readStates]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelsByGuild, byServer, serverIdByGuild, activeId]);
+
+  // Retained for call-site shape stability; reflects the active server's record.
+  const readStates = useMemo(() => Object.values(byServer[activeId] ?? {}), [byServer, activeId]);
 
   return { guildUnreads, isChannelUnread, channelMentionCounts, readStates };
 }

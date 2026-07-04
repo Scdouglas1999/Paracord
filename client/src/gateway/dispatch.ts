@@ -194,7 +194,7 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
             data.mention_everyone === true ||
             new RegExp(`<@!?${selfUserId}>`).test(content);
           if (mentionsSelf) {
-            useReadStateStore.getState().incrementMention(data.channel_id);
+            useReadStateStore.getState().incrementMention(serverId, data.channel_id);
           }
         }
       }

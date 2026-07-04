@@ -1,6 +1,22 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useChannelStore } from './channelStore';
+import { useServerListStore, type ServerEntry } from './serverListStore';
 import type { Channel } from '../types';
+
+// Mock the per-server transport so loadAllDmChannels() fan-out is deterministic.
+vi.mock('../lib/connectionManager', () => ({
+  LOCAL_SERVER_ID: '__local__',
+  connectionManager: { getApiClient: vi.fn() },
+}));
+
+// Imported after the mock so we get the mocked instance.
+import { connectionManager } from '../lib/connectionManager';
+
+const mockGetApiClient = vi.mocked(connectionManager.getApiClient);
+
+function server(id: string, connected = true): ServerEntry {
+  return { id, url: `https://${id}`, name: id, token: 't', connected } as ServerEntry;
+}
 
 function makeChannel(overrides: Partial<Channel> = {}): Channel {
   return {
@@ -25,6 +41,7 @@ describe('channelStore', () => {
   beforeEach(() => {
     useChannelStore.setState({
       channelsByGuild: {},
+      dmChannelsByServer: {},
       channelsById: {},
       channels: [],
       guildChannelsLoaded: {},
@@ -32,6 +49,8 @@ describe('channelStore', () => {
       selectedGuildId: null,
       isLoading: false,
     });
+    useServerListStore.setState({ activeServerId: null, servers: [] });
+    mockGetApiClient.mockReset();
   });
 
   it('has correct initial state', () => {
@@ -245,5 +264,79 @@ describe('channelStore', () => {
     const ch = makeChannel({ id: 'c1', guild_id: 'g1' });
     useChannelStore.getState().addChannel(ch);
     expect(useChannelStore.getState().channels).toHaveLength(1);
+  });
+
+  describe('setDmChannelsForServer', () => {
+    it('indexes DMs per server', () => {
+      useServerListStore.setState({ activeServerId: 's1', servers: [] });
+      const a = makeChannel({ id: 'dmA', guild_id: undefined, name: 'A' });
+      const b = makeChannel({ id: 'dmB', guild_id: undefined, name: 'B' });
+      useChannelStore.getState().setDmChannelsForServer('s1', [a]);
+      useChannelStore.getState().setDmChannelsForServer('s2', [b]);
+
+      const state = useChannelStore.getState();
+      expect(state.dmChannelsByServer['s1'].map((c) => c.id)).toEqual(['dmA']);
+      expect(state.dmChannelsByServer['s2'].map((c) => c.id)).toEqual(['dmB']);
+    });
+
+    it("mirrors channelsByGuild[''] + channelsById only for the active server", () => {
+      useServerListStore.setState({ activeServerId: 's1', servers: [] });
+      const active = makeChannel({ id: 'dmActive', guild_id: undefined });
+      const background = makeChannel({ id: 'dmBg', guild_id: undefined });
+
+      useChannelStore.getState().setDmChannelsForServer('s1', [active]);
+      useChannelStore.getState().setDmChannelsForServer('s2', [background]);
+
+      const state = useChannelStore.getState();
+      // Active server mirrors into back-compat surfaces.
+      expect(state.channelsByGuild[''].map((c) => c.id)).toEqual(['dmActive']);
+      expect(state.channelsById['dmActive'].id).toBe('dmActive');
+      // Background server does NOT touch back-compat surfaces.
+      expect(state.channelsById['dmBg']).toBeUndefined();
+    });
+  });
+
+  describe('loadAllDmChannels', () => {
+    it('fans out over connected servers and writes each result', async () => {
+      useServerListStore.setState({
+        activeServerId: 's1',
+        servers: [server('s1', true), server('s2', true), server('s3', false)],
+      });
+      const s1Dm = makeChannel({ id: 'dm-s1', guild_id: undefined });
+      const s2Dm = makeChannel({ id: 'dm-s2', guild_id: undefined });
+      mockGetApiClient.mockImplementation((id: string) => {
+        if (id === 's1') return { get: vi.fn().mockResolvedValue({ data: [s1Dm] }) } as never;
+        if (id === 's2') return { get: vi.fn().mockResolvedValue({ data: [s2Dm] }) } as never;
+        return undefined;
+      });
+
+      await useChannelStore.getState().loadAllDmChannels();
+
+      const state = useChannelStore.getState();
+      expect(state.dmChannelsByServer['s1'].map((c) => c.id)).toEqual(['dm-s1']);
+      expect(state.dmChannelsByServer['s2'].map((c) => c.id)).toEqual(['dm-s2']);
+      // Disconnected server never queried.
+      expect(state.dmChannelsByServer['s3']).toBeUndefined();
+      expect(mockGetApiClient).not.toHaveBeenCalledWith('s3');
+    });
+
+    it('tolerates one server rejecting and still loads the others', async () => {
+      useServerListStore.setState({
+        activeServerId: 's1',
+        servers: [server('s1', true), server('s2', true)],
+      });
+      const s2Dm = makeChannel({ id: 'dm-s2', guild_id: undefined });
+      mockGetApiClient.mockImplementation((id: string) => {
+        if (id === 's1') return { get: vi.fn().mockRejectedValue(new Error('down')) } as never;
+        if (id === 's2') return { get: vi.fn().mockResolvedValue({ data: [s2Dm] }) } as never;
+        return undefined;
+      });
+
+      await expect(useChannelStore.getState().loadAllDmChannels()).resolves.toBeUndefined();
+
+      const state = useChannelStore.getState();
+      expect(state.dmChannelsByServer['s1']).toBeUndefined();
+      expect(state.dmChannelsByServer['s2'].map((c) => c.id)).toEqual(['dm-s2']);
+    });
   });
 });

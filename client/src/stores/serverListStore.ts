@@ -37,7 +37,7 @@ interface ServerListState {
   getServerByUrl: (url: string) => ServerEntry | undefined;
 }
 
-function normalizeServerUrl(url: string): string {
+export function normalizeServerUrl(url: string): string {
   const trimmed = url.trim();
   if (!trimmed) return trimmed;
   try {
