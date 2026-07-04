@@ -1786,12 +1786,23 @@ pub async fn ensure_track_sender_key(
             .to_owned()
     };
 
-    let mut encryptor = session
-        .frame_encryptor
+    {
+        let mut encryptor = session
+            .frame_encryptor
+            .lock()
+            .map_err(|_| "frame encryptor lock poisoned".to_string())?;
+        for layer in &track.layers {
+            encryptor.set_peer_key(layer.ssrc, key.epoch, &key.key);
+        }
+    }
+    // Register our own key with the local decryptor too: self-view subscribes
+    // to our own stream, which the server loops back encrypted with this key.
+    let mut decryptor = session
+        .frame_decryptor
         .lock()
-        .map_err(|_| "frame encryptor lock poisoned".to_string())?;
+        .map_err(|_| "frame decryptor lock poisoned".to_string())?;
     for layer in &track.layers {
-        encryptor.set_peer_key(layer.ssrc, key.epoch, &key.key);
+        decryptor.set_peer_key(layer.ssrc, key.epoch, &key.key);
     }
     Ok(())
 }

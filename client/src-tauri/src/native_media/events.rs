@@ -291,6 +291,7 @@ async fn handle_control_message(
                     stream_registry,
                     track_sender_keys,
                     frame_encryptor,
+                    frame_decryptor,
                     current_key_epoch,
                 )
                 .await
@@ -331,6 +332,7 @@ async fn handle_control_message(
                     stream_registry,
                     track_sender_keys,
                     frame_encryptor,
+                    frame_decryptor,
                     current_key_epoch,
                 )
                 .await
@@ -366,6 +368,7 @@ async fn handle_control_message(
                     stream_registry,
                     track_sender_keys,
                     frame_encryptor,
+                    frame_decryptor,
                     current_key_epoch,
                 )
                 .await
@@ -855,6 +858,7 @@ async fn rotate_track_sender_keys(
         >,
     >,
     frame_encryptor: &std::sync::Arc<std::sync::Mutex<paracord_codec::crypto::FrameEncryptor>>,
+    frame_decryptor: &std::sync::Arc<std::sync::Mutex<FrameDecryptor>>,
     current_key_epoch: &std::sync::Arc<AtomicU8>,
 ) -> Result<(), String> {
     use rand::random;
@@ -884,6 +888,9 @@ async fn rotate_track_sender_keys(
     let mut encryptor = frame_encryptor
         .lock()
         .map_err(|_| "frame encryptor lock poisoned".to_string())?;
+    let mut decryptor = frame_decryptor
+        .lock()
+        .map_err(|_| "frame decryptor lock poisoned".to_string())?;
     for track_key in track_keys {
         let Some(track) = tracks.get(&track_key) else {
             continue;
@@ -898,6 +905,9 @@ async fn rotate_track_sender_keys(
         );
         for layer in &track.layers {
             encryptor.set_peer_key(layer.ssrc, epoch, &next_key);
+            // Self-view: our own frames come back from the server encrypted
+            // with this key, so the local decryptor needs it too.
+            decryptor.set_peer_key(layer.ssrc, epoch, &next_key);
         }
     }
 
