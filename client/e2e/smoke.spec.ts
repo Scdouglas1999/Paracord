@@ -326,9 +326,9 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
 
   const lazyRoutes = [
-    { path: '/app', text: /Welcome to Paracord/i },
+    { path: '/app', text: /New message/i },
     { path: '/app/friends', text: /Friends/i },
-    { path: '/app/dms', text: /Select a conversation/i },
+    { path: '/app/dms', text: /Pick up a conversation/i },
     { path: '/app/discovery', text: /Discover Servers/i },
     { path: '/app/templates', text: /Template Gallery/i },
     { path: '/app/developers', text: /Developer Portal/i },
@@ -386,7 +386,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
   }
 
   await page.keyboard.press('Control+K');
-  const commandPaletteInput = page.getByPlaceholder('Where would you like to go?');
+  const commandPaletteInput = page.getByPlaceholder(/Jump to a channel, space, or setting/i);
   await expect(commandPaletteInput).toBeVisible();
   await expect(commandPaletteInput).toBeFocused();
   await page.keyboard.press('Escape');
@@ -398,40 +398,38 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${voiceChannelId}`));
 
-  await page.goto(`/app/guilds/${guildId}/channels/${textChannelId}`);
-  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
+  // Guild Home = Rooms view — the presence-first map that replaces the old
+  // channel column (layout-spec §1/§2). Voice/stage channels render as room
+  // cards; text channels group below; the server-settings entry lives in the
+  // guild-home header.
+  await page.goto(`/app/guilds/${guildId}`);
+  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}$`));
+  await expect(page.getByRole('heading', { name: /QA Guild/i })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Live rooms' })).toBeVisible();
+  const textChannelsRegion = page.getByRole('region', { name: 'Text channels' });
+  await expect(textChannelsRegion).toBeVisible();
 
-  await page.getByRole('button', { name: /Edit qa-general-channel/i }).click({ force: true });
+  // Server settings now open from the guild-home header (MANAGE_GUILD-gated),
+  // not the deleted channel-column dropdown.
+  await page.getByRole('button', { name: 'Server settings' }).click();
   const serverSettingsDialog = page.getByRole('dialog', { name: 'Server settings' });
   await expect(serverSettingsDialog).toBeVisible();
-  await expect(serverSettingsDialog.getByRole('heading', { name: 'Channels' })).toBeVisible();
-  await expect(serverSettingsDialog.locator(`[data-highlighted-channel="${textChannelId}"]`)).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(serverSettingsDialog).toBeHidden();
 
-  const textChannelItem = page.getByRole('treeitem', { name: /qa-general-channel/i }).first();
-  await textChannelItem.focus();
-  await expect(textChannelItem).toBeFocused();
-  await textChannelItem.press('ArrowDown');
-  const voiceCategoryItem = page.getByRole('treeitem', { name: /Voice Channels/i }).first();
-  await expect(voiceCategoryItem).toBeFocused();
-  await voiceCategoryItem.press('ArrowDown');
-  const voiceChannelItem = page.getByRole('treeitem', { name: /Voice Lounge/i }).first();
-  await expect(voiceChannelItem).toBeFocused();
-  await voiceChannelItem.press('ArrowUp');
-  await expect(voiceCategoryItem).toBeFocused();
-  await voiceCategoryItem.press('ArrowUp');
-  await expect(textChannelItem).toBeFocused();
+  // Text-channel navigation + keyboard activation from the Rooms view.
+  const textChannelButton = textChannelsRegion.getByRole('button', {
+    name: /qa-general-channel/i,
+  });
+  await textChannelButton.focus();
+  await expect(textChannelButton).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${textChannelId}`));
 
-  await voiceChannelItem.focus();
-  await expect(voiceChannelItem).toBeFocused();
-  await page.keyboard.press('Space');
-  await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}/channels/${voiceChannelId}`));
-  await expect(
-    page.getByText(/(Join from the channel rail to start speaking or screen sharing\.|Voice join failed:)/i),
-  ).toBeVisible();
+  // The unified sidebar merges every connected server's guilds into "Spaces";
+  // the guild is reachable there as a roving-tabindex option row.
+  const spacesList = page.getByRole('listbox', { name: 'Joined servers' });
+  await expect(spacesList.getByRole('option', { name: /QA Guild/i })).toBeVisible();
 
   await page.goto(`/app/guilds/${guildId}/channels/999999999`);
   await expect(page.getByRole('heading', { name: 'Channel not found' })).toBeVisible();

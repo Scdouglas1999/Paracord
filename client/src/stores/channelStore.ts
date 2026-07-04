@@ -41,7 +41,7 @@ interface ChannelState {
   channelsByGuild: Record<string, Channel[]>;
   // DM channels indexed by serverId — the cross-server DM source for the
   // unified sidebar. channelsByGuild[''] mirrors the active server for
-  // back-compat readers (DMList/UserProfile).
+  // back-compat readers (UserProfile).
   dmChannelsByServer: Record<string, Channel[]>;
   // Fast channel lookup by channel ID.
   channelsById: Record<string, Channel>;
@@ -196,7 +196,7 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
       const normalized = channels.map(normalizeChannel);
       const dmChannelsByServer = { ...state.dmChannelsByServer, [serverId]: normalized };
       // Only the active server's DMs mirror into channelsByGuild[''] + the
-      // derived index, so back-compat readers (DMList/UserProfile) keep seeing
+      // derived index, so back-compat readers (UserProfile) keep seeing
       // the active server. Background servers land only in dmChannelsByServer.
       const activeServerId = useServerListStore.getState().activeServerId;
       if (serverId !== activeServerId) {

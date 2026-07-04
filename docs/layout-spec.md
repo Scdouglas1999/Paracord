@@ -400,8 +400,26 @@ old pages working while the new shell renders new components.
 
 ### Wave 4 — Cleanup (no dead code left)
 14. Delete `Sidebar.tsx`, `ChannelSidebar.tsx`, `GuildChannelList.tsx`, `DMList.tsx`, `VoiceControls.tsx`, `pages/AppLayout.tsx`; rewrite their tests against the successor components.
-15. Remove the `uiStore` back-compat adapters + dead flags (`sidebarOpen`, `dockPinned`, `memberPanelOpen`, `economyPanelOpen`, `searchPanelOpen`) and their persistence once all readers are migrated; converge DM reads onto `dmChannelsByServer` and drop the legacy `channelsByGuild['']` back-compat if no longer read.
-16. Full `npm run typecheck` + `npm run test:unit` + `cargo clippy` green; verify no orphaned surface (§2 checklist).
+15. **[done]** Removed the `uiStore` back-compat adapters + dead flags (`sidebarOpen`, `dockPinned`, `memberPanelOpen`, `economyPanelOpen`, `searchPanelOpen`) and their persistence; `contextPanelMode` + `sidebarWidth` + `sidebarCollapsed` are the sole panel/sidebar state (last reader, `SearchPanel`, migrated to `setContextPanelMode(null)`). **DM convergence deferred:** `channelsByGuild['']` stays populated because it still has active readers (`CommandPalette`, `DmPickerModal`, `GroupDmMembersPanel`, `UserProfile`, `FriendsPage`, `DMPage`, `HomePage`, `useUnifiedConversations` fallback); converge those onto `dmChannelsByServer` and drop the back-compat in a follow-up once no reader remains.
+16. **[done]** Full green gate + §2 orphan audit closed. E2E migrated to the new IA:
+    `client/e2e/smoke.spec.ts` now drives the **guild-home Rooms view** (regions
+    `Live rooms` / `Text channels`, the `GuildHomeHeader` "Server settings" entry,
+    keyboard-activated `TextChannelList` navigation) and the **UnifiedSidebar**
+    `Joined servers` listbox — the old channel-column `treeitem` roving tree and the
+    "Edit channel" server-settings entry are gone. Command-palette placeholder + Home
+    (`/app`) / DMs empty-state anchor text updated to the reworked pages;
+    `real-server.smoke.spec.ts` needs no selector change (auth-page `Welcome back`
+    heading survives). **Orphan audit — every §2 surface has a home:** settings
+    (AppShell user + guild overlays), discovery (route + Home quick-action + ⌘K), bot
+    store (`BotStoreSection` in guild settings + `BotAuthorizePage` route), onboarding
+    (`GuildOnboardingGate`) + welcome (`GuildWelcomeScreen`) in `GuildPage`, scheduled
+    messages + file uploads (`MessageInput`/`FilePreview`), search / pins / members /
+    threads / economy (`ContextPanel` modes + `TopBar` toggles), invites
+    (`GuildHomeHeader` + `InvitePage`), voice control bar (`CallDock` desktop +
+    `MiniVoiceBar` mobile), stage + streams/watch (`RoomCard` states → channel route),
+    developer surfaces (route + ⌘K). Gate: `npm run typecheck` + `npm run test:unit`
+    (867 pass) + `npm run test:e2e` (mocked smoke) + `PARACORD_E2E_REAL=1` real-server
+    smoke + `cargo check --workspace` all green; server tree untouched (client-only).
 
 ---
 

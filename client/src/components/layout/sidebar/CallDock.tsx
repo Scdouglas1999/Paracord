@@ -4,18 +4,17 @@ import { useVoiceStore } from '../../../stores/voiceStore';
 import { MiniVoiceBar } from '../../voice/MiniVoiceBar';
 
 /**
- * Persistent call dock for the Unified Sidebar footer (layout-spec §1, §2 — replaces
- * the dying `components/voice/VoiceControls.tsx` channel-column footer). Renders ONLY
- * when voice is connected (`voiceStore.connected`); the dock body reuses the promoted
- * `MiniVoiceBar` primitive so the call surface never diverges from the mobile dock.
+ * Persistent call dock for the Unified Sidebar footer (layout-spec §1, §2 — the
+ * successor to the deleted channel-column voice footer). Renders ONLY when voice is
+ * connected (`voiceStore.connected`); the dock body reuses the promoted `MiniVoiceBar`
+ * primitive so the call surface never diverges from the mobile dock.
  *
  * Collapsed (64px icon rail, §6): a compact "in call" affordance — a pulsing accent
  * indicator that routes back to the active voice channel — since the full MiniVoiceBar
  * is too wide for the rail.
  *
- * NOTE (wave-4): richer stream/video affordances still live in `VoiceControls.tsx`
- * (deleted in §8 wave-4). Porting them into the dock is a follow-up; MiniVoiceBar's
- * mute/deafen/disconnect + channel nav cover the persistent-dock essentials.
+ * MiniVoiceBar's mute/deafen/disconnect + channel nav cover the persistent-dock
+ * essentials; richer stream/video affordances live on the channel/room views.
  */
 
 export interface CallDockProps {

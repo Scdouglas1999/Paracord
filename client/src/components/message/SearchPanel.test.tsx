@@ -6,7 +6,7 @@ import { channelApi } from '../../api/channels';
 import { SearchPanel } from './SearchPanel';
 
 const mockUIState = vi.hoisted(() => ({
-  setSearchPanelOpen: vi.fn(),
+  setContextPanelMode: vi.fn(),
 }));
 
 const mockChannelState = vi.hoisted(() => ({
@@ -65,7 +65,7 @@ describe('SearchPanel', () => {
     expect(screen.getByRole('textbox', { name: 'Author name filter' })).toBeInTheDocument();
 
     screen.getByRole('button', { name: 'Close search' }).click();
-    expect(mockUIState.setSearchPanelOpen).toHaveBeenCalledWith(false);
+    expect(mockUIState.setContextPanelMode).toHaveBeenCalledWith(null);
   });
 
   it('announces search failure after server and fallback search fail', async () => {

@@ -21,7 +21,7 @@ export interface DmPickerModalProps {
 }
 
 /**
- * Standalone DM-picker dialog lifted out of the doomed `layout/DMList`. Lists the
+ * Standalone DM-picker dialog lifted out of the former Home DM list. Lists the
  * viewer's friends, and on selection opens (or creates) a DM via `dmApi.create`,
  * updates `channelStore`, navigates to `/app/dms/:id`, fires `onCreated`, then
  * closes. A group-DM sub-mode is preserved from the original picker.

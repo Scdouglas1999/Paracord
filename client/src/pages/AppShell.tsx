@@ -20,8 +20,8 @@ import { useFocusTrap } from '../hooks/useFocusTrap';
 /**
  * AppShell — the "Rooms + Unified Stream" frame (layout-spec §1, §4, §5, §6).
  *
- * Replaces the old two-rail Discord skeleton (`Sidebar` guild rail +
- * `ChannelSidebar` channel column + docked `MemberList`) with a two-zone shell:
+ * Replaces the old two-rail Discord skeleton (guild rail + channel column +
+ * docked member list) with a two-zone shell:
  *
  *   [ UnifiedSidebar ]  [ <main><Outlet/></main> ]  [ ContextPanel? ]
  *

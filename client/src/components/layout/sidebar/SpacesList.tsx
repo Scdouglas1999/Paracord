@@ -4,21 +4,19 @@ import { cn } from '../../../lib/utils';
 import type { GuildSummary } from '../../../hooks/useUnifiedConversations';
 
 /**
- * "Spaces" section (layout-spec §1, §2 — replaces the dying guild rail
- * `components/layout/Sidebar.tsx`). Lists the user's joined guilds, MERGED across
- * every connected server, as compact avatar-chip + name rows. Click → the guild's
- * Home (Rooms view) at `/app/guilds/:guildId`; if the guild lives on a background
- * server we flip the active server first so its data resolves.
+ * "Spaces" section (layout-spec §1, §2 — the successor to the old guild rail).
+ * Lists the user's joined guilds, MERGED across every connected server, as compact
+ * avatar-chip + name rows. Click → the guild's Home (Rooms view) at
+ * `/app/guilds/:guildId`; if the guild lives on a background server we flip the
+ * active server first so its data resolves.
  *
  * Nav-item recipe (design-spec §7): 34px, `--radius-sm`, `--accent-tint` fill + 3px
  * teal (`--accent-secondary`) left edge bar on the active space. Guild avatar is a
  * squircle initials chip (kill-list clean — tokens only, no gradient tiles).
  *
- * NOTE (wave-4): the guild-rail context-menu affordances (mute, folders, invite,
- * leave, mark-read) still live in `components/layout/Sidebar.tsx`, which is deleted
- * in wave-4 of the layout overhaul (§8). Porting that menu is non-trivial, so this
- * renders the flat guild list per the SHELL-4 instruction; the ctx-menu port is a
- * follow-up when Sidebar.tsx is removed.
+ * NOTE: the old guild-rail context-menu affordances (mute, folders, invite, leave,
+ * mark-read) are not yet ported onto these rows; this renders the flat merged guild
+ * list. Re-homing that menu is a tracked follow-up.
  */
 
 export interface SpacesListProps {

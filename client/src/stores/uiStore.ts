@@ -19,8 +19,8 @@ type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'disconnec
 /**
  * The single source of truth for the toggleable right-hand context panel
  * (layout-spec §1). Exactly one mode is active at a time; `null` = closed.
- * The legacy `memberPanelOpen`/`economyPanelOpen`/`searchPanelOpen` booleans
- * are mirrored views of this value kept in sync by the setters below.
+ * All readers select `contextPanelMode` directly — the wave-2 mirrored
+ * per-panel booleans were retired in the cleanup wave (layout-spec §8 step 15).
  */
 export type ContextPanelMode = 'members' | 'threads' | 'pins' | 'search' | 'economy' | null;
 
@@ -39,8 +39,6 @@ const clampSidebarWidth = (px: number): number => {
 };
 
 interface UIState {
-  sidebarOpen: boolean;
-  dockPinned: boolean;
   theme: Theme;
   accentPreset: AccentPreset;
   customCss: string;
@@ -48,10 +46,7 @@ interface UIState {
   commandPaletteOpen: boolean;
   contextPanelMode: ContextPanelMode;
   sidebarWidth: number;
-  memberPanelOpen: boolean;
-  economyPanelOpen: boolean;
   sidebarCollapsed: boolean;
-  searchPanelOpen: boolean;
   connectionStatus: ConnectionStatus;
   connectionLatency: number;
   lowBandwidthMode: boolean;
@@ -60,9 +55,6 @@ interface UIState {
   guildSettingsInitialSection: string | null;
   guildSettingsChannelId: string | null;
 
-  toggleSidebar: () => void;
-  toggleDockPinned: () => void;
-  setDockPinned: (pinned: boolean) => void;
   setTheme: (theme: Theme) => void;
   setAccentPreset: (accentPreset: AccentPreset) => void;
   setCustomCss: (css: string) => void;
@@ -72,14 +64,8 @@ interface UIState {
   setContextPanelMode: (mode: ContextPanelMode) => void;
   toggleContextPanelMode: (mode: Exclude<ContextPanelMode, null>) => void;
   setSidebarWidth: (px: number) => void;
-  toggleMemberPanel: () => void;
-  setMemberPanelOpen: (open: boolean) => void;
-  toggleEconomyPanel: () => void;
-  setEconomyPanelOpen: (open: boolean) => void;
   toggleSidebarCollapsed: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
-  toggleSearchPanel: () => void;
-  setSearchPanelOpen: (open: boolean) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setConnectionLatency: (latency: number) => void;
   setLowBandwidthMode: (enabled: boolean) => void;
@@ -90,9 +76,7 @@ interface UIState {
 
 export const useUIStore = create<UIState>()(
   persist(
-    (set, get) => ({
-      sidebarOpen: true,
-      dockPinned: true,
+    (set) => ({
       theme: 'dark',
       accentPreset: 'emerald',
       customCss: '',
@@ -100,10 +84,7 @@ export const useUIStore = create<UIState>()(
       commandPaletteOpen: false,
       contextPanelMode: null,
       sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
-      memberPanelOpen: false,
-      economyPanelOpen: false,
       sidebarCollapsed: false,
-      searchPanelOpen: false,
       connectionStatus: 'disconnected' as ConnectionStatus,
       connectionLatency: 0,
       lowBandwidthMode: false,
@@ -112,9 +93,6 @@ export const useUIStore = create<UIState>()(
       guildSettingsInitialSection: null,
       guildSettingsChannelId: null,
 
-      toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
-      toggleDockPinned: () => set((s) => ({ dockPinned: !s.dockPinned })),
-      setDockPinned: (dockPinned) => set({ dockPinned }),
       setTheme: (theme) => set({ theme }),
       setAccentPreset: (accentPreset) => set({ accentPreset }),
       setCustomCss: (customCss) => set({ customCss }),
@@ -123,34 +101,13 @@ export const useUIStore = create<UIState>()(
       setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
 
       // contextPanelMode is the single source of truth for the right panel.
-      // Every mutation mirrors the legacy booleans so un-migrated selectors
-      // (TopBar/AppLayout/TextChannelView) keep resolving correctly.
-      setContextPanelMode: (contextPanelMode) => set({
-        contextPanelMode,
-        memberPanelOpen: contextPanelMode === 'members',
-        economyPanelOpen: contextPanelMode === 'economy',
-        searchPanelOpen: contextPanelMode === 'search',
-      }),
-      toggleContextPanelMode: (mode) => set((s) => {
-        const next = s.contextPanelMode === mode ? null : mode;
-        return {
-          contextPanelMode: next,
-          memberPanelOpen: next === 'members',
-          economyPanelOpen: next === 'economy',
-          searchPanelOpen: next === 'search',
-        };
-      }),
+      setContextPanelMode: (contextPanelMode) => set({ contextPanelMode }),
+      toggleContextPanelMode: (mode) => set((s) => ({
+        contextPanelMode: s.contextPanelMode === mode ? null : mode,
+      })),
       setSidebarWidth: (px) => set({ sidebarWidth: clampSidebarWidth(px) }),
-
-      // --- Legacy seam adapters: route through contextPanelMode (layout-spec §8.7) ---
-      toggleMemberPanel: () => get().toggleContextPanelMode('members'),
-      setMemberPanelOpen: (open) => get().setContextPanelMode(open ? 'members' : null),
-      toggleEconomyPanel: () => get().toggleContextPanelMode('economy'),
-      setEconomyPanelOpen: (open) => get().setContextPanelMode(open ? 'economy' : null),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
-      toggleSearchPanel: () => get().toggleContextPanelMode('search'),
-      setSearchPanelOpen: (open) => get().setContextPanelMode(open ? 'search' : null),
       setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
       setConnectionLatency: (connectionLatency) => set({ connectionLatency }),
       setLowBandwidthMode: (lowBandwidthMode) => set({ lowBandwidthMode }),
@@ -169,25 +126,11 @@ export const useUIStore = create<UIState>()(
         theme: state.theme,
         accentPreset: state.accentPreset,
         customCss: state.customCss,
-        dockPinned: state.dockPinned,
         contextPanelMode: state.contextPanelMode,
         sidebarWidth: state.sidebarWidth,
         sidebarCollapsed: state.sidebarCollapsed,
         lowBandwidthMode: state.lowBandwidthMode,
       }),
-      // Re-derive the mirrored panel booleans from the rehydrated
-      // contextPanelMode (single source of truth) so they never desync.
-      merge: (persisted, current) => {
-        const merged = { ...current, ...(persisted as Partial<UIState>) };
-        const mode = merged.contextPanelMode ?? null;
-        return {
-          ...merged,
-          contextPanelMode: mode,
-          memberPanelOpen: mode === 'members',
-          economyPanelOpen: mode === 'economy',
-          searchPanelOpen: mode === 'search',
-        };
-      },
     }
   )
 );

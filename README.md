@@ -201,7 +201,7 @@ Native app built with Tauri v2 for Windows and Linux. Auto-trusts self-signed se
 
 ### Multi-Server
 
-Connect to multiple Paracord servers at once. A server rail in the sidebar lets you switch between connected servers, each with its own gateway connection and state. Your Ed25519 identity carries across servers — no need to create separate accounts.
+Connect to multiple Paracord servers at once, each with its own gateway connection and state. Rather than siloing them behind a server rail, the v1.0 client **merges every connected server into one unified sidebar** — your mentions, DMs, and recent conversations from all servers rank together in a single "Needs you" / "Recent" stream, with joined servers listed as "Spaces". Your Ed25519 identity carries across servers — no need to create separate accounts.
 
 ### Appearance
 
@@ -211,6 +211,14 @@ calibrated emerald accent (rationed teal secondary) spent only on meaning. Every
 color is a runtime CSS token, so themes swap cleanly: dark (default), light,
 AMOLED black, and high-contrast. Compact or cozy message density, custom CSS
 support, and the UI is a command palette shortcut away from anywhere (Ctrl+K).
+
+The v1.0 layout drops the Discord skeleton (guild rail + channel column + docked
+member list) for a **"Rooms + Unified Stream"** information architecture: one
+attention-ranked unified sidebar on the left, a full-width content pane, and a
+contextual right panel (members, threads, pins, search) that toggles in only when
+you want it. Opening a server lands on its presence-first **Rooms view** — live
+voice/stage rooms as occupant cards up top, who's around now, and the grouped
+text channels below — so you see what's happening before you pick where to talk.
 
 ### Coming Soon
 

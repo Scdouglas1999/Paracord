@@ -10,35 +10,23 @@ describe('uiStore', () => {
   beforeEach(() => {
     // Reset store to defaults
     useUIStore.setState({
-      sidebarOpen: true,
       theme: 'dark',
       customCss: '',
       serverRestarting: false,
       commandPaletteOpen: false,
       contextPanelMode: null,
       sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
-      memberPanelOpen: false,
-      economyPanelOpen: false,
       sidebarCollapsed: false,
-      searchPanelOpen: false,
     });
   });
 
   it('has correct initial state', () => {
     const state = useUIStore.getState();
-    expect(state.sidebarOpen).toBe(true);
     expect(state.theme).toBe('dark');
     expect(state.customCss).toBe('');
-    expect(state.searchPanelOpen).toBe(false);
     expect(state.contextPanelMode).toBeNull();
+    expect(state.sidebarCollapsed).toBe(false);
     expect(state.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
-  });
-
-  it('toggles sidebar', () => {
-    useUIStore.getState().toggleSidebar();
-    expect(useUIStore.getState().sidebarOpen).toBe(false);
-    useUIStore.getState().toggleSidebar();
-    expect(useUIStore.getState().sidebarOpen).toBe(true);
   });
 
   it('sets theme', () => {
@@ -76,24 +64,6 @@ describe('uiStore', () => {
     expect(useUIStore.getState().commandPaletteOpen).toBe(false);
   });
 
-  it('toggles member panel (open from closed default, then close)', () => {
-    useUIStore.getState().toggleMemberPanel();
-    expect(useUIStore.getState().memberPanelOpen).toBe(true);
-    expect(useUIStore.getState().contextPanelMode).toBe('members');
-    useUIStore.getState().toggleMemberPanel();
-    expect(useUIStore.getState().memberPanelOpen).toBe(false);
-    expect(useUIStore.getState().contextPanelMode).toBeNull();
-  });
-
-  it('toggles economy panel', () => {
-    useUIStore.getState().toggleEconomyPanel();
-    expect(useUIStore.getState().economyPanelOpen).toBe(true);
-    expect(useUIStore.getState().contextPanelMode).toBe('economy');
-    useUIStore.getState().toggleEconomyPanel();
-    expect(useUIStore.getState().economyPanelOpen).toBe(false);
-    expect(useUIStore.getState().contextPanelMode).toBeNull();
-  });
-
   it('toggles sidebar collapsed', () => {
     useUIStore.getState().toggleSidebarCollapsed();
     expect(useUIStore.getState().sidebarCollapsed).toBe(true);
@@ -108,39 +78,14 @@ describe('uiStore', () => {
     expect(useUIStore.getState().sidebarCollapsed).toBe(false);
   });
 
-  it('toggles search panel', () => {
-    useUIStore.getState().toggleSearchPanel();
-    expect(useUIStore.getState().searchPanelOpen).toBe(true);
-    expect(useUIStore.getState().contextPanelMode).toBe('search');
-    useUIStore.getState().toggleSearchPanel();
-    expect(useUIStore.getState().searchPanelOpen).toBe(false);
-    expect(useUIStore.getState().contextPanelMode).toBeNull();
-  });
-
-  it('sets search panel open', () => {
-    useUIStore.getState().setSearchPanelOpen(true);
-    expect(useUIStore.getState().searchPanelOpen).toBe(true);
-    expect(useUIStore.getState().contextPanelMode).toBe('search');
-    useUIStore.getState().setSearchPanelOpen(false);
-    expect(useUIStore.getState().searchPanelOpen).toBe(false);
-    expect(useUIStore.getState().contextPanelMode).toBeNull();
-  });
-
   // --- contextPanelMode: single source of truth ---
 
-  it('setContextPanelMode drives the mode and mirrored booleans', () => {
+  it('setContextPanelMode drives the active mode', () => {
     useUIStore.getState().setContextPanelMode('members');
     expect(useUIStore.getState().contextPanelMode).toBe('members');
-    expect(useUIStore.getState().memberPanelOpen).toBe(true);
-    expect(useUIStore.getState().economyPanelOpen).toBe(false);
-    expect(useUIStore.getState().searchPanelOpen).toBe(false);
 
     useUIStore.getState().setContextPanelMode('threads');
     expect(useUIStore.getState().contextPanelMode).toBe('threads');
-    // threads/pins have no mirrored boolean; all three stay false
-    expect(useUIStore.getState().memberPanelOpen).toBe(false);
-    expect(useUIStore.getState().economyPanelOpen).toBe(false);
-    expect(useUIStore.getState().searchPanelOpen).toBe(false);
 
     useUIStore.getState().setContextPanelMode(null);
     expect(useUIStore.getState().contextPanelMode).toBeNull();
@@ -158,26 +103,14 @@ describe('uiStore', () => {
     expect(useUIStore.getState().contextPanelMode).toBe('members');
     useUIStore.getState().toggleContextPanelMode('search');
     expect(useUIStore.getState().contextPanelMode).toBe('search');
-    expect(useUIStore.getState().memberPanelOpen).toBe(false);
-    expect(useUIStore.getState().searchPanelOpen).toBe(true);
   });
 
   it('only one panel is ever open (single source of truth)', () => {
-    useUIStore.getState().setMemberPanelOpen(true);
-    expect(useUIStore.getState().memberPanelOpen).toBe(true);
-    // Opening economy via the legacy adapter must close members
-    useUIStore.getState().setEconomyPanelOpen(true);
-    expect(useUIStore.getState().economyPanelOpen).toBe(true);
-    expect(useUIStore.getState().memberPanelOpen).toBe(false);
-    expect(useUIStore.getState().contextPanelMode).toBe('economy');
-  });
-
-  it('legacy setMemberPanelOpen adapter drives contextPanelMode', () => {
-    useUIStore.getState().setMemberPanelOpen(true);
+    useUIStore.getState().setContextPanelMode('members');
     expect(useUIStore.getState().contextPanelMode).toBe('members');
-    useUIStore.getState().setMemberPanelOpen(false);
-    expect(useUIStore.getState().contextPanelMode).toBeNull();
-    expect(useUIStore.getState().memberPanelOpen).toBe(false);
+    // Opening economy must replace members — never coexist
+    useUIStore.getState().setContextPanelMode('economy');
+    expect(useUIStore.getState().contextPanelMode).toBe('economy');
   });
 
   // --- sidebarWidth: clamp + persist ---

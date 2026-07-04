@@ -37,7 +37,7 @@ function highlightMatches(text: string, query: string): ReactNode {
 export function SearchPanel() {
   const { channelId } = useParams();
   const navigate = useNavigate();
-  const setSearchPanelOpen = useUIStore((s) => s.setSearchPanelOpen);
+  const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
   const allChannels = Object.values(channelsByGuild).flat();
   const currentChannel = allChannels.find((c) => c.id === channelId);
@@ -63,12 +63,12 @@ export function SearchPanel() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setSearchPanelOpen(false);
+        setContextPanelMode(null);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [setSearchPanelOpen]);
+  }, [setContextPanelMode]);
 
   // Debounced search
   useEffect(() => {
@@ -136,7 +136,7 @@ export function SearchPanel() {
       navigate(`/app/dms/${msg.channel_id}`);
     }
     window.location.hash = `msg-${msg.id}`;
-    setSearchPanelOpen(false);
+    setContextPanelMode(null);
   };
 
   return (
@@ -146,7 +146,7 @@ export function SearchPanel() {
         <span className="text-subhead text-text-primary">Search</span>
         <button
           type="button"
-          onClick={() => setSearchPanelOpen(false)}
+          onClick={() => setContextPanelMode(null)}
           className="flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           aria-label="Close search"
         >

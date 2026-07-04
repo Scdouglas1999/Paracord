@@ -28,6 +28,16 @@ infrastructure to wire up.
   components consume tokens instead of hard-coded hex. Ships with dark (default),
   light, AMOLED, and high-contrast themes, plus custom-CSS support. See
   [docs/design-spec.md](docs/design-spec.md) for the full contract.
+- **New "Rooms + Unified Stream" layout.** The desktop client retires the Discord
+  skeleton (guild rail + channel column + docked member list) for a bolder
+  information architecture: one attention-ranked **unified sidebar** that merges
+  mentions, DMs, and recent conversations across *every* connected server ("Needs
+  you" / "Recent" / "Spaces"), a full-width content pane, and a contextual right
+  panel (members, threads, pins, search) that toggles in on demand. Opening a
+  server lands on its presence-first **Rooms view** — live voice/stage rooms as
+  occupant cards, who's around now, and grouped text channels below. Navigation is
+  route- and keyboard-complete (Ctrl+K command palette, roving-tabindex sidebar).
+  The full IA contract lives in [docs/layout-spec.md](docs/layout-spec.md).
 - **New operator docs.** A one-command quickstart in the README, a step-by-step
   [Getting Started](docs/getting-started.md) walkthrough (including native-vs-LiveKit
   guidance and the TLS/WebTransport nuance), and production
