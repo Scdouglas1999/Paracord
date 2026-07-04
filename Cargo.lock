@@ -5121,6 +5121,7 @@ dependencies = [
  "paracord-media",
  "paracord-models",
  "paracord-relay",
+ "paracord-transport",
  "paracord-util",
  "rand 0.8.5",
  "reqwest 0.12.28",

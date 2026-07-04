@@ -93,6 +93,7 @@ async fn main() -> Result<()> {
             cli::Command::MigrateToPostgres(migrate_args) => {
                 run_migrate_to_postgres(migrate_args).await
             }
+            cli::Command::Init(init_args) => run_init(init_args, &args.config),
         };
     }
 
@@ -104,14 +105,22 @@ async fn main() -> Result<()> {
     }
     let at_rest_profile = build_at_rest_profile(&config)?;
     if livekit_credentials_look_insecure(&config.livekit.api_key, &config.livekit.api_secret) {
-        if config.server.public_url.is_some() {
-            anyhow::bail!(
-                "Refusing to start with insecure LiveKit credentials when public_url is configured. Set strong [livekit] api_key/api_secret values first."
+        // Only enforce LiveKit credential hygiene when LiveKit will actually be
+        // used: native media is disabled, or an explicit external LiveKit is
+        // configured via [livekit].public_url. Under the native-media default
+        // LiveKit is inert, so weak placeholder credentials are irrelevant and
+        // must neither spam warnings nor block startup.
+        let livekit_in_use = !config.voice.native_media || config.livekit.public_url.is_some();
+        if livekit_in_use {
+            if config.server.public_url.is_some() {
+                anyhow::bail!(
+                    "Refusing to start with insecure LiveKit credentials when public_url is configured. Set strong [livekit] api_key/api_secret values first."
+                );
+            }
+            tracing::warn!(
+                "LiveKit credentials appear insecure. This is acceptable only for local development."
             );
         }
-        tracing::warn!(
-            "LiveKit credentials appear insecure. This is acceptable only for local development."
-        );
     }
 
     // ── Auto-create data directories ─────────────────────────────────────────
@@ -260,12 +269,23 @@ async fn main() -> Result<()> {
         tracing::info!("Detected local LAN IP: {}", lip);
     }
 
-    // Start managed LiveKit if no external one is configured
+    // LiveKit is a pure opt-in fallback; native QUIC (config.voice.native_media)
+    // is the default media engine. A managed LiveKit binary is only spawned or
+    // probed when an operator actually opts in — by disabling native media, or by
+    // pointing [livekit] at a real server (a non-local url, or an explicit
+    // public_url). Under the native default we never touch LiveKit at all, so a
+    // missing binary is a normal, silent outcome rather than an error.
     let mut managed_livekit = None;
-    let mut livekit_status = "External".to_string();
     let mut livekit_reachable = false;
-    if config.livekit.url.contains("localhost") || config.livekit.url.contains("127.0.0.1") {
-        // Check if LiveKit is already running on the port (e.g. from a previous server run)
+    let livekit_url_is_local =
+        config.livekit.url.contains("localhost") || config.livekit.url.contains("127.0.0.1");
+    let livekit_opt_in =
+        !config.voice.native_media || !livekit_url_is_local || config.livekit.public_url.is_some();
+    let livekit_status = if !livekit_opt_in {
+        "Disabled (native QUIC default)".to_string()
+    } else if livekit_url_is_local {
+        // Operator opted into a locally-managed LiveKit. Reuse an already-running
+        // instance if present, otherwise try to launch one.
         let already_running = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", livekit_port))
             .await
             .is_ok();
@@ -282,22 +302,21 @@ async fn main() -> Result<()> {
         .await
         {
             Some(proc) => {
-                livekit_status = format!("Managed (port {})", livekit_port);
                 livekit_reachable = true;
                 managed_livekit = Some(proc);
+                format!("Managed (port {})", livekit_port)
             }
             None if already_running => {
-                livekit_status = format!("External (port {})", livekit_port);
                 livekit_reachable = true;
+                format!("External (port {})", livekit_port)
             }
-            None => {
-                livekit_status = "Not available (binary not found)".to_string();
-            }
+            None => "Not available (binary not found)".to_string(),
         }
     } else {
-        // External LiveKit URL configured — assume reachable
+        // Explicit external LiveKit URL configured — assume reachable.
         livekit_reachable = true;
-    }
+        "External".to_string()
+    };
 
     let db_engine = map_db_engine(config.database.engine);
     let pg_options = paracord_db::PgConnectOptions {
@@ -554,7 +573,12 @@ async fn main() -> Result<()> {
 
         let media_port = config.voice.port;
         let media_addr: std::net::SocketAddr = format!("0.0.0.0:{}", media_port).parse()?;
-        match generate_self_signed_cert() {
+
+        // Provision the native QUIC endpoint. On success `state.native_media` is
+        // populated and the ALPN accept loop spawned; on failure we capture a
+        // concrete, operator-actionable reason and decide below whether to
+        // hard-fail (no fallback) or degrade to LiveKit.
+        let provisioning_error: Option<String> = match generate_self_signed_cert() {
             Ok(tls) => {
                 // Compute SHA-256 hash of the DER certificate for WebTransport
                 // `serverCertificateHashes`. Browsers need this to trust
@@ -607,20 +631,48 @@ async fn main() -> Result<()> {
                                 unified_media_accept_loop(endpoint, relay, jwt_secret, db).await;
                             });
                         }
+                        None
                     }
-                    Err(e) => {
-                        tracing::error!("Failed to start native QUIC media server: {}", e);
-                    }
+                    Err(e) => Some(describe_media_bind_error(&e, media_port)),
                 }
             }
-            Err(e) => {
-                tracing::error!("Failed to generate self-signed cert for media: {}", e);
+            Err(e) => Some(format!(
+                "failed to generate the self-signed media certificate: {e}"
+            )),
+        };
+
+        if let Some(reason) = provisioning_error {
+            if livekit_reachable {
+                // A working LiveKit fallback is configured, so voice still works.
+                // Degrade loudly but keep serving.
+                tracing::warn!("==========================================================");
+                tracing::warn!("  Native QUIC voice engine FAILED to start!");
+                tracing::warn!("  {}", reason);
+                tracing::warn!("");
+                tracing::warn!("  Falling back to the configured LiveKit backend.");
+                tracing::warn!("  Native QUIC media (E2EE, low-latency) stays DISABLED");
+                tracing::warn!("  until this is resolved.");
+                tracing::warn!("==========================================================");
+            } else {
+                // Native QUIC is the default and only voice engine, it failed, and
+                // there is no LiveKit fallback. Refuse to boot a server that cannot
+                // do voice at all — a silent no-voice server is worse than a clear
+                // startup failure.
+                anyhow::bail!(
+                    "Native QUIC voice is the default media engine but it failed to start, \
+                     and no working LiveKit fallback is configured. Refusing to boot a server \
+                     that cannot do voice.\n  Reason: {reason}\n  \
+                     Fix the underlying problem (e.g. free the UDP port, or configure an \
+                     external [livekit] server as a fallback) and restart."
+                );
             }
         }
     }
 
     // ── QUIC file transfer partial upload cleanup ─────────────────────────────
-    if config.voice.native_media {
+    // Only when the native QUIC endpoint actually came up (it shares that
+    // endpoint). If native media degraded to a LiveKit fallback, skip it.
+    if state.native_media.is_some() {
         let partial_dir = std::path::Path::new(&config.storage.path).join("partial");
         paracord_transport::file_transfer::PartialUploadManager::spawn_cleanup_task(
             partial_dir,
@@ -740,9 +792,19 @@ async fn main() -> Result<()> {
         "Not available".to_string()
     };
 
+    let share_url = derive_share_url(
+        &config.server.public_url,
+        &config.server.bind_address,
+        detected_local_ip.as_deref(),
+        tls_rustls_config.is_some(),
+        tls_port,
+        bind_port,
+    );
+
     print_startup_banner(
         &config.server.bind_address,
-        &config.server.public_url,
+        &share_url,
+        config.first_run,
         &livekit_status,
         &config.database.url,
         &port_forwarding_status,
@@ -1194,6 +1256,26 @@ fn normalize_https_host(host: &str, tls_port: u16) -> String {
         base.to_string()
     } else {
         format!("{}:{}", base, tls_port)
+    }
+}
+
+/// Turn a native-media provisioning failure into a concrete, operator-actionable
+/// message. Address-in-use is by far the most common cause, so name the exact UDP
+/// port and point at the fix; otherwise surface the underlying error verbatim.
+fn describe_media_bind_error(err: &anyhow::Error, media_port: u16) -> String {
+    let addr_in_use = err
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .any(|io_err| io_err.kind() == std::io::ErrorKind::AddrInUse);
+    if addr_in_use {
+        format!(
+            "UDP port {media_port} is already in use, so the native QUIC voice \
+             endpoint could not bind it. Stop whatever is holding UDP/{media_port} \
+             (another server instance?), or set [voice] port to a free UDP port, \
+             then restart. (underlying error: {err})"
+        )
+    } else {
+        format!("failed to bind the native QUIC media endpoint on UDP port {media_port}: {err}")
     }
 }
 
@@ -2244,9 +2326,84 @@ async fn remove_attachment_file(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Compute the single URL an operator should open in a browser and share with
+/// others. Prefers an explicit `public_url`; otherwise derives one from the
+/// detected LAN IP (or the bind host) using the scheme and port that actually
+/// accept connections. Pure and side-effect-free so it can be unit-tested.
+fn derive_share_url(
+    public_url: &Option<String>,
+    bind_address: &str,
+    detected_local_ip: Option<&str>,
+    tls_active: bool,
+    tls_port: u16,
+    bind_port: u16,
+) -> String {
+    if let Some(url) = public_url {
+        let url = url.trim_end_matches('/');
+        // When TLS is active but public_url was written as http://, present the
+        // HTTPS form on the TLS port so the shared link actually connects.
+        if tls_active {
+            if let Some(host) = url.strip_prefix("http://") {
+                let host_no_port = host.split(':').next().unwrap_or(host);
+                return format!("https://{host_no_port}:{tls_port}");
+            }
+        }
+        return url.to_string();
+    }
+
+    let scheme = if tls_active { "https" } else { "http" };
+    let port = if tls_active { tls_port } else { bind_port };
+
+    let bind_is_loopback = bind_address.starts_with("127.0.0.1:")
+        || bind_address.starts_with("localhost:")
+        || bind_address.starts_with("[::1]:");
+    // Host portion of the bind address (everything before the final ':').
+    let bind_host = bind_address
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(bind_address);
+    let host = if bind_is_loopback {
+        "localhost"
+    } else if let Some(ip) = detected_local_ip {
+        ip
+    } else if bind_host.is_empty() || bind_host == "0.0.0.0" || bind_host == "[::]" {
+        // Wildcard bind with no detectable LAN IP: localhost is the only
+        // address guaranteed to resolve on this machine.
+        "localhost"
+    } else {
+        bind_host
+    };
+    format!("{scheme}://{host}:{port}")
+}
+
+/// Friendly onboarding block, printed on a genuine first run and by `init`.
+/// Uses a single left border (not a fully-closed box) so variable-width URLs
+/// never produce a ragged right edge across terminals.
+fn print_next_steps(share_url: &str, media_port: u16) {
+    println!();
+    println!("  ┌─ Next steps ───────────────────────────────────────");
+    println!("  │");
+    println!("  │  1. Open Paracord in your browser:");
+    println!("  │       {share_url}");
+    println!("  │");
+    println!("  │  2. Register the FIRST account — it automatically");
+    println!("  │     becomes the server owner/admin.");
+    println!("  │");
+    println!("  │  3. Invite others: share the URL above, or create an");
+    println!("  │     invite link from any channel once you're in.");
+    println!("  │");
+    println!("  │  4. Voice & video run on Paracord's native QUIC engine");
+    println!("  │     — no extra setup. For access outside your network,");
+    println!("  │     forward port {media_port} (UDP + TCP) on your router.");
+    println!("  │");
+    println!("  └────────────────────────────────────────────────────");
+}
+
+#[allow(clippy::too_many_arguments)]
 fn print_startup_banner(
     bind_address: &str,
-    public_url: &Option<String>,
+    share_url: &str,
+    first_run: bool,
     livekit_status: &str,
     db_url: &str,
     port_forwarding_status: &str,
@@ -2265,26 +2422,14 @@ fn print_startup_banner(
     println!(" |  __/ (_| | | | (_| | (_| (_) | | | (_| |");
     println!(" |_|   \\__,_|_|  \\__,_|\\___\\___/|_|  \\__,_|");
     println!();
+    // The one URL to open and share. Always shown so an operator never has to
+    // reverse-engineer scheme/host/port from the raw bind address.
+    println!("  ➜  Open / share:  {share_url}");
+    println!();
     println!("  Listening:   http://{}", bind_address);
     if tls_active {
         println!("  HTTPS:       https://0.0.0.0:{}", tls_port);
     }
-    if let Some(url) = public_url {
-        println!("  Public URL:  {}", url);
-        if tls_active {
-            // Derive an HTTPS public URL from the HTTP one
-            if let Some(host) = url.strip_prefix("http://") {
-                // Strip the port from the host if present
-                let host_no_port = host.split(':').next().unwrap_or(host);
-                println!("  Public HTTPS: https://{}:{}", host_no_port, tls_port);
-            }
-        }
-        println!();
-        println!("  ╔══════════════════════════════════════════════════╗");
-        println!("  ║  Share this with friends: {:<24}║", url);
-        println!("  ╚══════════════════════════════════════════════════╝");
-    }
-    println!();
     // Redact any userinfo so a PostgreSQL password is never echoed to the
     // terminal or captured in startup logs.
     println!(
@@ -2292,12 +2437,23 @@ fn print_startup_banner(
         paracord_util::redact::redact_db_url(db_url)
     );
     println!("  Voice:       {}", voice_status);
-    println!("  LiveKit:     {}", livekit_status);
+    // Under the native-QUIC default LiveKit is inert; present it as an optional
+    // add-on rather than a scary "Disabled" so operators don't think media is off.
+    let livekit_line = if livekit_status.starts_with("Disabled") {
+        "optional (not configured)"
+    } else {
+        livekit_status
+    };
+    println!("  LiveKit:     {}", livekit_line);
     println!("  Port Fwd:    {}", port_forwarding_status);
     println!("  Web UI:      {}", web_ui);
     println!("  TLS/HTTPS:   {}", tls_status);
 
-    if needs_manual_forwarding {
+    if first_run {
+        // Genuine first run: the Next-steps block already covers the port to
+        // forward, so the standalone forwarding box below is redundant here.
+        print_next_steps(share_url, server_port);
+    } else if needs_manual_forwarding {
         println!();
         println!("  ╔══════════════════════════════════════════════════╗");
         println!("  ║  Port forwarding required for remote access     ║");
@@ -2326,6 +2482,55 @@ fn print_startup_banner(
         println!("  ╚══════════════════════════════════════════════════╝");
     }
     println!();
+}
+
+/// `paracord-server init [--config PATH]`: generate the config (if missing) via
+/// the canonical first-run path, print where it landed plus the share URL and
+/// Next-steps block, then return so the process exits without starting.
+/// An existing config is reported as ready and is never overwritten.
+fn run_init(init_args: &cli::InitArgs, default_config: &str) -> Result<()> {
+    let path = init_args.config.as_deref().unwrap_or(default_config);
+
+    // Config::load generates the default file when absent (setting first_run)
+    // and loads an existing file unchanged — it never overwrites. Reusing it
+    // keeps `init` and the zero-config startup path byte-for-byte identical.
+    let config = config::Config::load(path)?;
+
+    if !config.first_run {
+        println!();
+        println!("  Config already exists at: {path}");
+        println!("  It's ready — Paracord will use it on the next start.");
+        println!("  Start the server with:  paracord-server -c {path}");
+        println!();
+        return Ok(());
+    }
+
+    let tls_active = config.tls.enabled;
+    let bind_port: u16 = config
+        .server
+        .bind_address
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8090);
+    let tls_port = config.tls.port;
+    let media_port = if tls_active { tls_port } else { bind_port };
+    let share_url = derive_share_url(
+        &config.server.public_url,
+        &config.server.bind_address,
+        None,
+        tls_active,
+        tls_port,
+        bind_port,
+    );
+
+    println!();
+    println!("  Generated a new Paracord config at: {path}");
+    print_next_steps(&share_url, media_port);
+    println!();
+    println!("  Start the server with:  paracord-server -c {path}");
+    println!();
+    Ok(())
 }
 
 fn spawn_auto_backup(
@@ -3031,9 +3236,69 @@ async fn handle_webtransport_connection(
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_federation_signing_key_file, livekit_credentials_look_insecure,
+        derive_share_url, ensure_federation_signing_key_file, livekit_credentials_look_insecure,
         normalize_https_host, parse_detected_public_ip,
     };
+
+    #[test]
+    fn derive_share_url_prefers_public_url() {
+        assert_eq!(
+            derive_share_url(
+                &Some("https://chat.example.com".to_string()),
+                "0.0.0.0:8090",
+                Some("192.168.1.5"),
+                false,
+                8443,
+                8090,
+            ),
+            "https://chat.example.com"
+        );
+        // http public_url is upgraded to https on the TLS port when TLS is active.
+        assert_eq!(
+            derive_share_url(
+                &Some("http://chat.example.com:8090".to_string()),
+                "0.0.0.0:8090",
+                None,
+                true,
+                8443,
+                8090,
+            ),
+            "https://chat.example.com:8443"
+        );
+    }
+
+    #[test]
+    fn derive_share_url_uses_lan_ip_then_localhost() {
+        // Wildcard bind + detected LAN IP → LAN IP with http scheme + bind port.
+        assert_eq!(
+            derive_share_url(
+                &None,
+                "0.0.0.0:8090",
+                Some("192.168.1.5"),
+                false,
+                8443,
+                8090
+            ),
+            "http://192.168.1.5:8090"
+        );
+        // Wildcard bind, no LAN IP, TLS active → localhost on the TLS port.
+        assert_eq!(
+            derive_share_url(&None, "0.0.0.0:8090", None, true, 8443, 8090),
+            "https://localhost:8443"
+        );
+        // Loopback bind always resolves to localhost regardless of a LAN IP.
+        assert_eq!(
+            derive_share_url(
+                &None,
+                "127.0.0.1:8090",
+                Some("192.168.1.5"),
+                false,
+                8443,
+                8090
+            ),
+            "http://localhost:8090"
+        );
+    }
 
     #[test]
     fn normalizes_https_host_with_custom_port() {

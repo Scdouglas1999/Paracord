@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { useAccountStore } from '../stores/accountStore';
@@ -60,6 +60,18 @@ export function LoginPage() {
   const [mfaCode, setMfaCode] = useState('');
   const navigate = useNavigate();
   const serverUrl = getStoredServerUrl() || getCurrentOriginServerUrl();
+  // Tracks the deferred view-switch timer so it can be cancelled on unmount,
+  // preventing a setState on an unmounted component.
+  const viewSwitchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (viewSwitchTimer.current !== null) {
+        clearTimeout(viewSwitchTimer.current);
+        viewSwitchTimer.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -233,7 +245,9 @@ export function LoginPage() {
       setResetToken('');
       setResetNewPassword('');
       setResetConfirmPassword('');
-      setTimeout(() => {
+      if (viewSwitchTimer.current !== null) clearTimeout(viewSwitchTimer.current);
+      viewSwitchTimer.current = setTimeout(() => {
+        viewSwitchTimer.current = null;
         setView('login');
         setSuccessMsg('');
       }, 3000);
@@ -253,7 +267,9 @@ export function LoginPage() {
       await authApi.verifyEmail(verifyEmailToken);
       setSuccessMsg('Email verified successfully. You can now log in.');
       setVerifyEmailToken('');
-      setTimeout(() => {
+      if (viewSwitchTimer.current !== null) clearTimeout(viewSwitchTimer.current);
+      viewSwitchTimer.current = setTimeout(() => {
+        viewSwitchTimer.current = null;
         setView('login');
         setSuccessMsg('');
       }, 2500);

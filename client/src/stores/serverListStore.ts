@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { secureDelete, secureGet, secureSet } from '../lib/secureStorage';
+import { isTauri } from '../lib/tauriEnv';
 
 export interface ServerEntry {
   id: string;           // unique ID (derived from URL hash or random)
@@ -56,6 +57,21 @@ function normalizeServerUrl(url: string): string {
   }
 }
 
+/**
+ * Best default target to pre-fill on the connect screen.
+ *
+ * In a browser build the UI is served by its own Paracord server, so the
+ * current origin is the right server to connect to. In the desktop shell there
+ * is no implicit server — it supplies its own default — so this returns empty.
+ */
+export function resolveDefaultServerTarget(): string {
+  if (isTauri()) return '';
+  if (typeof window === 'undefined') return '';
+  if (!/^https?:$/.test(window.location.protocol)) return '';
+  if (!window.location.host) return '';
+  return `${window.location.protocol}//${window.location.host}`;
+}
+
 function generateServerId(url: string): string {
   // Simple hash-based ID from URL for deterministic IDs
   let hash = 0;
@@ -103,26 +119,19 @@ export const useServerListStore = create<ServerListState>()(
         const normalizedUrl = normalizeServerUrl(url);
         const existing = get().servers.find((s) => normalizeServerUrl(s.url) === normalizedUrl);
         if (existing) {
+          // Re-connecting to an already-known server: update its metadata and
+          // token in place (never duplicate) and make it the active server.
           if (token) {
             void saveServerToken(existing.id, token);
-            set((state) => ({
-              servers: state.servers.map((s) =>
-                s.id === existing.id
-                  ? { ...s, token, name, url: normalizedUrl, apiReachable: true }
-                  : s
-              ),
-              activeServerId: existing.id,
-            }));
-          } else {
-            set((state) => ({
-              servers: state.servers.map((s) =>
-                s.id === existing.id
-                  ? { ...s, name, url: normalizedUrl, apiReachable: true }
-                  : s
-              ),
-              activeServerId: existing.id,
-            }));
           }
+          set((state) => ({
+            servers: state.servers.map((s) =>
+              s.id === existing.id
+                ? { ...s, name, url: normalizedUrl, apiReachable: true, ...(token ? { token } : {}) }
+                : s
+            ),
+            activeServerId: existing.id,
+          }));
           return existing.id;
         }
         const id = generateServerId(normalizedUrl);

@@ -519,6 +519,105 @@ async fn dm_voice_leave_requires_membership_and_preserves_other_active_dm() -> a
     Ok(())
 }
 
+// ── Test: native-only (livekit unavailable) serves the full native contract ──
+// for BOTH a guild voice join and a DM voice join, with no LiveKit binary text.
+
+#[tokio::test]
+async fn native_only_guild_and_dm_join_serve_full_native_contract() -> anyhow::Result<()> {
+    let ctx = VoiceTestContext::new(true, false).await?;
+
+    // ── Guild voice join ────────────────────────────────────────────────
+    let (_guild_id, channel_id) = create_guild_and_voice_channel(&ctx).await?;
+    let (status, payload) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/voice/{channel_id}/join"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "guild native join: {payload}");
+    assert_eq!(payload["native_media"], json!(true));
+    assert_eq!(payload["livekit_available"], json!(false));
+    let candidates = payload["media_endpoint_candidates"]
+        .as_array()
+        .context("guild join must return media_endpoint_candidates")?;
+    assert!(
+        !candidates.is_empty(),
+        "guild media_endpoint_candidates must be non-empty: {payload}"
+    );
+    assert!(
+        payload["media_token"].is_string(),
+        "guild join must return a media_token: {payload}"
+    );
+    assert!(
+        payload["cert_hash"].is_string(),
+        "guild join must return a cert_hash: {payload}"
+    );
+    assert!(
+        !payload.to_string().contains("livekit-server"),
+        "guild native join must not mention the livekit-server binary: {payload}"
+    );
+
+    // ── DM voice join ───────────────────────────────────────────────────
+    let recipient_id = paracord_util::snowflake::generate(1);
+    paracord_db::users::create_user(
+        &ctx.db,
+        recipient_id,
+        "nativecontractpeer",
+        1,
+        "nativecontractpeer@example.com",
+        "hash",
+    )
+    .await?;
+    let (status, dm_payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/users/@me/channels",
+            Some(json!({
+                "recipient_ids": [recipient_id.to_string()],
+                "name": "Native Contract DM",
+            })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "group DM create: {dm_payload}");
+    let dm_channel_id = dm_payload["id"]
+        .as_str()
+        .context("group DM id should be a string")?
+        .to_string();
+
+    let (status, dm_join) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/dms/{dm_channel_id}/voice/join"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "DM native join: {dm_join}");
+    assert_eq!(dm_join["native_media"], json!(true));
+    assert_eq!(dm_join["livekit_available"], json!(false));
+    let dm_candidates = dm_join["media_endpoint_candidates"]
+        .as_array()
+        .context("DM join must return media_endpoint_candidates")?;
+    assert!(
+        !dm_candidates.is_empty(),
+        "DM media_endpoint_candidates must be non-empty: {dm_join}"
+    );
+    assert!(
+        dm_join["media_token"].is_string(),
+        "DM join must return a media_token: {dm_join}"
+    );
+    assert!(
+        dm_join["cert_hash"].is_string(),
+        "DM join must return a cert_hash: {dm_join}"
+    );
+    assert!(
+        !dm_join.to_string().contains("livekit-server"),
+        "DM native join must not mention the livekit-server binary: {dm_join}"
+    );
+
+    Ok(())
+}
+
 // ── Test: v2 POST join also accepts ?fallback=livekit ──
 
 #[tokio::test]

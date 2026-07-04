@@ -64,6 +64,12 @@ pub struct Config {
     pub ai: AiConfig,
     #[serde(default)]
     pub integrations: IntegrationsConfig,
+    /// True when `Config::load` generated the config file fresh on this run
+    /// (genuine first run). Not persisted; always deserializes to false.
+    /// Consumed by the startup path (main.rs) to drive first-run onboarding.
+    /// SETUP-3 wiring: read `config.first_run` after `Config::load(...)` returns.
+    #[serde(skip)]
+    pub first_run: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -205,8 +211,9 @@ pub struct MediaConfig {
 /// Native QUIC-based voice/video media server configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VoiceConfig {
-    /// Enable the native QUIC media server (replaces LiveKit when true).
-    #[serde(default = "default_false")]
+    /// Enable the native QUIC media server (the primary media path; LiveKit is
+    /// an optional fallback). Defaults to true so native media works with zero config.
+    #[serde(default = "default_true")]
     pub native_media: bool,
     /// UDP port for the unified QUIC media endpoint.
     /// Defaults to the same port as TLS (8443) — TCP serves HTTPS while
@@ -228,7 +235,7 @@ pub struct VoiceConfig {
 impl Default for VoiceConfig {
     fn default() -> Self {
         Self {
-            native_media: false,
+            native_media: true,
             port: default_voice_port(),
             max_participants_per_room: default_voice_max_participants(),
             audio_bitrate: default_voice_audio_bitrate(),
@@ -679,12 +686,17 @@ fn validate_secret_configuration(config: &Config) -> Result<()> {
         );
     }
 
-    let lk_key = config.livekit.api_key.trim();
-    let lk_secret = config.livekit.api_secret.trim();
-    if looks_like_placeholder_secret(lk_key) || looks_like_placeholder_secret(lk_secret) {
-        anyhow::bail!(
-            "Invalid livekit credentials: replace placeholder api_key/api_secret values before startup"
-        );
+    // LiveKit is only a fallback. When native media is the active path (the
+    // default), placeholder/empty LiveKit credentials must not block startup.
+    // Only enforce the LiveKit secret check for LiveKit-only operators.
+    if !config.voice.native_media {
+        let lk_key = config.livekit.api_key.trim();
+        let lk_secret = config.livekit.api_secret.trim();
+        if looks_like_placeholder_secret(lk_key) || looks_like_placeholder_secret(lk_secret) {
+            anyhow::bail!(
+                "Invalid livekit credentials: replace placeholder api_key/api_secret values before startup"
+            );
+        }
     }
 
     Ok(())
@@ -754,8 +766,10 @@ max_file_size = {max_file_size}
 p2p_threshold = {p2p_threshold}
 
 [voice]
-# Native QUIC/WebTransport voice stack. Disabled by default; enable this to
-# make native media the primary path while keeping LiveKit as an optional fallback.
+# Native QUIC/WebTransport voice stack. Enabled by default — this is the primary
+# media path and works out of the box with zero extra configuration. The [livekit]
+# section below is an optional fallback that operators can safely ignore. Set this
+# to false only to run a LiveKit-only deployment.
 # Env override: PARACORD_VOICE_NATIVE_MEDIA
 native_media = {voice_native_media}
 # Unified UDP port for raw QUIC desktop clients and browser WebTransport.
@@ -770,6 +784,8 @@ audio_bitrate = {voice_audio_bitrate}
 e2ee_required = {voice_e2ee_required}
 
 [livekit]
+# Optional fallback media server. Ignored while [voice] native_media = true.
+# These credentials are auto-generated so LiveKit works if you ever opt in.
 api_key = "{lk_key}"
 api_secret = "{lk_secret}"
 url = "{lk_url}"
@@ -937,8 +953,15 @@ timeout_seconds = {ai_timeout_seconds}
 // ── Config Loading ───────────────────────────────────────────────────────────
 
 impl Config {
+    /// Load configuration from `path`, generating a default config file if none
+    /// exists, then applying environment overrides and validating secrets.
+    ///
+    /// The returned `Config` carries a `first_run` flag (see the field docs):
+    /// it is `true` only when this call freshly generated the config file, so
+    /// callers can drive first-run onboarding without re-checking the filesystem.
     pub fn load(path: &str) -> Result<Self> {
-        let mut config = if std::path::Path::new(path).exists() {
+        let first_run = !std::path::Path::new(path).exists();
+        let mut config = if !first_run {
             let content = fs::read_to_string(path)?;
             toml::from_str(&content)?
         } else {
@@ -959,6 +982,7 @@ impl Config {
             tracing::info!("Generated default config at '{}'", path);
             config
         };
+        config.first_run = first_run;
         let _ = harden_secret_file_permissions(path);
 
         // Environment variable overrides
@@ -1407,10 +1431,59 @@ fn parse_optional_days(raw: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, DatabaseConfig, DatabaseEngine, TlsConfig};
+    use super::{
+        generate_config_template, validate_secret_configuration, Config, DatabaseConfig,
+        DatabaseEngine, TlsConfig,
+    };
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn voice_defaults_to_native_media() {
+        assert!(Config::default().voice.native_media);
+    }
+
+    #[test]
+    fn generated_config_template_round_trips_with_native_media_enabled() {
+        let template = generate_config_template(&Config::default());
+        let parsed: Config = toml::from_str(&template).expect("template must round-trip");
+        assert!(parsed.voice.native_media);
+        // first_run is not persisted; a parsed config is never a first run.
+        assert!(!parsed.first_run);
+    }
+
+    #[test]
+    fn validate_secret_ok_with_native_default_and_blank_livekit() {
+        let mut config = Config::default();
+        assert!(config.voice.native_media);
+        config.livekit.api_key = String::new();
+        config.livekit.api_secret = "   ".to_string();
+        assert!(validate_secret_configuration(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_secret_errors_when_native_disabled_and_livekit_placeholder() {
+        let mut config = Config::default();
+        config.voice.native_media = false;
+        config.livekit.api_key = "change_me".to_string();
+        config.livekit.api_secret = String::new();
+        assert!(validate_secret_configuration(&config).is_err());
+    }
+
+    #[test]
+    fn validate_secret_errors_on_weak_jwt_regardless_of_media() {
+        // Short JWT with native media on (LiveKit check skipped) still fails.
+        let mut native = Config::default();
+        native.auth.jwt_secret = "short".to_string();
+        assert!(validate_secret_configuration(&native).is_err());
+
+        // Blank JWT with native media off also fails.
+        let mut livekit_only = Config::default();
+        livekit_only.voice.native_media = false;
+        livekit_only.auth.jwt_secret = String::new();
+        assert!(validate_secret_configuration(&livekit_only).is_err());
+    }
 
     #[test]
     fn tls_defaults_enable_self_signed_bootstrap() {

@@ -46,3 +46,7 @@ lettre = { workspace = true }
 tempfile = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 sqlx = { workspace = true }
+# Test-only: lets the integration harness construct a real NativeMediaState
+# (bound QUIC endpoint + cert hash) so native voice routes exercise the full
+# native contract, including cert_hash.
+paracord-transport = { workspace = true }

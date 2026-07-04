@@ -16,10 +16,6 @@ use sha2::{Digest, Sha256};
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 
-pub fn first_forwarded_value_pub(headers: &HeaderMap, name: &str) -> Option<String> {
-    first_forwarded_value(headers, name)
-}
-
 pub fn livekit_url_candidates_pub(headers: &HeaderMap, fallback: &str) -> Vec<String> {
     livekit_url_candidates(headers, fallback)
 }
@@ -113,6 +109,27 @@ fn push_unique_url(candidates: &mut Vec<String>, raw: String) {
         return;
     }
     candidates.push(trimmed.to_string());
+}
+
+/// Build the browser-facing native media endpoint plus its ordered candidate
+/// list. The optional LAN candidate is preferred (avoids hairpin NAT), followed
+/// by the Host-derived endpoint. Shared by guild and DM voice joins so both
+/// return the identical native contract.
+pub fn native_media_endpoints(headers: &HeaderMap, media_port: u16) -> (String, Vec<String>) {
+    let host = first_forwarded_value(headers, "x-forwarded-host")
+        .or_else(|| first_forwarded_value(headers, "host"))
+        .unwrap_or_else(|| format!("localhost:{}", media_port));
+    let host_no_port = host.split(':').next().unwrap_or(&host);
+    // Browser clients connect via WebTransport (HTTPS/HTTP3) on the unified
+    // media port (same UDP port as raw QUIC, ALPN-routed).
+    let media_endpoint = format!("https://{}:{}/media", host_no_port, media_port);
+
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(local) = env_trimmed("PARACORD_NATIVE_MEDIA_LOCAL_CANDIDATE") {
+        push_unique_url(&mut candidates, local);
+    }
+    push_unique_url(&mut candidates, media_endpoint.clone());
+    (media_endpoint, candidates)
 }
 
 fn livekit_url_candidates(headers: &HeaderMap, fallback: &str) -> Vec<String> {
@@ -243,7 +260,7 @@ pub async fn join_voice(
         && !paracord_federation::is_enabled()
     {
         return Err(ApiError::ServiceUnavailable(
-            "Voice chat is not available — LiveKit server binary not found. Place livekit-server next to the Paracord server executable.".into(),
+            "Voice is not available on this server".into(),
         ));
     }
 
@@ -502,22 +519,8 @@ pub async fn join_voice(
             channel.guild_id(),
         );
 
-        let media_port = state.config.native_media_port;
-        let host = first_forwarded_value(&headers, "x-forwarded-host")
-            .or_else(|| first_forwarded_value(&headers, "host"))
-            .unwrap_or_else(|| format!("localhost:{}", media_port));
-        let host_no_port = host.split(':').next().unwrap_or(&host);
-        // Browser clients connect via WebTransport (HTTPS/HTTP3) on the
-        // unified media port (same UDP port as raw QUIC, ALPN-routed).
-        let media_endpoint = format!("https://{}:{}/media", host_no_port, media_port);
-
-        // Build candidate list: LAN IP first (avoids hairpin NAT), then
-        // the Host-derived endpoint.
-        let mut media_endpoint_candidates: Vec<String> = Vec::new();
-        if let Some(local) = env_trimmed("PARACORD_NATIVE_MEDIA_LOCAL_CANDIDATE") {
-            push_unique_url(&mut media_endpoint_candidates, local);
-        }
-        push_unique_url(&mut media_endpoint_candidates, media_endpoint.clone());
+        let (media_endpoint, media_endpoint_candidates) =
+            native_media_endpoints(&headers, state.config.native_media_port);
 
         let room_name = format!("{}:{}", guild_id, channel_id);
 
@@ -563,7 +566,7 @@ pub async fn join_voice(
 
     if !state.config.livekit_available {
         return Err(ApiError::ServiceUnavailable(
-            "Voice chat is not available - LiveKit server binary not found. Place livekit-server next to the Paracord server executable.".into(),
+            "LiveKit voice is not available on this server".into(),
         ));
     }
 
@@ -645,7 +648,7 @@ pub async fn start_stream(
         && !paracord_federation::is_enabled()
     {
         return Err(ApiError::ServiceUnavailable(
-            "Streaming is not available — LiveKit server binary not found.".into(),
+            "Streaming is not available on this server".into(),
         ));
     }
 
@@ -862,7 +865,7 @@ pub async fn start_stream(
 
     if !state.config.livekit_available {
         return Err(ApiError::ServiceUnavailable(
-            "Streaming is not available - LiveKit server binary not found.".into(),
+            "LiveKit streaming is not available on this server".into(),
         ));
     }
 

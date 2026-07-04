@@ -26,6 +26,23 @@ pub enum Command {
     /// the target is left untouched on failure. Stop the server (and ensure the
     /// SQLite file is not being written) before running this.
     MigrateToPostgres(MigrateToPostgresArgs),
+
+    /// Generate the config file (if absent) and print onboarding instructions,
+    /// then exit without starting the server.
+    ///
+    /// This is a convenience wrapper around the normal zero-config first run:
+    /// it writes the default config using the same generation path, prints the
+    /// URL to open/share and the first-run "Next steps" block, and exits 0. If
+    /// the config already exists it is reported as ready and never overwritten.
+    Init(InitArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct InitArgs {
+    /// Path to write (or check) the configuration file. Defaults to the
+    /// top-level `--config` value when omitted.
+    #[arg(short, long)]
+    pub config: Option<String>,
 }
 
 #[derive(ClapArgs, Debug)]

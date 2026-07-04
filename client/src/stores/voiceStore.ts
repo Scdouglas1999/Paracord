@@ -2034,7 +2034,13 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     const existingEngine = get().mediaEngine;
     if (existingEngine) {
       existingEngine.disconnect().catch(() => { });
-      set({ mediaEngine: null, useNativeMedia: isTauri() });
+      // Only drop the engine reference. Do NOT downgrade useNativeMedia here:
+      // the intended engine is decided per-join by the server's native_media
+      // flag plus a stable local preference, never by whether an engine object
+      // currently exists. Previously this reset to isTauri(), which silently
+      // flipped native OFF in the browser for the next join even though the
+      // browser has a real WebTransport engine (BrowserMediaEngine).
+      set({ mediaEngine: null });
     }
     const existingRoom = get().room;
     if (existingRoom) {

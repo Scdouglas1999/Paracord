@@ -368,7 +368,7 @@ pub async fn join_dm_voice(
 ) -> Result<Json<Value>, ApiError> {
     if !state.config.livekit_available && !state.config.native_media_enabled {
         return Err(ApiError::ServiceUnavailable(
-            "Voice chat is not available — LiveKit server binary not found.".into(),
+            "Voice is not available on this server".into(),
         ));
     }
 
@@ -438,13 +438,8 @@ pub async fn join_dm_voice(
             }
         }
 
-        let media_port = state.config.native_media_port;
-
-        let host = super::voice::first_forwarded_value_pub(&headers, "x-forwarded-host")
-            .or_else(|| super::voice::first_forwarded_value_pub(&headers, "host"))
-            .unwrap_or_else(|| format!("localhost:{}", media_port));
-        let host_no_port = host.split(':').next().unwrap_or(&host);
-        let media_endpoint = format!("https://{}:{}/media", host_no_port, media_port);
+        let (media_endpoint, media_endpoint_candidates) =
+            super::voice::native_media_endpoints(&headers, state.config.native_media_port);
 
         let issued_at = chrono::Utc::now().timestamp();
         let media_claims = json!({
@@ -487,6 +482,7 @@ pub async fn join_dm_voice(
         return Ok(Json(json!({
             "native_media": true,
             "media_endpoint": media_endpoint,
+            "media_endpoint_candidates": media_endpoint_candidates,
             "media_token": media_token,
             "cert_hash": cert_hash,
             "room_name": room_name,
@@ -497,7 +493,7 @@ pub async fn join_dm_voice(
 
     if !state.config.livekit_available {
         return Err(ApiError::ServiceUnavailable(
-            "Voice chat is not available — LiveKit server binary not found.".into(),
+            "LiveKit voice is not available on this server".into(),
         ));
     }
 

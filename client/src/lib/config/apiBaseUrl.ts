@@ -35,6 +35,41 @@ function normalizeServerBaseUrl(url: string): string {
   }
 }
 
+/**
+ * Normalise a raw connect-screen input into a canonical server base URL.
+ *
+ * - Trims surrounding whitespace.
+ * - Adds a protocol when none is present: `http://` for loopback hosts
+ *   (localhost / 127.0.0.1 / [::1]), `https://` for everything else.
+ * - When the bare host (no explicit port) matches the current browser origin,
+ *   returns that origin verbatim so a self-hosted UI connects back to itself.
+ * - Strips trailing slashes.
+ *
+ * This is the single source of truth for connect-input normalisation; the
+ * ServerConnectPage imports it rather than re-implementing the logic.
+ */
+export function normalizeConnectInput(raw: string): string {
+  let serverUrl = raw.trim();
+  if (!serverUrl) return serverUrl;
+  if (!/^https?:\/\//i.test(serverUrl)) {
+    const hostAndPort = serverUrl.split('/')[0];
+    const hostPart = hostAndPort.split(':')[0];
+    const hasExplicitPort = /:\d+$/.test(hostAndPort);
+    if (
+      typeof window !== 'undefined' &&
+      hostPart.toLowerCase() === window.location.hostname.toLowerCase() &&
+      !hasExplicitPort
+    ) {
+      return window.location.origin.replace(/\/+$/, '');
+    }
+
+    const isLocalhost =
+      hostPart === 'localhost' || hostPart === '127.0.0.1' || hostPart === '[::1]';
+    serverUrl = (isLocalhost ? 'http://' : 'https://') + serverUrl;
+  }
+  return serverUrl.replace(/\/+$/, '');
+}
+
 export function getStoredServerUrl(): string | null {
   try {
     const value = getVersionedStorageItem(SERVER_URL_KEY, ['server-url']);

@@ -141,6 +141,16 @@ function allowDirectLivekitFallback(): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
+/**
+ * Whether a native-media failure may silently fall back to LiveKit.
+ *
+ * v1 default: OFF. Paracord is native-first — the QUIC media engine is the
+ * product, and LiveKit is only an explicit opt-in fallback that an operator or
+ * user must enable via VITE_ENABLE_NATIVE_TO_LIVEKIT_FALLBACK. When the env var
+ * is unset (or not a recognized truthy value) we return false so a native
+ * failure surfaces as a real error instead of quietly routing media through a
+ * different, non-E2EE transport.
+ */
 export function allowNativeToLivekitFallback(): boolean {
   const raw = import.meta.env.VITE_ENABLE_NATIVE_TO_LIVEKIT_FALLBACK;
   if (typeof raw === 'boolean') return raw;

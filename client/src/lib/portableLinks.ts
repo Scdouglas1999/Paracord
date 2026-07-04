@@ -24,28 +24,47 @@ export function encodePortableLink(serverUrl: string, inviteCode: string): strin
 }
 
 export function decodePortableLink(token: string): { serverUrl: string; inviteCode: string } {
-  const cleaned = token.startsWith(INVITE_PREFIX) ? token.slice(INVITE_PREFIX.length) : token;
+  const cleaned = token.trim().startsWith(INVITE_PREFIX)
+    ? token.trim().slice(INVITE_PREFIX.length)
+    : token.trim();
+  if (!cleaned) {
+    throw new Error('Invalid portable link: empty token');
+  }
   const decoded = base64urlDecode(cleaned);
   const sepIndex = decoded.lastIndexOf(SEPARATOR);
   if (sepIndex === -1) {
     throw new Error('Invalid portable link: missing separator');
   }
-  return {
-    serverUrl: decoded.slice(0, sepIndex),
-    inviteCode: decoded.slice(sepIndex + 1),
-  };
+  const serverUrl = decoded.slice(0, sepIndex);
+  const inviteCode = decoded.slice(sepIndex + 1);
+  if (!serverUrl || !inviteCode) {
+    throw new Error('Invalid portable link: empty component');
+  }
+  return { serverUrl, inviteCode };
+}
+
+/**
+ * Safe variant of {@link decodePortableLink}: returns `null` for any malformed
+ * input instead of throwing. Prefer this at call sites that accept untrusted
+ * user input (e.g. the connect screen).
+ */
+export function tryDecodePortableLink(
+  token: string
+): { serverUrl: string; inviteCode: string } | null {
+  try {
+    return decodePortableLink(token);
+  } catch {
+    return null;
+  }
 }
 
 export function isPortableLink(input: string): boolean {
   const trimmed = input.trim();
-  if (trimmed.startsWith(INVITE_PREFIX)) return true;
+  if (trimmed.startsWith(INVITE_PREFIX)) {
+    return tryDecodePortableLink(trimmed) !== null;
+  }
   if (/^[A-Za-z0-9_-]{8,}$/.test(trimmed)) {
-    try {
-      const { serverUrl, inviteCode } = decodePortableLink(trimmed);
-      return serverUrl.length > 0 && inviteCode.length > 0;
-    } catch {
-      return false;
-    }
+    return tryDecodePortableLink(trimmed) !== null;
   }
   return false;
 }

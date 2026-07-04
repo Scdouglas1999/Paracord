@@ -103,6 +103,38 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
         http_url: "http://localhost:7880".to_string(),
     });
 
+    // When native media is enabled, build a real NativeMediaState so the voice
+    // routes exercise the full native contract (room manager + cert_hash). The
+    // QUIC endpoint binds an ephemeral loopback port — the response payload uses
+    // the configured `native_media_port`, so the actual bound port is irrelevant.
+    let native_media = if options.native_media_enabled {
+        use paracord_transport::endpoint::{generate_self_signed_cert, MediaEndpoint};
+        let tls = generate_self_signed_cert()?;
+        let cert_hash = {
+            use base64::Engine;
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(tls.cert_chain[0].as_ref());
+            base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
+        };
+        let endpoint = MediaEndpoint::bind("127.0.0.1:0".parse().unwrap(), tls)?;
+        let rooms = Arc::new(paracord_relay::room::MediaRoomManager::new());
+        let speaker_detector = Arc::new(paracord_relay::speaker::SpeakerDetector::new());
+        let relay_forwarder = Arc::new(paracord_relay::relay::RelayForwarder::new(
+            Arc::clone(&rooms),
+            Arc::clone(&speaker_detector),
+        ));
+        Some(paracord_core::NativeMediaState {
+            rooms,
+            speaker_detector,
+            endpoint: Arc::new(endpoint),
+            relay_forwarder,
+            cert_hash,
+        })
+    } else {
+        None
+    };
+
     let state = AppState {
         db: db.clone(),
         event_bus: event_bus.clone(),
@@ -162,7 +194,7 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
         federation_service: None,
         member_index: Arc::new(paracord_core::member_index::MemberIndex::empty()),
         presence_manager: Arc::new(paracord_core::presence_manager::PresenceManager::new()),
-        native_media: None,
+        native_media,
         mfa_tickets: moka::future::Cache::builder()
             .max_capacity(10_000)
             .time_to_live(std::time::Duration::from_secs(300))
