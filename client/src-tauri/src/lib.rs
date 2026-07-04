@@ -14,6 +14,7 @@ mod tray;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Duration;
+use tauri::Emitter;
 
 /// Origins that the user has explicitly configured as servers. Certificate
 /// errors for these origins (and localhost) are allowed through so that
@@ -21,6 +22,23 @@ use std::time::Duration;
 /// All other origins fall back to the default (reject) behaviour.
 static TRUSTED_SERVER_ORIGINS: LazyLock<RwLock<HashSet<String>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
+
+#[derive(Default)]
+struct NativeSseState {
+    tasks: tokio::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct NativeSseEvent {
+    stream_id: String,
+    kind: &'static str,
+    event: Option<String>,
+    data: Option<String>,
+    error: Option<String>,
+}
+
+const NATIVE_SSE_EVENT: &str = "native_sse_event";
 
 fn trusted_origin_from_url(raw_url: &str) -> Option<String> {
     let parsed = url::Url::parse(raw_url).ok()?;
@@ -568,6 +586,160 @@ async fn native_fetch(req: NativeFetchRequest) -> Result<NativeFetchResponse, St
     Ok(NativeFetchResponse { status, body })
 }
 
+fn find_sse_delimiter(buffer: &str) -> Option<(usize, usize)> {
+    let lf = buffer.find("\n\n").map(|idx| (idx, 2));
+    let crlf = buffer.find("\r\n\r\n").map(|idx| (idx, 4));
+    match (lf, crlf) {
+        (Some(a), Some(b)) => Some(if a.0 < b.0 { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn drain_sse_events(buffer: &mut String) -> Vec<(Option<String>, String)> {
+    let mut events = Vec::new();
+    while let Some((idx, delimiter_len)) = find_sse_delimiter(buffer) {
+        let frame = buffer[..idx].to_string();
+        buffer.drain(..idx + delimiter_len);
+
+        let mut event_name = None;
+        let mut data_lines = Vec::new();
+        for raw_line in frame.lines() {
+            let line = raw_line.trim_end_matches('\r');
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("event:") {
+                event_name = Some(value.trim_start().to_string());
+            } else if let Some(value) = line.strip_prefix("data:") {
+                data_lines.push(value.trim_start().to_string());
+            }
+        }
+
+        if !data_lines.is_empty() {
+            events.push((event_name, data_lines.join("\n")));
+        }
+    }
+    events
+}
+
+fn emit_native_sse(app: &tauri::AppHandle, payload: NativeSseEvent) {
+    let _ = app.emit(NATIVE_SSE_EVENT, payload);
+}
+
+#[tauri::command]
+async fn start_native_sse_stream(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, NativeSseState>,
+    stream_id: String,
+    url: String,
+) -> Result<(), String> {
+    ensure_native_fetch_target_is_trusted(&url)?;
+    {
+        let mut tasks = state.tasks.lock().await;
+        if let Some(existing) = tasks.remove(&stream_id) {
+            existing.abort();
+        }
+    }
+
+    let client = tls_pinning_client()?;
+    let task_stream_id = stream_id.clone();
+    let task = tokio::spawn(async move {
+        let emit_error = |message: String, app: &tauri::AppHandle, stream_id: &str| {
+            emit_native_sse(
+                app,
+                NativeSseEvent {
+                    stream_id: stream_id.to_string(),
+                    kind: "error",
+                    event: None,
+                    data: None,
+                    error: Some(message),
+                },
+            );
+        };
+
+        let resp = match client
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(err) => {
+                emit_error(map_reqwest_error(err), &app, &task_stream_id);
+                return;
+            }
+        };
+
+        if !resp.status().is_success() {
+            emit_error(
+                format!("SSE stream returned HTTP {}", resp.status()),
+                &app,
+                &task_stream_id,
+            );
+            return;
+        }
+
+        emit_native_sse(
+            &app,
+            NativeSseEvent {
+                stream_id: task_stream_id.clone(),
+                kind: "open",
+                event: None,
+                data: None,
+                error: None,
+            },
+        );
+
+        let mut buffer = String::new();
+        let mut resp = resp;
+        loop {
+            match resp.chunk().await {
+                Ok(Some(chunk)) => {
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    for (event, data) in drain_sse_events(&mut buffer) {
+                        emit_native_sse(
+                            &app,
+                            NativeSseEvent {
+                                stream_id: task_stream_id.clone(),
+                                kind: "message",
+                                event,
+                                data: Some(data),
+                                error: None,
+                            },
+                        );
+                    }
+                }
+                Ok(None) => {
+                    emit_error("SSE stream ended".to_string(), &app, &task_stream_id);
+                    return;
+                }
+                Err(err) => {
+                    emit_error(map_reqwest_error(err), &app, &task_stream_id);
+                    return;
+                }
+            }
+        }
+    });
+
+    let mut tasks = state.tasks.lock().await;
+    tasks.insert(stream_id, task);
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_native_sse_stream(
+    state: tauri::State<'_, NativeSseState>,
+    stream_id: String,
+) -> Result<(), String> {
+    let mut tasks = state.tasks.lock().await;
+    if let Some(task) = tasks.remove(&stream_id) {
+        task.abort();
+    }
+    Ok(())
+}
+
 /// Event name carrying a `paracord://` deep link to the webview. The connect
 /// flow listens for this (via `@tauri-apps/api/event`) to route invite tokens
 /// (`paracord://invite/<token>`) and server hosts (`paracord://server/<host>`).
@@ -629,6 +801,7 @@ pub fn run() {
             forward_deep_link_urls(app, &extract_paracord_urls(argv));
         }))
         .manage(native_media::MediaState::new())
+        .manage(NativeSseState::default())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
@@ -692,6 +865,8 @@ pub fn run() {
         update_trusted_server_hosts,
         probe_server,
         native_fetch,
+        start_native_sse_stream,
+        stop_native_sse_stream,
         get_default_connect_target,
         audio_capture::set_system_audio_capture_enabled,
         audio_capture::start_system_audio_capture,

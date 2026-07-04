@@ -6,8 +6,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use quinn::crypto::rustls::QuicServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use sha2::{Digest, Sha256};
 
 use crate::ensure_rustls_provider;
 
@@ -25,8 +28,8 @@ pub struct MediaEndpoint {
 impl MediaEndpoint {
     /// Bind a QUIC endpoint to the given address with the provided TLS config.
     ///
-    /// The endpoint supports both accepting incoming connections (server mode)
-    /// and initiating outgoing connections (client mode / P2P).
+    /// Outgoing connections must use [`Self::connect_pinned`]; server endpoints
+    /// intentionally have no default client TLS configuration.
     pub fn bind(addr: SocketAddr, tls: TlsConfig) -> anyhow::Result<Self> {
         ensure_rustls_provider();
         let mut server_crypto = rustls::ServerConfig::builder()
@@ -37,19 +40,7 @@ impl MediaEndpoint {
         let server_config =
             quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
 
-        let client_crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
-            .with_no_client_auth();
-        let mut client_crypto = client_crypto;
-        client_crypto.alpn_protocols = vec![b"paracord-media".to_vec()];
-
-        let client_config = quinn::ClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
-        ));
-
-        let mut endpoint = quinn::Endpoint::server(server_config, addr)?;
-        endpoint.set_default_client_config(client_config);
+        let endpoint = quinn::Endpoint::server(server_config, addr)?;
 
         Ok(Self { endpoint })
     }
@@ -70,47 +61,21 @@ impl MediaEndpoint {
             .with_no_client_auth()
             .with_single_cert(tls.cert_chain.clone(), tls.private_key.clone_key())?;
 
-        let client_alpn_protocols = alpn_protocols.clone();
         server_crypto.alpn_protocols = alpn_protocols;
 
         let server_config =
             quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
 
-        let mut client_crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
-            .with_no_client_auth();
-        client_crypto.alpn_protocols = client_alpn_protocols;
-
-        let client_config = quinn::ClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
-        ));
-
-        let mut endpoint = quinn::Endpoint::server(server_config, addr)?;
-        endpoint.set_default_client_config(client_config);
+        let endpoint = quinn::Endpoint::server(server_config, addr)?;
 
         Ok(Self { endpoint })
     }
 
-    /// Create a client-only endpoint (no server config, for P2P initiators).
+    /// Create a client-only endpoint. Connections must use
+    /// [`Self::connect_pinned`]; there is deliberately no insecure default.
     pub fn client(addr: SocketAddr) -> anyhow::Result<Self> {
         ensure_rustls_provider();
-        let mut client_crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
-            .with_no_client_auth();
-
-        // The server's unified QUIC endpoint requires ALPN negotiation.
-        // Without this, rustls rejects the handshake with NoApplicationProtocol.
-        client_crypto.alpn_protocols = vec![b"paracord-media".to_vec()];
-
-        let client_config = quinn::ClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
-        ));
-
-        let mut endpoint = quinn::Endpoint::client(addr)?;
-        endpoint.set_default_client_config(client_config);
-
+        let endpoint = quinn::Endpoint::client(addr)?;
         Ok(Self { endpoint })
     }
 
@@ -119,13 +84,20 @@ impl MediaEndpoint {
         self.endpoint.accept().await
     }
 
-    /// Initiate a QUIC connection to a remote endpoint.
-    pub fn connect(
+    /// Initiate a QUIC connection whose leaf certificate must match the
+    /// base64-encoded SHA-256 DER fingerprint advertised by the trusted REST
+    /// control plane. A missing, malformed, or mismatched pin fails closed.
+    pub fn connect_pinned(
         &self,
         addr: SocketAddr,
         server_name: &str,
-    ) -> Result<quinn::Connecting, quinn::ConnectError> {
-        self.endpoint.connect(addr, server_name)
+        cert_hash: &str,
+    ) -> anyhow::Result<quinn::Connecting> {
+        let expected_sha256 = decode_certificate_hash(cert_hash)?;
+        let client_config = pinned_client_config(expected_sha256)?;
+        Ok(self
+            .endpoint
+            .connect_with(client_config, addr, server_name)?)
     }
 
     /// Returns the local address this endpoint is bound to.
@@ -163,43 +135,96 @@ pub fn generate_self_signed_cert() -> anyhow::Result<TlsConfig> {
     })
 }
 
-/// A certificate verifier that accepts any certificate.
-/// Used for development / self-signed cert scenarios.
-#[derive(Debug)]
-struct InsecureCertVerifier;
+/// Return the base64-encoded SHA-256 fingerprint used by WebTransport and raw
+/// QUIC clients to pin a self-signed media certificate.
+pub fn certificate_hash(cert: &CertificateDer<'_>) -> String {
+    STANDARD.encode(Sha256::digest(cert.as_ref()))
+}
 
-impl rustls::client::danger::ServerCertVerifier for InsecureCertVerifier {
+fn decode_certificate_hash(cert_hash: &str) -> anyhow::Result<[u8; 32]> {
+    let decoded = STANDARD
+        .decode(cert_hash.trim())
+        .map_err(|_| anyhow::anyhow!("media certificate pin is not valid base64"))?;
+    decoded.try_into().map_err(|decoded: Vec<u8>| {
+        anyhow::anyhow!(
+            "media certificate pin must be a SHA-256 digest (32 bytes, got {})",
+            decoded.len()
+        )
+    })
+}
+
+fn pinned_client_config(expected_sha256: [u8; 32]) -> anyhow::Result<quinn::ClientConfig> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut client_crypto = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
+            expected_sha256,
+            provider,
+        }))
+        .with_no_client_auth();
+    client_crypto.alpn_protocols = vec![b"paracord-media".to_vec()];
+
+    Ok(quinn::ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
+    )))
+}
+
+/// Verifies a self-signed media certificate against an exact SHA-256 pin and
+/// verifies the TLS CertificateVerify signature against that certificate.
+#[derive(Debug)]
+struct PinnedCertVerifier {
+    expected_sha256: [u8; 32],
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for PinnedCertVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
+        end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
         _server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let presented: [u8; 32] = Sha256::digest(end_entity.as_ref()).into();
+        if presented != self.expected_sha256 {
+            return Err(rustls::Error::General(
+                "native media TLS certificate pin mismatch".to_string(),
+            ));
+        }
         Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
+        self.provider
             .signature_verification_algorithms
             .supported_schemes()
     }
@@ -237,6 +262,7 @@ mod tests {
     async fn server_client_connect_and_exchange_datagram() {
         // Start server
         let tls = generate_self_signed_cert().unwrap();
+        let cert_hash = certificate_hash(&tls.cert_chain[0]);
         let server = MediaEndpoint::bind("127.0.0.1:0".parse().unwrap(), tls).unwrap();
         let server_addr = server.local_addr().unwrap();
 
@@ -244,7 +270,9 @@ mod tests {
         let client = MediaEndpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
 
         // Client connects to server
-        let client_connecting = client.connect(server_addr, "localhost").unwrap();
+        let client_connecting = client
+            .connect_pinned(server_addr, "localhost", &cert_hash)
+            .unwrap();
 
         // Server accepts
         let server_incoming = server.accept().await.expect("server should accept");
@@ -269,6 +297,43 @@ mod tests {
 
         // Clean up
         server.close();
+        client.close();
+    }
+
+    #[tokio::test]
+    async fn pinned_connection_rejects_wrong_certificate() {
+        let server_tls = generate_self_signed_cert().unwrap();
+        let server = MediaEndpoint::bind("127.0.0.1:0".parse().unwrap(), server_tls).unwrap();
+        let server_addr = server.local_addr().unwrap();
+
+        let other_tls = generate_self_signed_cert().unwrap();
+        let wrong_hash = certificate_hash(&other_tls.cert_chain[0]);
+        let client = MediaEndpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+
+        let client_connecting = client
+            .connect_pinned(server_addr, "localhost", &wrong_hash)
+            .unwrap();
+        let server_incoming = server.accept().await.expect("server should accept");
+        let server_connecting = server_incoming.accept().unwrap();
+        let (client_result, _server_result) = tokio::join!(client_connecting, server_connecting);
+        assert!(
+            client_result.is_err(),
+            "a mismatched certificate pin must fail"
+        );
+
+        server.close();
+        client.close();
+    }
+
+    #[tokio::test]
+    async fn malformed_certificate_pin_is_rejected() {
+        let client = MediaEndpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        let result = client.connect_pinned(
+            "127.0.0.1:9".parse().unwrap(),
+            "localhost",
+            "not-a-sha256-pin",
+        );
+        assert!(result.is_err());
         client.close();
     }
 }

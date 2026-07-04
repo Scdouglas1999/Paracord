@@ -108,15 +108,11 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
     // QUIC endpoint binds an ephemeral loopback port — the response payload uses
     // the configured `native_media_port`, so the actual bound port is irrelevant.
     let native_media = if options.native_media_enabled {
-        use paracord_transport::endpoint::{generate_self_signed_cert, MediaEndpoint};
-        let tls = generate_self_signed_cert()?;
-        let cert_hash = {
-            use base64::Engine;
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(tls.cert_chain[0].as_ref());
-            base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
+        use paracord_transport::endpoint::{
+            certificate_hash, generate_self_signed_cert, MediaEndpoint,
         };
+        let tls = generate_self_signed_cert()?;
+        let cert_hash = certificate_hash(&tls.cert_chain[0]);
         let endpoint = MediaEndpoint::bind("127.0.0.1:0".parse().unwrap(), tls)?;
         let rooms = Arc::new(paracord_relay::room::MediaRoomManager::new());
         let speaker_detector = Arc::new(paracord_relay::speaker::SpeakerDetector::new());

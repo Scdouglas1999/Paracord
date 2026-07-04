@@ -530,10 +530,12 @@ pub async fn join_voice(
             "sub": auth.user_id,
             // Keep canonical claim names used by the transport layer.
             "sid": &session_id,
+            "auth_sid": auth.session_id.as_deref(),
             "iat": issued_at,
             "exp": issued_at + 86400,
             // Extra claims are tolerated by serde and help with diagnostics.
             "session_id": &session_id,
+            "auth_session_id": auth.session_id.as_deref(),
             "room": &room_name,
         });
         let media_token = jsonwebtoken::encode(

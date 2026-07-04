@@ -991,7 +991,11 @@ pub async fn upload_token(
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("JWT encode error: {}", e)))?;
 
     // 5. Determine QUIC endpoint availability
-    let quic_available = state.config.native_media_enabled;
+    let cert_hash = state
+        .native_media
+        .as_ref()
+        .map(|native| native.cert_hash.clone());
+    let quic_available = cert_hash.is_some();
     let quic_endpoint = if quic_available {
         let host = headers
             .get("x-forwarded-host")
@@ -1019,6 +1023,7 @@ pub async fn upload_token(
         "upload_token": upload_token,
         "quic_endpoint": quic_endpoint,
         "quic_available": quic_available,
+        "cert_hash": cert_hash,
     })))
 }
 

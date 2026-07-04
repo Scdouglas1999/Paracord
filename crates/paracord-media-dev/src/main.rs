@@ -424,6 +424,7 @@ fn generate_media_token(user_id: i64, secret: &str) -> String {
         iat: now,
         exp: now + 3600, // 1 hour
         sid: Some(format!("media-{}", user_id)),
+        auth_sid: None,
         room: None,
     };
 

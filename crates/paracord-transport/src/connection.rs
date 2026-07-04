@@ -29,8 +29,12 @@ pub struct MediaClaims {
     pub sub: i64,
     pub exp: usize,
     pub iat: usize,
+    /// Voice/media session id used to bind the token to the current voice_state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sid: Option<String>,
+    /// Auth session id used for revocation/expiry checks against auth_sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_sid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room: Option<String>,
 }
@@ -40,6 +44,7 @@ pub struct MediaClaims {
 pub struct ConnectionMeta {
     pub user_id: i64,
     pub session_id: Option<String>,
+    pub auth_session_id: Option<String>,
     pub room_id: Option<String>,
     pub remote_addr: SocketAddr,
     pub mode: ConnectionMode,
@@ -135,6 +140,7 @@ impl MediaConnection {
             let meta = ConnectionMeta {
                 user_id: claims.sub,
                 session_id: claims.sid,
+                auth_session_id: claims.auth_sid,
                 room_id: claims.room,
                 remote_addr,
                 mode,
@@ -188,6 +194,7 @@ impl MediaConnection {
         let meta = ConnectionMeta {
             user_id: 0,
             session_id: None,
+            auth_session_id: None,
             room_id: None,
             remote_addr,
             mode,
@@ -268,12 +275,14 @@ mod tests {
             exp: 9999999999,
             iat: 1000000000,
             sid: Some("session-1".to_string()),
+            auth_sid: Some("auth-session-1".to_string()),
             room: Some("guild:1:channel:2".to_string()),
         };
         let json = serde_json::to_string(&claims).unwrap();
         let parsed: MediaClaims = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.sub, 42);
         assert_eq!(parsed.sid.as_deref(), Some("session-1"));
+        assert_eq!(parsed.auth_sid.as_deref(), Some("auth-session-1"));
         assert_eq!(parsed.room.as_deref(), Some("guild:1:channel:2"));
     }
 
@@ -285,6 +294,7 @@ mod tests {
             exp: 1,
             iat: 0,
             sid: Some("session-1".to_string()),
+            auth_sid: Some("auth-session-1".to_string()),
             room: Some("1:2".to_string()),
         };
         let token = jsonwebtoken::encode(

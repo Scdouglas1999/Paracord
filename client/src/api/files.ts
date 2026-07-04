@@ -71,6 +71,7 @@ async function quicUpload(
   const transport = await manager.getOrConnect(
     token.quic_endpoint,
     token.upload_token,
+    token.cert_hash,
   );
 
   const uploader = new QUICFileUploader();

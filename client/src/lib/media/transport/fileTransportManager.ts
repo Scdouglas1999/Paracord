@@ -18,6 +18,7 @@ export class FileTransportManager {
 
   private transport: WebTransport | null = null;
   private endpoint = '';
+  private certHash = '';
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private connecting: Promise<WebTransport> | null = null;
 
@@ -32,21 +33,31 @@ export class FileTransportManager {
    * Get an active WebTransport connection, or establish a new one.
    * The token is used for authentication on the initial connection.
    */
-  async getOrConnect(endpoint: string, token: string): Promise<WebTransport> {
+  async getOrConnect(
+    endpoint: string,
+    token: string,
+    certHash?: string,
+  ): Promise<WebTransport> {
     this.resetIdleTimer();
 
+    if (!certHash) {
+      throw new Error('QUIC file server did not provide a TLS certificate pin');
+    }
+
     // Reuse existing connection if same endpoint and still open
-    if (this.transport && this.endpoint === endpoint) {
+    if (this.transport && this.endpoint === endpoint && this.certHash === certHash) {
       return this.transport;
     }
 
     // If already connecting, wait for it
-    if (this.connecting && this.endpoint === endpoint) {
+    if (this.connecting && this.endpoint === endpoint && this.certHash === certHash) {
       return this.connecting;
     }
 
     // Establish new connection
-    this.connecting = this.establishConnection(endpoint, token);
+    this.endpoint = endpoint;
+    this.certHash = certHash;
+    this.connecting = this.establishConnection(endpoint, token, certHash);
     try {
       const transport = await this.connecting;
       return transport;
@@ -55,11 +66,21 @@ export class FileTransportManager {
     }
   }
 
-  private async establishConnection(endpoint: string, token: string): Promise<WebTransport> {
+  private async establishConnection(
+    endpoint: string,
+    token: string,
+    certHash: string,
+  ): Promise<WebTransport> {
     // Close existing connection if any
     this.closeTransport();
 
-    const transport = new WebTransport(endpoint);
+    const decodedHash = Uint8Array.from(atob(certHash), (char) => char.charCodeAt(0));
+    if (decodedHash.byteLength !== 32) {
+      throw new Error('QUIC file server TLS certificate pin is not a SHA-256 digest');
+    }
+    const transport = new WebTransport(endpoint, {
+      serverCertificateHashes: [{ algorithm: 'sha-256', value: decodedHash }],
+    });
     await transport.ready;
 
     // Authenticate on the control stream
@@ -86,6 +107,7 @@ export class FileTransportManager {
 
     this.transport = transport;
     this.endpoint = endpoint;
+    this.certHash = certHash;
 
     // Handle unexpected close
     transport.closed
@@ -108,12 +130,14 @@ export class FileTransportManager {
       } catch { /* already closed */ }
       this.transport = null;
       this.endpoint = '';
+      this.certHash = '';
     }
   }
 
   private handleClose(): void {
     this.transport = null;
     this.endpoint = '';
+    this.certHash = '';
     this.clearIdleTimer();
   }
 

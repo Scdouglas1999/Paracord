@@ -102,6 +102,7 @@ export interface UploadTokenResponse {
   upload_token: string;
   quic_endpoint: string;
   quic_available: boolean;
+  cert_hash?: string;
 }
 
 export interface UploadResult {

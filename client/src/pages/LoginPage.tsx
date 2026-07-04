@@ -11,7 +11,7 @@ import {
 } from '../lib/config/apiBaseUrl';
 import { hasAccount } from '../lib/account';
 import { authApi } from '../api/auth';
-import { setAccessToken, setRefreshToken } from '../lib/authToken';
+import { getRefreshToken, setAccessToken, setRefreshToken } from '../lib/authToken';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
@@ -129,6 +129,7 @@ export function LoginPage() {
       const serverStore = useServerListStore.getState();
       const existingServer = serverStore.getServerByUrl(serverUrl);
       const token = useAuthStore.getState().token;
+      const refreshToken = getRefreshToken();
       if (!existingServer) {
         let serverName = serverUrl;
         try {
@@ -136,9 +137,11 @@ export function LoginPage() {
         } catch {
           // Keep raw URL as name if parsing fails.
         }
-        serverStore.addServer(serverUrl, serverName, token || undefined);
+        const serverId = serverStore.addServer(serverUrl, serverName, token || undefined);
+        serverStore.updateRefreshToken(serverId, refreshToken);
       } else if (token) {
         serverStore.updateToken(existingServer.id, token);
+        serverStore.updateRefreshToken(existingServer.id, refreshToken);
       }
     }
 

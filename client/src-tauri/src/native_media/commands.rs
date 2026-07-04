@@ -111,6 +111,7 @@ pub struct StreamSubscriptionRequest {
 pub async fn start_voice_session(
     endpoint: String,
     token: String,
+    cert_hash: String,
     room_id: String,
     advertised_capabilities: Option<super::capabilities::MediaStreamCapabilities>,
     state: State<'_, MediaState>,
@@ -119,8 +120,14 @@ pub async fn start_voice_session(
     use super::session::NativeMediaSession;
     use super::{audio_pipeline, events};
 
-    let mut session =
-        NativeMediaSession::connect(&endpoint, &token, &room_id, advertised_capabilities).await?;
+    let mut session = NativeMediaSession::connect(
+        &endpoint,
+        &token,
+        &cert_hash,
+        &room_id,
+        advertised_capabilities,
+    )
+    .await?;
     let session_id = session.session_id.clone();
 
     // Spawn audio pipeline tasks
@@ -1030,6 +1037,7 @@ fn validate_file_path_within_bases(
 pub async fn quic_upload_file(
     endpoint: String,
     token: String,
+    cert_hash: String,
     transfer_id: String,
     file_path: String,
     app: tauri::AppHandle,
@@ -1038,13 +1046,15 @@ pub async fn quic_upload_file(
     let path_str = validated_path
         .to_str()
         .ok_or_else(|| "file path contains invalid characters".to_string())?;
-    super::file_transfer::upload_file(&endpoint, &token, &transfer_id, path_str, app).await
+    super::file_transfer::upload_file(&endpoint, &token, &cert_hash, &transfer_id, path_str, app)
+        .await
 }
 
 #[tauri::command]
 pub async fn quic_download_file(
     endpoint: String,
     token: String,
+    cert_hash: String,
     attachment_id: String,
     dest_path: String,
     app: tauri::AppHandle,
@@ -1053,7 +1063,15 @@ pub async fn quic_download_file(
     let path_str = validated_path
         .to_str()
         .ok_or_else(|| "file path contains invalid characters".to_string())?;
-    super::file_transfer::download_file(&endpoint, &token, &attachment_id, path_str, app).await
+    super::file_transfer::download_file(
+        &endpoint,
+        &token,
+        &cert_hash,
+        &attachment_id,
+        path_str,
+        app,
+    )
+    .await
 }
 
 #[cfg(test)]

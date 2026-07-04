@@ -239,6 +239,7 @@ impl NativeMediaSession {
     pub async fn connect(
         endpoint_addr: &str,
         token: &str,
+        cert_hash: &str,
         room_id: &str,
         advertised_capabilities: Option<MediaStreamCapabilities>,
     ) -> Result<Self, String> {
@@ -256,7 +257,7 @@ impl NativeMediaSession {
 
         // Connect and authenticate
         let connecting = endpoint
-            .connect(remote_addr, "paracord")
+            .connect_pinned(remote_addr, "paracord", cert_hash)
             .map_err(|e| format!("QUIC connect: {e}"))?;
         let quinn_conn = connecting
             .await

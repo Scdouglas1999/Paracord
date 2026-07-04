@@ -59,6 +59,13 @@ pub struct FederationMeta {
     pub connected_at: u64,
 }
 
+/// Authenticated identity and TLS pin for an outbound federation peer.
+pub struct RemoteFederationPeer<'a> {
+    pub origin: &'a str,
+    pub public_key: &'a str,
+    pub cert_hash: &'a str,
+}
+
 /// An authenticated server-to-server QUIC connection.
 pub struct FederationConnection {
     conn: Connection,
@@ -138,9 +145,10 @@ pub async fn initiate_federation(
     local_origin: &str,
     signing_key: &SigningKey,
     expected_remote_key: &str,
+    expected_remote_cert_hash: &str,
 ) -> Result<FederationConnection, FederationError> {
     let connecting = endpoint
-        .connect(remote_addr, "federation")
+        .connect_pinned(remote_addr, "federation", expected_remote_cert_hash)
         .map_err(|e| FederationError::InvalidHandshake(e.to_string()))?;
 
     let conn = connecting.await?;
@@ -399,17 +407,16 @@ impl FederationPool {
         remote_addr: SocketAddr,
         local_origin: &str,
         signing_key: &SigningKey,
-        remote_origin: &str,
-        remote_public_key: &str,
+        remote: RemoteFederationPeer<'_>,
     ) -> Result<Arc<FederationConnection>, FederationError> {
         // Check for existing connection
-        if let Some(conn) = self.get(remote_origin).await {
+        if let Some(conn) = self.get(remote.origin).await {
             return Ok(conn);
         }
 
         // Establish new connection
         info!(
-            remote_origin,
+            remote_origin = remote.origin,
             remote_addr = %remote_addr,
             "federation pool: establishing new connection"
         );
@@ -419,13 +426,14 @@ impl FederationPool {
             remote_addr,
             local_origin,
             signing_key,
-            remote_public_key,
+            remote.public_key,
+            remote.cert_hash,
         )
         .await?;
 
         let arc_conn = Arc::new(conn);
         let mut conns = self.connections.write().await;
-        conns.insert(remote_origin.to_string(), Arc::clone(&arc_conn));
+        conns.insert(remote.origin.to_string(), Arc::clone(&arc_conn));
 
         Ok(arc_conn)
     }
@@ -642,6 +650,7 @@ mod tests {
         // Set up two QUIC endpoints simulating two federated servers
         let tls_a = crate::endpoint::generate_self_signed_cert().unwrap();
         let tls_b = crate::endpoint::generate_self_signed_cert().unwrap();
+        let cert_hash_b = crate::endpoint::certificate_hash(&tls_b.cert_chain[0]);
 
         let server_a = MediaEndpoint::bind("127.0.0.1:0".parse().unwrap(), tls_a).unwrap();
         let server_b = MediaEndpoint::bind("127.0.0.1:0".parse().unwrap(), tls_b).unwrap();
@@ -672,6 +681,7 @@ mod tests {
             "server-a.example.com",
             &key_a,
             &pub_b_clone,
+            &cert_hash_b,
         )
         .await
         .unwrap();

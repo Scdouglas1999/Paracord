@@ -14,6 +14,7 @@ const CHUNK_SIZE: usize = 256 * 1024; // 256 KiB
 pub async fn upload_file(
     endpoint_addr: &str,
     token: &str,
+    cert_hash: &str,
     transfer_id: &str,
     file_path: &str,
     app: tauri::AppHandle,
@@ -29,7 +30,7 @@ pub async fn upload_file(
     let remote_addr = NativeMediaSession::resolve_endpoint_addr(endpoint_addr).await?;
 
     let connecting = endpoint
-        .connect(remote_addr, "paracord")
+        .connect_pinned(remote_addr, "paracord", cert_hash)
         .map_err(|e| format!("QUIC connect: {e}"))?;
     let quinn_conn = connecting
         .await
@@ -174,6 +175,7 @@ pub async fn upload_file(
 pub async fn download_file(
     endpoint_addr: &str,
     token: &str,
+    cert_hash: &str,
     attachment_id: &str,
     dest_path: &str,
     app: tauri::AppHandle,
@@ -189,7 +191,7 @@ pub async fn download_file(
     let remote_addr = NativeMediaSession::resolve_endpoint_addr(endpoint_addr).await?;
 
     let connecting = endpoint
-        .connect(remote_addr, "paracord")
+        .connect_pinned(remote_addr, "paracord", cert_hash)
         .map_err(|e| format!("QUIC connect: {e}"))?;
     let quinn_conn = connecting
         .await

@@ -337,8 +337,11 @@ export class TauriMediaEngine implements MediaEngine {
   private videoFrameLoop: number | null = null;
   private videoSendInFlight = false;
 
-  async connect(endpoint: string, token: string, _certHash?: string): Promise<void> {
+  async connect(endpoint: string, token: string, certHash?: string): Promise<void> {
     await tauriReady;
+    if (!certHash) {
+      throw new Error('native media server did not provide a TLS certificate pin');
+    }
     this.localUserId = parseUserIdFromToken(token);
     this.localRoomId = parseRoomIdFromToken(token);
     // Wait for all pending listener registrations to complete before
@@ -353,6 +356,7 @@ export class TauriMediaEngine implements MediaEngine {
       await invoke('start_voice_session', {
         endpoint: relayEndpoint,
         token,
+        certHash,
         roomId: '',
         advertisedCapabilities,
       });
@@ -1309,4 +1313,3 @@ export class TauriMediaEngine implements MediaEngine {
     }
   }
 }
-

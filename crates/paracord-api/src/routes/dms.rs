@@ -445,9 +445,11 @@ pub async fn join_dm_voice(
         let media_claims = json!({
             "sub": auth.user_id,
             "sid": &session_id,
+            "auth_sid": auth.session_id.as_deref(),
             "iat": issued_at,
             "exp": issued_at + 86400,
             "session_id": &session_id,
+            "auth_session_id": auth.session_id.as_deref(),
             "room": &room_name,
         });
         let media_token = jsonwebtoken::encode(

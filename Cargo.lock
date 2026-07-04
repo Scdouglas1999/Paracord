@@ -5444,6 +5444,7 @@ name = "paracord-transport"
 version = "0.9.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bytes",
  "dashmap",
  "ed25519-dalek",
@@ -5457,6 +5458,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

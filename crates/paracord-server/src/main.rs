@@ -569,7 +569,9 @@ async fn main() -> Result<()> {
     // routing: `h3` → WebTransport (browsers), anything else → raw QUIC
     // (desktop/federation). Admins only need to forward one port (TCP + UDP).
     if config.voice.native_media {
-        use paracord_transport::endpoint::{generate_self_signed_cert, MediaEndpoint};
+        use paracord_transport::endpoint::{
+            certificate_hash, generate_self_signed_cert, MediaEndpoint,
+        };
 
         let media_port = config.voice.port;
         let media_addr: std::net::SocketAddr = format!("0.0.0.0:{}", media_port).parse()?;
@@ -583,14 +585,7 @@ async fn main() -> Result<()> {
                 // Compute SHA-256 hash of the DER certificate for WebTransport
                 // `serverCertificateHashes`. Browsers need this to trust
                 // self-signed certs.
-                let cert_hash = {
-                    use sha2::{Digest, Sha256};
-                    let mut hasher = Sha256::new();
-                    hasher.update(tls.cert_chain[0].as_ref());
-                    let digest = hasher.finalize();
-                    use base64::Engine;
-                    base64::engine::general_purpose::STANDARD.encode(digest)
-                };
+                let cert_hash = certificate_hash(&tls.cert_chain[0]);
 
                 // Single unified endpoint: ALPN `h3` for WebTransport browsers,
                 // `paracord-media` for raw QUIC desktop/federation clients.
@@ -2693,6 +2688,13 @@ async fn handle_raw_quic_connection(
             return;
         }
     };
+    let auth_session_id = match media_conn.meta().auth_session_id.as_deref() {
+        Some(session_id) if !session_id.trim().is_empty() => session_id,
+        _ => {
+            tracing::warn!(user_id, "QUIC: media token missing auth session id");
+            return;
+        }
+    };
     let room_id = match resolve_active_media_room(
         &db,
         user_id,
@@ -2711,7 +2713,7 @@ async fn handle_raw_quic_connection(
         }
     };
 
-    if !is_media_session_active(&db, user_id, session_id).await {
+    if !is_media_session_active(&db, user_id, auth_session_id).await {
         tracing::warn!(user_id, "QUIC: media token session revoked or expired");
         return;
     }
@@ -3146,6 +3148,16 @@ async fn handle_webtransport_connection(
                             tracing::warn!(addr = %remote_addr, "WebTransport: media token missing session id");
                             return;
                         };
+                        let auth_session_id = claims
+                            .get("auth_sid")
+                            .or_else(|| claims.get("auth_session_id"))
+                            .and_then(|sid| sid.as_str())
+                            .map(str::trim)
+                            .filter(|sid| !sid.is_empty());
+                        let Some(auth_session_id) = auth_session_id else {
+                            tracing::warn!(addr = %remote_addr, "WebTransport: media token missing auth session id");
+                            return;
+                        };
                         let claimed_room = claims.get("room").and_then(|r| r.as_str());
                         room_id =
                             match resolve_active_media_room(&db, user_id, session_id, claimed_room)
@@ -3161,7 +3173,7 @@ async fn handle_webtransport_connection(
                                 }
                             };
 
-                        if !is_media_session_active(&db, user_id, session_id).await {
+                        if !is_media_session_active(&db, user_id, auth_session_id).await {
                             tracing::warn!(
                                 user_id,
                                 "WebTransport: media token session revoked or expired"

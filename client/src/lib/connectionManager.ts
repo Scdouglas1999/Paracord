@@ -10,6 +10,7 @@ import {
 } from './accountSession';
 import { getRefreshToken, setAccessToken, setRefreshToken } from './authToken';
 import { getCurrentOriginServerUrl, getStoredServerUrl } from './config/apiBaseUrl';
+import { isTauri } from './tauriEnv';
 import { inflateSync } from 'fflate';
 import type { Activity, GatewayPayload } from '../types';
 import { GatewayEvents } from '../gateway/events';
@@ -37,12 +38,114 @@ export function warnMalformedFrame(transport: 'sse' | 'ws', rawPreview: string):
   );
 }
 
+type RealtimeEventSource = {
+  readyState: number;
+  onopen: ((evt: Event) => void) | null;
+  onmessage: ((evt: MessageEvent<string>) => void) | null;
+  onerror: ((evt: Event) => void) | null;
+  addEventListener: (type: string, listener: (evt: MessageEvent<string>) => void) => void;
+  close: () => void;
+};
+
+type NativeSsePayload = {
+  streamId?: string;
+  kind?: 'open' | 'message' | 'error';
+  event?: string | null;
+  data?: string | null;
+  error?: string | null;
+};
+
+class NativeSseConnection implements RealtimeEventSource {
+  private static nextId = 1;
+
+  readonly streamId = `native-sse-${Date.now().toString(36)}-${NativeSseConnection.nextId++}`;
+  readyState = 0;
+  onopen: ((evt: Event) => void) | null = null;
+  onmessage: ((evt: MessageEvent<string>) => void) | null = null;
+  onerror: ((evt: Event) => void) | null = null;
+
+  private closed = false;
+  private unlisten: (() => void) | null = null;
+  private readonly listeners = new Map<string, Set<(evt: MessageEvent<string>) => void>>();
+
+  private constructor(private readonly url: string) {}
+
+  static async open(url: string): Promise<NativeSseConnection> {
+    const conn = new NativeSseConnection(url);
+    await conn.start();
+    return conn;
+  }
+
+  addEventListener(type: string, listener: (evt: MessageEvent<string>) => void): void {
+    const set = this.listeners.get(type) ?? new Set();
+    set.add(listener);
+    this.listeners.set(type, set);
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.readyState = 2;
+    this.unlisten?.();
+    this.unlisten = null;
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('stop_native_sse_stream', { streamId: this.streamId }))
+      .catch(() => undefined);
+  }
+
+  private async start(): Promise<void> {
+    const [{ invoke }, { listen }] = await Promise.all([
+      import('@tauri-apps/api/core'),
+      import('@tauri-apps/api/event'),
+    ]);
+
+    this.unlisten = await listen<NativeSsePayload>('native_sse_event', (evt) => {
+      if (this.closed || evt.payload?.streamId !== this.streamId) return;
+      if (evt.payload.kind === 'open') {
+        this.readyState = 1;
+        this.onopen?.(new Event('open'));
+        return;
+      }
+
+      if (evt.payload.kind === 'message') {
+        const data = evt.payload.data ?? '';
+        const eventType = evt.payload.event || 'message';
+        const message = new MessageEvent<string>(eventType, { data });
+        if (eventType === 'message') {
+          this.onmessage?.(message);
+        }
+        this.listeners.get(eventType)?.forEach((listener) => listener(message));
+        return;
+      }
+
+      if (evt.payload.kind === 'error') {
+        this.readyState = 2;
+        this.onerror?.(new Event('error'));
+      }
+    });
+
+    try {
+      await invoke('start_native_sse_stream', { streamId: this.streamId, url: this.url });
+    } catch {
+      this.readyState = 2;
+      this.onerror?.(new Event('error'));
+    }
+  }
+}
+
+async function openRealtimeEventSource(url: string): Promise<RealtimeEventSource> {
+  if (isTauri()) {
+    return NativeSseConnection.open(url);
+  }
+  return new EventSource(url, { withCredentials: true });
+}
+
 export interface ServerConnection {
   serverId: string;
   serverUrl: string;
   apiClient: AxiosInstance;
   ws: WebSocket | null;
-  eventSource: EventSource | null;
+  eventSource: RealtimeEventSource | null;
   streamUrl: string | null;
   heartbeatTimer: ReturnType<typeof setInterval> | null;
   heartbeatInterval: number | null;
@@ -224,6 +327,80 @@ class ConnectionManager {
     return 'http://localhost:8080';
   }
 
+  private canonicalServerUrl(url: string): string {
+    try {
+      const parsed = new URL(url);
+      const hostname = parsed.hostname.toLowerCase() === 'localhost'
+        ? '127.0.0.1'
+        : parsed.hostname.toLowerCase();
+      const port = parsed.port ? `:${parsed.port}` : '';
+      const pathname = parsed.pathname.replace(/\/+$/, '');
+      return `${parsed.protocol}//${hostname}${port}${pathname}`;
+    } catch {
+      return url.trim().replace(/\/+$/, '').toLowerCase();
+    }
+  }
+
+  private sameServerUrl(left: string, right: string): boolean {
+    return this.canonicalServerUrl(left) === this.canonicalServerUrl(right);
+  }
+
+  private isConfiguredLocalServerUrl(url: string): boolean {
+    const candidates = [
+      getStoredServerUrl(),
+      getCurrentOriginServerUrl(),
+      this.resolveLocalServerUrl(),
+    ].filter((candidate): candidate is string => !!candidate);
+    return candidates.some((candidate) => this.sameServerUrl(url, candidate));
+  }
+
+  private async verifyLocalSessionForServer(
+    serverId: string,
+    apiBaseUrl: string,
+    candidateToken: string,
+    candidateRefreshToken: string | null,
+  ): Promise<string | null> {
+    let verifiedToken = candidateToken;
+    let verifiedRefreshToken = candidateRefreshToken;
+    const probeClient = createApiClient(
+      apiBaseUrl,
+      () => verifiedToken,
+      (nextToken, nextRefreshToken) => {
+        verifiedToken = nextToken;
+        if (nextRefreshToken) {
+          verifiedRefreshToken = nextRefreshToken;
+        }
+        setAccessToken(nextToken);
+        useAuthStore.setState({ token: nextToken });
+        if (nextRefreshToken) {
+          setRefreshToken(nextRefreshToken);
+        }
+      },
+      undefined,
+      (reachable) => useServerListStore.getState().setApiReachable(serverId, reachable),
+      () => verifiedRefreshToken,
+    );
+
+    try {
+      const { data } = await probeClient.get<{ id?: string }>('/users/@me', { timeout: 10_000 });
+      useServerListStore.getState().updateToken(serverId, verifiedToken);
+      if (verifiedRefreshToken) {
+        useServerListStore.getState().updateRefreshToken(serverId, verifiedRefreshToken);
+      }
+      if (data?.id) {
+        useServerListStore.getState().updateServerInfo(serverId, { userId: data.id });
+      }
+      logVoiceDiagnostic('[gateway] verified local auth token for saved server', { server: serverId });
+      return verifiedToken;
+    } catch (err) {
+      logVoiceDiagnostic('[gateway] local auth token not valid for saved server', {
+        server: serverId,
+        error: String(err),
+      });
+      return null;
+    }
+  }
+
   private async connectLocalInternal(): Promise<void> {
     const token = useAuthStore.getState().token;
     if (!token) {
@@ -306,14 +483,38 @@ class ConnectionManager {
 
     // Create API client for this server
     const effectiveUrl = server.url;
+    let isLocalServerEntry = this.isConfiguredLocalServerUrl(effectiveUrl);
+    let localSessionToken = isLocalServerEntry ? useAuthStore.getState().token : null;
+    const candidateLocalToken = useAuthStore.getState().token;
+    const candidateLocalRefreshToken = getRefreshToken();
+    const localSessionRefreshToken = isLocalServerEntry ? candidateLocalRefreshToken : null;
+    let serverToken = server.token;
+    if (localSessionToken) {
+      useServerListStore.getState().updateToken(serverId, localSessionToken);
+      serverToken = localSessionToken;
+    }
+    if (localSessionRefreshToken) {
+      useServerListStore.getState().updateRefreshToken(serverId, localSessionRefreshToken);
+    }
     const apiBaseUrl = `${effectiveUrl.replace(/\/+$/, '')}/api/v1`;
     const client = createApiClient(
       apiBaseUrl,
-      () => useServerListStore.getState().getServer(serverId)?.token || null,
+      () => {
+        const current = useServerListStore.getState().getServer(serverId);
+        if (isLocalServerEntry) {
+          return useAuthStore.getState().token || current?.token || null;
+        }
+        return current?.token || null;
+      },
       (token, refreshToken) => {
         useServerListStore.getState().updateToken(serverId, token);
         if (refreshToken) {
           useServerListStore.getState().updateRefreshToken(serverId, refreshToken);
+        }
+        if (isLocalServerEntry) {
+          setAccessToken(token);
+          useAuthStore.setState({ token });
+          if (refreshToken) setRefreshToken(refreshToken);
         }
       },
       () => {
@@ -324,17 +525,38 @@ class ConnectionManager {
         this.disconnectServer(serverId);
       },
       (reachable) => useServerListStore.getState().setApiReachable(serverId, reachable),
-      () => useServerListStore.getState().getServer(serverId)?.refreshToken || null,
+      () => {
+        const current = useServerListStore.getState().getServer(serverId);
+        if (isLocalServerEntry) {
+          return current?.refreshToken || getRefreshToken();
+        }
+        return current?.refreshToken || null;
+      },
     );
 
     // If we don't have a valid token, do challenge-response auth.
     // Do not require local key unlock when a token already exists.
-    if (!server.token) {
+    if (!serverToken && !localSessionToken && candidateLocalToken) {
+      const verifiedToken = await this.verifyLocalSessionForServer(
+        serverId,
+        apiBaseUrl,
+        candidateLocalToken,
+        candidateLocalRefreshToken,
+      );
+      if (verifiedToken) {
+        isLocalServerEntry = true;
+        localSessionToken = verifiedToken;
+        serverToken = verifiedToken;
+      }
+    }
+
+    if (!serverToken && !localSessionToken) {
       if (!canUseChallengeAuth) {
         throw new Error('No server token and local account is not unlocked');
       }
       const token = await this.authenticate(client, server, account.publicKey!, account.username!);
       useServerListStore.getState().updateToken(serverId, token);
+      serverToken = token;
     }
 
     const conn: ServerConnection = {
@@ -557,7 +779,7 @@ class ConnectionManager {
         const logUrl = streamUrl.replace(/ticket=[^&]+/, 'ticket=***');
         logVoiceDiagnostic('[gateway] SSE EventSource opening', { url: logUrl });
 
-        const es = new EventSource(streamUrl, { withCredentials: true });
+        const es = await openRealtimeEventSource(streamUrl);
         conn.eventSource = es;
 
         es.onopen = () => {
@@ -819,7 +1041,7 @@ class ConnectionManager {
    * intervening frame counts as a miss; once too many pile up the stream is
    * declared stale, its latency recorded, and a reconnect is triggered.
    */
-  private startSseWatchdog(conn: ServerConnection, es: EventSource): void {
+  private startSseWatchdog(conn: ServerConnection, es: RealtimeEventSource): void {
     this.clearSseWatchdog(conn);
     conn.lastFrameTs = Date.now();
     conn.missedAcks = 0;
@@ -1084,7 +1306,7 @@ class ConnectionManager {
     if (localServerUrl && !allServerUrls.includes(localServerUrl)) {
       allServerUrls.push(localServerUrl);
     }
-    void this.syncTrustedHosts(allServerUrls);
+    await this.syncTrustedHosts(allServerUrls);
     const keepIds = new Set<string>();
 
     // Determine the local server URL so we can detect when a server entry
@@ -1106,9 +1328,14 @@ class ConnectionManager {
     // the same URL.  When the user adds the local server to their server
     // list, that entry already establishes the SSE connection — opening a
     // second one causes an infinite reconnect loop.
-    const localAlreadyCovered = servers.some(
-      (s) => s.url.replace(/\/+$/, '') === localUrl,
-    );
+    const refreshedLocalToken = useAuthStore.getState().token;
+    const localAlreadyCovered = servers.some((s) => {
+      const latest = useServerListStore.getState().getServer(s.id);
+      return (
+        this.sameServerUrl(s.url, localUrl) ||
+        (!!refreshedLocalToken && latest?.token === refreshedLocalToken)
+      );
+    });
     if (localToken && !localAlreadyCovered) {
       keepIds.add(LOCAL_SERVER_ID);
       await this.connectLocal();

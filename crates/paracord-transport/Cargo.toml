@@ -29,6 +29,8 @@ jsonwebtoken = { workspace = true }
 rcgen = { workspace = true }
 rand = { workspace = true }
 ed25519-dalek = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
