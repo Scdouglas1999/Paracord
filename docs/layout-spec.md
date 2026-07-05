@@ -1,5 +1,14 @@
 # Paracord Layout Spec — "Rooms + Unified Stream" (v1.0 overhaul)
 
+> **Status: SHIPPED (v1.0).** All four migration waves in §8 have landed on
+> `overhaul/v1.0-shippable`. The Discord skeleton (`Sidebar` / `ChannelSidebar` /
+> `GuildChannelList` / `DMList` / `VoiceControls` / `AppLayout`) is deleted; the
+> `AppShell` + `UnifiedSidebar` + `ContextPanel` + `RoomsView` IA described below is
+> the live layout. Tests (unit + e2e) assert the new IA. Two items are intentionally
+> **deferred, not missing** — the true `@everyone` ranking tier (§3.3 / §9.1, needs a
+> server-side `everyone_count`) and DM-index convergence off `channelsByGuild['']`
+> (§8 wave-4, a follow-up client PR). This document now reads as an as-built record.
+>
 > **This file is the IA law.** The whole client-layout overhaul is graded against it.
 > It resolves the three verified research slices (ia-routing, attention/ranking data,
 > rooms/presence surfaces) into one implementable plan. Where a slice and this file
