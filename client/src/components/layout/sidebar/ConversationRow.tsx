@@ -1,5 +1,7 @@
+import { memo } from 'react';
 import { Hash, Volume2, MessageSquare, MessagesSquare } from 'lucide-react';
 import { usePresenceStore } from '../../../stores/presenceStore';
+import { safeStoredImageDataUrl } from '../../../lib/security';
 import { cn } from '../../../lib/utils';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
 
@@ -49,18 +51,23 @@ function PresenceDot({ userId, scope }: { userId?: string | null; scope?: string
 const AVATAR_KINDS = new Set<ConversationEntry['kind']>(['dm', 'group_dm', 'guild_home']);
 
 function LeadingAvatar({ entry }: { entry: ConversationEntry }) {
-  const { kind, title, userId, serverId } = entry;
+  const { kind, title, userId, serverId, avatar } = entry;
   const isGroup = kind === 'group_dm';
   const isGuildHome = kind === 'guild_home';
+  // Render the real stored avatar (matching AroundNowStrip / OccupantStack), with
+  // an initials / group-icon chip as the fallback (design-spec §7 Avatar recipe).
+  const src = safeStoredImageDataUrl(avatar);
   return (
     <span className="relative shrink-0">
       <span
         className={cn(
-          'flex h-6 w-6 items-center justify-center bg-bg-mod-strong text-meta font-semibold text-text-secondary',
+          'flex h-6 w-6 items-center justify-center overflow-hidden bg-bg-mod-strong text-meta font-semibold text-text-secondary',
           isGuildHome ? 'rounded-md' : 'rounded-full',
         )}
       >
-        {isGroup ? (
+        {src ? (
+          <img src={src} alt="" className="h-full w-full object-cover" />
+        ) : isGroup ? (
           <MessagesSquare size={13} aria-hidden />
         ) : (
           (title.charAt(0) || '?').toUpperCase()
@@ -93,7 +100,7 @@ export interface ConversationRowProps {
   tabIndex?: number;
 }
 
-export function ConversationRow({
+function ConversationRowComponent({
   entry,
   active = false,
   onClick,
@@ -168,3 +175,40 @@ export function ConversationRow({
     </button>
   );
 }
+
+/**
+ * `useUnifiedConversations` rebuilds fresh entry objects on every MESSAGE_CREATE
+ * across every connected server, so the merged Needs-you / Recent arrays get new
+ * identities constantly. Without memoization the entire row set reconciles on each
+ * message — work that scales with channel count while message rate ALSO scales with
+ * channel count (the per-message re-render storm). Compare the entry's meaningful
+ * fields instead of identity so a row only re-renders when its own display data
+ * changes; the presence dot keeps its own store subscription and updates
+ * independently of this comparator.
+ */
+function propsAreEqual(a: ConversationRowProps, b: ConversationRowProps): boolean {
+  if (
+    a.active !== b.active
+    || a.navIndex !== b.navIndex
+    || a.tabIndex !== b.tabIndex
+    || a.onClick !== b.onClick
+  ) {
+    return false;
+  }
+  const x = a.entry;
+  const y = b.entry;
+  return (
+    x.key === y.key
+    && x.kind === y.kind
+    && x.title === y.title
+    && x.contextLabel === y.contextLabel
+    && x.unread === y.unread
+    && x.mentionCount === y.mentionCount
+    && x.hasVoiceActivity === y.hasVoiceActivity
+    && x.userId === y.userId
+    && x.serverId === y.serverId
+    && x.avatar === y.avatar
+  );
+}
+
+export const ConversationRow = memo(ConversationRowComponent, propsAreEqual);

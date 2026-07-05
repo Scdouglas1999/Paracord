@@ -3,7 +3,6 @@ import { Radio, Settings, UserPlus, Users } from 'lucide-react';
 import { useGuildStore } from '../../stores/guildStore';
 import { useUIStore } from '../../stores/uiStore';
 import { usePermissions } from '../../hooks/usePermissions';
-import { getGuildColor } from '../../lib/colors';
 import { hasPermission, Permissions } from '../../types';
 import { InviteModal } from '../guild/InviteModal';
 
@@ -49,8 +48,7 @@ export function GuildHomeHeader({
     <header className="shrink-0 border-b border-border-subtle bg-bg-secondary shadow-sm">
       <div className="flex items-center gap-4 px-6 py-5 sm:px-8">
         <div
-          className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-md text-2xl font-bold text-text-on-accent shadow-sm sm:flex"
-          style={{ backgroundColor: getGuildColor(guild.id) }}
+          className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-md bg-accent-tint text-2xl font-bold text-accent-primary shadow-sm sm:flex"
           aria-hidden="true"
         >
           {guildInitial}

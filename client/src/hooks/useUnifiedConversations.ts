@@ -15,7 +15,7 @@ import {
   type ConversationKind,
 } from '../lib/attention/conversationModel';
 import { buildServerUrlMap, resolveServerIdForGuild } from '../lib/attention/serverResolve';
-import { ChannelType, type Channel, type Guild, type ReadState } from '../types';
+import { ChannelType, type Channel, type Guild, type ReadState, type VoiceState } from '../types';
 
 /**
  * The single cross-server unified-conversation selector (layout-spec §3.2, §3.3).
@@ -105,6 +105,28 @@ function lastActivityMs(e: ConversationEntry): number {
 }
 
 /**
+ * Collision-safe voice occupancy. `voiceStore.channelParticipants` is a single
+ * Map keyed by the BARE channel id, populated cross-server — two independent
+ * servers can mint the same snowflake channel id, so a naive `.get(id).length`
+ * leaks an occupied room on server B into the same-id row on server A. Scope by
+ * guild membership instead: guild channels require a participant whose
+ * `guild_id` matches the row's guild (loadVoiceStates stamps every guild voice
+ * state's guild_id); DM/group-DM rows require a participant with NO guild_id, so
+ * a colliding guild channel can't inflate a DM row either.
+ */
+function hasVoiceOccupancy(
+  channelParticipants: Map<string, VoiceState[]>,
+  channelId: string,
+  guildId: string | null,
+): boolean {
+  const parts = channelParticipants.get(channelId);
+  if (!parts?.length) return false;
+  return guildId
+    ? parts.some((p) => p.guild_id === guildId)
+    : parts.some((p) => !p.guild_id);
+}
+
+/**
  * @param mutedGuildIds guilds the user muted — their channels still render in
  *   Recent but carry no attention signals, so they never enter Needs-you.
  */
@@ -118,13 +140,25 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
   const guilds = useGuildStore((s) => s.guilds);
   const pinnedKeys = usePinnedStore((s) => s.pinnedKeys);
 
-  // Pull background servers' DMs + read-state once on mount; subsequent updates
-  // arrive through the stores. Fire-and-forget: the active-server-first seam keeps
-  // the list valid whether only the active server or every server has reported.
+  // Stable key of the connected-server set. Re-runs the DM + read-state fan-out
+  // whenever a server connects/disconnects — the sidebar stays mounted across
+  // route/server switches, so a background server that connects AFTER first mount
+  // would otherwise never have its /users/@me/dms fetched and its DMs would be
+  // silently absent from the merge until a full remount.
+  const connectedKey = servers
+    .filter((s) => s.connected)
+    .map((s) => s.id)
+    .sort()
+    .join(',');
+
+  // Pull each connected server's DMs + read-state. Fire-and-forget: the
+  // active-server-first seam keeps the list valid whether only the active server
+  // or every server has reported. Re-fires when the connected set changes so
+  // late-connecting servers fold into Needs-you / Recent without a remount.
   useEffect(() => {
     void useChannelStore.getState().loadAllDmChannels();
     void useReadStateStore.getState().refresh();
-  }, []);
+  }, [connectedKey]);
 
   const activeId = activeServerId ?? LOCAL_SERVER_ID;
 
@@ -174,6 +208,7 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
           channelId: ch.id,
           guildId,
           userId: null,
+          avatar: null,
           kind,
           title: ch.name ?? 'unknown',
           contextLabel,
@@ -182,7 +217,7 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
           mentionCount: info?.mentionCount ?? 0,
           isDMUnread: false,
           isThreadReply: isThread && channelUnread,
-          hasVoiceActivity: !muted && (channelParticipants.get(ch.id)?.length ?? 0) > 0,
+          hasVoiceActivity: !muted && hasVoiceOccupancy(channelParticipants, ch.id, guildId),
           pinned: pinnedSet.has(key),
         });
       }
@@ -205,6 +240,7 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
           channelId: ch.id,
           guildId: null,
           userId: ch.recipient?.id ?? null,
+          avatar: ch.recipient?.avatar_hash ?? null,
           kind,
           title: dmTitle(ch),
           contextLabel: null,
@@ -213,7 +249,7 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
           mentionCount: info?.mentionCount ?? 0,
           isDMUnread: (info?.unreadCount ?? 0) > 0,
           isThreadReply: false,
-          hasVoiceActivity: (channelParticipants.get(ch.id)?.length ?? 0) > 0,
+          hasVoiceActivity: hasVoiceOccupancy(channelParticipants, ch.id, null),
           pinned: pinnedSet.has(key),
         });
       }

@@ -93,6 +93,10 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
           ...(g as Guild),
           id: g.id,
           owner_id: g.owner_id,
+          // Tag the TRUE originating server so the cross-server merge reads the
+          // right per-server unread/mention bucket (§9 flag 3). server_url alone
+          // mis-attributes background-server guilds to the active server.
+          originServerId: serverId,
           name: g.name ?? 'Unnamed Server',
           created_at: g.created_at ?? new Date().toISOString(),
           member_count: g.member_count ?? 0,
@@ -236,7 +240,8 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       break;
 
     case GatewayEvents.GUILD_CREATE:
-      useGuildStore.getState().addGuild(data as Guild);
+      // Tag the originating server so cross-server unread attribution is correct.
+      useGuildStore.getState().addGuild({ ...(data as Guild), originServerId: serverId });
       break;
     case GatewayEvents.GUILD_UPDATE:
       if (!data.id) break;

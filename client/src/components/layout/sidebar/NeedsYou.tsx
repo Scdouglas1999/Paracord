@@ -18,9 +18,11 @@ export interface NeedsYouProps {
   onSelect: (entry: ConversationEntry) => void;
   /** Flat roving-tabindex ordinal of this section's first row (SHELL-5 wires the handler). */
   navIndexStart?: number;
+  /** Flat ordinal of the single roving Tab stop; -1 on every other row. */
+  activeNavIndex?: number;
 }
 
-export function NeedsYou({ entries, activeKey, onSelect, navIndexStart = 0 }: NeedsYouProps) {
+export function NeedsYou({ entries, activeKey, onSelect, navIndexStart = 0, activeNavIndex }: NeedsYouProps) {
   return (
     <section aria-label="Needs you" className="flex flex-col gap-0.5">
       <h2 className="px-2 pb-1 text-section uppercase text-text-muted">Needs you</h2>
@@ -36,7 +38,7 @@ export function NeedsYou({ entries, activeKey, onSelect, navIndexStart = 0 }: Ne
           </p>
         </div>
       ) : (
-        <div role="listbox" aria-label="Needs you conversations" className="flex flex-col gap-0.5">
+        <div role="group" aria-label="Needs you conversations" className="flex flex-col gap-0.5">
           {entries.map((entry, i) => (
             <ConversationRow
               key={entry.key}
@@ -44,6 +46,7 @@ export function NeedsYou({ entries, activeKey, onSelect, navIndexStart = 0 }: Ne
               active={entry.key === activeKey}
               onClick={onSelect}
               navIndex={navIndexStart + i}
+              tabIndex={navIndexStart + i === activeNavIndex ? 0 : -1}
             />
           ))}
         </div>

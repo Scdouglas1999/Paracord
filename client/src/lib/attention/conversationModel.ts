@@ -33,6 +33,13 @@ export interface ConversationEntry {
    * sets it explicitly (recipient id for DMs, null for guild channels).
    */
   userId?: string | null;
+  /**
+   * Stored avatar hash for the leading identity chip on DM / group-DM rows (the
+   * recipient's `avatar_hash`). Optional so the pure fixtures stay valid;
+   * `useUnifiedConversations` sets it from the channel recipient. Rendered via
+   * `safeStoredImageDataUrl`, falling back to an initials chip.
+   */
+  avatar?: string | null;
   kind: ConversationKind;
   /** channel name / DM recipient / thread name / guild name. */
   title: string;

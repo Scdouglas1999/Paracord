@@ -42,11 +42,16 @@ export function LiveRoomsGrid({ guildId, channels }: LiveRoomsGridProps) {
     return { live: liveRooms, quiet: quietRooms };
   }, [channels, channelParticipants]);
 
+  // "Live rooms" is reserved for occupied rooms so the label agrees with the
+  // GuildHomeHeader's occupied-only count; a section holding only quiet/empty
+  // rooms is just "Rooms" (layout-spec §1.2).
+  const heading = live.length > 0 ? 'Live rooms' : 'Rooms';
+
   if (live.length === 0 && quiet.length === 0) {
     // Left-aligned empty state (kill-list #4) — a real title + specific copy.
     return (
-      <section aria-label="Live rooms">
-        <SectionLabel>Live rooms</SectionLabel>
+      <section aria-label={heading}>
+        <SectionLabel>{heading}</SectionLabel>
         <div className="rounded-md border border-border-subtle bg-bg-secondary p-5 shadow-sm">
           <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-sm bg-accent-tint text-accent-primary">
             <Volume2 size={18} />
@@ -62,8 +67,8 @@ export function LiveRoomsGrid({ guildId, channels }: LiveRoomsGridProps) {
   }
 
   return (
-    <section aria-label="Live rooms" className="flex flex-col gap-4">
-      <SectionLabel>Live rooms</SectionLabel>
+    <section aria-label={heading} className="flex flex-col gap-4">
+      <SectionLabel>{heading}</SectionLabel>
 
       {live.length > 0 && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

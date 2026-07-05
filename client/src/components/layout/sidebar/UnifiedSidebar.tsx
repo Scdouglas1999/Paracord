@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 
@@ -6,6 +6,7 @@ import { useUIStore } from '../../../stores/uiStore';
 import { useAuthStore } from '../../../stores/authStore';
 import { useServerListStore } from '../../../stores/serverListStore';
 import { useVoice } from '../../../hooks/useVoice';
+import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
 import { conversationKey } from '../../../lib/attention/conversationModel';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
@@ -69,6 +70,13 @@ function CollapsedRail({
     navigate(`/app/guilds/${space.id}`);
   };
 
+  // Roving tabindex for the collapsed rail: exactly one space is a Tab stop (the
+  // active one, else the first) and ArrowUp/Down/Home/End move between them via
+  // the shared [data-roving-container]/[data-nav-index] handler — so the collapsed
+  // rail keeps the same single-tab-stop + arrow affordance as the expanded list
+  // instead of making every space icon a Tab stop (layout-spec §5/§6).
+  const activeIdx = Math.max(0, spaces.findIndex((s) => s.id === activeGuildId));
+
   return (
     <div className="flex h-full w-16 flex-col items-center gap-2 bg-bg-secondary py-3">
       <button
@@ -83,11 +91,13 @@ function CollapsedRail({
       <div className="h-px w-8 shrink-0 bg-border-subtle" />
 
       <div
+        data-roving-container=""
         role="listbox"
         aria-label="Joined servers"
+        aria-orientation="vertical"
         className="flex flex-1 flex-col items-center gap-2 overflow-y-auto scrollbar-none"
       >
-        {spaces.map((space) => {
+        {spaces.map((space, i) => {
           const active = space.id === activeGuildId;
           const hasAttention = attentionGuildIds.has(space.id);
           return (
@@ -98,6 +108,8 @@ function CollapsedRail({
               aria-selected={active}
               aria-label={space.name}
               title={space.name}
+              data-nav-index={i}
+              tabIndex={i === activeIdx ? 0 : -1}
               onClick={() => openSpace(space)}
               className={cn(
                 'group relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-meta font-semibold outline-none transition-[border-radius,background-color,color] duration-[180ms] ease-[var(--ease-out)] hover:rounded-md focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]',
@@ -145,18 +157,16 @@ function CollapsedRail({
   );
 }
 
-export interface UnifiedSidebarProps {
-  /** Muted guild ids — forwarded to the unified selector so muted channels carry no signals. */
-  mutedGuildIds?: string[];
-}
-
-export function UnifiedSidebar({ mutedGuildIds = [] }: UnifiedSidebarProps) {
+export function UnifiedSidebar() {
   const navigate = useNavigate();
   const params = useParams();
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const activeServerId = useServerListStore((s) => s.activeServerId);
 
+  // The muted-guild set — read live from the shared producer/consumer so muted
+  // guilds carry no attention signal in the merge (§3.2). SpacesList is the writer.
+  const { mutedGuildIds } = useMutedGuilds();
   const { needsYou, recent, pinned, spaces } = useUnifiedConversations(mutedGuildIds);
   const userPanel = useUserPanelWiring();
 
@@ -172,18 +182,23 @@ export function UnifiedSidebar({ mutedGuildIds = [] }: UnifiedSidebarProps) {
     return set;
   }, [needsYou]);
 
-  const openConversation = (entry: ConversationEntry) => {
-    if (activeServerId !== entry.serverId) {
-      useServerListStore.getState().setActive(entry.serverId);
-    }
-    if (entry.kind === 'guild_home' && entry.guildId) {
-      navigate(`/app/guilds/${entry.guildId}`);
-    } else if (entry.guildId) {
-      navigate(`/app/guilds/${entry.guildId}/channels/${entry.channelId}`);
-    } else {
-      navigate(`/app/dms/${entry.channelId}`);
-    }
-  };
+  // Stable identity so memoized ConversationRows don't re-render on every parent
+  // pass (the per-message re-render storm fix depends on a stable onClick).
+  const openConversation = useCallback(
+    (entry: ConversationEntry) => {
+      if (useServerListStore.getState().activeServerId !== entry.serverId) {
+        useServerListStore.getState().setActive(entry.serverId);
+      }
+      if (entry.kind === 'guild_home' && entry.guildId) {
+        navigate(`/app/guilds/${entry.guildId}`);
+      } else if (entry.guildId) {
+        navigate(`/app/guilds/${entry.guildId}/channels/${entry.channelId}`);
+      } else {
+        navigate(`/app/dms/${entry.channelId}`);
+      }
+    },
+    [navigate],
+  );
 
   if (sidebarCollapsed) {
     return (
@@ -202,6 +217,20 @@ export function UnifiedSidebar({ mutedGuildIds = [] }: UnifiedSidebarProps) {
   const recentStart = pinnedStart + pinned.length;
   const spacesStart = recentStart + recent.length;
 
+  // Roving tabindex: exactly ONE row is a Tab stop (the active conversation/space,
+  // else the first row); every other row is tabIndex -1 and reached via the arrow
+  // handler's .focus(). Without this each row's native <button> stays a Tab stop,
+  // so Tab walks through every merged row (layout-spec §5).
+  let activeNavIndex = 0;
+  const inNeeds = activeKey ? needsYou.findIndex((e) => e.key === activeKey) : -1;
+  const inPinned = activeKey ? pinned.findIndex((e) => e.key === activeKey) : -1;
+  const inRecent = activeKey ? recent.findIndex((e) => e.key === activeKey) : -1;
+  const inSpaces = activeGuildId ? spaces.findIndex((s) => s.id === activeGuildId) : -1;
+  if (inNeeds >= 0) activeNavIndex = inNeeds;
+  else if (inPinned >= 0) activeNavIndex = pinnedStart + inPinned;
+  else if (inRecent >= 0) activeNavIndex = recentStart + inRecent;
+  else if (inSpaces >= 0) activeNavIndex = spacesStart + inSpaces;
+
   return (
     <aside
       aria-label="Navigation"
@@ -215,13 +244,15 @@ export function UnifiedSidebar({ mutedGuildIds = [] }: UnifiedSidebarProps) {
 
       <div
         data-roving-container=""
+        role="listbox"
+        aria-label="Conversations and spaces"
         aria-orientation="vertical"
         className="flex flex-1 flex-col gap-3 overflow-y-auto px-2 pb-2 scrollbar-thin"
       >
-        <NeedsYou entries={needsYou} activeKey={activeKey} onSelect={openConversation} navIndexStart={0} />
-        <PinnedRail entries={pinned} activeKey={activeKey} onSelect={openConversation} navIndexStart={pinnedStart} />
-        <RecentList entries={recent} activeKey={activeKey} onSelect={openConversation} navIndexStart={recentStart} />
-        <SpacesList spaces={spaces} activeGuildId={activeGuildId} navIndexStart={spacesStart} />
+        <NeedsYou entries={needsYou} activeKey={activeKey} onSelect={openConversation} navIndexStart={0} activeNavIndex={activeNavIndex} />
+        <PinnedRail entries={pinned} activeKey={activeKey} onSelect={openConversation} navIndexStart={pinnedStart} activeNavIndex={activeNavIndex} />
+        <RecentList entries={recent} activeKey={activeKey} onSelect={openConversation} navIndexStart={recentStart} activeNavIndex={activeNavIndex} />
+        <SpacesList spaces={spaces} activeGuildId={activeGuildId} navIndexStart={spacesStart} activeNavIndex={activeNavIndex} />
       </div>
 
       <div className="shrink-0">

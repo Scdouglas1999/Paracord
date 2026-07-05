@@ -71,11 +71,11 @@ describe('scoreEntry — mention clamp', () => {
 describe('scoreEntry — recency boost', () => {
   it('adds a positive boost for a recent activity id', () => {
     const recent = entry({ lastActivityId: snowflakeForMs(NOW) });
-    // Base 0 signals; boost ~= 60 at age 0.
+    // Base 0 signals; boost ~= 8 at age 0 (sub-gap tie-shaper ceiling).
     const s = scoreEntry(recent, NOW);
     expect(s).toBeGreaterThan(0);
-    expect(s).toBeLessThanOrEqual(60);
-    expect(s).toBeCloseTo(60, 5);
+    expect(s).toBeLessThanOrEqual(8);
+    expect(s).toBeCloseTo(8, 5);
   });
 
   it('decays with age', () => {
@@ -98,25 +98,24 @@ describe('scoreEntry — recency boost', () => {
   });
 
   it('is a tie-shaper: never lifts a lower tier above a higher tier', () => {
-    // Worst case: a lower-tier entry as fresh as possible (max boost 60)
-    // must still lose to a higher-tier entry as stale as possible (boost → 0).
+    // Worst case: a lower-tier entry as fresh as possible (max boost 8) must
+    // still lose to a higher-tier entry as stale as possible (boost → 0). With
+    // the sub-gap ceiling this holds STRICTLY, per-pair — a freshly-occupied
+    // voice-only room can no longer evict a real plain-unread channel.
     const freshLower = entry({
       hasVoiceActivity: true, // 30
-      lastActivityId: snowflakeForMs(NOW), // + ~60
+      lastActivityId: snowflakeForMs(NOW), // + ~8
     });
     const staleHigher = entry({
       unread: true, // 40, the very next tier up
       lastActivityId: snowflakeForMs(NOW - 1000 * 3_600_000), // boost ≈ 0
     });
-    // The gap 40 vs 30 is the smallest adjacent-tier gap and is the only place
-    // a 60-point boost could plausibly cross a tier. Assert it does not, by
-    // construction of the weights (voice 30 + 60 = 90 > 40) — so the tie-shaper
-    // property here is a RANKING claim across a full list, not per-pair.
-    // Verify the intended list ordering: within equal top-signal, recency wins;
-    // across signals, the signal dominates for entries at comparable recency.
+    expect(scoreEntry(freshLower, NOW)).toBeLessThan(scoreEntry(staleHigher, NOW));
+
+    // Within a tier, recency still breaks the tie (fresher ranks higher).
     const a = entry({ unread: true, lastActivityId: snowflakeForMs(NOW) });
     const b = entry({ unread: true, lastActivityId: snowflakeForMs(NOW - 6 * 3_600_000) });
-    expect(scoreEntry(a, NOW)).toBeGreaterThan(scoreEntry(b, NOW)); // recency breaks the tie
+    expect(scoreEntry(a, NOW)).toBeGreaterThan(scoreEntry(b, NOW));
 
     // And a strictly higher signal at equal recency always wins.
     const dm = entry({ isDMUnread: true, lastActivityId: snowflakeForMs(NOW - 6 * 3_600_000) });
@@ -124,7 +123,7 @@ describe('scoreEntry — recency boost', () => {
     expect(scoreEntry(dm, NOW)).toBeGreaterThan(scoreEntry(plain, NOW));
 
     // Guard the constructed worst-case values too.
-    expect(scoreEntry(freshLower, NOW)).toBeLessThan(90.1);
+    expect(scoreEntry(freshLower, NOW)).toBeLessThan(40);
     expect(scoreEntry(staleHigher, NOW)).toBeCloseTo(40, 1);
   });
 });

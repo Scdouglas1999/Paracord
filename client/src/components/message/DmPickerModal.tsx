@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus } from 'lucide-react';
+import { Check, UserPlus } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';
 import { dmApi } from '../../api/dms';
@@ -112,7 +112,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
       panelClassName="flex max-h-[70vh] flex-col"
     >
       <div className="panel-divider flex items-center justify-between border-b px-5 py-4">
-        <ModalTitle id="dm-picker-title" className="text-subhead">
+        <ModalTitle id="dm-picker-title">
           {groupMode ? 'Create Group DM' : 'Start Direct Message'}
         </ModalTitle>
         <button
@@ -178,7 +178,7 @@ export function DmPickerModal({ open, onClose, onCreated }: DmPickerModalProps) 
                           : 'border-border-subtle',
                       )}
                     >
-                      {selected && <span className="text-[10px] font-bold">{'✓'}</span>}
+                      {selected && <Check size={12} strokeWidth={3} aria-hidden />}
                     </div>
                   )}
                   <span className="text-label text-text-primary">{rel.user.username}</span>

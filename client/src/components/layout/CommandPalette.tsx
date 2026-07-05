@@ -6,7 +6,9 @@ import { useUIStore } from '../../stores/uiStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useServerListStore } from '../../stores/serverListStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { LOCAL_SERVER_ID } from '../../lib/connectionManager';
 import { isAdmin } from '../../types';
 import { cn } from '../../lib/utils';
 import type { Channel, Guild } from '../../types';
@@ -29,6 +31,8 @@ export function CommandPalette() {
   const guilds = useGuildStore((s) => s.guilds);
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
   const dmChannels = useChannelStore((s) => s.channelsByGuild[''] ?? EMPTY_CHANNELS);
+  const dmChannelsByServer = useChannelStore((s) => s.dmChannelsByServer);
+  const activeServerId = useServerListStore((s) => s.activeServerId);
   const selectGuild = useGuildStore((s) => s.selectGuild);
   const selectChannel = useChannelStore((s) => s.selectChannel);
   const user = useAuthStore((s) => s.user);
@@ -164,15 +168,32 @@ export function CommandPalette() {
       });
     });
 
-    // DM channels
-    dmChannels.forEach((dm: Channel) => {
+    // DM channels — merged across EVERY connected server (mirrors the unified
+    // sidebar's dmChannelsByServer), deduped by channel id, with the active
+    // server's '' mirror seeding the list for back-compat. Without this, ⌘K
+    // could only reach DMs on the active server even though background-server
+    // DMs are clickable in the sidebar.
+    const dmById = new Map<string, { channel: Channel; serverId: string }>();
+    const activeId = activeServerId ?? LOCAL_SERVER_ID;
+    for (const dm of dmChannels) {
+      if (!dmById.has(dm.id)) dmById.set(dm.id, { channel: dm, serverId: activeId });
+    }
+    for (const [serverId, list] of Object.entries(dmChannelsByServer)) {
+      for (const dm of list) {
+        if (!dmById.has(dm.id)) dmById.set(dm.id, { channel: dm, serverId });
+      }
+    }
+    dmById.forEach(({ channel: dm, serverId }) => {
       const recipientName = dm.recipient?.username || 'Direct Message';
       items.push({
-        id: `dm-${dm.id}`,
+        id: `dm-${serverId}-${dm.id}`,
         label: recipientName,
         sublabel: 'Direct Message',
         icon: <MessageCircle size={16} />,
         action: () => {
+          if (useServerListStore.getState().activeServerId !== serverId) {
+            useServerListStore.getState().setActive(serverId);
+          }
           selectGuild(null);
           useChannelStore.getState().selectGuild(null);
           selectChannel(dm.id);
@@ -184,7 +205,7 @@ export function CommandPalette() {
     });
 
     return items;
-  }, [guilds, channelsByGuild, dmChannels, user, navigate, selectGuild, selectChannel]);
+  }, [guilds, channelsByGuild, dmChannels, dmChannelsByServer, activeServerId, user, navigate, selectGuild, selectChannel]);
 
   // Filter items based on query
   const filteredItems = useMemo(() => {

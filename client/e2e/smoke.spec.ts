@@ -405,7 +405,9 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
   await page.goto(`/app/guilds/${guildId}`);
   await expect(page).toHaveURL(new RegExp(`/app/guilds/${guildId}$`));
   await expect(page.getByRole('heading', { name: /QA Guild/i })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Live rooms' })).toBeVisible();
+  // Quiet guild → the section reserves "Live rooms" for occupied rooms and
+  // reads "Rooms" while every voice room is empty (layout-spec §1.2).
+  await expect(page.getByRole('region', { name: 'Rooms' })).toBeVisible();
   const textChannelsRegion = page.getByRole('region', { name: 'Text channels' });
   await expect(textChannelsRegion).toBeVisible();
 
@@ -428,7 +430,9 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
 
   // The unified sidebar merges every connected server's guilds into "Spaces";
   // the guild is reachable there as a roving-tabindex option row.
-  const spacesList = page.getByRole('listbox', { name: 'Joined servers' });
+  // The expanded sidebar is one roving listbox with grouped options; "Spaces" is
+  // the "Joined servers" group inside it (single-listbox composite, not four).
+  const spacesList = page.getByRole('group', { name: 'Joined servers' });
   await expect(spacesList.getByRole('option', { name: /QA Guild/i })).toBeVisible();
 
   await page.goto(`/app/guilds/${guildId}/channels/999999999`);

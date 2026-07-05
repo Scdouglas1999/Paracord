@@ -10,13 +10,18 @@
  *   thread reply         120
  *   plain unread         40
  *   voice activity       30
- *   recency boost        + 60 * exp(-ageHours/12)       (tie-shaper only)
+ *   recency boost        + 8 * exp(-ageHours/12)        (tie-shaper only)
  *
- * The recency term is a TIE-SHAPER: its max value (60, at age 0) is strictly
- * below the smallest tier gap (voice 30 → plain unread 40 differ by only 10,
- * but recency applies uniformly and can never lift a scored entry above the
- * next signal tier because the tier weights dominate at 120/400/1000). The
- * invariant "recency never overtakes a higher tier" is asserted in tests.
+ * The recency term is a strict TIE-SHAPER. The smallest adjacent-tier gap is
+ * voice(30) → plain-unread(40) = 10, so the boost ceiling is pinned BELOW that
+ * gap (max 8, at age 0). This makes the invariant real: a freshly-active
+ * voice-only room (30 + 8 = 38) can never overtake a stale plain-unread channel
+ * (40 + ~0), so a burst of empty-but-just-occupied voice rooms can no longer
+ * evict channels holding actual unread messages from the capped Needs-you
+ * shortlist. Within a tier the boost still orders fresher entries first. (The
+ * earlier value 60 contradicted this invariant — voice+60 = 90 outranked plain
+ * unread 40 — so it is corrected here to the sub-gap ceiling the spec prose and
+ * this docstring both promise; the invariant is asserted in tests.)
  */
 
 import type { ConversationEntry } from './conversationModel';
@@ -28,7 +33,7 @@ const DM_UNREAD_WEIGHT = 400;
 const THREAD_REPLY_WEIGHT = 120;
 const PLAIN_UNREAD_WEIGHT = 40;
 const VOICE_ACTIVITY_WEIGHT = 30;
-const RECENCY_WEIGHT = 60;
+const RECENCY_WEIGHT = 8;
 const RECENCY_HALFLIFE_HOURS = 12;
 
 export function scoreEntry(e: ConversationEntry, nowMs: number): number {

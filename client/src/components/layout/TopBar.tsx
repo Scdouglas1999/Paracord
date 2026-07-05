@@ -314,6 +314,7 @@ export function TopBar({
     disabled,
     className,
     badge,
+    controlsPanel,
   }: {
     onClick: () => void;
     icon: LucideIcon;
@@ -322,12 +323,15 @@ export function TopBar({
     disabled?: boolean;
     className?: string;
     badge?: number;
+    /** True for toggles that drive the ContextPanel → expose aria-expanded. */
+    controlsPanel?: boolean;
   }) => (
     <div className={className}>
       <Tooltip content={tooltip} side="bottom">
         <button
           aria-label={tooltip}
           aria-pressed={active}
+          aria-expanded={controlsPanel ? Boolean(active) : undefined}
           onClick={onClick}
           disabled={disabled}
           className={cn(
@@ -384,13 +388,13 @@ export function TopBar({
                 <button
                   type="button"
                   onClick={() => navigate(`/app/guilds/${resolvedGuildId}`)}
-                  className="hidden max-w-[10rem] shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)] sm:inline-flex"
+                  className="hidden max-w-[10rem] shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-label font-medium text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)] lg:inline-flex"
                   aria-label={`Go to ${guildName} home`}
                   title={`Go to ${guildName} home`}
                 >
                   <span className="truncate">{guildName}</span>
                 </button>
-                <ChevronRight size={14} className="hidden shrink-0 text-text-muted sm:block" aria-hidden />
+                <ChevronRight size={14} className="hidden shrink-0 text-text-muted lg:block" aria-hidden />
               </>
             )}
             <ChannelIcon size={18} className="shrink-0 text-channel-icon" />
@@ -399,8 +403,8 @@ export function TopBar({
             </span>
             {channelTopic && (
               <>
-                <span className="hidden h-4 w-px shrink-0 bg-border-strong md:block" aria-hidden />
-                <span className="hidden min-w-0 truncate text-label text-text-secondary md:block">
+                <span className="hidden h-4 w-px shrink-0 bg-border-strong lg:block" aria-hidden />
+                <span className="hidden min-w-0 truncate text-label text-text-secondary lg:block">
                   {channelTopic}
                 </span>
               </>
@@ -443,6 +447,7 @@ export function TopBar({
           icon={Search}
           onClick={panelToggle('search')}
           active={contextPanelMode === 'search'}
+          controlsPanel
           tooltip={channelId ? 'Search Messages' : 'Select a channel to search'}
           disabled={!channelId}
         />
@@ -457,6 +462,7 @@ export function TopBar({
           icon={Pin}
           onClick={panelToggle('pins')}
           active={contextPanelMode === 'pins'}
+          controlsPanel
           tooltip={channelId ? 'Pinned Messages' : 'Select a channel to view pins'}
           disabled={!channelId}
         />
@@ -465,6 +471,7 @@ export function TopBar({
             icon={MessagesSquare}
             onClick={panelToggle('threads')}
             active={contextPanelMode === 'threads'}
+            controlsPanel
             tooltip="Threads"
           />
         )}
@@ -483,12 +490,14 @@ export function TopBar({
               icon={TrendingUp}
               onClick={panelToggle('economy')}
               active={contextPanelMode === 'economy'}
+              controlsPanel
               tooltip="Guild Leaderboard"
             />
             <TopBarIcon
               icon={Users}
               onClick={panelToggle('members')}
               active={contextPanelMode === 'members'}
+              controlsPanel
               tooltip="Member List"
             />
           </>

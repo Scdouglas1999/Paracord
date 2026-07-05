@@ -36,6 +36,15 @@ export interface Guild {
   bot_settings?: Record<string, GuildBotConfig>;
   /** Base URL of the server this guild was fetched from (client-side tag). */
   server_url?: string;
+  /**
+   * Connection id of the server this guild actually originated from (client-side
+   * tag, stamped at gateway ingest). Unlike `server_url` — which `addGuild`
+   * defaults to the ACTIVE server's base url and so mis-attributes guilds that
+   * arrive over a background server's READY — this carries the true owning
+   * server, so the cross-server merge reads unread/mention from the right bucket
+   * (layout-spec §9 flag 3).
+   */
+  originServerId?: string;
 }
 
 export interface Member {

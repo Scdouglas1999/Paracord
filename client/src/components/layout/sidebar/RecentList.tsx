@@ -18,9 +18,11 @@ export interface RecentListProps {
   onSelect: (entry: ConversationEntry) => void;
   /** Flat roving-tabindex ordinal of this section's first row (SHELL-5 wires the handler). */
   navIndexStart?: number;
+  /** Flat ordinal of the single roving Tab stop; -1 on every other row. */
+  activeNavIndex?: number;
 }
 
-export function RecentList({ entries, activeKey, onSelect, navIndexStart = 0 }: RecentListProps) {
+export function RecentList({ entries, activeKey, onSelect, navIndexStart = 0, activeNavIndex }: RecentListProps) {
   return (
     <section aria-label="Recent" className="flex flex-col gap-0.5">
       <h2 className="px-2 pb-1 text-section uppercase text-text-muted">Recent</h2>
@@ -36,7 +38,7 @@ export function RecentList({ entries, activeKey, onSelect, navIndexStart = 0 }: 
           </p>
         </div>
       ) : (
-        <div role="listbox" aria-label="Recent conversations" className="flex flex-col gap-0.5">
+        <div role="group" aria-label="Recent conversations" className="flex flex-col gap-0.5">
           {entries.map((entry, i) => (
             <ConversationRow
               key={entry.key}
@@ -44,6 +46,7 @@ export function RecentList({ entries, activeKey, onSelect, navIndexStart = 0 }: 
               active={entry.key === activeKey}
               onClick={onSelect}
               navIndex={navIndexStart + i}
+              tabIndex={navIndexStart + i === activeNavIndex ? 0 : -1}
             />
           ))}
         </div>

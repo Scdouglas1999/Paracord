@@ -83,7 +83,7 @@ export function RoomCard({
           <div className="flex items-center gap-2">
             <span className="truncate text-label font-semibold text-text-primary">{name}</span>
             {live && (
-              <span className="inline-flex items-center rounded-xs bg-danger-tint px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-wide text-accent-danger">
+              <span className="inline-flex items-center rounded-xs bg-accent-tint px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-wide text-accent-primary">
                 Live
               </span>
             )}

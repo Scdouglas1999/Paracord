@@ -11,8 +11,11 @@
 
 import { normalizeServerUrl, type ServerEntry } from '../../stores/serverListStore';
 
-/** Minimal structural shape — a guild only needs its client-side `server_url` tag. */
+/** Minimal structural shape — a guild's client-side attribution tags. */
 export interface GuildLike {
+  /** True originating server, stamped at gateway ingest (authoritative). */
+  originServerId?: string | null;
+  /** Base url the guild was fetched from (may mis-attribute background guilds). */
   server_url?: string | null;
 }
 
@@ -34,23 +37,24 @@ export function buildServerUrlMap(servers: ServerEntry[]): Map<string, string> {
 
 /**
  * Resolve the serverId whose read-state / channel bucket holds this guild's
- * channels, from the `server_url → serverId` map. Falls back to `activeServerId`
- * when the guild's `server_url` is missing or unmapped.
+ * channels. Prefers the authoritative `originServerId` stamped at gateway ingest;
+ * falls back to the `server_url → serverId` map, then to `activeServerId`.
  *
- * FLAG (layout-spec §9 flag 3 — latent mis-attribution): guilds that arrive via a
- * *background* server's READY are stamped by `guildStore.addGuild` with the ACTIVE
- * server's base url (`resolveApiBaseUrl()`), not their true origin. Such a guild
- * therefore resolves to `activeServerId` here even though its channels live on the
- * background server — its unread/mention counts can be read from the wrong bucket
- * until a proper fix tags guilds with their originating serverId at ingest (a small
- * additive client change flagged for its own PR). The fallback keeps the merge
- * green and collision-safe; it does not fabricate a wrong-but-confident mapping.
+ * `originServerId` (layout-spec §9 flag 3, now fixed) closes the latent
+ * mis-attribution: guilds arriving via a *background* server's READY used to be
+ * stamped by `guildStore.addGuild` with only the ACTIVE server's base url, so they
+ * resolved to `activeServerId` here even though their channels live on the
+ * background server — reading unread/mention from the wrong bucket. The origin tag
+ * carries the true owning server, so the merge now reads the correct per-server
+ * bucket. The url-map + active fallback remains for older cached guilds that
+ * predate the tag.
  */
 export function resolveServerIdForGuild(
   guild: GuildLike,
   urlMap: Map<string, string>,
   activeServerId: string,
 ): string {
+  if (guild.originServerId) return guild.originServerId;
   const url = guild.server_url ? normalizeServerUrl(guild.server_url) : '';
   const resolved = url ? urlMap.get(url) : undefined;
   return resolved ?? activeServerId;

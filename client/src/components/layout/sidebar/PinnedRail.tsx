@@ -15,15 +15,17 @@ export interface PinnedRailProps {
   onSelect: (entry: ConversationEntry) => void;
   /** Flat roving-tabindex ordinal of this section's first row (SHELL-5 wires the handler). */
   navIndexStart?: number;
+  /** Flat ordinal of the single roving Tab stop; -1 on every other row. */
+  activeNavIndex?: number;
 }
 
-export function PinnedRail({ entries, activeKey, onSelect, navIndexStart = 0 }: PinnedRailProps) {
+export function PinnedRail({ entries, activeKey, onSelect, navIndexStart = 0, activeNavIndex }: PinnedRailProps) {
   if (entries.length === 0) return null;
 
   return (
     <section aria-label="Pinned" className="flex flex-col gap-0.5">
       <h2 className="px-2 pb-1 text-section uppercase text-text-muted">Pinned</h2>
-      <div role="listbox" aria-label="Pinned conversations" className="flex flex-col gap-0.5">
+      <div role="group" aria-label="Pinned conversations" className="flex flex-col gap-0.5">
         {entries.map((entry, i) => (
           <ConversationRow
             key={entry.key}
@@ -31,6 +33,7 @@ export function PinnedRail({ entries, activeKey, onSelect, navIndexStart = 0 }: 
             active={entry.key === activeKey}
             onClick={onSelect}
             navIndex={navIndexStart + i}
+            tabIndex={navIndexStart + i === activeNavIndex ? 0 : -1}
           />
         ))}
       </div>

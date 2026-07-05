@@ -83,7 +83,11 @@ export function useUnreadCounts(mutedGuildIds: string[]) {
     const map = new Map<string, string>();
     const getServerByUrl = useServerListStore.getState().getServerByUrl;
     for (const guild of guilds) {
-      const resolved = guild.server_url ? getServerByUrl(guild.server_url)?.id : undefined;
+      // Prefer the authoritative origin tag (§9 flag 3 fix); fall back to the
+      // server_url map, then the active server, for guilds predating the tag.
+      const resolved =
+        guild.originServerId
+        ?? (guild.server_url ? getServerByUrl(guild.server_url)?.id : undefined);
       map.set(guild.id, resolved ?? activeId);
     }
     return map;

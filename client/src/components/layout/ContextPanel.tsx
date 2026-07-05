@@ -1,10 +1,12 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { Coins, Users, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Channel, Message } from '../../types';
 import { useUIStore } from '../../stores/uiStore';
 import { useChannelStore } from '../../stores/channelStore';
+import { channelApi } from '../../api/channels';
+import { extractApiError } from '../../api/client';
 import { MemberList } from './MemberList';
 import { GroupDmMembersPanel } from './GroupDmMembersPanel';
 import { ThreadPanel } from '../message/ThreadPanel';
@@ -38,6 +40,12 @@ export interface ContextPanelProps {
   onPinsErrorChange?: (error: string | null) => void;
   /** Active thread descriptor for the `threads` surface. */
   activeThread?: ContextPanelThread | null;
+  /**
+   * When true, move focus into the panel on open and restore it to the trigger
+   * on close (desktop inline instance). Left false for the mobile overlay, whose
+   * host dialog already runs a focus trap (WCAG 2.4.3).
+   */
+  manageFocus?: boolean;
 }
 
 /** Panel-native surfaces render inside the shared right-panel chrome. */
@@ -108,10 +116,55 @@ export function ContextPanel({
   pinsError,
   onPinsErrorChange,
   activeThread,
+  manageFocus = false,
 }: ContextPanelProps) {
   const mode = useUIStore((s) => s.contextPanelMode);
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
   const channelsById = useChannelStore((s) => s.channelsById);
+  const asideRef = useRef<HTMLElement>(null);
+
+  // The pins/search surfaces are rendered by the shell, not the ChatView, so the
+  // ChatView can no longer feed them props. Self-provision from the channel store:
+  // the search channel name + the cross-channel list for per-result attribution,
+  // and (for pins) fetch the channel's pins on open — the overlay only refetches
+  // after an unpin, so without this the pins surface is permanently empty.
+  const controlledPins = pins !== undefined;
+  const [fetchedPins, setFetchedPins] = useState<Message[]>([]);
+  const [fetchedPinsError, setFetchedPinsError] = useState<string | null>(null);
+
+  const resolvedChannelName =
+    channelName ?? (channelId ? channelsById[channelId]?.name ?? null : null);
+
+  const resolvedAllChannels = useMemo(
+    () =>
+      allChannels
+      ?? Object.values(channelsById).map((c) => ({
+        id: c.id,
+        guild_id: c.guild_id,
+        name: c.name,
+      })),
+    [allChannels, channelsById],
+  );
+
+  useEffect(() => {
+    if (mode !== 'pins' || controlledPins || !channelId) return;
+    let cancelled = false;
+    setFetchedPinsError(null);
+    channelApi
+      .getPins(channelId)
+      .then(({ data }) => {
+        if (!cancelled) setFetchedPins(data);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setFetchedPins([]);
+          setFetchedPinsError(`Failed to load pinned messages: ${extractApiError(err)}`);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, channelId, controlledPins]);
 
   const close = useCallback(() => setContextPanelMode(null), [setContextPanelMode]);
 
@@ -125,6 +178,21 @@ export function ContextPanel({
     [close],
   );
 
+  // Desktop: this complementary region is mounted only while open, so on mount we
+  // remember the trigger and move focus into the panel; on unmount (Escape/close)
+  // we restore focus to the trigger — mirroring the CommandPalette returnFocusRef
+  // pattern so keyboard/AT users are told the panel appeared and keep their place.
+  useEffect(() => {
+    if (!manageFocus) return;
+    const trigger =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const raf = requestAnimationFrame(() => asideRef.current?.focus());
+    return () => {
+      cancelAnimationFrame(raf);
+      if (trigger && document.contains(trigger)) trigger.focus();
+    };
+  }, [manageFocus]);
+
   if (mode === null) return null;
 
   // Overlay surfaces bring their own chrome (title + close); their close button
@@ -135,10 +203,10 @@ export function ContextPanel({
         open
         onClose={close}
         channelId={channelId ?? undefined}
-        pins={pins ?? []}
-        onPinsChange={onPinsChange ?? (() => {})}
-        error={pinsError ?? null}
-        onErrorChange={onPinsErrorChange}
+        pins={controlledPins ? pins ?? [] : fetchedPins}
+        onPinsChange={onPinsChange ?? setFetchedPins}
+        error={controlledPins ? pinsError ?? null : fetchedPinsError}
+        onErrorChange={onPinsErrorChange ?? setFetchedPinsError}
       />
     );
   }
@@ -149,8 +217,8 @@ export function ContextPanel({
         open
         onClose={close}
         channelId={channelId ?? undefined}
-        channelName={channelName ?? undefined}
-        allChannels={allChannels ?? []}
+        channelName={resolvedChannelName ?? undefined}
+        allChannels={resolvedAllChannels}
       />
     );
   }
@@ -198,6 +266,7 @@ export function ContextPanel({
 
   return (
     <aside
+      ref={asideRef}
       role="complementary"
       aria-label={header.title}
       tabIndex={-1}
@@ -221,7 +290,7 @@ export function ContextPanel({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        {mode === 'members' ? <MemberList /> : <GuildEconomyPanel guildId={guildId as string} />}
+        {mode === 'members' ? <MemberList hideStatsHeader /> : <GuildEconomyPanel guildId={guildId as string} />}
       </div>
     </aside>
   );

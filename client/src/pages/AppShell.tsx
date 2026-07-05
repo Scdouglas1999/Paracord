@@ -53,8 +53,12 @@ export function AppShell() {
   const setGuildSettingsId = useUIStore((s) => s.setGuildSettingsId);
   const userSettingsDialogRef = useRef<HTMLDivElement>(null);
   const guildSettingsDialogRef = useRef<HTMLDivElement>(null);
+  const sidebarOverlayRef = useRef<HTMLDivElement>(null);
+  const contextOverlayRef = useRef<HTMLDivElement>(null);
   const closeUserSettings = useCallback(() => setUserSettingsOpen(false), [setUserSettingsOpen]);
   const closeGuildSettings = useCallback(() => setGuildSettingsId(null), [setGuildSettingsId]);
+  const closeSidebarOverlay = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed]);
+  const closeContextOverlay = useCallback(() => setContextPanelMode(null), [setContextPanelMode]);
 
   useFocusTrap(userSettingsDialogRef, userSettingsOpen, closeUserSettings);
   useFocusTrap(guildSettingsDialogRef, Boolean(guildSettingsId), closeGuildSettings);
@@ -95,6 +99,12 @@ export function AppShell() {
 
   const showContextPanel = contextPanelMode !== null;
   const showSidebarOverlay = isMobile && !sidebarCollapsed;
+
+  // Narrow-viewport overlays are modal (they cover a dimmed but present main
+  // pane), so they trap focus, move focus inside on open, restore it on close,
+  // and honor Escape — mirroring the settings dialogs (WCAG 2.4.3 / 2.1.2).
+  useFocusTrap(sidebarOverlayRef, showSidebarOverlay, closeSidebarOverlay);
+  useFocusTrap(contextOverlayRef, isMobile && showContextPanel, closeContextOverlay);
 
   // Emerald Commons elevation ramp (design-spec §1.1, kill-list #7): the whole
   // authenticated app lives inside a single surface ramp — `--bg-tertiary` base,
@@ -142,7 +152,7 @@ export function AppShell() {
 
           {/* Right rail — ContextPanel (desktop inline; toggleable, not docked). */}
           {!isMobile && showContextPanel && (
-            <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} />
+            <ContextPanel guildId={guildId ?? null} channelId={channelId ?? null} manageFocus />
           )}
         </div>
 
@@ -159,7 +169,12 @@ export function AppShell() {
               onClick={() => setSidebarCollapsed(true)}
             >
               <motion.div
-                className="h-full max-w-[88vw] overflow-hidden shadow-xl"
+                ref={sidebarOverlayRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Navigation"
+                tabIndex={-1}
+                className="h-full max-w-[88vw] overflow-hidden shadow-xl outline-none"
                 initial={{ x: -24, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: -24, opacity: 0 }}
@@ -184,7 +199,12 @@ export function AppShell() {
               onClick={() => setContextPanelMode(null)}
             >
               <motion.div
-                className="h-full max-w-[88vw] overflow-hidden shadow-xl"
+                ref={contextOverlayRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Details"
+                tabIndex={-1}
+                className="h-full max-w-[88vw] overflow-hidden shadow-xl outline-none"
                 initial={{ x: 24, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: 24, opacity: 0 }}

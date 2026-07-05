@@ -35,6 +35,12 @@ interface MemberListProps {
   members?: MemberWithUser[];
   roles?: Role[];
   compact?: boolean;
+  /**
+   * Suppress the top-level "Members" total-count subheader. Used when a host
+   * chrome (e.g. ContextPanel) already supplies the "Members" title, so the
+   * per-role group headers are not stacked under a redundant duplicate label.
+   */
+  hideStatsHeader?: boolean;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -54,7 +60,7 @@ export function resolveMemberStatus(
   return 'offline';
 }
 
-export function MemberList({ members: propMembers, roles: propRoles = [], compact = false }: MemberListProps) {
+export function MemberList({ members: propMembers, roles: propRoles = [], compact = false, hideStatsHeader = false }: MemberListProps) {
   const selectedGuildId = useGuildStore(s => s.selectedGuildId);
   const activeServerId = useServerListStore(s => s.activeServerId);
   const activeServer = useServerListStore((s) =>
@@ -245,7 +251,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
   const virtualRows = useMemo<VirtualRow[]>(() => {
     if (isMemberListLoading) return [];
     const rows: VirtualRow[] = [];
-    rows.push({ type: 'stats' });
+    if (!hideStatsHeader) rows.push({ type: 'stats' });
 
     for (const [roleId, groupMembers] of roleGroups.entries()) {
       const role = roles.find(r => r.id === roleId);
@@ -270,7 +276,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
     }
 
     return rows;
-  }, [roleGroups, noRoleGroup, offlineMems, showOffline, members.length, roles, isMemberListLoading]);
+  }, [roleGroups, noRoleGroup, offlineMems, showOffline, members.length, roles, isMemberListLoading, hideStatsHeader]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
