@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight, Bot } from 'lucide-react';
+import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight, Bot, UserPlus, Users, MessagesSquare, MessageSquarePlus } from 'lucide-react';
 import { Modal } from '../ui/Modal';
+import { DmPickerModal } from '../message/DmPickerModal';
 import { useUIStore } from '../../stores/uiStore';
 import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
@@ -40,6 +41,7 @@ export function CommandPalette() {
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [dmPickerOpen, setDmPickerOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -72,19 +74,62 @@ export function CommandPalette() {
   const allItems = useMemo((): PaletteItem[] => {
     const items: PaletteItem[] = [];
 
+    // Social action commands — everything social reachable from ⌘K (do not
+    // duplicate the "Friends" destination with the Home nav item below, which now
+    // lands on the App Home rather than the friends page).
+    items.push({
+      id: 'action-new-message',
+      label: 'New message',
+      sublabel: 'Start a direct or group DM',
+      icon: <MessageSquarePlus size={16} />,
+      action: () => setDmPickerOpen(true),
+      category: 'Actions',
+      keywords: 'new message dm direct compose start conversation group',
+    });
+
+    items.push({
+      id: 'action-add-friend',
+      label: 'Add a friend',
+      sublabel: 'Send a friend request',
+      icon: <UserPlus size={16} />,
+      action: () => navigate('/app/friends'),
+      category: 'Actions',
+      keywords: 'add friend request invite people',
+    });
+
+    items.push({
+      id: 'action-all-conversations',
+      label: 'All conversations',
+      sublabel: 'Open your direct messages',
+      icon: <MessagesSquare size={16} />,
+      action: () => navigate('/app/dms'),
+      category: 'Actions',
+      keywords: 'all conversations direct messages dms inbox',
+    });
+
+    items.push({
+      id: 'action-friends',
+      label: 'Friends',
+      sublabel: 'Online, pending, and blocked',
+      icon: <Users size={16} />,
+      action: () => navigate('/app/friends'),
+      category: 'Actions',
+      keywords: 'friends online pending requests blocked',
+    });
+
     // Navigation items
     items.push({
       id: 'nav-home',
       label: 'Go to Home',
-      sublabel: 'Friends & Direct Messages',
+      sublabel: 'Calls, friends around, and recent DMs',
       icon: <Home size={16} />,
       action: () => {
         selectGuild(null);
         useChannelStore.getState().selectGuild(null);
-        navigate('/app/friends');
+        navigate('/app');
       },
       category: 'Navigation',
-      keywords: 'home friends dm direct message',
+      keywords: 'home overview happening now',
     });
 
     items.push({
@@ -205,7 +250,7 @@ export function CommandPalette() {
     });
 
     return items;
-  }, [guilds, channelsByGuild, dmChannels, dmChannelsByServer, activeServerId, user, navigate, selectGuild, selectChannel]);
+  }, [guilds, channelsByGuild, dmChannels, dmChannelsByServer, activeServerId, user, navigate, selectGuild, selectChannel, setDmPickerOpen]);
 
   // Filter items based on query
   const filteredItems = useMemo(() => {
@@ -220,7 +265,7 @@ export function CommandPalette() {
   // Group filtered items by category
   const groupedItems = useMemo(() => {
     const groups: { category: string; items: PaletteItem[] }[] = [];
-    const categoryOrder = ['Navigation', 'Channels', 'Spaces', 'Direct Messages'];
+    const categoryOrder = ['Actions', 'Navigation', 'Channels', 'Spaces', 'Direct Messages'];
     const categoryMap = new Map<string, PaletteItem[]>();
 
     filteredItems.forEach((item) => {
@@ -309,6 +354,7 @@ export function CommandPalette() {
   const activeItemId = flatItems[selectedIndex]?.id;
 
   return (
+    <>
     <Modal
       open={open}
       onClose={handleClose}
@@ -431,5 +477,9 @@ export function CommandPalette() {
         </div>
       </div>
     </Modal>
+    {/* "New message" opens the shared DM picker directly — reusing the extracted
+        DmPickerModal rather than a bespoke ⌘K flow (layout-spec §2). */}
+    <DmPickerModal open={dmPickerOpen} onClose={() => setDmPickerOpen(false)} />
+    </>
   );
 }

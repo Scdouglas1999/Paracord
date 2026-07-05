@@ -1,6 +1,6 @@
-import { useCallback, useMemo } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { Search } from 'lucide-react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { Search, Home, Users, MessageCircle, Plus } from 'lucide-react';
 
 import { useUIStore } from '../../../stores/uiStore';
 import { useAuthStore } from '../../../stores/authStore';
@@ -10,18 +10,20 @@ import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
 import { conversationKey } from '../../../lib/attention/conversationModel';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
-import type { GuildSummary } from '../../../hooks/useUnifiedConversations';
+import type { GuildSummary, FriendRequestEntry } from '../../../hooks/useUnifiedConversations';
 import { LOCAL_SERVER_ID } from '../../../lib/connectionManager';
 import { isAdmin as isGlobalAdmin } from '../../../types';
 import { cn } from '../../../lib/utils';
 
 import { SidebarSearch } from './SidebarSearch';
+import { AnchorNav } from './AnchorNav';
 import { NeedsYou } from './NeedsYou';
 import { PinnedRail } from './PinnedRail';
 import { RecentList } from './RecentList';
 import { SpacesList } from './SpacesList';
 import { CallDock } from './CallDock';
 import { UserPanel } from '../UserPanel';
+import { CreateGuildModal } from '../../guild/CreateGuildModal';
 
 /**
  * The Unified Sidebar (layout-spec §1, §6, §7.6) — the single left rail that
@@ -50,17 +52,62 @@ function useUserPanelWiring() {
   return { user, selfMute, selfDeaf, toggleMute, toggleDeaf, showAdminDashboard };
 }
 
-/** Collapsed 64px icon rail (§6). Space avatars + attention dots, mini call dock, user. */
+/** One 40px icon button in the collapsed rail (search / anchor / add-space). */
+function CollapsedIconButton({
+  label,
+  active = false,
+  badge = false,
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  badge?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-current={active ? 'page' : undefined}
+      onClick={onClick}
+      className={cn(
+        'relative flex h-10 w-10 items-center justify-center rounded-md outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
+        active
+          ? 'bg-accent-tint text-accent-primary'
+          : 'text-text-muted hover:bg-bg-mod-subtle hover:text-text-primary',
+      )}
+    >
+      {children}
+      {badge && (
+        <span
+          data-testid="anchor-attention-dot"
+          aria-hidden
+          className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-accent-primary ring-2 ring-bg-secondary"
+        />
+      )}
+    </button>
+  );
+}
+
+/** Collapsed 64px icon rail (§6). Anchors + space avatars + attention dots, mini call dock, user. */
 function CollapsedRail({
   spaces,
   attentionGuildIds,
   activeGuildId,
+  friendRequestCount,
+  onAddSpace,
 }: {
   spaces: GuildSummary[];
   attentionGuildIds: Set<string>;
   activeGuildId: string | null;
+  friendRequestCount: number;
+  onAddSpace: () => void;
 }) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { user } = useUserPanelWiring();
 
   const openSpace = (space: GuildSummary) => {
@@ -87,6 +134,32 @@ function CollapsedRail({
       >
         <Search size={18} aria-hidden />
       </button>
+
+      <div className="h-px w-8 shrink-0 bg-border-subtle" />
+
+      {/* Fixed anchors — the always-present Home / Friends / Messages destinations. */}
+      <CollapsedIconButton
+        label="Home"
+        active={pathname === '/app' || pathname === '/app/'}
+        onClick={() => navigate('/app')}
+      >
+        <Home size={18} aria-hidden />
+      </CollapsedIconButton>
+      <CollapsedIconButton
+        label="Friends"
+        active={pathname.startsWith('/app/friends')}
+        badge={friendRequestCount > 0}
+        onClick={() => navigate('/app/friends')}
+      >
+        <Users size={18} aria-hidden />
+      </CollapsedIconButton>
+      <CollapsedIconButton
+        label="Messages"
+        active={pathname.startsWith('/app/dms')}
+        onClick={() => navigate('/app/dms')}
+      >
+        <MessageCircle size={18} aria-hidden />
+      </CollapsedIconButton>
 
       <div className="h-px w-8 shrink-0 bg-border-subtle" />
 
@@ -142,6 +215,11 @@ function CollapsedRail({
         })}
       </div>
 
+      {/* Persistent create/join-server entry below the space icons. */}
+      <CollapsedIconButton label="Add a space" onClick={onAddSpace}>
+        <Plus size={18} aria-hidden />
+      </CollapsedIconButton>
+
       <div className="mt-auto flex flex-col items-center gap-2">
         <CallDock collapsed />
         <button
@@ -160,6 +238,7 @@ function CollapsedRail({
 export function UnifiedSidebar() {
   const navigate = useNavigate();
   const params = useParams();
+  const location = useLocation();
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const activeServerId = useServerListStore((s) => s.activeServerId);
@@ -167,8 +246,14 @@ export function UnifiedSidebar() {
   // The muted-guild set — read live from the shared producer/consumer so muted
   // guilds carry no attention signal in the merge (§3.2). SpacesList is the writer.
   const { mutedGuildIds } = useMutedGuilds();
-  const { needsYou, recent, pinned, spaces } = useUnifiedConversations(mutedGuildIds);
+  const { needsYou, recent, pinned, spaces, requests } = useUnifiedConversations(mutedGuildIds);
   const userPanel = useUserPanelWiring();
+
+  // The create/join-server flow reuses the existing CreateGuildModal (Create/Join/
+  // Template tabs), mounted once and opened from the expanded "Add a space" row or the
+  // collapsed "+" button — the same modal HomePage's quick action mounts. Not rebuilt.
+  const [showCreateGuild, setShowCreateGuild] = useState(false);
+  const openCreateGuild = useCallback(() => setShowCreateGuild(true), []);
 
   const activeServer = activeServerId ?? LOCAL_SERVER_ID;
   const activeChannelId = params.channelId ?? null;
@@ -200,73 +285,113 @@ export function UnifiedSidebar() {
     [navigate],
   );
 
-  if (sidebarCollapsed) {
-    return (
-      <aside aria-label="Navigation" data-collapsed="true" className="h-full shrink-0 border-r border-border-subtle">
-        <CollapsedRail
-          spaces={spaces}
-          attentionGuildIds={attentionGuildIds}
-          activeGuildId={activeGuildId}
-        />
-      </aside>
-    );
-  }
+  // Fixed-anchor + zero-state navigation callbacks (stable identities). A friend
+  // request row and the "Add a friend" zero-state action both land on /app/friends.
+  const goFriends = useCallback(() => navigate('/app/friends'), [navigate]);
+  const goDiscovery = useCallback(() => navigate('/app/discovery'), [navigate]);
+  const goDms = useCallback(() => navigate('/app/dms'), [navigate]);
+  const openRequest = useCallback((_r: FriendRequestEntry) => navigate('/app/friends'), [navigate]);
 
-  // Flat roving-tabindex ordinals in the §5 order: Needs-you → Pinned → Recent → Spaces.
-  const pinnedStart = needsYou.length;
+  // -- Flat roving-tabindex ordinals (§5). Anchors come FIRST, then Needs-you (its
+  //    friend-request rows before its conversation rows), Pinned, Recent, and Spaces
+  //    (whose trailing "Add a space" row closes out the order). --
+  const ANCHOR_COUNT = 3;
+  const needsYouStart = ANCHOR_COUNT; // request rows occupy [3 .. 3+requests-1]
+  const needsYouConvStart = needsYouStart + requests.length; // conversation rows follow
+  const pinnedStart = needsYouConvStart + needsYou.length;
   const recentStart = pinnedStart + pinned.length;
   const spacesStart = recentStart + recent.length;
 
-  // Roving tabindex: exactly ONE row is a Tab stop (the active conversation/space,
-  // else the first row); every other row is tabIndex -1 and reached via the arrow
-  // handler's .focus(). Without this each row's native <button> stays a Tab stop,
-  // so Tab walks through every merged row (layout-spec §5).
+  const pathname = location.pathname;
+  const homeActive = pathname === '/app' || pathname === '/app/';
+  const friendsActive = pathname.startsWith('/app/friends');
+  const messagesActive = pathname.startsWith('/app/dms');
+
+  // Roving tabindex: exactly ONE element is a Tab stop; every other is tabIndex -1 and
+  // reached via the arrow handler's .focus(). Prefer an open conversation/space, else
+  // the active anchor route, else Home (index 0) as the default entry point (§5).
   let activeNavIndex = 0;
   const inNeeds = activeKey ? needsYou.findIndex((e) => e.key === activeKey) : -1;
   const inPinned = activeKey ? pinned.findIndex((e) => e.key === activeKey) : -1;
   const inRecent = activeKey ? recent.findIndex((e) => e.key === activeKey) : -1;
   const inSpaces = activeGuildId ? spaces.findIndex((s) => s.id === activeGuildId) : -1;
-  if (inNeeds >= 0) activeNavIndex = inNeeds;
+  if (inNeeds >= 0) activeNavIndex = needsYouConvStart + inNeeds;
   else if (inPinned >= 0) activeNavIndex = pinnedStart + inPinned;
   else if (inRecent >= 0) activeNavIndex = recentStart + inRecent;
   else if (inSpaces >= 0) activeNavIndex = spacesStart + inSpaces;
+  else if (friendsActive) activeNavIndex = 1;
+  else if (messagesActive) activeNavIndex = 2;
+  else if (homeActive) activeNavIndex = 0;
 
   return (
-    <aside
-      aria-label="Navigation"
-      data-collapsed="false"
-      style={{ width: `${sidebarWidth}px` }}
-      className="flex h-full shrink-0 flex-col border-r border-border-subtle bg-bg-secondary"
-    >
-      <div className="shrink-0 p-2">
-        <SidebarSearch />
-      </div>
+    <>
+      {sidebarCollapsed ? (
+        <aside aria-label="Navigation" data-collapsed="true" className="h-full shrink-0 border-r border-border-subtle">
+          <CollapsedRail
+            spaces={spaces}
+            attentionGuildIds={attentionGuildIds}
+            activeGuildId={activeGuildId}
+            friendRequestCount={requests.length}
+            onAddSpace={openCreateGuild}
+          />
+        </aside>
+      ) : (
+        <aside
+          aria-label="Navigation"
+          data-collapsed="false"
+          style={{ width: `${sidebarWidth}px` }}
+          className="flex h-full shrink-0 flex-col border-r border-border-subtle bg-bg-secondary"
+        >
+          <div className="shrink-0 p-2">
+            <SidebarSearch />
+          </div>
 
-      <div
-        data-roving-container=""
-        role="listbox"
-        aria-label="Conversations and spaces"
-        aria-orientation="vertical"
-        className="flex flex-1 flex-col gap-3 overflow-y-auto px-2 pb-2 scrollbar-thin"
-      >
-        <NeedsYou entries={needsYou} activeKey={activeKey} onSelect={openConversation} navIndexStart={0} activeNavIndex={activeNavIndex} />
-        <PinnedRail entries={pinned} activeKey={activeKey} onSelect={openConversation} navIndexStart={pinnedStart} activeNavIndex={activeNavIndex} />
-        <RecentList entries={recent} activeKey={activeKey} onSelect={openConversation} navIndexStart={recentStart} activeNavIndex={activeNavIndex} />
-        <SpacesList spaces={spaces} activeGuildId={activeGuildId} navIndexStart={spacesStart} activeNavIndex={activeNavIndex} />
-      </div>
+          <div
+            data-roving-container=""
+            role="listbox"
+            aria-label="Navigation and conversations"
+            aria-orientation="vertical"
+            className="flex flex-1 flex-col gap-3 overflow-y-auto px-2 pb-2 pt-2 scrollbar-thin"
+          >
+            <AnchorNav friendRequestCount={requests.length} navIndexStart={0} activeNavIndex={activeNavIndex} />
+            <NeedsYou
+              entries={needsYou}
+              requests={requests}
+              onOpenRequest={openRequest}
+              activeKey={activeKey}
+              onSelect={openConversation}
+              navIndexStart={needsYouStart}
+              activeNavIndex={activeNavIndex}
+            />
+            <PinnedRail entries={pinned} activeKey={activeKey} onSelect={openConversation} navIndexStart={pinnedStart} activeNavIndex={activeNavIndex} />
+            <RecentList
+              entries={recent}
+              activeKey={activeKey}
+              onSelect={openConversation}
+              onAddFriend={goFriends}
+              onExploreServers={goDiscovery}
+              onViewAll={goDms}
+              navIndexStart={recentStart}
+              activeNavIndex={activeNavIndex}
+            />
+            <SpacesList spaces={spaces} activeGuildId={activeGuildId} onAddSpace={openCreateGuild} navIndexStart={spacesStart} activeNavIndex={activeNavIndex} />
+          </div>
 
-      <div className="shrink-0">
-        <CallDock />
-        <UserPanel
-          user={userPanel.user}
-          navigate={navigate}
-          muted={userPanel.selfMute}
-          deafened={userPanel.selfDeaf}
-          onToggleMute={userPanel.toggleMute}
-          onToggleDeaf={userPanel.toggleDeaf}
-          showAdminDashboard={userPanel.showAdminDashboard}
-        />
-      </div>
-    </aside>
+          <div className="shrink-0">
+            <CallDock />
+            <UserPanel
+              user={userPanel.user}
+              navigate={navigate}
+              muted={userPanel.selfMute}
+              deafened={userPanel.selfDeaf}
+              onToggleMute={userPanel.toggleMute}
+              onToggleDeaf={userPanel.toggleDeaf}
+              showAdminDashboard={userPanel.showAdminDashboard}
+            />
+          </div>
+        </aside>
+      )}
+      {showCreateGuild && <CreateGuildModal onClose={() => setShowCreateGuild(false)} />}
+    </>
   );
 }

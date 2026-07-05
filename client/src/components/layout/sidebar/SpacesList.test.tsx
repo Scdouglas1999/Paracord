@@ -31,9 +31,11 @@ describe('SpacesList', () => {
 
     expect(screen.getByRole('heading', { name: 'Spaces' })).toBeInTheDocument();
     const options = screen.getAllByRole('option');
-    expect(options).toHaveLength(2);
+    // Two joined guilds + the persistent "Add a space" row.
+    expect(options).toHaveLength(3);
     expect(screen.getByText('Emerald HQ')).toBeInTheDocument();
     expect(screen.getByText('Weekend Crew')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Add a space' })).toBeInTheDocument();
     // Two-letter initials chip (kill-list clean — tokens/text, not a gradient tile).
     expect(screen.getByText('EH')).toBeInTheDocument();
     expect(screen.getByText('WC')).toBeInTheDocument();
@@ -71,17 +73,25 @@ describe('SpacesList', () => {
     expect(navigate).toHaveBeenCalledWith('/app/guilds/g2');
   });
 
-  it('assigns flat roving-tabindex ordinals from navIndexStart', () => {
+  it('assigns flat roving-tabindex ordinals from navIndexStart, ending on the Add-a-space row', () => {
     const spaces = [space({ id: 'g1', name: 'Emerald HQ' }), space({ id: 'g2', name: 'Weekend Crew' })];
     render(<SpacesList spaces={spaces} navIndexStart={7} />);
 
     const options = screen.getAllByRole('option');
     expect(options[0]).toHaveAttribute('data-nav-index', '7');
     expect(options[1]).toHaveAttribute('data-nav-index', '8');
+    // The "Add a space" row is the last roving ordinal in the section.
+    expect(screen.getByRole('option', { name: 'Add a space' })).toHaveAttribute('data-nav-index', '9');
   });
 
-  it('renders nothing when the viewer has joined no spaces', () => {
-    const { container } = render(<SpacesList spaces={[]} />);
-    expect(container).toBeEmptyDOMElement();
+  it('keeps the persistent Add-a-space row even when the viewer has joined no spaces', () => {
+    const onAddSpace = vi.fn();
+    render(<SpacesList spaces={[]} onAddSpace={onAddSpace} />);
+    // The old guild-rail "+" is restored: create/join stays reachable at zero spaces.
+    expect(screen.getByRole('heading', { name: 'Spaces' })).toBeInTheDocument();
+    const addRow = screen.getByRole('option', { name: 'Add a space' });
+    expect(addRow).toBeInTheDocument();
+    fireEvent.click(addRow);
+    expect(onAddSpace).toHaveBeenCalledTimes(1);
   });
 });

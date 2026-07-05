@@ -15,7 +15,9 @@ import { useSwipeGesture } from '../hooks/useSwipeGesture';
 import { useMobile } from '../hooks/useMobile';
 import { SettingsPage } from './SettingsPage';
 import { GuildSettingsPage } from './GuildSettingsPage';
+import { LayoutTour } from '../components/onboarding/LayoutTour';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useRelationshipStore } from '../stores/relationshipStore';
 
 /**
  * AppShell — the "Rooms + Unified Stream" frame (layout-spec §1, §4, §5, §6).
@@ -70,6 +72,13 @@ export function AppShell() {
   useEffect(() => {
     setSidebarCollapsed(isMobile);
   }, [isMobile, setSidebarCollapsed]);
+
+  // Prime relationships once per shell mount so the sidebar's Friends badge and
+  // Needs-you request rows are fresh without requiring a Home/Friends visit
+  // (gateway RELATIONSHIP_* events keep them live afterwards).
+  useEffect(() => {
+    void useRelationshipStore.getState().fetchRelationships();
+  }, []);
 
   // Mobile swipe gestures (§6): right from the left edge opens the sidebar overlay;
   // left from the right edge opens the ContextPanel in `members` mode (mirrors the
@@ -221,6 +230,7 @@ export function AppShell() {
 
         <CommandPalette />
         <ConfirmDialog />
+        <LayoutTour />
 
         {/* Windowed settings overlays — spec modal enter (§4/§5): backdrop fade,
             surface scale .96→1 + rise, 240ms ease-out. */}

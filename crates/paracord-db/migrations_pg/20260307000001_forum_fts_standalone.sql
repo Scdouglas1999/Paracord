@@ -1,0 +1,12 @@
+-- No-op on PostgreSQL.
+--
+-- The SQLite migration of the same version rebuilds messages_fts as a
+-- standalone FTS5 table because the original external-content linkage
+-- (content='messages', content_rowid='id') was unsafe with a BIGINT primary
+-- key that is not the implicit rowid.
+--
+-- PostgreSQL full-text search uses the messages.search_vector tsvector column
+-- and trigger installed by 20260301000006_forum_fts.sql; there is no FTS5
+-- table to rebuild. This file exists only to keep migration version parity
+-- between the SQLite and PostgreSQL trees.
+SELECT 1;

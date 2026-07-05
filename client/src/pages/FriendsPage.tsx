@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Users, MessageSquare, X, Search, Check, UserPlus, UserRoundPlus, UserRoundX, Inbox, Ban } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Users, MessageSquare, X, Search, Check, UserPlus, UserRoundPlus, Inbox, Ban, ArrowUpRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useServerListStore } from '../stores/serverListStore';
+import type { Relationship } from '../api/relationships';
 import { dmApi } from '../api/dms';
 import { extractApiError } from '../api/client';
 import { useChannelStore } from '../stores/channelStore';
@@ -12,7 +13,7 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
 
-type FriendsTab = 'online' | 'all' | 'pending' | 'blocked' | 'add';
+type FriendsTab = 'online' | 'all' | 'requests' | 'blocked';
 
 const STATUS_COLOR: Record<string, string> = {
   online: 'bg-status-online',
@@ -64,14 +65,53 @@ function ActionButton({
   );
 }
 
+// A single person row (design-spec §7 List item): avatar + optional presence dot,
+// name + subtitle, then row actions supplied by the caller.
+function PersonRow({
+  name,
+  subtitle,
+  status,
+  showPresence,
+  actions,
+}: {
+  name: string;
+  subtitle: string;
+  status?: string;
+  showPresence?: boolean;
+  actions: ReactNode;
+}) {
+  return (
+    <div className="group flex items-center gap-3 px-4 py-2.5 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
+      <div className="relative shrink-0">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary">
+          {name.charAt(0).toUpperCase()}
+        </div>
+        {showPresence && status && status !== 'offline' && (
+          <span
+            className={cn('absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full', STATUS_COLOR[status] ?? 'bg-status-offline')}
+            style={{ boxShadow: '0 0 0 2.5px var(--bg-secondary)' }}
+          />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-label font-semibold text-text-primary">{name}</div>
+        <div className="truncate text-meta text-text-muted">{subtitle}</div>
+      </div>
+      <div className="flex items-center gap-1.5">{actions}</div>
+    </div>
+  );
+}
+
 export function FriendsPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<FriendsTab>('online');
+  const [showAddFriend, setShowAddFriend] = useState(false);
   const [addFriendInput, setAddFriendInput] = useState('');
   const [addFriendStatus, setAddFriendStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [relationshipError, setRelationshipError] = useState<string | null>(null);
   const [pendingActions, setPendingActions] = useState<Set<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const addInputRef = useRef<HTMLInputElement>(null);
   const relationships = useRelationshipStore((s) => s.relationships);
   const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
   const presences = usePresenceStore((s) => s.presences);
@@ -87,7 +127,7 @@ export function FriendsPage() {
   const blocked = useMemo(() => relationships.filter((r) => r.type === 2), [relationships]);
   const pendingIncoming = useMemo(() => relationships.filter((r) => r.type === 3), [relationships]);
   const pendingOutgoing = useMemo(() => relationships.filter((r) => r.type === 4), [relationships]);
-  const pending = useMemo(() => [...pendingIncoming, ...pendingOutgoing], [pendingIncoming, pendingOutgoing]);
+  const requestCount = pendingIncoming.length + pendingOutgoing.length;
   const onlineCount = useMemo(
     () =>
       friends.filter(
@@ -106,6 +146,12 @@ export function FriendsPage() {
       next.delete(actionKey);
       return next;
     });
+  };
+
+  const openAddFriend = () => {
+    setShowAddFriend(true);
+    // Focus lands on the input on the next frame once it's mounted.
+    requestAnimationFrame(() => addInputRef.current?.focus());
   };
 
   const handleAddFriend = async () => {
@@ -185,42 +231,94 @@ export function FriendsPage() {
   const filterTabs: { id: FriendsTab; label: string; count: number }[] = [
     { id: 'online', label: 'Online', count: onlineCount },
     { id: 'all', label: 'All', count: friends.length },
-    { id: 'pending', label: 'Pending', count: pending.length },
+    { id: 'requests', label: 'Requests', count: requestCount },
     { id: 'blocked', label: 'Blocked', count: blocked.length },
   ];
 
-  const list = useMemo(() => {
-    let base =
-      activeTab === 'all'
-        ? friends
-        : activeTab === 'pending'
-          ? pending
-          : activeTab === 'blocked'
-            ? blocked
-            : friends.filter(
-                (r) => (getPresence(r.user.id, scope)?.status || 'offline') !== 'offline'
-              );
+  const friendListSource =
+    activeTab === 'all'
+      ? friends
+      : activeTab === 'blocked'
+        ? blocked
+        : friends.filter((r) => (getPresence(r.user.id, scope)?.status || 'offline') !== 'offline');
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      base = base.filter((r) => r.user.username.toLowerCase().includes(q));
-    }
-    return base;
-  }, [activeTab, blocked, friends, pending, presences, getPresence, searchQuery, scope]);
+  const searchable = activeTab === 'online' || activeTab === 'all' || activeTab === 'blocked';
+  const filteredList = useMemo(() => {
+    if (!searchQuery.trim()) return friendListSource;
+    const q = searchQuery.toLowerCase();
+    return friendListSource.filter((r) => r.user.username.toLowerCase().includes(q));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [friendListSource, searchQuery]);
 
-  const sectionLabel =
-    activeTab === 'all' ? 'All friends' : activeTab === 'pending' ? 'Pending' : activeTab === 'blocked' ? 'Blocked' : 'Online';
+  const sectionLabel = activeTab === 'all' ? 'All' : activeTab === 'blocked' ? 'Blocked' : 'Online';
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-primary">
-      {/* Solid header with title + filter pills (no gradient hero) */}
+      {/* Solid header — title + primary Add-friend action (no gradient hero, §6.1). */}
       <header className="shrink-0 border-b border-border-subtle bg-bg-secondary px-4 py-4 sm:px-6">
         <div className="flex items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent-tint text-accent-primary">
             <Users size={19} />
           </span>
-          <h1 className="font-display text-heading text-text-primary">Friends</h1>
+          <div className="min-w-0 flex-1">
+            <h1 className="font-display text-heading text-text-primary">Friends</h1>
+            <p className="text-meta text-text-muted">People you can DM, share servers with, and see around.</p>
+          </div>
+          <Button
+            onClick={() => (showAddFriend ? setShowAddFriend(false) : openAddFriend())}
+            aria-expanded={showAddFriend}
+            className="shrink-0"
+          >
+            <UserPlus size={16} className="mr-1.5" />
+            Add friend
+          </Button>
         </div>
+
+        {/* Inline add-friend input — the primary action, not a hidden tab (§ task 1). */}
+        {showAddFriend && (
+          <div className="mt-4 rounded-md border border-border-subtle bg-bg-primary p-4">
+            <div className="text-section uppercase text-text-muted">Add a friend</div>
+            <p className="mt-1 text-meta text-text-secondary">
+              Send a request with someone's exact username, or their numeric user ID if you have it.
+            </p>
+            <div className="mt-3 flex flex-col gap-2.5 sm:flex-row sm:items-center">
+              <label htmlFor="friend-identifier" className="sr-only">
+                Username or user ID
+              </label>
+              <Input
+                id="friend-identifier"
+                ref={addInputRef}
+                type="text"
+                value={addFriendInput}
+                onChange={(e) => setAddFriendInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void handleAddFriend(); }}
+                placeholder="Username or user ID"
+                className="flex-1"
+              />
+              <Button
+                onClick={() => void handleAddFriend()}
+                disabled={!addFriendInput.trim() || isActionPending('add')}
+                className="sm:w-auto"
+              >
+                {isActionPending('add') ? 'Sending...' : 'Send Friend Request'}
+              </Button>
+            </div>
+            {addFriendStatus && (
+              <div
+                role={addFriendStatus.type === 'error' ? 'alert' : 'status'}
+                className={cn(
+                  'mt-3 flex items-center gap-2 rounded-sm border px-3.5 py-2.5 text-label font-medium',
+                  addFriendStatus.type === 'success'
+                    ? 'border-accent-success/35 bg-success-tint text-accent-success'
+                    : 'border-accent-danger/35 bg-danger-tint text-accent-danger',
+                )}
+              >
+                {addFriendStatus.type === 'success' ? <Check size={16} /> : <X size={16} />}
+                <span>{addFriendStatus.message}</span>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
           {filterTabs.map((tab) => {
@@ -229,7 +327,7 @@ export function FriendsPage() {
               <button
                 type="button"
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => { setActiveTab(tab.id); setSearchQuery(''); }}
                 aria-pressed={active}
                 className={cn(
                   'inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-label font-medium outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
@@ -252,178 +350,198 @@ export function FriendsPage() {
               </button>
             );
           })}
-          <div className="ml-auto">
-            <button
-              type="button"
-              onClick={() => setActiveTab('add')}
-              aria-pressed={activeTab === 'add'}
-              className={cn(
-                'inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-label font-semibold outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)]',
-                activeTab === 'add'
-                  ? 'bg-accent-primary text-text-on-accent shadow-sm'
-                  : 'bg-bg-mod-subtle text-text-primary hover:bg-bg-mod-strong',
-              )}
-            >
-              <UserPlus size={15} />
-              Add Friend
-            </button>
-          </div>
         </div>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        {activeTab === 'add' ? (
-          <div className="mx-auto w-full max-w-2xl px-4 py-6 sm:px-6">
-            <h2 className="font-display text-title text-text-primary">Add a friend</h2>
-            <p className="mt-1.5 text-body text-text-secondary">
-              Send a request with someone's exact username, or their numeric user ID if you have it.
-            </p>
-
-            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <label htmlFor="friend-identifier" className="sr-only">
-                Username or user ID
-              </label>
-              <Input
-                id="friend-identifier"
-                type="text"
-                value={addFriendInput}
-                onChange={(e) => setAddFriendInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleAddFriend(); }}
-                placeholder="Username or user ID"
-                className="flex-1"
-              />
-              <Button
-                type="button"
-                onClick={() => void handleAddFriend()}
-                disabled={!addFriendInput.trim() || isActionPending('add')}
-                className="sm:w-auto"
-              >
-                {isActionPending('add') ? 'Sending...' : 'Send Friend Request'}
-              </Button>
+        <div className="px-4 py-4 sm:px-6">
+          {relationshipError && (
+            <div role="alert" className="mb-4 flex items-center gap-2 rounded-md border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label font-medium text-accent-danger">
+              <X size={16} />
+              <span>{relationshipError}</span>
             </div>
+          )}
 
-            {addFriendStatus && (
-              <div
-                role={addFriendStatus.type === 'error' ? 'alert' : 'status'}
-                className={cn(
-                  'mt-3 flex items-center gap-2 rounded-md border px-3.5 py-2.5 text-label font-medium',
-                  addFriendStatus.type === 'success'
-                    ? 'border-accent-success/35 bg-success-tint text-accent-success'
-                    : 'border-accent-danger/35 bg-danger-tint text-accent-danger',
-                )}
-              >
-                {addFriendStatus.type === 'success' ? <Check size={16} /> : <X size={16} />}
-                <span>{addFriendStatus.message}</span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="px-4 py-4 sm:px-6">
-            {relationshipError && (
-              <div role="alert" className="mb-4 flex items-center gap-2 rounded-md border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label font-medium text-accent-danger">
-                <X size={16} />
-                <span>{relationshipError}</span>
-              </div>
-            )}
-
-            <div className="relative mb-5">
-              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-              <label htmlFor="friends-search" className="sr-only">
-                Search friends
-              </label>
-              <Input
-                id="friends-search"
-                type="text"
-                placeholder={`Search ${sectionLabel.toLowerCase()}`}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-
-            {list.length === 0 ? (
-              <FriendsEmptyState
-                tab={activeTab}
-                searching={searchQuery.trim().length > 0}
-                onAdd={() => setActiveTab('add')}
-                onClearSearch={() => setSearchQuery('')}
-              />
-            ) : (
-              <>
-                <div className="mb-2 px-1 text-section uppercase text-text-muted">
-                  {sectionLabel} — {list.length}
+          {activeTab === 'requests' ? (
+            <RequestsView
+              incoming={pendingIncoming}
+              outgoing={pendingOutgoing}
+              onAccept={(id) => void handleAcceptFriend(id)}
+              onDecline={(id) => void handleRemoveFriend(id)}
+              onAdd={openAddFriend}
+              isPending={isActionPending}
+            />
+          ) : (
+            <>
+              {searchable && (
+                <div className="relative mb-5">
+                  <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                  <label htmlFor="friends-search" className="sr-only">
+                    Search friends
+                  </label>
+                  <Input
+                    id="friends-search"
+                    type="text"
+                    placeholder={`Search ${sectionLabel.toLowerCase()}`}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-9"
+                  />
                 </div>
-                <div className="divide-y divide-border-subtle rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
-                  {list.map((rel) => {
-                    const status = getPresence(rel.user.id, scope)?.status || 'offline';
-                    const subtitle =
-                      rel.type === 3
-                        ? 'Incoming friend request'
-                        : rel.type === 4
-                          ? 'Outgoing friend request'
-                          : rel.type === 2
-                            ? 'Blocked'
-                            : STATUS_LABEL[status] ?? 'Offline';
-                    return (
-                      <div
-                        key={rel.id}
-                        className="group flex items-center gap-3 px-4 py-2.5 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle"
-                      >
-                        <div className="relative shrink-0">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary">
-                            {rel.user.username.charAt(0).toUpperCase()}
-                          </div>
-                          {rel.type === 1 && status !== 'offline' && (
-                            <span
-                              className={cn('absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full', STATUS_COLOR[status] ?? 'bg-status-offline')}
-                              style={{ boxShadow: '0 0 0 2.5px var(--bg-secondary)' }}
-                            />
-                          )}
-                        </div>
+              )}
 
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-label font-semibold text-text-primary">{rel.user.username}</div>
-                          <div className="truncate text-meta text-text-muted">{subtitle}</div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5">
-                          {rel.type === 3 && (
-                            <ActionButton
-                              label={`Accept friend request from ${rel.user.username}`}
-                              tone="success"
-                              onClick={() => void handleAcceptFriend(rel.user.id)}
-                              disabled={isActionPending(`accept:${rel.user.id}`)}
-                            >
-                              <Check size={16} />
-                            </ActionButton>
-                          )}
-                          {rel.type === 1 && (
-                            <ActionButton
-                              label={`Message ${rel.user.username}`}
-                              onClick={() => void handleMessageFriend(rel.user.id)}
-                              disabled={isActionPending(`message:${rel.user.id}`)}
-                            >
-                              <MessageSquare size={16} />
-                            </ActionButton>
-                          )}
-                          <ActionButton
-                            label={`${rel.type === 2 ? 'Unblock' : 'Remove'} ${rel.user.username}`}
-                            tone="danger"
-                            onClick={() => void handleRemoveFriend(rel.user.id)}
-                            disabled={isActionPending(`remove:${rel.user.id}`)}
-                          >
-                            <X size={16} />
-                          </ActionButton>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        )}
+              {filteredList.length === 0 ? (
+                <FriendsEmptyState
+                  tab={activeTab}
+                  searching={searchQuery.trim().length > 0}
+                  onAdd={openAddFriend}
+                  onClearSearch={() => setSearchQuery('')}
+                />
+              ) : (
+                <>
+                  <div className="mb-2 px-1 text-section uppercase text-text-muted">
+                    {sectionLabel} — {filteredList.length}
+                  </div>
+                  <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+                    {filteredList.map((rel) => {
+                      const status = getPresence(rel.user.id, scope)?.status || 'offline';
+                      const isFriend = rel.type === 1;
+                      const subtitle = rel.type === 2 ? 'Blocked' : STATUS_LABEL[status] ?? 'Offline';
+                      return (
+                        <PersonRow
+                          key={rel.id}
+                          name={rel.user.username}
+                          subtitle={subtitle}
+                          status={status}
+                          showPresence={isFriend}
+                          actions={
+                            <>
+                              {isFriend && (
+                                <ActionButton
+                                  label={`Message ${rel.user.username}`}
+                                  onClick={() => void handleMessageFriend(rel.user.id)}
+                                  disabled={isActionPending(`message:${rel.user.id}`)}
+                                >
+                                  <MessageSquare size={16} />
+                                </ActionButton>
+                              )}
+                              <ActionButton
+                                label={`${rel.type === 2 ? 'Unblock' : 'Remove'} ${rel.user.username}`}
+                                tone="danger"
+                                onClick={() => void handleRemoveFriend(rel.user.id)}
+                                disabled={isActionPending(`remove:${rel.user.id}`)}
+                              >
+                                <X size={16} />
+                              </ActionButton>
+                            </>
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+// Incoming / Outgoing request sections (§ task 1 — visible sections with counts +
+// accept/decline affordances). Each carries its own header + count.
+function RequestsView({
+  incoming,
+  outgoing,
+  onAccept,
+  onDecline,
+  onAdd,
+  isPending,
+}: {
+  incoming: Relationship[];
+  outgoing: Relationship[];
+  onAccept: (userId: string) => void;
+  onDecline: (userId: string) => void;
+  onAdd: () => void;
+  isPending: (key: string) => boolean;
+}) {
+  if (incoming.length === 0 && outgoing.length === 0) {
+    return (
+      <EmptyState
+        icon={<Inbox size={20} />}
+        title="No pending requests"
+        description="Friend requests you've sent or received collect here. Send one and we'll let you know the moment it's accepted."
+        action={
+          <Button variant="secondary" size="sm" onClick={onAdd}>
+            Send a request
+          </Button>
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      {incoming.length > 0 && (
+        <section>
+          <div className="mb-2 px-1 text-section uppercase text-text-muted">Incoming — {incoming.length}</div>
+          <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+            {incoming.map((rel) => (
+              <PersonRow
+                key={rel.id}
+                name={rel.user.username}
+                subtitle="Wants to be your friend"
+                actions={
+                  <>
+                    <ActionButton
+                      label={`Accept friend request from ${rel.user.username}`}
+                      tone="success"
+                      onClick={() => onAccept(rel.user.id)}
+                      disabled={isPending(`accept:${rel.user.id}`)}
+                    >
+                      <Check size={16} />
+                    </ActionButton>
+                    <ActionButton
+                      label={`Decline friend request from ${rel.user.username}`}
+                      tone="danger"
+                      onClick={() => onDecline(rel.user.id)}
+                      disabled={isPending(`remove:${rel.user.id}`)}
+                    >
+                      <X size={16} />
+                    </ActionButton>
+                  </>
+                }
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {outgoing.length > 0 && (
+        <section>
+          <div className="mb-2 px-1 text-section uppercase text-text-muted">Outgoing — {outgoing.length}</div>
+          <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+            {outgoing.map((rel) => (
+              <PersonRow
+                key={rel.id}
+                name={rel.user.username}
+                subtitle="Request sent — waiting to hear back"
+                actions={
+                  <ActionButton
+                    label={`Cancel friend request to ${rel.user.username}`}
+                    tone="danger"
+                    onClick={() => onDecline(rel.user.id)}
+                    disabled={isPending(`remove:${rel.user.id}`)}
+                  >
+                    <X size={16} />
+                  </ActionButton>
+                }
+              />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -460,7 +578,7 @@ function FriendsEmptyState({
         <EmptyState
           icon={<UserRoundPlus size={20} />}
           title="Nobody's online right now"
-          description="None of your friends are online at the moment — they'll show up here the second they sign in. In the meantime, add a few more people to your circle."
+          description="None of your friends are online at the moment — they'll show up here the second they sign in. In the meantime, add a few more people with the Add friend button up top."
           action={
             <Button size="sm" onClick={onAdd}>
               Add a friend
@@ -473,23 +591,10 @@ function FriendsEmptyState({
         <EmptyState
           icon={<UserRoundPlus size={20} />}
           title="Your friends list is empty"
-          description="Add people by their username to start DMs, share servers, and see when they're around. It only takes their handle."
+          description="Add people by their username with the Add friend button up top to start DMs, share servers, and see when they're around. All it takes is their handle."
           action={
             <Button size="sm" onClick={onAdd}>
               Add your first friend
-            </Button>
-          }
-        />
-      );
-    case 'pending':
-      return (
-        <EmptyState
-          icon={<Inbox size={20} />}
-          title="No pending requests"
-          description="Friend requests you've sent or received will collect here. Send one and we'll let you know the moment it's accepted."
-          action={
-            <Button variant="secondary" size="sm" onClick={onAdd}>
-              Send a request
             </Button>
           }
         />
@@ -505,7 +610,7 @@ function FriendsEmptyState({
     default:
       return (
         <EmptyState
-          icon={<UserRoundX size={20} />}
+          icon={<ArrowUpRight size={20} />}
           title="Nothing here yet"
           description="There's nobody in this list right now."
         />

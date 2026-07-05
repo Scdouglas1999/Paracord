@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Bell, BellOff, CheckCheck } from 'lucide-react';
+import { Bell, BellOff, CheckCheck, Plus } from 'lucide-react';
 import { useServerListStore } from '../../../stores/serverListStore';
 import { useChannelStore } from '../../../stores/channelStore';
 import { useReadStateStore } from '../../../stores/readStateStore';
@@ -30,18 +30,27 @@ export interface SpacesListProps {
   spaces: GuildSummary[];
   /** Currently-open guild id (route param) → active row highlight. */
   activeGuildId?: string | null;
+  /**
+   * Open the create/join-server flow. The old guild rail's "+" was the only persistent
+   * create/join entry and died with the rail; the always-visible "Add a space" row
+   * restores it. The sidebar mounts the existing `CreateGuildModal` (Create/Join/
+   * Template tabs) — this component never rebuilds it.
+   */
+  onAddSpace?: () => void;
   /** Flat roving-tabindex ordinal of this section's first row (SHELL-5 wires the handler). */
   navIndexStart?: number;
   /** Flat ordinal of the single roving Tab stop; -1 on every other row. */
   activeNavIndex?: number;
 }
 
-export function SpacesList({ spaces, activeGuildId, navIndexStart = 0, activeNavIndex }: SpacesListProps) {
+export function SpacesList({ spaces, activeGuildId, onAddSpace, navIndexStart = 0, activeNavIndex }: SpacesListProps) {
   const navigate = useNavigate();
   const { mutedGuildIds, toggleMute } = useMutedGuilds();
   const { contextMenu, onContextMenu, closeContextMenu } = useContextMenu();
 
-  if (spaces.length === 0) return null;
+  // Never returns null now: even with zero joined spaces the "Add a space" row must
+  // stay reachable so a fresh account can create or join its first server.
+  const addSpaceNavIndex = navIndexStart + spaces.length;
 
   const openSpace = (space: GuildSummary) => {
     if (useServerListStore.getState().activeServerId !== space.serverId) {
@@ -136,6 +145,30 @@ export function SpacesList({ spaces, activeGuildId, navIndexStart = 0, activeNav
             </button>
           );
         })}
+
+        {/* Persistent create/join-server entry — restores the dead guild-rail "+". */}
+        <button
+          type="button"
+          role="option"
+          aria-selected={false}
+          aria-label="Add a space"
+          data-nav-index={addSpaceNavIndex}
+          tabIndex={addSpaceNavIndex === activeNavIndex ? 0 : -1}
+          onClick={() => onAddSpace?.()}
+          className={cn(
+            'group relative flex h-[34px] w-full items-center gap-2 rounded-sm px-2 text-left outline-none',
+            'text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)]',
+            'hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]',
+          )}
+        >
+          <span
+            aria-hidden
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-tint text-accent-primary"
+          >
+            <Plus size={16} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-label">Add a space</span>
+        </button>
       </div>
 
       {contextMenu.isOpen && (

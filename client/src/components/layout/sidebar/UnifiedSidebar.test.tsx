@@ -1,5 +1,5 @@
-import { act, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { act, render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { UnifiedSidebar } from './UnifiedSidebar';
@@ -9,12 +9,24 @@ import { useUIStore } from '../../../stores/uiStore';
 import { usePresenceStore } from '../../../stores/presenceStore';
 import { useUnifiedConversations } from '../../../hooks/useUnifiedConversations';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
-import type { UnifiedConversations } from '../../../hooks/useUnifiedConversations';
+import type { UnifiedConversations, FriendRequestEntry } from '../../../hooks/useUnifiedConversations';
 
 // MiniVoiceBar pulls in livekit-client + the full voice pipeline; stub it so the
 // CallDock behaviour (renders only when connected) can be asserted in isolation.
 vi.mock('../../voice/MiniVoiceBar', () => ({
   MiniVoiceBar: () => <div data-testid="mini-voice-bar" />,
+}));
+
+// The create/join-server modal is heavy (fetches templates on mount); stub it so the
+// "Add a space" affordance can be asserted to OPEN it without its side effects.
+vi.mock('../../guild/CreateGuildModal', () => ({
+  CreateGuildModal: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="create-guild-modal">
+      <button type="button" onClick={onClose}>
+        close
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('../../../hooks/useUnifiedConversations', () => ({
@@ -41,28 +53,42 @@ function entry(over: Partial<ConversationEntry> & { key: string }): Conversation
   };
 }
 
-const CONVERSATIONS: UnifiedConversations = {
-  needsYou: [entry({ key: 'srv:1', title: 'urgent-channel', mentionCount: 3 })],
-  pinned: [entry({ key: 'srv:2', title: 'pinned-channel', pinned: true })],
-  recent: [entry({ key: 'srv:3', title: 'lounge-channel' })],
-  spaces: [
-    { id: 'g1', name: 'Emerald HQ', icon: null, serverId: 'srv' },
-    { id: 'g2', name: 'Side Space', icon: null, serverId: 'srv' },
-  ],
-};
+function request(over: Partial<FriendRequestEntry> & { userId: string }): FriendRequestEntry {
+  return { key: `request:${over.userId}`, username: 'friend', createdMs: null, ...over };
+}
+
+function conversations(over: Partial<UnifiedConversations> = {}): UnifiedConversations {
+  return {
+    needsYou: [entry({ key: 'srv:1', title: 'urgent-channel', mentionCount: 3 })],
+    pinned: [entry({ key: 'srv:2', title: 'pinned-channel', pinned: true })],
+    recent: [entry({ key: 'srv:3', title: 'lounge-channel' })],
+    spaces: [
+      { id: 'g1', name: 'Emerald HQ', icon: null, serverId: 'srv' },
+      { id: 'g2', name: 'Side Space', icon: null, serverId: 'srv' },
+    ],
+    requests: [],
+    ...over,
+  };
+}
 
 const mockedHook = vi.mocked(useUnifiedConversations);
 
-function renderSidebar() {
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="pathname">{loc.pathname}</div>;
+}
+
+function renderSidebar(initialPath = '/app') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialPath]}>
       <UnifiedSidebar />
+      <LocationProbe />
     </MemoryRouter>,
   );
 }
 
 beforeEach(() => {
-  mockedHook.mockReturnValue(CONVERSATIONS);
+  mockedHook.mockReturnValue(conversations());
   usePresenceStore.setState({ presences: new Map(), presenceOrder: new Map() });
   useAuthStore.setState({ user: { id: 'u1', username: 'Wren', flags: 0 } as never });
   useUIStore.setState({ sidebarCollapsed: false, sidebarWidth: 300 });
@@ -83,6 +109,57 @@ describe('UnifiedSidebar', () => {
     expect(screen.getByText('pinned-channel')).toBeInTheDocument();
     expect(screen.getByText('lounge-channel')).toBeInTheDocument();
     expect(screen.getByText('Emerald HQ')).toBeInTheDocument();
+  });
+
+  it('renders the three fixed anchor rows above the ranked sections', () => {
+    renderSidebar();
+    const home = screen.getByRole('option', { name: /^Home$/ });
+    const friends = screen.getByRole('option', { name: /^Friends$/ });
+    const messages = screen.getByRole('option', { name: /^Messages$/ });
+    // Anchors take the first three flat roving ordinals.
+    expect(home).toHaveAttribute('data-nav-index', '0');
+    expect(friends).toHaveAttribute('data-nav-index', '1');
+    expect(messages).toHaveAttribute('data-nav-index', '2');
+    // No friend requests → no badge on Friends.
+    expect(screen.queryByTestId('anchor-badge-friends')).not.toBeInTheDocument();
+  });
+
+  it('marks the anchor whose route is active', () => {
+    renderSidebar('/app/friends');
+    expect(screen.getByRole('option', { name: /^Friends$/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('option', { name: /^Home$/ })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('navigates when an anchor is clicked', () => {
+    renderSidebar('/app');
+    fireEvent.click(screen.getByRole('option', { name: /^Messages$/ }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/dms');
+  });
+
+  it('shows an emerald request badge on Friends and a request row in Needs-you', () => {
+    mockedHook.mockReturnValue(
+      conversations({
+        requests: [
+          request({ userId: 'a', username: 'Ada' }),
+          request({ userId: 'b', username: 'Bo' }),
+        ],
+      }),
+    );
+    renderSidebar();
+
+    expect(screen.getByTestId('anchor-badge-friends')).toHaveTextContent('2');
+    // A request row surfaces in Needs-you and routes to the friends surface on click.
+    const row = screen.getByRole('option', { name: /Ada sent a friend request/ });
+    expect(row).toBeInTheDocument();
+    fireEvent.click(row);
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/app/friends');
+  });
+
+  it('renders a persistent "Add a space" row that opens the create-guild modal', () => {
+    renderSidebar();
+    expect(screen.queryByTestId('create-guild-modal')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'Add a space' }));
+    expect(screen.getByTestId('create-guild-modal')).toBeInTheDocument();
   });
 
   it('renders UserPanel in the footer', () => {
@@ -110,15 +187,15 @@ describe('UnifiedSidebar', () => {
     expect(screen.getByTestId('mini-voice-bar')).toBeInTheDocument();
   });
 
-  it('assigns flat roving-tabindex ordinals across sections (Needs-you → Pinned → Recent → Spaces)', () => {
+  it('assigns flat roving-tabindex ordinals across sections (Anchors → Needs-you → Pinned → Recent → Spaces → Add a space)', () => {
     renderSidebar();
     const rows = screen.getAllByRole('option');
     const indices = rows.map((r) => r.getAttribute('data-nav-index'));
-    // 1 needsYou + 1 pinned + 1 recent + 2 spaces, contiguous from 0.
-    expect(indices).toEqual(['0', '1', '2', '3', '4']);
+    // 3 anchors + 1 needsYou + 1 pinned + 1 recent + 2 spaces + 1 add-a-space, contiguous.
+    expect(indices).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8']);
   });
 
-  it('collapses to the 64px icon rail with space avatars and a mini CallDock', () => {
+  it('collapses to the 64px icon rail with anchors, space avatars and a mini CallDock', () => {
     useUIStore.setState({ sidebarCollapsed: true });
     useVoiceStore.setState({ connected: true });
     renderSidebar();
@@ -126,8 +203,11 @@ describe('UnifiedSidebar', () => {
     const rail = screen.getByRole('complementary', { name: 'Navigation' });
     expect(rail).toHaveAttribute('data-collapsed', 'true');
 
-    // Full list sections are gone; space avatars + collapsed call dock remain.
+    // Full list sections are gone; anchors + space avatars + collapsed call dock remain.
     expect(screen.queryByRole('heading', { name: 'Recent' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Friends' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add a space' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Emerald HQ' })).toBeInTheDocument();
     expect(screen.getByTestId('call-dock-collapsed')).toBeInTheDocument();
   });
@@ -137,5 +217,12 @@ describe('UnifiedSidebar', () => {
     useUIStore.setState({ sidebarCollapsed: true });
     renderSidebar();
     expect(screen.getAllByTestId('space-attention-dot')).toHaveLength(1);
+  });
+
+  it('flags the collapsed Friends anchor with a dot when requests are pending', () => {
+    useUIStore.setState({ sidebarCollapsed: true });
+    mockedHook.mockReturnValue(conversations({ requests: [request({ userId: 'a' })] }));
+    renderSidebar();
+    expect(screen.getByTestId('anchor-attention-dot')).toBeInTheDocument();
   });
 });

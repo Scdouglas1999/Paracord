@@ -5,6 +5,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '../../stores/uiStore';
 import { CommandPalette } from './CommandPalette';
 
+const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }));
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return { ...actual, useNavigate: () => navigateMock };
+});
+
+// The palette mounts DmPickerModal to satisfy the "New message" command; stub it
+// so the test asserts the trigger without pulling in its friend-list fetch.
+vi.mock('../message/DmPickerModal', () => ({
+  DmPickerModal: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="dm-picker">DM picker</div> : null,
+}));
+
 vi.mock('framer-motion', async () => {
   const React = await import('react');
   return {
@@ -24,6 +38,7 @@ vi.mock('framer-motion', async () => {
 describe('CommandPalette accessibility', () => {
   beforeEach(() => {
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    navigateMock.mockClear();
     useUIStore.setState({ commandPaletteOpen: false });
   });
 
@@ -79,5 +94,68 @@ describe('CommandPalette accessibility', () => {
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command Palette' })).not.toBeInTheDocument());
     await waitFor(() => expect(opener).toHaveFocus());
+  });
+});
+
+describe('CommandPalette social action commands', () => {
+  beforeEach(() => {
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    navigateMock.mockClear();
+    useUIStore.setState({ commandPaletteOpen: false });
+  });
+
+  afterEach(() => {
+    act(() => {
+      useUIStore.setState({ commandPaletteOpen: false });
+    });
+  });
+
+  async function openPalette() {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <button type="button">Opener</button>
+        <CommandPalette />
+      </MemoryRouter>,
+    );
+    screen.getByRole('button', { name: 'Opener' }).focus();
+    await user.keyboard('{Control>}k{/Control}');
+    await screen.findByRole('dialog', { name: 'Command Palette' });
+    return user;
+  }
+
+  it('surfaces the social action commands', async () => {
+    await openPalette();
+    expect(screen.getByText('New message')).toBeInTheDocument();
+    expect(screen.getByText('Add a friend')).toBeInTheDocument();
+    expect(screen.getByText('All conversations')).toBeInTheDocument();
+    expect(screen.getByText('Friends')).toBeInTheDocument();
+  });
+
+  it('opens the DM picker from "New message"', async () => {
+    const user = await openPalette();
+    await user.click(screen.getByText('New message'));
+    await waitFor(() => expect(screen.getByTestId('dm-picker')).toBeInTheDocument());
+  });
+
+  it('routes "Add a friend" and "Friends" to the friends page', async () => {
+    const user = await openPalette();
+    await user.click(screen.getByText('Add a friend'));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/app/friends'));
+  });
+
+  it('routes "All conversations" to the DM index', async () => {
+    const user = await openPalette();
+    await user.click(screen.getByText('All conversations'));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/app/dms'));
+  });
+
+  it('sends Home to the App Home and keeps a single Friends entry', async () => {
+    const user = await openPalette();
+    // Exactly one "Friends" command — Home no longer doubles as the friends link.
+    expect(screen.getAllByText('Friends')).toHaveLength(1);
+    await user.click(screen.getByText('Go to Home'));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/app'));
+    expect(navigateMock).not.toHaveBeenCalledWith('/app/friends');
   });
 });

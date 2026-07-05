@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,10 +15,32 @@ const testData = vi.hoisted(() => ({
     system: false,
     created_at: '2026-05-17T00:00:00Z',
   },
+  ada: {
+    id: 'ada-id',
+    username: 'Ada',
+    discriminator: 2,
+    flags: 0,
+    bot: false,
+    system: false,
+    created_at: '2026-05-17T00:00:00Z',
+  },
+  bea: {
+    id: 'bea-id',
+    username: 'Bea',
+    discriminator: 3,
+    flags: 0,
+    bot: false,
+    system: false,
+    created_at: '2026-05-17T00:00:00Z',
+  },
 }));
 
 const mockRelationshipState = vi.hoisted(() => ({
-  relationships: [{ id: 'rel-1', type: 1, user: testData.friend }],
+  relationships: [{ id: 'rel-1', type: 1, user: testData.friend }] as Array<{
+    id: string;
+    type: number;
+    user: typeof testData.friend;
+  }>,
   fetchRelationships: vi.fn(),
   addFriend: vi.fn(),
   acceptFriend: vi.fn(),
@@ -125,6 +147,21 @@ describe('FriendsPage', () => {
     expect(mockChannelState.selectChannel).not.toHaveBeenCalled();
   });
 
+  it('surfaces Add friend as a header primary action, not a filter tab', async () => {
+    const user = userEvent.setup();
+    renderFriendsPage();
+
+    // The add flow is a prominent header button, not one of the filter pills.
+    const addButton = screen.getByRole('button', { name: /^add friend$/i });
+    expect(addButton).toHaveAttribute('aria-expanded', 'false');
+    // The input is hidden until the primary action is invoked.
+    expect(screen.queryByRole('textbox', { name: /username or user id/i })).not.toBeInTheDocument();
+
+    await user.click(addButton);
+    expect(addButton).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('textbox', { name: /username or user id/i })).toBeInTheDocument();
+  });
+
   it('prevents duplicate friend requests while a send is already pending', async () => {
     const user = userEvent.setup();
     let resolveAddFriend!: () => void;
@@ -155,5 +192,46 @@ describe('FriendsPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Friend request sent to Ada!');
     });
+  });
+
+  it('splits requests into Incoming/Outgoing sections with counts and accept/decline', async () => {
+    const user = userEvent.setup();
+    mockRelationshipState.relationships = [
+      { id: 'in-1', type: 3, user: testData.ada },
+      { id: 'out-1', type: 4, user: testData.bea },
+    ];
+
+    renderFriendsPage();
+
+    // The Requests pill carries the combined pending count.
+    const requestsTab = screen.getByRole('button', { name: /requests/i });
+    expect(within(requestsTab).getByText('2')).toBeInTheDocument();
+
+    await user.click(requestsTab);
+
+    expect(screen.getByText('Incoming — 1')).toBeInTheDocument();
+    expect(screen.getByText('Outgoing — 1')).toBeInTheDocument();
+
+    // Incoming requests get accept + decline; outgoing gets cancel.
+    expect(screen.getByRole('button', { name: /accept friend request from ada/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /decline friend request from ada/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /cancel friend request to bea/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /accept friend request from ada/i }));
+    expect(mockRelationshipState.acceptFriend).toHaveBeenCalledWith('ada-id');
+  });
+
+  it('renders a left-aligned empty state that points at the Add friend action', async () => {
+    const user = userEvent.setup();
+    mockRelationshipState.relationships = [];
+
+    renderFriendsPage();
+
+    await user.click(screen.getByRole('button', { name: /^all$/i }));
+    expect(screen.getByText('Your friends list is empty')).toBeInTheDocument();
+
+    // The empty-state CTA opens the same add-friend input.
+    await user.click(screen.getByRole('button', { name: /add your first friend/i }));
+    expect(screen.getByRole('textbox', { name: /username or user id/i })).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import { useReadStateStore } from '../stores/readStateStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { usePinnedStore } from '../stores/pinnedStore';
+import { useRelationshipStore } from '../stores/relationshipStore';
 import { LOCAL_SERVER_ID } from '../lib/connectionManager';
 import { computeGuildUnread } from './useUnreadCounts';
 import { scoreEntry } from '../lib/attention/scoreConversation';
@@ -50,12 +51,37 @@ export interface GuildSummary {
   serverId: string;
 }
 
+/**
+ * An incoming friend request surfaced at the TOP of "Needs you" (they are literally
+ * waiting on the user). Sourced from `relationshipStore` — NOT the channel merge — so
+ * it lives in its own isolated memo and a relationship change never re-runs the
+ * expensive cross-server conversation build (and vice-versa), preserving the
+ * per-message re-render fix.
+ */
+export interface FriendRequestEntry {
+  /** `request:${userId}` — stable, collision-free against conversation keys. */
+  key: string;
+  userId: string;
+  username: string;
+  /**
+   * Request creation time (ms), derived from the relationship's snowflake id when it
+   * is one; null for the composite `${user_id}:${target_id}` fallback id. Rendered as
+   * a compact relative label when present ("timestamp if available", §1 of the brief).
+   */
+  createdMs: number | null;
+}
+
 export interface UnifiedConversations {
   needsYou: ConversationEntry[];
   recent: ConversationEntry[];
   pinned: ConversationEntry[];
   spaces: GuildSummary[];
+  /** Incoming friend requests, newest first — rendered above Needs-you rows. */
+  requests: FriendRequestEntry[];
 }
+
+/** Relationship.type === 3 is a pending INCOMING friend request (see relationshipStore). */
+const RELATIONSHIP_PENDING_INCOMING = 3;
 
 /** Needs-you is capped so the section stays a glanceable shortlist (§3.2). */
 const NEEDS_YOU_CAP = 6;
@@ -139,6 +165,7 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
   const activeServerId = useServerListStore((s) => s.activeServerId);
   const guilds = useGuildStore((s) => s.guilds);
   const pinnedKeys = usePinnedStore((s) => s.pinnedKeys);
+  const relationships = useRelationshipStore((s) => s.relationships);
 
   // Stable key of the connected-server set. Re-runs the DM + read-state fan-out
   // whenever a server connects/disconnects — the sidebar stays mounted across
@@ -165,7 +192,25 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
   // A new array identity every render would bust the memo; derive a stable key.
   const mutedKey = mutedGuildIds.join(',');
 
-  return useMemo<UnifiedConversations>(() => {
+  // Incoming friend requests live in their OWN memo, keyed only on `relationships`.
+  // Isolating them keeps a friend-request event from re-running the O(channels)
+  // conversation build below — and a MESSAGE_CREATE storm from re-deriving requests.
+  const requests = useMemo<FriendRequestEntry[]>(() => {
+    return relationships
+      .filter((r) => r.type === RELATIONSHIP_PENDING_INCOMING)
+      .map((r) => ({
+        key: `request:${r.user.id}`,
+        userId: r.user.id,
+        username: r.user.display_name || r.user.username,
+        // The relationship id is a snowflake carrying the request time UNLESS it fell
+        // back to the composite `${user_id}:${target_id}` form — only decode digits.
+        createdMs: /^\d+$/.test(r.id) ? snowflakeToMs(r.id) : null,
+      }))
+      // Newest first — they are the freshest thing waiting on the user.
+      .sort((a, b) => (b.createdMs ?? 0) - (a.createdMs ?? 0));
+  }, [relationships]);
+
+  const conversations = useMemo(() => {
     const urlMap = buildServerUrlMap(servers);
     const guildById = new Map<string, Guild>(guilds.map((g) => [g.id, g]));
     const pinnedSet = new Set(pinnedKeys);
@@ -297,4 +342,11 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
     pinnedKeys,
     mutedKey,
   ]);
+
+  // Combine the two isolated memos. Identity is stable whenever neither input
+  // changed, so consumers memoized on the returned arrays don't re-render on churn.
+  return useMemo<UnifiedConversations>(
+    () => ({ ...conversations, requests }),
+    [conversations, requests],
+  );
 }

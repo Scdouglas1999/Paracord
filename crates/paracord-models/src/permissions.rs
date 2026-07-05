@@ -58,10 +58,24 @@ impl<'de> Deserialize<'de> for Permissions {
 
 impl Default for Permissions {
     fn default() -> Self {
+        // Baseline @everyone / default "Member" role permissions. Tuned for
+        // Discord parity so ordinary members can participate without an owner
+        // hand-granting each capability: they can create invites, attach files,
+        // embed links, and use external emojis in addition to the core
+        // read/send/react/voice set.
+        //
+        // MENTION_EVERYONE is DELIBERATELY EXCLUDED: with auto_join_public_spaces,
+        // a fresh account can join a public space instantly, so a default
+        // @everyone mass-ping is cheap abuse. Owners can still grant
+        // MENTION_EVERYONE explicitly to a role when they want it.
         Self::VIEW_CHANNEL
             | Self::SEND_MESSAGES
             | Self::READ_MESSAGE_HISTORY
             | Self::ADD_REACTIONS
+            | Self::CREATE_INSTANT_INVITE
+            | Self::EMBED_LINKS
+            | Self::ATTACH_FILES
+            | Self::USE_EXTERNAL_EMOJIS
             | Self::CONNECT
             | Self::SPEAK
             | Self::STREAM
@@ -90,5 +104,42 @@ mod tests {
             Permissions::from_bits_truncate(1_i64 << 19),
             Permissions::empty()
         );
+    }
+
+    #[test]
+    fn default_grants_discord_parity_member_permissions() {
+        let d = Permissions::default();
+
+        // Core member capabilities.
+        assert!(d.contains(Permissions::VIEW_CHANNEL));
+        assert!(d.contains(Permissions::SEND_MESSAGES));
+        assert!(d.contains(Permissions::READ_MESSAGE_HISTORY));
+        assert!(d.contains(Permissions::ADD_REACTIONS));
+
+        // Discord-parity additions: ordinary members must be able to invite,
+        // attach files, embed links, and use external emojis out of the box.
+        assert!(d.contains(Permissions::CREATE_INSTANT_INVITE));
+        assert!(d.contains(Permissions::ATTACH_FILES));
+        assert!(d.contains(Permissions::EMBED_LINKS));
+        assert!(d.contains(Permissions::USE_EXTERNAL_EMOJIS));
+    }
+
+    #[test]
+    fn default_excludes_privileged_and_mass_ping_permissions() {
+        let d = Permissions::default();
+
+        // MENTION_EVERYONE is intentionally NOT a default (mass-ping abuse is too
+        // cheap when public spaces auto-join). Owners grant it explicitly.
+        assert!(!d.contains(Permissions::MENTION_EVERYONE));
+
+        // No administrative / management bits leak into the baseline role.
+        assert!(!d.contains(Permissions::ADMINISTRATOR));
+        assert!(!d.contains(Permissions::MANAGE_CHANNELS));
+        assert!(!d.contains(Permissions::MANAGE_GUILD));
+        assert!(!d.contains(Permissions::MANAGE_MESSAGES));
+        assert!(!d.contains(Permissions::MANAGE_ROLES));
+        assert!(!d.contains(Permissions::MANAGE_WEBHOOKS));
+        assert!(!d.contains(Permissions::MANAGE_EMOJIS));
+        assert!(!d.contains(Permissions::MANAGE_NICKNAMES));
     }
 }

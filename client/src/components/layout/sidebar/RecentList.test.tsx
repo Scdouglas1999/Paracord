@@ -77,13 +77,46 @@ describe('RecentList', () => {
     expect(rows[1]).toHaveAttribute('data-nav-index', '11');
   });
 
-  it('renders a warm, specific empty state (not a placeholder) when there are no recents', () => {
-    render(<RecentList entries={[]} onSelect={vi.fn()} />);
+  it('renders a warm, specific empty state (not a placeholder) with discovery actions', () => {
+    const onAddFriend = vi.fn();
+    const onExploreServers = vi.fn();
+    render(
+      <RecentList
+        entries={[]}
+        onSelect={vi.fn()}
+        onAddFriend={onAddFriend}
+        onExploreServers={onExploreServers}
+      />,
+    );
     expect(screen.getByRole('heading', { name: 'Recent' })).toBeInTheDocument();
-    expect(screen.getByText('Nothing going yet')).toBeInTheDocument();
+    expect(screen.getByText('Conversations you visit will gather here.')).toBeInTheDocument();
     expect(screen.queryByRole('option')).not.toBeInTheDocument();
     // Kill-list #11: no lazy placeholder copy.
     expect(screen.queryByText(/it's quiet/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/no data/i)).not.toBeInTheDocument();
+
+    // Two quiet inline actions wired to the friends / discovery destinations.
+    fireEvent.click(screen.getByRole('button', { name: 'Add a friend' }));
+    expect(onAddFriend).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Explore servers' }));
+    expect(onExploreServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows an "All conversations" footer link only when there are recents', () => {
+    const onViewAll = vi.fn();
+    const { rerender } = render(<RecentList entries={[]} onSelect={vi.fn()} onViewAll={onViewAll} />);
+    // Empty → no footer.
+    expect(screen.queryByRole('button', { name: /All conversations/ })).not.toBeInTheDocument();
+
+    rerender(
+      <RecentList
+        entries={[makeEntry({ key: 'a:1', title: 'general' })]}
+        onSelect={vi.fn()}
+        onViewAll={onViewAll}
+      />,
+    );
+    const footer = screen.getByRole('button', { name: /All conversations/ });
+    fireEvent.click(footer);
+    expect(onViewAll).toHaveBeenCalledTimes(1);
   });
 });

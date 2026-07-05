@@ -7,8 +7,9 @@ import { useReadStateStore } from '../stores/readStateStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { usePinnedStore } from '../stores/pinnedStore';
+import { useRelationshipStore } from '../stores/relationshipStore';
 import { EPOCH_MS } from '../lib/attention/conversationModel';
-import { ChannelType, type Channel, type Guild, type ReadState, type VoiceState } from '../types';
+import { ChannelType, type Channel, type Guild, type ReadState, type User, type VoiceState } from '../types';
 
 function snowflakeForMs(ms: number): string {
   return String((BigInt(ms) - BigInt(EPOCH_MS)) << 22n);
@@ -54,6 +55,11 @@ function resetStores(): void {
   });
   useGuildStore.setState({ guilds: [] });
   usePinnedStore.setState({ pinnedKeys: [] });
+  useRelationshipStore.setState({ relationships: [] });
+}
+
+function user(id: string, username: string): User {
+  return { id, username, discriminator: 0, bot: false, system: false, flags: 0, created_at: '' } as User;
 }
 
 function run() {
@@ -216,6 +222,29 @@ describe('useUnifiedConversations — graceful degradation', () => {
     // a1 is read (no signal) → recent; b1 has no read-state → treated as unread.
     expect(result.needsYou.map((e) => e.key)).toEqual(['b:b1']);
     expect(result.recent.map((e) => e.key)).toEqual(['a:a1']);
+  });
+
+  it('surfaces pending-incoming friend requests, newest first, with decoded timestamps', () => {
+    const now = Date.now();
+    const olderId = snowflakeForMs(now - 3_600_000);
+    const newerId = snowflakeForMs(now - 60_000);
+    useRelationshipStore.setState({
+      relationships: [
+        { id: olderId, type: 3, user: user('u1', 'Ada') }, // pending incoming (older)
+        { id: newerId, type: 3, user: user('u2', 'Bo') }, // pending incoming (newer)
+        { id: '5', type: 1, user: user('u3', 'friend') }, // accepted friend — excluded
+        { id: '6', type: 4, user: user('u4', 'outgoing') }, // pending OUTGOING — excluded
+        { id: 'u5:me', type: 3, user: user('u5', 'NoTs') }, // composite id → no timestamp
+      ],
+    });
+
+    const { requests } = run();
+    // Only the three pending-incoming requests, ordered newest → oldest.
+    expect(requests.map((r) => r.username)).toEqual(['Bo', 'Ada', 'NoTs']);
+    expect(requests[0].key).toBe('request:u2');
+    expect(requests[1].createdMs).toBeGreaterThan(0);
+    // A composite fallback id carries no decodable request time.
+    expect(requests[2].createdMs).toBeNull();
   });
 
   it('maps joined guilds to spaces with resolved serverIds', () => {
