@@ -103,3 +103,9 @@ client/ui_mock_screenshot.png
 SECURITY_AUDIT*.md
 SECURITY_REMEDIATION_TRACKER.md
 
+
+# Local tool/build outputs (never commit)
+client/target/
+.build-tmp/
+.codex
+.deepsec/
