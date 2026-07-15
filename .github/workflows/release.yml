@@ -276,6 +276,16 @@ jobs:
           "VPX_VERSION=1.16.0" >> $env:GITHUB_ENV
           "VPX_STATIC=1" >> $env:GITHUB_ENV
 
+          # env-libvpx-sys emits `rustc-link-lib=static=libvpx` on Windows, so
+          # rustc looks for libvpx.lib; the vcpkg x64-windows-static triplet
+          # names the archive vpx.lib. Provide a libvpx.lib alias so the static
+          # link resolves.
+          $libFile = Join-Path $installed "lib\vpx.lib"
+          $aliasFile = Join-Path $installed "lib\libvpx.lib"
+          if ((Test-Path $libFile) -and -not (Test-Path $aliasFile)) {
+            Copy-Item $libFile $aliasFile
+          }
+
       - name: Install client dependencies
         working-directory: client
         run: npm ci
