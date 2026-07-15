@@ -12,6 +12,9 @@ env:
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: "true"
   LIVEKIT_VERSION: "v1.9.11"
+  # libopus (audiopus_sys) bundles a pre-3.5 CMakeLists; CMake 4.x (Windows
+  # runner) removed that compatibility. Configure it anyway per CMake's guidance.
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
