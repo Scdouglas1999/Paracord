@@ -347,7 +347,9 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             libsoup-3.0-dev \
             libasound2-dev \
-            libvpx-dev
+            libvpx-dev \
+            libpipewire-0.3-dev \
+            libdbus-1-dev
           if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
             sudo apt-get install -y libayatana-appindicator3-dev
           else
