@@ -18,7 +18,7 @@
   &nbsp;
   <img src="https://img.shields.io/badge/license-Source--Available-8B7355" alt="Source-Available license"/>
   &nbsp;
-  <img src="https://img.shields.io/badge/version-0.9.0-2D6A4F" alt="Version 0.9.0"/>
+  <img src="https://img.shields.io/badge/version-1.0.0-2D6A4F" alt="Version 1.0.0"/>
 </p>
 
 <p align="center">
@@ -33,7 +33,7 @@
 </p>
 
 <p align="center">
-  Current release: <strong>v0.9.0</strong> · targeting first public <strong>v1.0.0</strong>
+  Current release: <strong>v1.0.0</strong> · first public release
 </p>
 
 ---
@@ -309,7 +309,7 @@ cargo clippy --workspace -- -D warnings
 
 ## Known Limitations
 
-Paracord is pre-1.0 (`v0.9.0`). Before you rely on it for a public community, skim **[docs/known-limitations.md](docs/known-limitations.md)** — especially federation readiness, Linux capture/distro variance, Docker loopback HTTP, and desktop updater expectations for unsigned builds.
+Paracord `v1.0.0` is the first public release. Before you rely on it for a public community, skim **[docs/known-limitations.md](docs/known-limitations.md)** — especially federation readiness, Linux capture/distro variance, Docker loopback HTTP, and desktop updater expectations for unsigned builds.
 
 ---
 
