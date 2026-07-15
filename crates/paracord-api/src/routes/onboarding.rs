@@ -68,11 +68,14 @@ fn settings_to_json(
     })
 }
 
+/// Ensures the actor holds MANAGE_GUILD in the target guild, returning the
+/// actor's effective permissions and the guild owner id so callers can perform
+/// further per-role authorization (e.g. onboarding role-option gating).
 async fn ensure_manage_guild(
     state: &AppState,
     guild_id: i64,
     user_id: i64,
-) -> Result<(), ApiError> {
+) -> Result<(Permissions, i64), ApiError> {
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
@@ -84,6 +87,32 @@ async fn ensure_manage_guild(
     let perms =
         paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
+    Ok((perms, guild.owner_id))
+}
+
+/// Authorizes the configuring actor to publish `role` as a self-service
+/// onboarding option. Mirrors `members::validate_member_role_assignment`: an
+/// actor may only make assignable a role they could themselves hand out — i.e.
+/// never a role carrying ADMINISTRATOR, and never one whose permission bits are
+/// not a subset of the actor's. Guild owners and administrators bypass. This
+/// closes the config-mediated escalation where a MANAGE_GUILD holder (who lacks
+/// MANAGE_ROLES or is hierarchy-blocked) would otherwise publish a privileged
+/// role and self-select it via the onboarding self-service path.
+fn ensure_role_option_assignable(
+    guild_owner_id: i64,
+    actor_user_id: i64,
+    actor_perms: Permissions,
+    role: &paracord_db::roles::RoleRow,
+) -> Result<(), ApiError> {
+    if actor_user_id == guild_owner_id || actor_perms.contains(Permissions::ADMINISTRATOR) {
+        return Ok(());
+    }
+    if role.permissions & Permissions::ADMINISTRATOR.bits() != 0 {
+        return Err(ApiError::Forbidden);
+    }
+    if role.permissions & !actor_perms.bits() != 0 {
+        return Err(ApiError::Forbidden);
+    }
     Ok(())
 }
 
@@ -131,7 +160,7 @@ pub async fn update_guild_onboarding(
     Path(guild_id): Path<i64>,
     Json(body): Json<UpdateOnboardingSettingsRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    ensure_manage_guild(&state, guild_id, auth.user_id).await?;
+    let (actor_perms, guild_owner_id) = ensure_manage_guild(&state, guild_id, auth.user_id).await?;
 
     let welcome_title = trim_opt(body.welcome_title.as_deref());
     let welcome_body = trim_opt(body.welcome_body.as_deref());
@@ -215,6 +244,13 @@ pub async fn update_guild_onboarding(
                     "all onboarding role options must belong to the target guild".into(),
                 ));
             }
+            // Authorize the configuring actor to publish this role as a
+            // self-assignable onboarding option using the same rules that gate
+            // a direct role grant. Without this, a MANAGE_GUILD holder who
+            // cannot otherwise assign a role (no MANAGE_ROLES / hierarchy-blocked)
+            // could publish a privileged or ADMINISTRATOR role and self-select
+            // it via the onboarding self-service path.
+            ensure_role_option_assignable(guild_owner_id, auth.user_id, actor_perms, &role)?;
             rows.push((
                 paracord_util::snowflake::generate(1),
                 role_id,
@@ -312,14 +348,47 @@ pub async fn update_my_onboarding_state(
                 .map_err(|_| ApiError::BadRequest("Invalid selected_role_ids entry".into()))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if !allowed_roles.is_empty()
-        && selected_role_ids
-            .iter()
-            .any(|id| !allowed_roles.contains(id))
+    // Every selected role MUST be in the configured onboarding allow-list. An
+    // empty allow-list means the guild has no self-assignable onboarding roles,
+    // so any non-empty selection is rejected outright. (Previously an empty
+    // allow-list short-circuited the check and let members self-assign ANY guild
+    // role, including ADMINISTRATOR.)
+    if selected_role_ids
+        .iter()
+        .any(|id| !allowed_roles.contains(id))
     {
         return Err(ApiError::BadRequest(
             "selected_role_ids must be a subset of configured onboarding role options".into(),
         ));
+    }
+
+    // Defense-in-depth: onboarding self-service must never grant a role carrying
+    // privileged permission bits, even if such a role was mis-configured into the
+    // allow-list. This guarantees onboarding cannot be used to self-escalate.
+    if !selected_role_ids.is_empty() {
+        let privileged = Permissions::ADMINISTRATOR
+            | Permissions::MANAGE_GUILD
+            | Permissions::MANAGE_ROLES
+            | Permissions::MANAGE_CHANNELS
+            | Permissions::MANAGE_WEBHOOKS
+            | Permissions::MANAGE_EMOJIS
+            | Permissions::MANAGE_MESSAGES
+            | Permissions::MANAGE_NICKNAMES
+            | Permissions::BAN_MEMBERS
+            | Permissions::KICK_MEMBERS
+            | Permissions::VIEW_AUDIT_LOG
+            | Permissions::MENTION_EVERYONE;
+        let space_roles = paracord_db::roles::get_space_roles(&state.db, guild_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        for id in &selected_role_ids {
+            let role = space_roles.iter().find(|r| r.id == *id).ok_or_else(|| {
+                ApiError::BadRequest("selected_role_ids contains an unknown role".into())
+            })?;
+            if role.permissions & privileged.bits() != 0 {
+                return Err(ApiError::Forbidden);
+            }
+        }
     }
 
     let completed = body.completed.unwrap_or(body.accepted_rules);

@@ -33,7 +33,7 @@ export function computeGuildUnread(
       if (channel.last_message_id) unreadCount++;
       continue;
     }
-    if (channel.last_message_id && channel.last_message_id !== rs.last_message_id) {
+    if (isMessageUnread(channel.last_message_id, rs.last_message_id)) {
       unreadCount++;
     }
     mentionCount += rs.mention_count ?? 0;
@@ -43,6 +43,44 @@ export function computeGuildUnread(
     return { unreadCount, mentionCount };
   }
   return null;
+}
+
+const NUMERIC_ID_RE = /^\d+$/;
+
+/**
+ * Message ids are Snowflakes, so unread is an ordered comparison: a channel is
+ * unread only when its latest message is newer than the saved read cursor.
+ *
+ * This intentionally treats a read cursor that is ahead of stale channel
+ * metadata as read. That can happen after the message list has loaded a newer
+ * page and persisted the cursor before the sidebar/inbox channel snapshot has
+ * caught up. A strict string inequality would make the channel flip back to
+ * unread every time a refresh or navigation re-read the stale channel object.
+ */
+export function isMessageUnread(
+  latestMessageId: string | number | null | undefined,
+  readMessageId: string | number | null | undefined,
+): boolean {
+  if (latestMessageId === null || latestMessageId === undefined || latestMessageId === '') {
+    return false;
+  }
+
+  const latest = String(latestMessageId);
+  if (latest === '0') return false;
+
+  if (readMessageId === null || readMessageId === undefined || readMessageId === '') {
+    return true;
+  }
+
+  const read = String(readMessageId);
+  if (latest === read) return false;
+
+  if (NUMERIC_ID_RE.test(latest) && NUMERIC_ID_RE.test(read)) {
+    return BigInt(latest) > BigInt(read);
+  }
+
+  // Non-snowflake test fixtures / legacy ids have no ordering guarantee.
+  return latest !== read;
 }
 
 function recordToMap(record: Record<string, ReadState>): Map<string, ReadState> {
@@ -124,7 +162,7 @@ export function useUnreadCounts(mutedGuildIds: string[]) {
           if (channel.last_message_id) set.add(channel.id);
           continue;
         }
-        if (channel.last_message_id && channel.last_message_id !== rs.last_message_id) {
+        if (isMessageUnread(channel.last_message_id, rs.last_message_id)) {
           set.add(channel.id);
         }
       }

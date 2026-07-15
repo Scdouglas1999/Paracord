@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import { UserMinus, UserPlus, Users, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { LogOut, UserMinus, UserPlus, Users, X } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';
 import { dmApi } from '../../api/dms';
 import { extractApiError } from '../../api/client';
+import { displayName } from '../../lib/displayName';
+import { confirm } from '../../stores/confirmStore';
+import { toast } from '../../stores/toastStore';
 
 interface GroupDmMembersPanelProps {
   channelId: string;
@@ -18,6 +22,7 @@ interface GroupDmMembersPanelProps {
  * overlay-style ContextPanel surfaces (its own header + Add toggle + close).
  */
 export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelProps) {
+  const navigate = useNavigate();
   const dmChannels = useChannelStore((s) => s.channelsByGuild['']);
   const setDmChannels = useChannelStore((s) => s.setDmChannels);
   const dmChannel = (dmChannels ?? []).find((c) => c.id === channelId);
@@ -67,8 +72,33 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
     }
   };
 
+  const handleLeaveGroup = async () => {
+    if (!currentUser?.id) return;
+    const ok = await confirm({
+      title: 'Leave group DM?',
+      description: 'You will no longer see this conversation unless someone adds you back.',
+      confirmLabel: 'Leave group',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setMemberActionError(null);
+    try {
+      await dmApi.removeRecipient(channelId, currentUser.id);
+      const remaining = (dmChannels ?? []).filter((c) => c.id !== channelId);
+      setDmChannels(remaining);
+      onClose();
+      toast.success('Left the group DM.');
+      navigate('/app/dms');
+    } catch (err) {
+      setMemberActionError(extractApiError(err) || 'Failed to leave this group DM.');
+    }
+  };
+
   const eligibleFriends = relationships.filter(
     (r) => r.type === 1 && !dmChannel?.recipients?.some((rec) => rec.id === r.user.id),
+  );
+  const isMember = Boolean(
+    currentUser?.id && dmChannel?.recipients?.some((r) => r.id === currentUser.id),
   );
 
   return (
@@ -125,7 +155,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-bg-mod-subtle text-text-secondary">
                 <UserPlus size={13} />
               </span>
-              <span className="min-w-0 flex-1 truncate text-label text-text-secondary">{rel.user.username}</span>
+              <span className="min-w-0 flex-1 truncate text-label text-text-secondary">{displayName(rel.user)}</span>
             </button>
           ))}
           {eligibleFriends.length === 0 && (
@@ -150,7 +180,7 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
               <button
                 type="button"
                 aria-label={`Remove ${recipient.username} from group DM`}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted opacity-0 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] group-hover:opacity-100"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted opacity-100 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-accent-danger focus-visible:shadow-[var(--focus-ring)] sm:opacity-0 sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
                 onClick={() => void handleRemoveMember(recipient.id)}
                 title="Remove from group"
               >
@@ -160,6 +190,19 @@ export function GroupDmMembersPanel({ channelId, onClose }: GroupDmMembersPanelP
           </div>
         ))}
       </div>
+
+      {isMember && (
+        <div className="shrink-0 border-t border-border-subtle p-3">
+          <button
+            type="button"
+            onClick={() => void handleLeaveGroup()}
+            className="flex h-9 w-full items-center justify-center gap-2 rounded-sm border border-accent-danger/30 text-label font-medium text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-danger-tint focus-visible:shadow-[var(--focus-ring)]"
+          >
+            <LogOut size={16} />
+            Leave group
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

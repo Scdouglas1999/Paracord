@@ -436,12 +436,14 @@ impl FederationClient {
         let mut last_err = FederationError::Http("no attempts made".to_string());
         for attempt in 0..MAX_RETRIES {
             let path = transport::request_path_from_url(url);
+            let destination = transport::destination_from_url(url);
             for protocol_version in [FEDERATION_PROTOCOL_DEFAULT, FEDERATION_PROTOCOL_VERSION_V1] {
                 let mut request = client.get(url);
                 request = self.with_transport_signature_headers(
                     request,
                     "GET",
                     &path,
+                    &destination,
                     &[],
                     protocol_version,
                 );
@@ -497,6 +499,7 @@ impl FederationClient {
         let mut last_err = FederationError::Http("no attempts made".to_string());
         for attempt in 0..MAX_RETRIES {
             let path = transport::request_path_from_url(url);
+            let destination = transport::destination_from_url(url);
             for protocol_version in [FEDERATION_PROTOCOL_DEFAULT, FEDERATION_PROTOCOL_VERSION_V1] {
                 // Sign and send the exact same bytes: `body_bytes` is serialized
                 // once by the caller, signed as-is below, and transmitted
@@ -510,6 +513,7 @@ impl FederationClient {
                     request,
                     "POST",
                     &path,
+                    &destination,
                     &body_bytes,
                     protocol_version,
                 );
@@ -558,6 +562,7 @@ impl FederationClient {
         request: reqwest::RequestBuilder,
         method: &str,
         path: &str,
+        destination: &str,
         body_bytes: &[u8],
         protocol_version: &str,
     ) -> reqwest::RequestBuilder {
@@ -565,14 +570,23 @@ impl FederationClient {
             return request.header("X-Paracord-Fed-Version", protocol_version);
         };
         let timestamp_ms = chrono::Utc::now().timestamp_millis();
-        let canonical =
-            transport::canonical_transport_bytes_with_body(method, path, timestamp_ms, body_bytes);
+        // Bind the request to its intended destination server so a captured
+        // signed request cannot be replayed/forwarded to a different server that
+        // trusts the same origin key.
+        let canonical = transport::canonical_transport_bytes_with_body_and_destination(
+            method,
+            path,
+            timestamp_ms,
+            body_bytes,
+            destination,
+        );
         let signature = signing::sign(&signer.signing_key, &canonical);
         request
             .header("X-Paracord-Origin", signer.origin.as_str())
             .header("X-Paracord-Key-Id", signer.key_id.as_str())
             .header("X-Paracord-Timestamp", timestamp_ms.to_string())
             .header("X-Paracord-Signature", signature)
+            .header("X-Paracord-Destination", destination)
             .header("X-Paracord-Fed-Version", protocol_version)
     }
 }
@@ -611,6 +625,38 @@ fn ssrf_checked_http_client_pinned(
         .resolve_to_addrs(host, addrs)
         .build()
         .map_err(|e| FederationError::Http(e.to_string()))
+}
+
+/// Validate `url_str`, resolve its DNS, and return an HTTP client whose
+/// connection is pinned to the validated public addresses.
+///
+/// This is the SSRF-safe entry point for callers outside [`FederationClient`]
+/// (federated discovery, moderation-list sync). Validating with
+/// [`validate_public_federation_url_with_dns`] and then connecting with an
+/// unpinned client leaves a DNS-rebinding TOCTOU: the validation lookup and the
+/// connect-time lookup are independent, so a low-TTL rebind to a private IP
+/// slips past the check. Pinning the resolved addresses onto the client closes
+/// that window because reqwest never re-resolves `host`.
+///
+/// When the host is a raw IP literal (nothing to rebind) or an operator has
+/// opted into private federation URLs, no addresses are pinned and a plain
+/// SSRF-checked client is returned.
+pub async fn ssrf_checked_pinned_client_for_url(
+    user_agent: &'static str,
+    timeout: Duration,
+    url_str: &str,
+) -> Result<Client, FederationError> {
+    let addrs = resolve_public_federation_addrs(url_str).await?;
+    if addrs.is_empty() {
+        return ssrf_checked_http_client(user_agent, timeout);
+    }
+    let host = url::Url::parse(url_str)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_string))
+        .ok_or_else(|| {
+            FederationError::Http("SSRF protection: URL has no host to pin".to_string())
+        })?;
+    ssrf_checked_http_client_pinned(user_agent, timeout, &host, &addrs)
 }
 
 impl Default for FederationClient {

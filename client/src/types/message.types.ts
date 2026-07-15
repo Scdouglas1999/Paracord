@@ -1,3 +1,5 @@
+import type { Component } from './components';
+
 export enum MessageType {
   Default = 0,
   RecipientAdd = 1,
@@ -25,6 +27,7 @@ export interface MessageEmbed {
 export interface MessageAuthor {
   id: string;
   username: string;
+  display_name?: string | null;
   discriminator: string;
   avatar?: string;
   avatar_hash?: string | null;
@@ -91,6 +94,12 @@ export interface Poll {
   total_votes: number;
 }
 
+export interface MessageInteraction {
+  id: string;
+  type?: number;
+  name?: string;
+}
+
 export interface Message {
   id: string;
   channel_id: string;
@@ -113,6 +122,10 @@ export interface Message {
   poll?: Poll;
   referenced_message?: Message;
   embeds?: MessageEmbed[];
+  /** Bot/application message components (action rows, buttons, selects). */
+  components?: Component[];
+  /** Present on slash-command / interaction response messages. */
+  interaction?: MessageInteraction | null;
   anonymous?: {
     alias: string;
     is_anonymous: boolean;

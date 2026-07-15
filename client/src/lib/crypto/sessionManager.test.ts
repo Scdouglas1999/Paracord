@@ -146,7 +146,9 @@ describe('crypto/sessionManager', () => {
       expect(store.signedPrekey.id).toBeGreaterThan(0);
       expect(store.signedPrekey.createdAt).toBeGreaterThan(0);
       expect(store.oneTimePrekeys.length).toBe(OPK_BATCH_SIZE);
-      expect(store.nextOPKId).toBe(store.signedPrekey.id + OPK_BATCH_SIZE + 1);
+      expect(store.lastResortPrekey).not.toBeNull();
+      expect(store.lastResortPrekey!.id).toBe(store.signedPrekey.id + OPK_BATCH_SIZE + 1);
+      expect(store.nextOPKId).toBe(store.signedPrekey.id + OPK_BATCH_SIZE + 2);
     });
 
     it('generates unique OPK IDs', () => {
@@ -216,6 +218,18 @@ describe('crypto/sessionManager', () => {
 
       const result = consumeLocalOPK(store, 999999);
       expect(result).toBeNull();
+    });
+
+    it('keeps the last-resort prekey when resolved by id', () => {
+      const edPriv = ed25519.utils.randomSecretKey();
+      const store = generatePrekeyBundle(edPriv);
+      expect(store.lastResortPrekey).not.toBeNull();
+      const lr = store.lastResortPrekey!;
+
+      const result = consumeLocalOPK(store, lr.id);
+      expect(result).not.toBeNull();
+      expect(result!.privateKey).toEqual(lr.privateKey);
+      expect(result!.updatedStore.lastResortPrekey).toEqual(lr);
     });
   });
 

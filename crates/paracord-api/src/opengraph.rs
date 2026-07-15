@@ -9,7 +9,7 @@
 
 use paracord_core::AppState;
 use serde_json::{json, Value};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use url::{Host, Url};
 
@@ -44,11 +44,28 @@ pub fn extract_urls(text: &str) -> Vec<String> {
 
 /// Fetch a single URL and extract OpenGraph metadata.
 /// Returns `None` if fetching fails or no OG tags are found.
-async fn fetch_og(client: &reqwest::Client, url: &str) -> Option<Value> {
+async fn fetch_og(url: &str) -> Option<Value> {
     let mut current_url = Url::parse(url).ok()?;
     let mut redirects = 0usize;
     let resp = loop {
-        validate_ssrf_target(&current_url).await?;
+        // Validate the target and capture the exact addresses that passed the
+        // SSRF check. Empty means the host is a raw IP literal (already
+        // validated directly, nothing to pin).
+        let pinned = validate_ssrf_target(&current_url).await?;
+
+        // Build a fresh client per hop whose DNS for this host is pinned to the
+        // validated addresses. reqwest then connects to the exact IP that
+        // passed `is_private_or_reserved_ip` instead of re-resolving the
+        // hostname at connect time, closing the DNS-rebinding TOCTOU. This is
+        // re-done on every redirect hop, so revalidation is also pinned.
+        let host = current_url.host_str()?;
+        let mut builder = reqwest::Client::builder()
+            .timeout(FETCH_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none());
+        if !pinned.is_empty() {
+            builder = builder.resolve_to_addrs(host, &pinned);
+        }
+        let client = builder.build().ok()?;
 
         let resp = client
             .get(current_url.clone())
@@ -141,7 +158,15 @@ fn is_private_or_reserved_ip(ip: &IpAddr) -> bool {
     }
 }
 
-async fn validate_ssrf_target(url: &Url) -> Option<()> {
+/// Validate a fetch target against the SSRF policy.
+///
+/// Returns the validated socket addresses so the caller can pin them onto the
+/// connecting reqwest client (via `resolve_to_addrs`), guaranteeing the socket
+/// connects to the exact IP that passed the private/reserved check rather than
+/// a rebound address re-resolved at connect time. For raw IP literals an empty
+/// vector is returned: the literal is validated directly and there is nothing
+/// to pin. `None` means the target is rejected.
+async fn validate_ssrf_target(url: &Url) -> Option<Vec<SocketAddr>> {
     match url.scheme() {
         "http" | "https" => {}
         _ => return None,
@@ -153,11 +178,13 @@ async fn validate_ssrf_target(url: &Url) -> Option<()> {
             if is_private_or_reserved_ip(&IpAddr::V4(v4)) {
                 return None;
             }
+            Some(Vec::new())
         }
         Host::Ipv6(v6) => {
             if is_private_or_reserved_ip(&IpAddr::V6(v6)) {
                 return None;
             }
+            Some(Vec::new())
         }
         Host::Domain(domain) => {
             let lowered = domain.to_ascii_lowercase();
@@ -175,21 +202,18 @@ async fn validate_ssrf_target(url: &Url) -> Option<()> {
             }
 
             let lookup = format!("{domain}:{port}");
-            let mut has_ip = false;
-            let addrs = tokio::net::lookup_host(&lookup).await.ok()?;
-            for addr in addrs {
-                has_ip = true;
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&lookup).await.ok()?.collect();
+            if addrs.is_empty() {
+                return None;
+            }
+            for addr in &addrs {
                 if is_private_or_reserved_ip(&addr.ip()) {
                     return None;
                 }
             }
-            if !has_ip {
-                return None;
-            }
+            Some(addrs)
         }
     }
-
-    Some(())
 }
 
 /// Parse `<meta property="og:*" content="...">` tags from HTML.
@@ -319,18 +343,12 @@ pub fn spawn_opengraph_task(
             return;
         }
 
-        let client = match reqwest::Client::builder()
-            .timeout(FETCH_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-        {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-
+        // Note: the reqwest client is built per fetch (and per redirect hop)
+        // inside `fetch_og` so its DNS can be pinned to the addresses that
+        // passed SSRF validation, preventing DNS-rebinding.
         let mut embeds: Vec<Value> = Vec::new();
         for url in &urls {
-            if let Some(embed) = fetch_og(&client, url).await {
+            if let Some(embed) = fetch_og(url).await {
                 embeds.push(embed);
             }
         }
@@ -486,6 +504,29 @@ mod tests {
             "https://foo.metadata/computeMetadata/v1/",
             "https://printer.local/status",
             "https://router.home.arpa/status",
+        ] {
+            let url = Url::parse(raw).expect("valid URL");
+            assert!(validate_ssrf_target(&url).await.is_none(), "{raw}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_ssrf_target_ip_literals_return_empty_pin_set() {
+        // Public IP literals validate and yield an empty pin set (nothing to
+        // pin — reqwest connects to the literal directly).
+        let public = Url::parse("https://8.8.8.8/").expect("valid URL");
+        assert_eq!(
+            validate_ssrf_target(&public).await,
+            Some(Vec::new()),
+            "public IP literal should validate with no pinned addrs"
+        );
+
+        // Private/reserved IP literals are rejected outright.
+        for raw in [
+            "http://127.0.0.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.5/admin",
+            "http://[::1]/",
         ] {
             let url = Url::parse(raw).expect("valid URL");
             assert!(validate_ssrf_target(&url).await.is_none(), "{raw}");

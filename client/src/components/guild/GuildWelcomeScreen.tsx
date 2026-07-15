@@ -55,7 +55,7 @@ export function GuildWelcomeScreen({ guild, channels, onDismiss }: GuildWelcomeS
       body:
         textChannels.length > 0
           ? `${textChannels.length} ${textChannels.length === 1 ? 'channel is' : 'channels are'} waiting below — each one is a different conversation.`
-          : 'Channels will show up here as the server takes shape.',
+          : 'Channels will show up here as the space takes shape.',
     },
     {
       icon: MessageSquare,

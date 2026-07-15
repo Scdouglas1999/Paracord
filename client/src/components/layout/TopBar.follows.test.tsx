@@ -28,8 +28,16 @@ const mockUIState = vi.hoisted(() => ({
   sidebarCollapsed: false,
   toggleSidebarCollapsed: vi.fn(),
   setCommandPaletteOpen: vi.fn(),
+  setGuildSettingsId: vi.fn(),
   connectionStatus: 'connected',
   connectionLatency: 42,
+}));
+
+const mockPermissions = vi.hoisted(() => ({
+  permissions: 0n,
+  isAdmin: false,
+  isOwner: false,
+  isLoading: false,
 }));
 
 const mockVoiceState = vi.hoisted(() => ({
@@ -61,10 +69,36 @@ const mockChannels = vi.hoisted(() => ({
       },
     ],
   },
+  channelsById: {
+    'ann-1': {
+      id: 'ann-1',
+      type: 5,
+      channel_type: 5,
+      guild_id: 'guild-1',
+      name: 'announcements',
+      position: 0,
+      nsfw: false,
+      created_at: '2026-01-01T00:00:00.000Z',
+    },
+    'text-1': {
+      id: 'text-1',
+      type: 0,
+      channel_type: 0,
+      guild_id: 'guild-1',
+      name: 'general',
+      position: 1,
+      nsfw: false,
+      created_at: '2026-01-01T00:00:00.000Z',
+    },
+  },
 }));
 
 vi.mock('../../stores/uiStore', () => ({
   useUIStore: (selector: (state: typeof mockUIState) => unknown) => selector(mockUIState),
+}));
+
+vi.mock('../../hooks/usePermissions', () => ({
+  usePermissions: () => mockPermissions,
 }));
 
 vi.mock('../../stores/channelStore', () => ({

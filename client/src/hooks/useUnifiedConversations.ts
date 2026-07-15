@@ -17,6 +17,7 @@ import {
 } from '../lib/attention/conversationModel';
 import { buildServerUrlMap, resolveServerIdForGuild } from '../lib/attention/serverResolve';
 import { ChannelType, type Channel, type Guild, type ReadState, type VoiceState } from '../types';
+import { displayName } from '../lib/displayName';
 
 /**
  * The single cross-server unified-conversation selector (layout-spec §3.2, §3.3).
@@ -73,6 +74,8 @@ export interface FriendRequestEntry {
 
 export interface UnifiedConversations {
   needsYou: ConversationEntry[];
+  /** Attention-bearing entries beyond the six-row glanceable shortlist. */
+  needsYouOverflowCount: number;
   recent: ConversationEntry[];
   pinned: ConversationEntry[];
   spaces: GuildSummary[];
@@ -105,8 +108,8 @@ function guildChannelKind(type: ChannelType): ConversationKind | null {
 /** Best-effort DM/group-DM title from the channel's recipient(s). */
 function dmTitle(ch: Channel): string {
   if (ch.name) return ch.name;
-  if (ch.recipient?.username) return ch.recipient.username;
-  if (ch.recipients?.length) return ch.recipients.map((r) => r.username).join(', ');
+  if (ch.recipient) return displayName(ch.recipient);
+  if (ch.recipients?.length) return ch.recipients.map((r) => displayName(r)).join(', ');
   return 'Direct Message';
 }
 
@@ -317,6 +320,7 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
       .map((e) => ({ e, s: scoreEntry(e, now) }));
     scored.sort((a, b) => b.s - a.s);
     const needsYou = scored.slice(0, NEEDS_YOU_CAP).map((x) => x.e);
+    const needsYouOverflowCount = Math.max(0, scored.length - NEEDS_YOU_CAP);
 
     const needsYouKeys = new Set(needsYou.map((e) => e.key));
     const recent = pool
@@ -326,11 +330,12 @@ export function useUnifiedConversations(mutedGuildIds: string[] = []): UnifiedCo
     const spaces: GuildSummary[] = guilds.map((g) => ({
       id: g.id,
       name: g.name,
-      icon: g.icon ?? null,
+      // Prefer icon_hash (API field); fall back to legacy `icon` if present.
+      icon: g.icon_hash ?? g.icon ?? null,
       serverId: resolveServerIdForGuild(g, urlMap, activeId),
     }));
 
-    return { needsYou, recent, pinned, spaces };
+    return { needsYou, needsYouOverflowCount, recent, pinned, spaces };
   }, [
     channelsByGuild,
     dmChannelsByServer,

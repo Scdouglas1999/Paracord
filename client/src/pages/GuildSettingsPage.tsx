@@ -3,9 +3,11 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { useGuildStore } from '../stores/guildStore';
 import { usePermissions } from '../hooks/usePermissions';
-import { Permissions, hasPermission } from '../types';
+import { canAccessGuildSettings } from '../lib/guildSettingsAccess';
 import { useUIStore } from '../stores/uiStore';
 import { Button } from '../components/ui/Button';
+
+export { canAccessGuildSettings } from '../lib/guildSettingsAccess';
 
 export function GuildSettingsPage() {
   const { guildId: routeGuildId } = useParams();
@@ -28,7 +30,7 @@ export function GuildSettingsPage() {
   const guilds = useGuildStore((s) => s.guilds);
   const guild = guilds.find((g) => g.id === guildId);
   const { permissions, isAdmin, isLoading } = usePermissions(guildId || null);
-  const canManageGuild = isAdmin || hasPermission(permissions, Permissions.MANAGE_GUILD);
+  const canOpenSettings = canAccessGuildSettings(permissions, isAdmin);
   const closeSettings = () => {
     setGuildSettingsId(null);
     if (!isOverlay && routeGuildId) {
@@ -47,7 +49,7 @@ export function GuildSettingsPage() {
     );
   }
 
-  if (!canManageGuild) {
+  if (!canOpenSettings) {
     return (
       <div className="flex h-full items-center bg-bg-primary px-6 sm:px-10">
         <div className="w-full max-w-md">
@@ -55,12 +57,12 @@ export function GuildSettingsPage() {
             <ShieldAlert size={20} strokeWidth={2} />
           </div>
           <h2 className="font-display text-heading text-text-primary">
-            Server settings are locked
+            Space settings are locked
           </h2>
           <p className="mt-2 max-w-prose text-body text-text-secondary">
-            You need the <span className="font-medium text-text-primary">Manage Server</span>{' '}
-            permission to change roles, channels, and moderation here. Ask an admin
-            to grant it, or head back to the conversation.
+            You need a moderation or management permission (for example Manage Space,
+            Manage Channels, Ban Members, or View Audit Log) to open settings here.
+            Ask an admin to grant one, or head back to the conversation.
           </p>
           <div className="mt-6">
             <Button onClick={closeSettings}>Back to the server</Button>

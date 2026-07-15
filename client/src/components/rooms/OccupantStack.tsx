@@ -2,6 +2,7 @@ import { MicOff } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { safeStoredImageDataUrl } from '../../lib/security';
 import type { VoiceState } from '../../types';
+import { displayName as resolveDisplayName } from '../../lib/displayName';
 
 interface OccupantStackProps {
   participants: VoiceState[];
@@ -11,7 +12,8 @@ interface OccupantStackProps {
 }
 
 function displayName(vs: VoiceState): string {
-  return vs.username || `User ${vs.user_id.slice(0, 6)}`;
+  const resolved = resolveDisplayName(vs);
+  return resolved === 'Unknown User' ? `User ${vs.user_id.slice(0, 6)}` : resolved;
 }
 
 function AvatarChip({

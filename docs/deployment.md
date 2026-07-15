@@ -39,7 +39,10 @@ PARACORD_TRUSTED_PROXY_IPS=<exact proxy IPs or CIDRs>
 ```
 
 Restrict `PARACORD_TRUSTED_PROXY_IPS` to your actual proxy addresses only — never
-leave it open.
+leave it open. At the public edge, overwrite `X-Forwarded-For` with the socket
+client address instead of preserving an incoming client-supplied value. Paracord
+walks multi-proxy chains from the trusted right edge, so internal trusted proxies
+may still append their immediate peer when a deliberate proxy chain is used.
 
 > If you prefer **not** to run a reverse proxy, keep Paracord's built-in TLS
 > enabled (the default for the binary): it auto-generates a self-signed

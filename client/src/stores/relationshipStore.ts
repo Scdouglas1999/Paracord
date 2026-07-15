@@ -36,12 +36,12 @@ export const useRelationshipStore = create<RelationshipState>()((set, get) => ({
 
   addFriend: async (username) => {
     await relationshipApi.addFriend(username);
-    get().fetchRelationships();
+    await get().fetchRelationships();
   },
 
   acceptFriend: async (userId) => {
     await relationshipApi.accept(userId);
-    get().fetchRelationships();
+    await get().fetchRelationships();
   },
 
   removeFriend: async (userId) => {

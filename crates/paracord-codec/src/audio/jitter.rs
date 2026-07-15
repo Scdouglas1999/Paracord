@@ -151,7 +151,28 @@ impl<T> JitterBuffer<T> {
     ///
     /// The caller should call this at regular 20 ms intervals.
     pub fn pull(&mut self) -> Option<T> {
-        let next = self.next_seq?;
+        let mut next = self.next_seq?;
+
+        // Resync guard. If the expected sequence is missing but the buffer holds
+        // packets that are a long way *ahead* of it, `next_seq` has gone stale
+        // and advancing it one frame per pull would take minutes to catch up (or,
+        // past a u16 wrap, never — `insert` would discard the live packets as
+        // "too old"). This happens after a deafen window drops packets
+        // pre-insertion: `next_seq` freezes while the sender's sequence keeps
+        // climbing. Jump straight to the smallest buffered sequence that is
+        // clearly ahead rather than draining silence for the whole gap.
+        if !self.packets.contains_key(&next) {
+            if let Some((&smallest, _)) = self.packets.iter().next() {
+                let ahead = smallest.wrapping_sub(next);
+                // `ahead as i16 > 0` restricts the jump to genuinely-forward
+                // gaps (a behind packet wraps to a negative i16); the capacity
+                // threshold keeps ordinary jitter/reordering on the normal path.
+                if (ahead as i16) > 0 && ahead as usize > MAX_BUFFERED_PACKETS {
+                    self.next_seq = Some(smallest);
+                    next = smallest;
+                }
+            }
+        }
 
         // Before playout starts, wait until we have enough buffered
         if !self.playing
@@ -178,6 +199,16 @@ impl<T> JitterBuffer<T> {
         self.next_seq
             .map(|seq| self.packets.contains_key(&seq))
             .unwrap_or(false)
+    }
+
+    /// Peek at the payload buffered at the current expected sequence, without
+    /// removing it. After a [`pull`](Self::pull) that returned `None` (a missing
+    /// frame), this returns the *following* packet if it has already arrived —
+    /// exactly the packet whose Opus in-band FEC can reconstruct the lost frame.
+    pub fn peek_next_payload(&self) -> Option<&T> {
+        self.next_seq
+            .and_then(|seq| self.packets.get(&seq))
+            .map(|packet| &packet.payload)
     }
 
     /// Get current buffer statistics.
@@ -402,6 +433,85 @@ mod tests {
             assert!(packet.is_some(), "packet {i} should be available");
             assert_eq!(packet.unwrap(), vec![i as u8]);
         }
+    }
+
+    #[test]
+    fn resync_jumps_next_seq_after_a_large_forward_gap() {
+        // Reproduces the deafen stall: playout starts at seq 0, then a long
+        // window passes during which `next_seq` freezes while the sender keeps
+        // advancing. When packets resume far ahead, pull() must resync to them
+        // instead of returning silence for the whole gap.
+        let mut jb: JitterBuffer<Vec<u8>> = JitterBuffer::new();
+
+        // Establish playout on seq 0.
+        jb.insert(0, 0, vec![0], 0);
+        assert_eq!(jb.pull().unwrap(), vec![0]); // now expecting seq 1
+
+        // Resume far ahead (well beyond MAX_BUFFERED_PACKETS = 50).
+        let resume: u16 = 5000;
+        for i in 0..3u16 {
+            let seq = resume.wrapping_add(i);
+            jb.insert(
+                seq,
+                seq as u32 * 960,
+                vec![(i + 1) as u8],
+                100 + i as u64 * 20,
+            );
+        }
+
+        // The next pull must land on the resumed stream, not drain ~5000 frames
+        // of PLC silence one tick at a time.
+        let first = jb.pull();
+        assert_eq!(
+            first,
+            Some(vec![1]),
+            "pull should resync to the smallest buffered seq after a large gap"
+        );
+        assert_eq!(jb.pull(), Some(vec![2]));
+        assert_eq!(jb.pull(), Some(vec![3]));
+    }
+
+    #[test]
+    fn reset_recovers_from_wraparound_stall() {
+        // Past a u16 wrap the stale next_seq makes `insert` treat live packets as
+        // "too old" and discard them — permanent silence. A reset (performed on
+        // undeafen) clears next_seq so the buffer re-locks onto the live stream.
+        let mut jb: JitterBuffer<Vec<u8>> = JitterBuffer::new();
+        jb.insert(100, 0, vec![0], 0);
+        assert_eq!(jb.pull().unwrap(), vec![0]); // expecting seq 101
+
+        // Live stream is now far ahead such that the forward gap wraps negative.
+        let live: u16 = 40000;
+        // Without reset, this packet is discarded by the "too old" guard.
+        jb.reset();
+        for i in 0..3u16 {
+            let seq = live.wrapping_add(i);
+            jb.insert(
+                seq,
+                seq as u32 * 960,
+                vec![(i + 10) as u8],
+                200 + i as u64 * 20,
+            );
+        }
+        // After reset the buffer re-inits next_seq to the first live packet.
+        assert_eq!(jb.pull(), Some(vec![10]));
+        assert_eq!(jb.pull(), Some(vec![11]));
+        assert_eq!(jb.pull(), Some(vec![12]));
+    }
+
+    #[test]
+    fn peek_next_payload_exposes_fec_candidate() {
+        let mut jb: JitterBuffer<Vec<u8>> = JitterBuffer::new();
+        // seq 0 present, seq 1 missing, seq 2 present.
+        jb.insert(0, 0, vec![0], 0);
+        jb.insert(2, 1920, vec![2], 40);
+
+        assert_eq!(jb.pull().unwrap(), vec![0]); // expecting seq 1
+                                                 // seq 1 is missing → pull returns None and advances to seq 2.
+        assert!(jb.pull().is_none());
+        // The following packet (seq 2) is buffered: it is the FEC candidate that
+        // can reconstruct the lost seq-1 frame.
+        assert_eq!(jb.peek_next_payload(), Some(&vec![2]));
     }
 
     #[test]

@@ -3,7 +3,6 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '../api/client';
-import { inviteApi } from '../api/invites';
 import { toast } from '../stores/toastStore';
 import { DiscoveryPage } from './DiscoveryPage';
 
@@ -22,14 +21,9 @@ const mockChannelState = vi.hoisted(() => ({
 vi.mock('../api/client', () => ({
   apiClient: {
     get: vi.fn(),
+    put: vi.fn(),
   },
   extractApiError: (err: unknown) => (err instanceof Error ? err.message : 'Request failed'),
-}));
-
-vi.mock('../api/invites', () => ({
-  inviteApi: {
-    accept: vi.fn(),
-  },
 }));
 
 vi.mock('../stores/toastStore', () => ({
@@ -90,13 +84,10 @@ describe('DiscoveryPage', () => {
       if (url.startsWith('/discovery/guilds')) {
         return Promise.resolve({ data: { guilds: [discoverableGuild], total: 1 } });
       }
-      if (url === '/guilds/guild-1/invites') {
-        return Promise.resolve({ data: [{ code: 'invite-1' }] });
-      }
       return Promise.reject(new Error(`Unexpected GET ${url}`));
     });
-    vi.mocked(inviteApi.accept).mockResolvedValue({
-      data: { guild: { id: 'guild-1', name: 'Launch Guild', default_channel_id: null } },
+    vi.mocked(apiClient.put).mockResolvedValue({
+      data: { id: 'guild-1', name: 'Launch Guild', default_channel_id: null },
     } as never);
   });
 
@@ -108,22 +99,37 @@ describe('DiscoveryPage', () => {
 
     renderDiscoveryPage();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load public servers: network down');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load public spaces: network down');
     await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByRole('heading', { name: 'Launch Guild' })).toBeInTheDocument();
   });
 
-  it('joins a public server through its public invite and opens the first text channel', async () => {
+  it('requests federated discovery results', async () => {
+    renderDiscoveryPage();
+    await screen.findByRole('heading', { name: 'Launch Guild' });
+    expect(apiClient.get).toHaveBeenCalledWith(
+      expect.stringContaining('include_federated=true'),
+    );
+  });
+
+  it('previews a public server before joining and opens the first text channel after confirmation', async () => {
     const user = userEvent.setup();
 
     renderDiscoveryPage();
 
     expect(await screen.findByRole('heading', { name: 'Launch Guild' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Join' }));
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Launch Guild' });
+    expect(dialog).toHaveTextContent('Public launch planning.');
+    expect(dialog).toHaveTextContent('Joining adds this space to your sidebar');
+    expect(apiClient.put).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Join Launch Guild' }));
 
     await waitFor(() => {
-      expect(inviteApi.accept).toHaveBeenCalledWith('invite-1');
+      expect(apiClient.put).toHaveBeenCalledWith('/guilds/guild-1/members/@me');
     });
     expect(mockGuildState.addGuild).toHaveBeenCalledWith({
       id: 'guild-1',
@@ -135,51 +141,49 @@ describe('DiscoveryPage', () => {
     expect(await screen.findByText('Guild channel route')).toBeInTheDocument();
   });
 
-  it('has an accessible back action and reports when no public invite is available', async () => {
+  it('has an accessible back action and lets the user dismiss a preview without joining', async () => {
     const user = userEvent.setup();
-    vi.mocked(apiClient.get).mockImplementation((url: string) => {
-      if (url.startsWith('/discovery/guilds')) {
-        return Promise.resolve({ data: { guilds: [discoverableGuild], total: 1 } });
-      }
-      if (url === '/guilds/guild-1/invites') {
-        return Promise.resolve({ data: [] });
-      }
-      return Promise.reject(new Error(`Unexpected GET ${url}`));
-    });
 
     renderDiscoveryPage();
 
     expect(await screen.findByRole('button', { name: 'Back to home' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Join' }));
-
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('No public invite available for this server.');
-    });
-    expect(inviteApi.accept).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    await user.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(screen.queryByRole('dialog', { name: 'Launch Guild' })).not.toBeInTheDocument();
+    expect(apiClient.put).not.toHaveBeenCalled();
   });
 
-  it('shows concrete join errors when public invite lookup fails', async () => {
+  it('shows concrete join errors inside the preview and keeps it open for retry', async () => {
     const user = userEvent.setup();
-    vi.mocked(apiClient.get).mockImplementation((url: string) => {
-      if (url.startsWith('/discovery/guilds')) {
-        return Promise.resolve({ data: { guilds: [discoverableGuild], total: 1 } });
-      }
-      if (url === '/guilds/guild-1/invites') {
-        return Promise.reject(new Error('Public invites are temporarily unavailable.'));
-      }
-      return Promise.reject(new Error(`Unexpected GET ${url}`));
-    });
+    vi.mocked(apiClient.put).mockRejectedValue(new Error('Membership service is temporarily unavailable.'));
 
     renderDiscoveryPage();
 
     expect(await screen.findByRole('heading', { name: 'Launch Guild' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Join' }));
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    await user.click(screen.getByRole('button', { name: 'Join Launch Guild' }));
 
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(
-        'Failed to join server: Public invites are temporarily unavailable.',
-      );
-    });
-    expect(inviteApi.accept).not.toHaveBeenCalled();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "We couldn't join this space: Membership service is temporarily unavailable.",
+    );
+    expect(screen.getByRole('dialog', { name: 'Launch Guild' })).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('identifies federated listings and does not offer a join action that cannot work', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.get).mockResolvedValue({
+      data: {
+        guilds: [{ ...discoverableGuild, id: 'peer.example:guild-1', federated: true, origin_server: 'peer.example' }],
+        total: 1,
+      },
+    } as never);
+
+    renderDiscoveryPage();
+    await user.click(await screen.findByRole('button', { name: 'Preview' }));
+
+    expect(screen.getByRole('dialog', { name: 'Launch Guild' })).toHaveTextContent('From peer.example');
+    expect(screen.getByText(/Cross-server joining is not available/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Join Launch Guild/i })).toBeNull();
   });
 });

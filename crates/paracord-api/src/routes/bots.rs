@@ -323,13 +323,22 @@ pub async fn get_bot_application(
 
 pub async fn get_public_bot_application(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    auth: AuthUser,
     Path(bot_app_id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
     let app = paracord_db::bot_applications::get_bot_application(&state.db, bot_app_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+
+    // Only publicly listed applications are discoverable by non-owners. A
+    // private/unlisted app's metadata (name, description, bot_user_id,
+    // permissions, redirect_uri, bot profile) must not leak to arbitrary callers.
+    // Return NotFound rather than Forbidden so the endpoint does not even confirm
+    // the app exists, mirroring the store-review visibility gate.
+    if !app.public_listed && app.owner_id != auth.user_id {
+        return Err(ApiError::NotFound);
+    }
 
     let bot_user = paracord_db::users::get_user_by_id(&state.db, app.bot_user_id)
         .await
@@ -657,6 +666,15 @@ pub async fn oauth2_authorize(
         .ok_or(ApiError::NotFound)?;
 
     ensure_manage_guild(&state, guild_id, auth.user_id).await?;
+
+    // A private/unlisted application may only be installed by its owner. Without
+    // this, anyone holding MANAGE_GUILD could force-install a never-listed bot
+    // into their guild — the bot would then start receiving interaction events
+    // from a guild that never consented to it. Public store apps and the app's
+    // own owner remain installable.
+    if !app.public_listed && app.owner_id != auth.user_id {
+        return Err(ApiError::Forbidden);
+    }
 
     if let Some(ref redirect_uri) = redirect_uri {
         if app.redirect_uri.as_deref() != Some(redirect_uri.as_str()) {

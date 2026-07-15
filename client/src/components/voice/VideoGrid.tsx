@@ -4,6 +4,7 @@ import { useVoiceStore } from '../../stores/voiceStore';
 import { useAuthStore } from '../../stores/authStore';
 import { Maximize2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { useWebcamTiles, type WebcamTile } from '../../hooks/useWebcamTiles';
 
 /** Circular initial-avatar shown when a participant's camera is off. */
 function TileAvatar({ name, size }: { name: string; size: number }) {
@@ -19,20 +20,12 @@ function TileAvatar({ name, size }: { name: string; size: number }) {
   );
 }
 
-interface VideoTile {
-  participantId: string;
-  username: string;
-  isLocal: boolean;
-}
-
 export type VideoGridLayout = 'grid' | 'compact' | 'sidebar' | 'pip';
 
 export function VideoGrid({ layout = 'grid' }: { layout?: VideoGridLayout }) {
-  const room = useVoiceStore((s) => s.room);
-  const connected = useVoiceStore((s) => s.connected);
   const speakingUsers = useVoiceStore((s) => s.speakingUsers);
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
-  const [tiles, setTiles] = useState<VideoTile[]>([]);
+  const tiles = useWebcamTiles();
   const [isNarrow, setIsNarrow] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(max-width: 640px)').matches;
@@ -46,85 +39,6 @@ export function VideoGrid({ layout = 'grid' }: { layout?: VideoGridLayout }) {
     mediaQuery.addEventListener('change', updateIsNarrow);
     return () => mediaQuery.removeEventListener('change', updateIsNarrow);
   }, []);
-
-  useEffect(() => {
-    if (!room || !connected) {
-      setTiles([]);
-      return;
-    }
-
-    const recompute = () => {
-      const next: VideoTile[] = [];
-
-      // Check local participant
-      for (const pub of room.localParticipant.videoTrackPublications.values()) {
-        if (
-          pub.source === Track.Source.Camera &&
-          !pub.isMuted &&
-          pub.track &&
-          pub.track.mediaStreamTrack?.readyState !== 'ended'
-        ) {
-          next.push({
-            participantId: room.localParticipant.identity,
-            username: room.localParticipant.name || 'You',
-            isLocal: true,
-          });
-          break;
-        }
-      }
-
-      // Check remote participants
-      for (const participant of room.remoteParticipants.values()) {
-        for (const pub of participant.videoTrackPublications.values()) {
-          if (pub.source === Track.Source.Camera) {
-            // Subscribe to camera tracks
-            if (!pub.isSubscribed) {
-              pub.setSubscribed(true);
-            }
-            if (!pub.isMuted && pub.track && pub.track.mediaStreamTrack?.readyState !== 'ended') {
-              next.push({
-                participantId: participant.identity,
-                username: participant.name || `User ${participant.identity.slice(0, 6)}`,
-                isLocal: false,
-              });
-              break;
-            }
-          }
-        }
-      }
-
-      setTiles(next);
-    };
-
-    recompute();
-
-    room.on(RoomEvent.TrackSubscribed, recompute);
-    room.on(RoomEvent.TrackUnsubscribed, recompute);
-    room.on(RoomEvent.TrackPublished, recompute);
-    room.on(RoomEvent.TrackUnpublished, recompute);
-    room.on(RoomEvent.TrackMuted, recompute);
-    room.on(RoomEvent.TrackUnmuted, recompute);
-    room.on(RoomEvent.ParticipantConnected, recompute);
-    room.on(RoomEvent.ParticipantDisconnected, recompute);
-    room.on(RoomEvent.LocalTrackPublished, recompute);
-    room.on(RoomEvent.LocalTrackUnpublished, recompute);
-
-    const pollInterval = setInterval(recompute, 2000);
-
-    return () => {
-      clearInterval(pollInterval);
-      room.off(RoomEvent.TrackSubscribed, recompute);
-      room.off(RoomEvent.TrackUnsubscribed, recompute);
-      room.off(RoomEvent.TrackPublished, recompute);
-      room.off(RoomEvent.TrackUnpublished, recompute);
-      room.off(RoomEvent.TrackMuted, recompute);
-      room.off(RoomEvent.TrackUnmuted, recompute);
-      room.off(RoomEvent.ParticipantConnected, recompute);
-      room.off(RoomEvent.ParticipantDisconnected, recompute);
-      room.off(RoomEvent.LocalTrackPublished, recompute);
-      room.off(RoomEvent.LocalTrackUnpublished, recompute);
-    };
-  }, [room, connected]);
 
   if (tiles.length === 0) return null;
 
@@ -210,7 +124,7 @@ function VideoTileView({
   fill = false,
   compactSize = 'default',
 }: {
-  tile: VideoTile;
+  tile: WebcamTile;
   isSpeaking: boolean;
   currentUserId: string | null;
   compact?: boolean;
@@ -218,10 +132,13 @@ function VideoTileView({
   compactSize?: 'default' | 'small';
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const room = useVoiceStore((s) => s.room);
+  const mediaEngine = useVoiceStore((s) => s.mediaEngine);
   const [hasTrack, setHasTrack] = useState(false);
 
+  // LiveKit path
   useEffect(() => {
     if (!room || !videoRef.current) return;
 
@@ -231,7 +148,6 @@ function VideoTileView({
       const el = videoRef.current;
       if (!el) return;
 
-      // Clean up previous track ended listener
       if (trackEndedCleanup) {
         trackEndedCleanup();
         trackEndedCleanup = null;
@@ -240,21 +156,19 @@ function VideoTileView({
       let mediaTrack: MediaStreamTrack | null = null;
 
       if (tile.isLocal) {
-        // Local camera track
         const pub = room.localParticipant.getTrackPublication(Track.Source.Camera);
         const track = pub?.track;
         if (track && track.mediaStreamTrack && !pub?.isMuted) {
           mediaTrack = track.mediaStreamTrack;
           const stream = new MediaStream([track.mediaStreamTrack]);
           el.srcObject = stream;
-          el.muted = true; // Local preview should be muted
+          el.muted = true;
           void el.play().catch(() => {});
           setHasTrack(true);
         } else {
           setHasTrack(false);
         }
       } else {
-        // Remote camera track
         const participant = room.remoteParticipants.get(tile.participantId);
         if (!participant) {
           setHasTrack(false);
@@ -276,7 +190,6 @@ function VideoTileView({
         }
       }
 
-      // Listen for track ended to clear stale tiles immediately
       if (mediaTrack) {
         const onEnded = () => {
           setHasTrack(false);
@@ -293,7 +206,6 @@ function VideoTileView({
 
     attachTrack();
 
-    // Re-attach on any track events — the function is cheap and self-filtering
     room.on(RoomEvent.TrackSubscribed, attachTrack);
     room.on(RoomEvent.TrackUnsubscribed, attachTrack);
     room.on(RoomEvent.LocalTrackPublished, attachTrack);
@@ -314,8 +226,36 @@ function VideoTileView({
     };
   }, [room, tile.participantId, tile.isLocal]);
 
+  // Native / browser MediaEngine path — canvas subscription for camera tracks.
+  useEffect(() => {
+    if (room || !mediaEngine || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    let sawFrame = false;
+    const onFrame = () => {
+      if (!sawFrame) {
+        sawFrame = true;
+        setHasTrack(true);
+      }
+    };
+
+    const unsubscribe = mediaEngine.subscribeVideo(
+      tile.participantId,
+      canvas,
+      onFrame,
+      { preferredTrackId: 'camera' },
+    );
+
+    return () => {
+      unsubscribe();
+      if (!sawFrame) {
+        setHasTrack(false);
+      }
+    };
+  }, [room, mediaEngine, tile.participantId]);
+
   const isMe = currentUserId != null && tile.participantId === currentUserId;
   const displayName = isMe ? 'You' : tile.username;
+  const useCanvas = !room && Boolean(mediaEngine);
 
   const requestFullscreen = () => {
     const el = containerRef.current;
@@ -327,7 +267,6 @@ function VideoTileView({
       ref={containerRef}
       className="group relative overflow-hidden rounded-md bg-bg-tertiary transition-shadow duration-[var(--duration-normal)] ease-[var(--ease-out)]"
       style={{
-        // Speaking = an emerald ring (design-spec §7 tile), not a color wash/glow.
         boxShadow: isSpeaking
           ? 'inset 0 0 0 2px var(--accent-primary), var(--shadow-sm)'
           : 'inset 0 0 0 1px var(--border-subtle), var(--shadow-sm)',
@@ -343,17 +282,28 @@ function VideoTileView({
             }),
       }}
     >
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={tile.isLocal}
-        className="h-full w-full object-cover"
-        style={{
-          transform: tile.isLocal ? 'scaleX(-1)' : undefined,
-          display: hasTrack ? 'block' : 'none',
-        }}
-      />
+      {useCanvas ? (
+        <canvas
+          ref={canvasRef}
+          className="h-full w-full object-cover"
+          style={{
+            transform: tile.isLocal ? 'scaleX(-1)' : undefined,
+            display: hasTrack ? 'block' : 'none',
+          }}
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted={tile.isLocal}
+          className="h-full w-full object-cover"
+          style={{
+            transform: tile.isLocal ? 'scaleX(-1)' : undefined,
+            display: hasTrack ? 'block' : 'none',
+          }}
+        />
+      )}
       {!hasTrack && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-bg-secondary">
           <TileAvatar name={displayName} size={compact ? 34 : 56} />
@@ -361,7 +311,6 @@ function VideoTileView({
         </div>
       )}
 
-      {/* Per-tile controls — revealed on hover and keyboard focus (a11y §8). */}
       {hasTrack && !compact && (
         <button
           type="button"
@@ -373,7 +322,6 @@ function VideoTileView({
         </button>
       )}
 
-      {/* Name pill — bottom-left, floating surface + meta type (design-spec §7). */}
       <div
         className={cn(
           'absolute bottom-2 left-2 flex items-center gap-1.5 rounded-sm bg-bg-floating px-2 py-1 backdrop-blur-md',

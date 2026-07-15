@@ -1,4 +1,5 @@
-use crate::{bool_from_any_row, DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
+use chrono::{DateTime, Utc};
 use sqlx::Row;
 
 #[derive(Debug, Clone)]
@@ -12,10 +13,15 @@ pub struct VoiceStateRow {
     pub self_stream: bool,
     pub self_video: bool,
     pub suppress: bool,
+    pub request_to_speak_at: Option<DateTime<Utc>>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for VoiceStateRow {
     fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let request_to_speak_at = row
+            .try_get::<Option<String>, _>("request_to_speak_at")?
+            .map(|value| datetime_from_db_text(&value))
+            .transpose()?;
         Ok(Self {
             user_id: row.try_get("user_id")?,
             space_id: row.try_get("space_id")?,
@@ -26,6 +32,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for VoiceStateRow {
             self_stream: bool_from_any_row(row, "self_stream")?,
             self_video: bool_from_any_row(row, "self_video")?,
             suppress: bool_from_any_row(row, "suppress")?,
+            request_to_speak_at,
         })
     }
 }
@@ -62,7 +69,16 @@ pub async fn upsert_voice_state(
     sqlx::query(
         "INSERT INTO voice_states (user_id, space_id, channel_id, session_id)
          VALUES ($1, $2, $3, $4)
-         ON CONFLICT (user_id) DO UPDATE SET space_id = $2, channel_id = $3, session_id = $4",
+         ON CONFLICT (user_id) DO UPDATE SET
+             space_id = $2,
+             channel_id = $3,
+             session_id = $4,
+             request_to_speak_at = CASE
+                 WHEN voice_states.channel_id = $3
+                  AND COALESCE(voice_states.space_id, 0) = COALESCE($2, 0)
+                 THEN voice_states.request_to_speak_at
+                 ELSE NULL
+             END",
     )
     .bind(user_id)
     .bind(space_id)
@@ -83,7 +99,8 @@ pub async fn get_channel_voice_states(
                 CASE WHEN self_deaf THEN 1 ELSE 0 END AS self_deaf,
                 CASE WHEN self_stream THEN 1 ELSE 0 END AS self_stream,
                 CASE WHEN self_video THEN 1 ELSE 0 END AS self_video,
-                CASE WHEN suppress THEN 1 ELSE 0 END AS suppress
+                CASE WHEN suppress THEN 1 ELSE 0 END AS suppress,
+                CAST(request_to_speak_at AS TEXT) AS request_to_speak_at
          FROM voice_states WHERE channel_id = $1",
     )
     .bind(channel_id)
@@ -103,7 +120,8 @@ pub async fn get_user_voice_state(
                 CASE WHEN self_deaf THEN 1 ELSE 0 END AS self_deaf,
                 CASE WHEN self_stream THEN 1 ELSE 0 END AS self_stream,
                 CASE WHEN self_video THEN 1 ELSE 0 END AS self_video,
-                CASE WHEN suppress THEN 1 ELSE 0 END AS suppress
+                CASE WHEN suppress THEN 1 ELSE 0 END AS suppress,
+                CAST(request_to_speak_at AS TEXT) AS request_to_speak_at
          FROM voice_states WHERE user_id = $1 AND COALESCE(space_id, 0) = COALESCE($2, 0)",
     )
     .bind(user_id)
@@ -139,7 +157,8 @@ pub async fn get_all_user_voice_states(
                 CASE WHEN self_deaf THEN 1 ELSE 0 END AS self_deaf,
                 CASE WHEN self_stream THEN 1 ELSE 0 END AS self_stream,
                 CASE WHEN self_video THEN 1 ELSE 0 END AS self_video,
-                CASE WHEN suppress THEN 1 ELSE 0 END AS suppress
+                CASE WHEN suppress THEN 1 ELSE 0 END AS suppress,
+                CAST(request_to_speak_at AS TEXT) AS request_to_speak_at
          FROM voice_states WHERE user_id = $1",
     )
     .bind(user_id)
@@ -206,12 +225,17 @@ pub struct VoiceStateWithUser {
     pub self_stream: bool,
     pub self_video: bool,
     pub suppress: bool,
+    pub request_to_speak_at: Option<DateTime<Utc>>,
     pub username: String,
     pub avatar_hash: Option<String>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for VoiceStateWithUser {
     fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+        let request_to_speak_at = row
+            .try_get::<Option<String>, _>("request_to_speak_at")?
+            .map(|value| datetime_from_db_text(&value))
+            .transpose()?;
         Ok(Self {
             user_id: row.try_get("user_id")?,
             space_id: row.try_get("space_id")?,
@@ -222,6 +246,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for VoiceStateWithUser {
             self_stream: bool_from_any_row(row, "self_stream")?,
             self_video: bool_from_any_row(row, "self_video")?,
             suppress: bool_from_any_row(row, "suppress")?,
+            request_to_speak_at,
             username: row.try_get("username")?,
             avatar_hash: row.try_get("avatar_hash")?,
         })
@@ -254,6 +279,7 @@ pub async fn get_space_voice_states(
                 CASE WHEN vs.self_stream THEN 1 ELSE 0 END AS self_stream,
                 CASE WHEN vs.self_video THEN 1 ELSE 0 END AS self_video,
                 CASE WHEN vs.suppress THEN 1 ELSE 0 END AS suppress,
+                CAST(vs.request_to_speak_at AS TEXT) AS request_to_speak_at,
                 u.username, u.avatar_hash
          FROM voice_states vs
          JOIN users u ON u.id = vs.user_id
@@ -296,7 +322,7 @@ pub async fn update_suppress(
     suppress: bool,
 ) -> Result<(), DbError> {
     sqlx::query(
-        "UPDATE voice_states SET suppress = $3
+        "UPDATE voice_states SET suppress = $3, request_to_speak_at = NULL
          WHERE user_id = $1 AND COALESCE(space_id, 0) = COALESCE($2, 0)",
     )
     .bind(user_id)
@@ -305,4 +331,47 @@ pub async fn update_suppress(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Mark an audience member as requesting the stage. Returns false when the
+/// user is not currently a suppressed participant in the requested channel.
+pub async fn request_to_speak(
+    pool: &DbPool,
+    user_id: i64,
+    space_id: i64,
+    channel_id: i64,
+) -> Result<bool, DbError> {
+    let result = sqlx::query(
+        "UPDATE voice_states
+         SET request_to_speak_at = CURRENT_TIMESTAMP
+         WHERE user_id = $1
+           AND space_id = $2
+           AND channel_id = $3
+           AND suppress = TRUE",
+    )
+    .bind(user_id)
+    .bind(space_id)
+    .bind(channel_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn clear_request_to_speak(
+    pool: &DbPool,
+    user_id: i64,
+    space_id: i64,
+    channel_id: i64,
+) -> Result<bool, DbError> {
+    let result = sqlx::query(
+        "UPDATE voice_states
+         SET request_to_speak_at = NULL
+         WHERE user_id = $1 AND space_id = $2 AND channel_id = $3",
+    )
+    .bind(user_id)
+    .bind(space_id)
+    .bind(channel_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }

@@ -5,7 +5,10 @@
   if (window.__TAURI_INTERNALS__ && navigator.serviceWorker) {
     var originalRegister = navigator.serviceWorker.register;
     navigator.serviceWorker.register = function () {
-      return Promise.reject(new Error('PWA service workers are disabled in Paracord desktop'));
+      // The generated web bootstrap calls register() without awaiting it. Make
+      // that desktop-only call a resolved no-op so no worker is installed and
+      // no expected rejection leaks into the global error handler.
+      return navigator.serviceWorker.getRegistration();
     };
 
     navigator.serviceWorker.getRegistrations().then(function (registrations) {

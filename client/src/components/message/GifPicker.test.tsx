@@ -48,6 +48,10 @@ describe('GifPicker', () => {
 
     const { container } = render(<GifPicker onSelect={onSelect} onClose={vi.fn()} />);
 
+    expect(container.firstElementChild).toHaveClass(
+      'w-[min(25rem,calc(100vw-1rem))]',
+      'max-h-[min(28.75rem,calc(100dvh-1rem))]',
+    );
     await user.click(await screen.findByRole('button', { name: 'Select GIF Safe' }));
 
     expect(onSelect).toHaveBeenCalledWith('https://media.example.com/safe.gif');
@@ -72,5 +76,15 @@ describe('GifPicker', () => {
 
     expect(await screen.findByText('No GIFs found')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Select GIF Zero Height' })).toBeNull();
+  });
+
+  it('closes on Escape', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    trending.mockResolvedValue(tenorResponse([]));
+    render(<GifPicker onSelect={vi.fn()} onClose={onClose} />);
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

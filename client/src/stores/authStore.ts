@@ -13,6 +13,11 @@ import { clearDownloadTicketCache, startDownloadTicketLifecycle } from '../lib/d
 import { toast } from './toastStore';
 import { useTypingStore } from './typingStore';
 import { useReadStateStore } from './readStateStore';
+import { useSavedMessageStore } from './savedMessageStore';
+
+function isUnauthorizedError(err: unknown): boolean {
+  return (err as { response?: { status?: number } } | null)?.response?.status === 401;
+}
 
 interface AuthState {
   token: string | null;
@@ -44,6 +49,7 @@ function clearAuthState(set: (partial: Partial<AuthState>) => void): void {
   // pending expiry timers don't leak into the next session.
   useTypingStore.getState().reset();
   useReadStateStore.getState().reset();
+  useSavedMessageStore.getState().reset();
   set({
     token: null,
     user: null,
@@ -67,7 +73,6 @@ export const useAuthStore = create<AuthState>()((set) => ({
       const trimmedIdentifier = identifier.trim();
       const { data } = await authApi.login({
         identifier: trimmedIdentifier,
-        email: trimmedIdentifier,
         password,
       });
       setAccessToken(data.token);
@@ -109,8 +114,11 @@ export const useAuthStore = create<AuthState>()((set) => ({
       if (data.refresh_token) setRefreshToken(data.refresh_token);
       set({ token: data.token, sessionBootstrapComplete: true });
       startDownloadTicketLifecycle();
-    } catch {
+    } catch (err) {
       setAccessToken(null);
+      if (isUnauthorizedError(err)) {
+        setRefreshToken(null);
+      }
       set({ token: null, sessionBootstrapComplete: true });
     }
   },

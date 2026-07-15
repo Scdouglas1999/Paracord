@@ -24,11 +24,18 @@ vi.mock('../../stores/channelStore', () => ({
       channelsByGuild: {
         g1: [{ id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 }],
       },
+      channelsById: {
+        ch1: { id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 },
+      },
     }),
 }));
 
 vi.mock('../../stores/memberStore', () => ({
   useMemberStore: (selector: (s: unknown) => unknown) => selector({ members: new Map() }),
+}));
+
+vi.mock('../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ permissions: BigInt('0x7FFFFFFFFFFFFFFF'), isAdmin: true }),
 }));
 
 vi.mock('../../stores/pollStore', () => ({
@@ -60,6 +67,7 @@ vi.mock('../../api/channels', () => ({
   channelApi: {
     createPoll: vi.fn(),
     getFeatureSettings: vi.fn(() => Promise.resolve({ data: {} })),
+    getOverwrites: vi.fn(() => Promise.resolve({ data: [] })),
   },
 }));
 

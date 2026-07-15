@@ -87,6 +87,7 @@ pub async fn create_role(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
     let user_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -189,6 +190,7 @@ pub async fn update_role(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
     let user_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -297,6 +299,7 @@ pub async fn delete_role(
         ));
     }
 
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
     let user_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;

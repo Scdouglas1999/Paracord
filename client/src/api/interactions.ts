@@ -1,11 +1,19 @@
 import { getApi } from './activeClient';
-import type { ResolvedCommandOption, Interaction, InteractionResponse, InteractionCallbackData } from '../types/interactions';
+import type {
+  ResolvedCommandOption,
+  Interaction,
+  InteractionResponse,
+  InteractionCallbackData,
+  InteractionType,
+} from '../types/interactions';
 
 export interface InvokeCommandRequest {
   command_name: string;
   guild_id: string;
   channel_id: string;
   options?: ResolvedCommandOption[];
+  /** Defaults to ApplicationCommand (2). Use 4 for autocomplete. */
+  type?: InteractionType;
 }
 
 export const interactionApi = {

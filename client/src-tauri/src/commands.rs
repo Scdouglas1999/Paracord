@@ -9,6 +9,7 @@ use std::path::Path;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 use tauri::Manager;
 
 #[tauri::command]
@@ -122,6 +123,21 @@ const SECURE_STORE_KEY_PREFIX: &str = "paracord:";
 const SECURE_STORE_FALLBACK_KEY_FILE: &str = "secure-store-fallback.key";
 const SECURE_STORE_FALLBACK_NONCE_LEN: usize = 12;
 static ACTIVITY_SHARING_ENABLED: AtomicBool = AtomicBool::new(false);
+const MAX_DIAGNOSTIC_LOG_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_DIAGNOSTIC_LINE_BYTES: usize = 4 * 1024;
+static DIAGNOSTIC_LOG_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+/// Separate, native-owned consent gate for the *window title* of the foreground
+/// application. A window title routinely embeds highly sensitive context (bank
+/// account pages, document filenames, private URLs), so — unlike the
+/// low-sensitivity process identity used for Discord-style activity presence —
+/// it is redacted by default and only shared when the user has explicitly opted
+/// in through a trusted native path.
+///
+/// This flag is deliberately NOT exposed to the renderer via
+/// `tauri::generate_handler!` and has no `#[tauri::command]` setter, so a webview
+/// XSS that flips the renderer-settable `ACTIVITY_SHARING_ENABLED` still cannot
+/// turn window-title surveillance on. (CWE-359)
+static ACTIVITY_TITLE_SHARING_ENABLED: AtomicBool = AtomicBool::new(false);
 
 fn validate_secure_store_key(key: &str) -> Result<(), String> {
     if !key.starts_with(SECURE_STORE_KEY_PREFIX) {
@@ -289,9 +305,14 @@ fn load_or_create_secure_store_fallback_key(app: &tauri::AppHandle) -> Result<[u
     let payload = dpapi_protect(&key)?;
 
     {
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
             .open(&path)
             .map_err(|e| format!("failed to create fallback key: {e}"))?;
         #[cfg(windows)]
@@ -310,7 +331,7 @@ fn load_or_create_secure_store_fallback_key(app: &tauri::AppHandle) -> Result<[u
     Ok(key)
 }
 
-fn diagnostics_log_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+pub(crate) fn diagnostics_log_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let mut dir = if cfg!(windows) {
         if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
             std::path::PathBuf::from(local_app_data)
@@ -329,17 +350,58 @@ fn diagnostics_log_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, St
     dir.push("logs");
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create diagnostics log dir: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("failed to secure diagnostics log dir: {e}"))?;
+    }
     dir.push("client-voice.log");
     Ok(dir)
 }
 
+fn sanitize_diagnostic_line(line: &str) -> String {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("paracord://invite/") || lower.contains("authorization: bearer ") {
+        return "[redacted sensitive diagnostic]".to_string();
+    }
+    let mut sanitized = String::with_capacity(line.len().min(MAX_DIAGNOSTIC_LINE_BYTES));
+    for ch in line.chars() {
+        let replacement = if ch == '\n' || ch == '\r' || (ch.is_control() && ch != '\t') {
+            ' '
+        } else {
+            ch
+        };
+        if sanitized.len() + replacement.len_utf8() > MAX_DIAGNOSTIC_LINE_BYTES {
+            break;
+        }
+        sanitized.push(replacement);
+    }
+    sanitized
+}
+
 #[tauri::command]
 pub fn append_client_log(app: tauri::AppHandle, line: String) -> Result<(), String> {
+    let line = sanitize_diagnostic_line(&line);
     eprintln!("[client-diag] {line}");
+    let _guard = DIAGNOSTIC_LOG_LOCK
+        .lock()
+        .map_err(|_| "diagnostics log lock poisoned".to_string())?;
     let path = diagnostics_log_path(&app)?;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    if std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() >= MAX_DIAGNOSTIC_LOG_BYTES) {
+        let rotated = path.with_extension("log.old");
+        let _ = std::fs::remove_file(&rotated);
+        std::fs::rename(&path, &rotated)
+            .map_err(|e| format!("failed to rotate diagnostics log: {e}"))?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
         .open(&path)
         .map_err(|e| format!("failed to open diagnostics log file: {e}"))?;
     writeln!(file, "{line}").map_err(|e| format!("failed to write diagnostics log line: {e}"))?;
@@ -702,12 +764,22 @@ fn detect_foreground_application_linux() -> LinuxForegroundProbe {
     })
 }
 
-#[tauri::command]
-pub fn get_foreground_application() -> Option<ForegroundApplication> {
-    if !ACTIVITY_SHARING_ENABLED.load(Ordering::SeqCst) {
-        return None;
+/// Strip the window title from a detected foreground application unless the user
+/// has opted into title sharing through a trusted native path. The process
+/// identity (name / display name / pid / exe path) is kept because it is what the
+/// Rich-Presence-style activity feature needs; the window title is the
+/// high-sensitivity field and is redacted by default. (CWE-359)
+fn apply_title_consent(mut app: ForegroundApplication) -> ForegroundApplication {
+    if !ACTIVITY_TITLE_SHARING_ENABLED.load(Ordering::SeqCst) {
+        app.window_title = None;
     }
+    app
+}
 
+/// Raw, unfiltered foreground-application probe for the running platform.
+/// Callers are responsible for consent gating and for redacting sensitive fields
+/// (see `apply_title_consent`).
+fn detect_foreground_application() -> Option<ForegroundApplication> {
     #[cfg(windows)]
     {
         use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -778,6 +850,15 @@ pub fn get_foreground_application() -> Option<ForegroundApplication> {
     }
 }
 
+#[tauri::command]
+pub fn get_foreground_application() -> Option<ForegroundApplication> {
+    if !ACTIVITY_SHARING_ENABLED.load(Ordering::SeqCst) {
+        return None;
+    }
+
+    detect_foreground_application().map(apply_title_consent)
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::is_wayland_session;
@@ -800,5 +881,58 @@ mod linux_tests {
         assert!(!is_wayland_session(Some("x11"), None));
         assert!(!is_wayland_session(None, None));
         assert!(!is_wayland_session(Some("tty"), Some("")));
+    }
+}
+
+#[cfg(test)]
+mod activity_consent_tests {
+    use super::{
+        apply_title_consent, sanitize_diagnostic_line, ForegroundApplication,
+        ACTIVITY_TITLE_SHARING_ENABLED, MAX_DIAGNOSTIC_LINE_BYTES,
+    };
+    use std::sync::atomic::Ordering;
+
+    fn sample() -> ForegroundApplication {
+        ForegroundApplication {
+            pid: 4321,
+            process_name: "bank-app".to_string(),
+            display_name: "Bank App".to_string(),
+            executable_path: Some("/usr/bin/bank-app".to_string()),
+            window_title: Some("ACME Bank — Account 1234 balance $9,001".to_string()),
+        }
+    }
+
+    // The window title is the high-sensitivity field. It must be stripped from
+    // the IPC payload unless the user opted in through the trusted native gate,
+    // even though a webview XSS can flip the renderer-settable sharing flag.
+    // Both cases live in one test because they toggle the same process-global
+    // flag and must not race a parallel sibling.
+    #[test]
+    fn window_title_is_gated_by_native_consent() {
+        // Default state: the native title-consent flag is off → title redacted,
+        // low-sensitivity process identity preserved for activity presence.
+        ACTIVITY_TITLE_SHARING_ENABLED.store(false, Ordering::SeqCst);
+        let redacted = apply_title_consent(sample());
+        assert_eq!(redacted.window_title, None);
+        assert_eq!(redacted.process_name, "bank-app");
+        assert_eq!(redacted.display_name, "Bank App");
+
+        // Simulate a trusted native opt-in enabling the native-owned flag.
+        ACTIVITY_TITLE_SHARING_ENABLED.store(true, Ordering::SeqCst);
+        let shared = apply_title_consent(sample());
+        assert!(shared.window_title.is_some());
+
+        // Restore the default (redacted) posture for any other reader.
+        ACTIVITY_TITLE_SHARING_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn diagnostic_lines_are_bounded_single_line_and_secret_redacted() {
+        assert_eq!(
+            sanitize_diagnostic_line("deep-link paracord://invite/secret-token"),
+            "[redacted sensitive diagnostic]"
+        );
+        assert_eq!(sanitize_diagnostic_line("one\ntwo\rthree"), "one two three");
+        assert!(sanitize_diagnostic_line(&"x".repeat(10_000)).len() <= MAX_DIAGNOSTIC_LINE_BYTES);
     }
 }

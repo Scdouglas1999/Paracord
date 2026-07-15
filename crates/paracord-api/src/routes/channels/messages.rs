@@ -88,7 +88,7 @@ pub async fn get_messages(
         ));
     }
 
-    let limit = params.limit.unwrap_or(50).min(100);
+    let limit = params.limit.unwrap_or(50).clamp(1, 100);
     let messages = if let Some(anchor) = params.around {
         // Compose two windowed reads around the anchor plus the anchor itself,
         // then merge into a single newest-first page.
@@ -183,7 +183,7 @@ pub async fn search_messages(
     )
     .await?;
 
-    let limit = params.limit.unwrap_or(20).min(100);
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let messages = if channel.channel_type == 7 {
         // Forum channels store post content in thread children, not the forum
         // parent. Collect the post channel ids and run a single ranked search
@@ -933,8 +933,13 @@ pub async fn get_edit_history(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    ensure_channel_permissions(&state, &channel, auth.user_id, &[Permissions::VIEW_CHANNEL])
-        .await?;
+    ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
+    )
+    .await?;
 
     let msg = paracord_db::messages::get_message(&state.db, message_id)
         .await

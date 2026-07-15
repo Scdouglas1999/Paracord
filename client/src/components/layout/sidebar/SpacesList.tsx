@@ -1,13 +1,22 @@
 import { useNavigate } from 'react-router-dom';
-import { Bell, BellOff, CheckCheck, Plus } from 'lucide-react';
+import { Bell, BellOff, CheckCheck, LogOut, Plus, Settings } from 'lucide-react';
 import { useServerListStore } from '../../../stores/serverListStore';
 import { useChannelStore } from '../../../stores/channelStore';
+import { useGuildStore } from '../../../stores/guildStore';
+import { useAuthStore } from '../../../stores/authStore';
 import { useReadStateStore } from '../../../stores/readStateStore';
+import { useUIStore } from '../../../stores/uiStore';
 import { useMutedGuilds } from '../../../hooks/useMutedGuilds';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '../../ui/ContextMenu';
 import { ChannelType } from '../../../types';
 import { cn } from '../../../lib/utils';
+import { guildInitials, resolveGuildIconUrl } from '../../../lib/guildIcon';
 import type { GuildSummary } from '../../../hooks/useUnifiedConversations';
+import { channelApi } from '../../../api/channels';
+import { extractApiError } from '../../../api/client';
+import { toast } from '../../../stores/toastStore';
+import { confirm } from '../../../stores/confirmStore';
+import { canAccessGuildSettingsSync } from '../../../lib/guildSettingsAccess';
 
 /**
  * "Spaces" section (layout-spec §1, §2 — the successor to the old guild rail).
@@ -17,17 +26,19 @@ import type { GuildSummary } from '../../../hooks/useUnifiedConversations';
  * active server first so its data resolves.
  *
  * Nav-item recipe (design-spec §7): 34px, `--radius-sm`, `--accent-tint` fill + 3px
- * teal (`--accent-secondary`) left edge bar on the active space. Guild avatar is a
- * squircle initials chip (kill-list clean — tokens only, no gradient tiles).
+ * teal (`--accent-secondary`) left edge bar on the active space. Space avatar is a
+ * squircle icon (or initials chip when missing) — tokens only, no gradient tiles.
  *
  * The old guild-rail context menu is re-homed here (layout-spec §2 — "folder/
  * context-menu logic absorbed into SpacesList"): right-click a space to Mute /
  * Unmute it (the sole writer of the `muted-guilds` set that feeds attention
- * ranking — see `useMutedGuilds`) or Mark the whole server read.
+ * ranking — see `useMutedGuilds`) or Mark the whole space read.
  */
 
 export interface SpacesListProps {
   spaces: GuildSummary[];
+  /** Guilds carrying unread, mention, reply, or live-room attention. */
+  attentionGuildIds?: ReadonlySet<string>;
   /** Currently-open guild id (route param) → active row highlight. */
   activeGuildId?: string | null;
   /**
@@ -43,13 +54,20 @@ export interface SpacesListProps {
   activeNavIndex?: number;
 }
 
-export function SpacesList({ spaces, activeGuildId, onAddSpace, navIndexStart = 0, activeNavIndex }: SpacesListProps) {
+export function SpacesList({
+  spaces,
+  attentionGuildIds,
+  activeGuildId,
+  onAddSpace,
+  navIndexStart = 0,
+  activeNavIndex,
+}: SpacesListProps) {
   const navigate = useNavigate();
   const { mutedGuildIds, toggleMute } = useMutedGuilds();
   const { contextMenu, onContextMenu, closeContextMenu } = useContextMenu();
 
   // Never returns null now: even with zero joined spaces the "Add a space" row must
-  // stay reachable so a fresh account can create or join its first server.
+  // stay reachable so a fresh account can create or join its first space.
   const addSpaceNavIndex = navIndexStart + spaces.length;
 
   const openSpace = (space: GuildSummary) => {
@@ -60,38 +78,91 @@ export function SpacesList({ spaces, activeGuildId, onAddSpace, navIndexStart = 
   };
 
   // Mark every channel of a guild read via the serverId-scoped read-state store.
-  const markSpaceRead = (space: GuildSummary) => {
+  const markSpaceRead = async (space: GuildSummary) => {
     const channels = useChannelStore.getState().channelsByGuild[space.id] ?? [];
     const markRead = useReadStateStore.getState().markRead;
+    const writes: Promise<unknown>[] = [];
     for (const ch of channels) {
       if (ch.type === ChannelType.Category || !ch.last_message_id) continue;
       markRead(space.serverId, ch.id, ch.last_message_id);
+      writes.push(channelApi.updateReadStateForServer(space.serverId, ch.id, ch.last_message_id));
+    }
+    const results = await Promise.allSettled(writes);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') {
+      toast.error(`Failed to save read positions: ${extractApiError(failed.reason)}`);
+    }
+  };
+
+  const leaveSpace = async (space: GuildSummary) => {
+    const ok = await confirm({
+      title: `Leave ${space.name}?`,
+      description: 'You will need an invite to rejoin this space.',
+      confirmLabel: 'Leave space',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      if (useServerListStore.getState().activeServerId !== space.serverId) {
+        useServerListStore.getState().setActive(space.serverId);
+      }
+      await useGuildStore.getState().leaveGuild(space.id);
+      toast.success(`Left ${space.name}.`);
+      if (typeof window !== 'undefined' && window.location.pathname.includes(`/guilds/${space.id}`)) {
+        navigate('/app');
+      }
+    } catch (err) {
+      toast.error(`Failed to leave space: ${extractApiError(err)}`);
     }
   };
 
   const buildItems = (space: GuildSummary): ContextMenuItem[] => {
     const muted = mutedGuildIds.includes(space.id);
-    return [
+    const currentUserId = useAuthStore.getState().user?.id;
+    const guild = useGuildStore.getState().guilds.find((g) => g.id === space.id);
+    const isOwner = Boolean(currentUserId && guild?.owner_id === currentUserId);
+    const canOpenSettings = canAccessGuildSettingsSync(space.id);
+    const items: ContextMenuItem[] = [
       {
-        label: muted ? 'Unmute server' : 'Mute server',
+        label: muted ? 'Unmute space' : 'Mute space',
         icon: muted ? <Bell size={16} /> : <BellOff size={16} />,
         action: () => toggleMute(space.id),
       },
       {
         label: 'Mark as read',
         icon: <CheckCheck size={16} />,
-        action: () => markSpaceRead(space),
+        action: () => void markSpaceRead(space),
       },
     ];
+    // Only surface settings when the viewer can actually open them — same gate
+    // as GuildHomeHeader / GuildSettingsPage.
+    if (canOpenSettings) {
+      items.push({
+        label: 'Space settings',
+        icon: <Settings size={16} />,
+        action: () => useUIStore.getState().setGuildSettingsId(space.id),
+      });
+    }
+    if (!isOwner) {
+      items.push({
+        label: 'Leave space',
+        icon: <LogOut size={16} />,
+        danger: true,
+        action: () => void leaveSpace(space),
+      });
+    }
+    return items;
   };
 
   return (
     <section aria-label="Spaces" className="flex flex-col gap-0.5">
       <h2 className="px-2 pb-1 text-section uppercase text-text-muted">Spaces</h2>
-      <div role="group" aria-label="Joined servers" className="flex flex-col gap-0.5">
+      <div role="group" aria-label="Joined spaces" className="flex flex-col gap-0.5">
         {spaces.map((space, i) => {
           const active = space.id === activeGuildId;
           const muted = mutedGuildIds.includes(space.id);
+          const needsAttention = !active && !muted && Boolean(attentionGuildIds?.has(space.id));
+          const iconSrc = resolveGuildIconUrl({ icon: space.icon });
           return (
             <button
               key={space.id}
@@ -121,20 +192,26 @@ export function SpacesList({ spaces, activeGuildId, onAddSpace, navIndexStart = 
               <span
                 aria-hidden
                 className={cn(
-                  'flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-bg-mod-strong text-meta font-semibold',
+                  'flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-bg-mod-strong text-meta font-semibold',
                   active ? 'text-accent-primary' : 'text-text-secondary',
                 )}
               >
-                {space.name
-                  .split(' ')
-                  .map((w) => w[0])
-                  .join('')
-                  .slice(0, 2)
-                  .toUpperCase() || '?'}
+                {iconSrc ? (
+                  <img src={iconSrc} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  guildInitials(space.name)
+                )}
               </span>
               <span className={cn('min-w-0 flex-1 truncate text-label', muted && 'text-text-muted')}>
                 {space.name}
               </span>
+              {needsAttention && (
+                <span
+                  data-testid="expanded-space-attention-dot"
+                  aria-hidden
+                  className="h-2 w-2 shrink-0 rounded-full bg-accent-primary"
+                />
+              )}
               {muted && (
                 <BellOff
                   size={13}

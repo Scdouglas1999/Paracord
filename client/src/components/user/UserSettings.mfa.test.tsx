@@ -6,6 +6,49 @@ import { authApi } from '../../api/auth';
 import { useAuthStore } from '../../stores/authStore';
 import { UserSettings } from './UserSettings';
 
+const mockAuthState = vi.hoisted(() => ({
+  user: null as Record<string, unknown> | null,
+  settings: null as Record<string, unknown> | null,
+  fetchSettings: vi.fn(),
+  fetchUser: vi.fn(),
+  updateSettings: vi.fn(),
+  updateUser: vi.fn(),
+  logout: vi.fn(),
+}));
+
+const mockUiState = vi.hoisted(() => ({
+  userSettingsInitialSection: null,
+  setTheme: vi.fn(),
+  lowBandwidthMode: false,
+  setLowBandwidthMode: vi.fn(),
+  customCss: '',
+  setCustomCss: vi.fn(),
+}));
+
+const mockMediaDevices = vi.hoisted(() => ({
+  audioInputDevices: [],
+  audioOutputDevices: [],
+  videoInputDevices: [],
+  selectedAudioInput: '',
+  selectedAudioOutput: '',
+  selectedVideoInput: '',
+  selectAudioInput: vi.fn(),
+  selectAudioOutput: vi.fn(),
+  selectVideoInput: vi.fn(),
+  enumerate: vi.fn(),
+}));
+
+const mockVoiceState = vi.hoisted(() => ({
+  applyAudioInputDevice: vi.fn(),
+  applyAudioOutputDevice: vi.fn(),
+}));
+
+vi.mock('../../stores/authStore', () => {
+  const useAuthStore = (selector: (state: typeof mockAuthState) => unknown) => selector(mockAuthState);
+  useAuthStore.setState = (partial: Partial<typeof mockAuthState>) => Object.assign(mockAuthState, partial);
+  return { useAuthStore };
+});
+
 vi.mock('../../api/auth', () => ({
   authApi: {
     exportMyData: vi.fn(),
@@ -41,16 +84,18 @@ vi.mock('../../api/client', () => ({
   },
 }));
 
+vi.mock('../../stores/accountStore', () => ({
+  useAccountStore: (selector: (state: { publicKey: string | null; isUnlocked: boolean }) => unknown) =>
+    selector({ publicKey: null, isUnlocked: false }),
+}));
+
+vi.mock('../../stores/uiStore', () => ({
+  useUIStore: (selector: (state: Record<string, unknown>) => unknown) =>
+    selector(mockUiState),
+}));
+
 vi.mock('../../hooks/useMediaDevices', () => ({
-  useMediaDevices: () => ({
-    audioInputDevices: [],
-    audioOutputDevices: [],
-    selectedAudioInput: '',
-    selectedAudioOutput: '',
-    selectAudioInput: vi.fn(),
-    selectAudioOutput: vi.fn(),
-    enumerate: vi.fn(),
-  }),
+  useMediaDevices: () => mockMediaDevices,
 }));
 
 vi.mock('../../hooks/useMobile', () => ({
@@ -59,10 +104,7 @@ vi.mock('../../hooks/useMobile', () => ({
 
 vi.mock('../../stores/voiceStore', () => ({
   useVoiceStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({
-      applyAudioInputDevice: vi.fn(),
-      applyAudioOutputDevice: vi.fn(),
-    }),
+    selector(mockVoiceState),
 }));
 
 vi.mock('../../lib/features/notifications', () => ({
@@ -75,6 +117,23 @@ vi.mock('../../lib/features/notifications', () => ({
 vi.mock('../../lib/account', () => ({
   hasAccount: vi.fn(() => false),
 }));
+
+vi.mock('../../api/activeClient', () => ({
+  getApi: () => ({ delete: vi.fn(), post: vi.fn() }),
+}));
+
+vi.mock('../../stores/toastStore', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
+}));
+
+vi.mock('../../lib/security', () => ({
+  isAllowedImageMimeType: vi.fn(() => true),
+  safeExternalUrl: vi.fn((value: string) => value),
+}));
+
+vi.mock('../../lib/userAvatar', () => ({ resolveUserAvatarUrl: vi.fn(() => null) }));
+vi.mock('../../lib/displayName', () => ({ displayName: vi.fn((user: { username?: string } | null) => user?.username ?? '') }));
+vi.mock('../../lib/keyboardShortcuts', () => ({ formatShortcut: vi.fn((value: string) => value) }));
 
 vi.mock('../../lib/activityPresence', () => ({
   getKnownActivityAppsFromStorage: vi.fn(() => []),

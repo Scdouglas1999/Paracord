@@ -69,9 +69,11 @@ describe('GuildEconomyPanel', () => {
   });
 
   it('renders current progress, achievements, and leaderboard entries', async () => {
-    render(<GuildEconomyPanel guildId="guild-1" />);
+    const { container } = render(<GuildEconomyPanel guildId="guild-1" />);
 
     expect(await screen.findByText('Your Progress')).toBeInTheDocument();
+    expect(container.firstElementChild).toHaveClass('w-full', 'min-w-0');
+    expect(container.firstElementChild).not.toHaveClass('w-[300px]', 'hidden');
     expect(economyApi.getLeaderboard).toHaveBeenCalledWith('guild-1', 8);
     expect(economyApi.getMyProgress).toHaveBeenCalledWith('guild-1');
     expect(screen.getByText('Rank #2')).toBeInTheDocument();

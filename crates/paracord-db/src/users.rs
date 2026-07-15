@@ -86,6 +86,8 @@ pub struct UserSettingsRow {
     pub locale: String,
     pub message_display: String,
     pub crypto_auth_enabled: bool,
+    pub presence_status: String,
+    pub custom_status: Option<String>,
     pub notifications: serde_json::Value,
     pub keybinds: serde_json::Value,
     pub updated_at: DateTime<Utc>,
@@ -153,6 +155,10 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for UserSettingsRow {
             locale: row.try_get("locale")?,
             message_display: row.try_get("message_display")?,
             crypto_auth_enabled: bool_from_any_row(row, "crypto_auth_enabled")?,
+            presence_status: row
+                .try_get("presence_status")
+                .unwrap_or_else(|_| "online".to_string()),
+            custom_status: row.try_get("custom_status").ok().flatten(),
             notifications: json_from_db_text(&notifications_raw)?,
             keybinds: json_from_db_text(&keybinds_raw)?,
             updated_at: datetime_from_db_text(&updated_at_raw)?,
@@ -432,7 +438,7 @@ pub async fn get_user_settings_typed(
     user_id: UserId,
 ) -> Result<Option<UserSettingsRow>, DbError> {
     let row = sqlx::query_as::<_, UserSettingsRow>(
-        "SELECT user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, notifications, keybinds, updated_at
+        "SELECT user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, presence_status, custom_status, notifications, keybinds, updated_at
          FROM user_settings WHERE user_id = $1",
     )
     .bind(user_id)
@@ -560,6 +566,8 @@ pub async fn upsert_user_settings_typed(
     message_display: &str,
     custom_css: Option<&str>,
     crypto_auth_enabled: Option<bool>,
+    presence_status: Option<&str>,
+    custom_status: Option<Option<&str>>,
     notifications: Option<&serde_json::Value>,
     keybinds: Option<&serde_json::Value>,
 ) -> Result<UserSettingsRow, DbError> {
@@ -575,19 +583,29 @@ pub async fn upsert_user_settings_typed(
         .map(serde_json::to_string)
         .transpose()
         .map_err(|e| DbError::Sqlx(sqlx::Error::Protocol(format!("invalid keybinds json: {e}"))))?;
+    // custom_status uses a nested Option so callers can distinguish "leave
+    // unchanged" (None) from "clear" (Some(None)) vs "set" (Some(Some(...))).
+    let clear_custom_status = matches!(custom_status, Some(None));
+    let set_custom_status = custom_status.flatten();
     let row = sqlx::query_as::<_, UserSettingsRow>(
-        "INSERT INTO user_settings (user_id, theme, locale, message_display, custom_css, crypto_auth_enabled, notifications, keybinds)
-         VALUES ($1, $2, $3, $4, $5, COALESCE($6, FALSE), COALESCE($7, '{}'), COALESCE($8, '{}'))
+        "INSERT INTO user_settings (user_id, theme, locale, message_display, custom_css, crypto_auth_enabled, presence_status, custom_status, notifications, keybinds)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6, FALSE), COALESCE($7, 'online'), $8, COALESCE($9, '{}'), COALESCE($10, '{}'))
          ON CONFLICT (user_id) DO UPDATE SET
             theme = $2,
             locale = $3,
             message_display = $4,
             custom_css = $5,
             crypto_auth_enabled = COALESCE($6, user_settings.crypto_auth_enabled),
-            notifications = COALESCE($7, user_settings.notifications),
-            keybinds = COALESCE($8, user_settings.keybinds),
-            updated_at = $9
-         RETURNING user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, notifications, keybinds, updated_at",
+            presence_status = COALESCE($7, user_settings.presence_status),
+            custom_status = CASE
+                WHEN $11 THEN NULL
+                WHEN $8 IS NOT NULL THEN $8
+                ELSE user_settings.custom_status
+            END,
+            notifications = COALESCE($9, user_settings.notifications),
+            keybinds = COALESCE($10, user_settings.keybinds),
+            updated_at = $12
+         RETURNING user_id, theme, custom_css, locale, message_display, CASE WHEN crypto_auth_enabled THEN 1 ELSE 0 END AS crypto_auth_enabled, presence_status, custom_status, notifications, keybinds, updated_at",
     )
     .bind(user_id)
     .bind(theme)
@@ -595,8 +613,11 @@ pub async fn upsert_user_settings_typed(
     .bind(message_display)
     .bind(custom_css)
     .bind(crypto_auth_enabled)
+    .bind(presence_status)
+    .bind(set_custom_status)
     .bind(notifications)
     .bind(keybinds)
+    .bind(clear_custom_status)
     .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
@@ -613,6 +634,8 @@ pub async fn upsert_user_settings(
     message_display: &str,
     custom_css: Option<&str>,
     crypto_auth_enabled: Option<bool>,
+    presence_status: Option<&str>,
+    custom_status: Option<Option<&str>>,
     notifications: Option<&serde_json::Value>,
     keybinds: Option<&serde_json::Value>,
 ) -> Result<UserSettingsRow, DbError> {
@@ -624,6 +647,8 @@ pub async fn upsert_user_settings(
         message_display,
         custom_css,
         crypto_auth_enabled,
+        presence_status,
+        custom_status,
         notifications,
         keybinds,
     )
@@ -1569,11 +1594,14 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .unwrap();
         assert_eq!(settings.theme, "dark");
         assert_eq!(settings.locale, "en-US");
+        assert_eq!(settings.presence_status, "online");
 
         // Upsert again to update
         let updated = upsert_user_settings_typed(
@@ -1584,12 +1612,16 @@ mod tests {
             "compact",
             None,
             None,
+            Some("dnd"),
+            Some(Some("focusing")),
             None,
             None,
         )
         .await
         .unwrap();
         assert_eq!(updated.theme, "light");
+        assert_eq!(updated.presence_status, "dnd");
+        assert_eq!(updated.custom_status.as_deref(), Some("focusing"));
     }
 
     #[tokio::test]

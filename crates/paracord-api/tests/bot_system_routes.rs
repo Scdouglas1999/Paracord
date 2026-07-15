@@ -734,6 +734,141 @@ async fn oauth2_authorize_rejects_redirect_uri_mismatch() -> anyhow::Result<()> 
     Ok(())
 }
 
+// ── Private-app metadata disclosure / forced-install regressions ─────────────
+
+#[tokio::test]
+async fn public_bot_application_hidden_from_non_owner_unless_listed() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    // Owner (the default ctx user) creates a private/unlisted bot application.
+    let bot = create_bot_application(&ctx, "PrivateBot").await?;
+    let app_id_num: i64 = bot.app_id.parse()?;
+
+    // The owner can always read their own app's public view.
+    let (status, payload) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/bots/applications/{}/public", bot.app_id),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "owner should read own app public view: {payload}"
+    );
+
+    // A different authenticated user must NOT be able to read an unlisted app's
+    // metadata. Old behavior returned 200 with name/description/bot_user_id/etc.
+    let other_token = create_authenticated_user_token(
+        &ctx.db,
+        &ctx._test_app.jwt_secret,
+        "otherviewer",
+        "OtherViewerPass123!",
+    )
+    .await?;
+    let (status, payload) = ctx
+        .request_json_with_token(
+            Method::GET,
+            &format!("/api/v1/bots/applications/{}/public", bot.app_id),
+            None,
+            &other_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "non-owner must not read an unlisted app's metadata: {payload}"
+    );
+
+    // Once the app is publicly listed, any authenticated user may read it.
+    sqlx::query("UPDATE bot_applications SET public_listed = TRUE WHERE id = $1")
+        .bind(app_id_num)
+        .execute(&ctx.db)
+        .await?;
+    let (status, payload) = ctx
+        .request_json_with_token(
+            Method::GET,
+            &format!("/api/v1/bots/applications/{}/public", bot.app_id),
+            None,
+            &other_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a publicly listed app must be readable by any authenticated user: {payload}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth2_authorize_rejects_non_owner_installing_unlisted_app() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    // Owner (the default ctx user) creates a private/unlisted bot application.
+    let bot = create_bot_application(&ctx, "UnlistedInstallBot").await?;
+    let app_id_num: i64 = bot.app_id.parse()?;
+
+    // A second user creates and thus owns their own guild → holds MANAGE_GUILD
+    // there, but does NOT own the bot application.
+    let installer_token = create_authenticated_user_token(
+        &ctx.db,
+        &ctx._test_app.jwt_secret,
+        "installer",
+        "InstallerPass123!",
+    )
+    .await?;
+    let (status, guild_payload) = ctx
+        .request_json_with_token(
+            Method::POST,
+            "/api/v1/guilds",
+            Some(json!({ "name": "Installer Guild", "icon": Value::Null })),
+            &installer_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "guild create: {guild_payload}");
+    let guild_id = guild_payload["id"]
+        .as_str()
+        .context("guild id should be a string")?
+        .to_string();
+
+    // MANAGE_GUILD alone must not let a non-owner force-install an unlisted bot.
+    let (status, payload) = ctx
+        .request_json_with_token(
+            Method::POST,
+            "/api/v1/oauth2/authorize",
+            Some(json!({ "application_id": bot.app_id, "guild_id": guild_id })),
+            &installer_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "non-owner must not force-install an unlisted app: {payload}"
+    );
+
+    // After the app is publicly listed, the same MANAGE_GUILD holder may install.
+    sqlx::query("UPDATE bot_applications SET public_listed = TRUE WHERE id = $1")
+        .bind(app_id_num)
+        .execute(&ctx.db)
+        .await?;
+    let (status, payload) = ctx
+        .request_json_with_token(
+            Method::POST,
+            "/api/v1/oauth2/authorize",
+            Some(json!({ "application_id": bot.app_id, "guild_id": guild_id })),
+            &installer_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a publicly listed app must be installable by a MANAGE_GUILD holder: {payload}"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn global_command_crud() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
@@ -1196,6 +1331,239 @@ async fn interaction_callback_type4_creates_message() -> anyhow::Result<()> {
         "interaction response components should survive a history reload"
     );
 
+    Ok(())
+}
+
+/// Post a bot-authored message into `channel_id` via a slash command + type-4
+/// callback, returning the created message id. Used to obtain a real message
+/// that carries a component the invoker could legitimately click.
+async fn post_bot_message(
+    ctx: &TestContext,
+    bot: &BotAppInfo,
+    guild_id: &str,
+    channel_id: &str,
+    command_name: &str,
+) -> anyhow::Result<String> {
+    create_global_command(ctx, &bot.app_id, command_name, "posts a panel").await?;
+    let (interaction, token) =
+        invoke_slash_command(ctx, command_name, guild_id, channel_id).await?;
+    let interaction_id = interaction["id"].as_str().unwrap();
+    let (status, result) = interaction_callback(
+        ctx,
+        interaction_id,
+        &token,
+        4,
+        Some(json!({
+            "content": "control panel",
+            "components": [
+                { "type": 1, "components": [
+                    { "type": 2, "label": "Ban", "custom_id": "ban:victim", "style": 4 }
+                ]}
+            ],
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "seed bot message failed: {result}");
+    Ok(result["id"].as_str().context("message id")?.to_string())
+}
+
+/// L04-05: a type-3 (MessageComponent) interaction whose `channel_id` does not
+/// match the target message's real channel must be rejected — otherwise a
+/// member could forge a component click and steer the bot's response into an
+/// arbitrary channel.
+#[tokio::test]
+async fn component_interaction_rejects_mismatched_channel() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let bot = create_bot_application(&ctx, "ComponentBot").await?;
+    let guild_id = create_guild(&ctx, "ComponentGuild").await?;
+    let channel_a = create_text_channel(&ctx, &guild_id, "panel").await?;
+    let channel_b = create_text_channel(&ctx, &guild_id, "elsewhere").await?;
+    authorize_bot_in_guild(&ctx, &bot.app_id, &guild_id).await?;
+
+    let message_id = post_bot_message(&ctx, &bot, &guild_id, &channel_a, "panel").await?;
+
+    // Forge a component interaction that claims the message lives in channel_b.
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/interactions",
+            Some(json!({
+                "type": 3,
+                "guild_id": guild_id,
+                "channel_id": channel_b,
+                "message_id": message_id,
+                "custom_id": "ban:victim",
+                "component_type": 2,
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "mismatched channel component interaction must be rejected: {payload}"
+    );
+
+    Ok(())
+}
+
+/// L04-05 regression guard: a legitimate type-3 interaction (channel_id matches
+/// the message's channel and the caller can view it) still succeeds.
+#[tokio::test]
+async fn component_interaction_accepts_matching_channel() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let bot = create_bot_application(&ctx, "ComponentBot2").await?;
+    let guild_id = create_guild(&ctx, "ComponentGuild2").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "panel").await?;
+    authorize_bot_in_guild(&ctx, &bot.app_id, &guild_id).await?;
+
+    let message_id = post_bot_message(&ctx, &bot, &guild_id, &channel_id, "panel").await?;
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/interactions",
+            Some(json!({
+                "type": 3,
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "message_id": message_id,
+                "custom_id": "ban:victim",
+                "component_type": 2,
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "legitimate component interaction should succeed: {payload}"
+    );
+    assert_eq!(payload["type"], 3);
+
+    Ok(())
+}
+
+/// A caller may only invoke the exact component persisted on the bot message;
+/// knowing a message ID must not allow invention of a privileged custom_id.
+#[tokio::test]
+async fn component_interaction_rejects_forged_custom_id_and_type() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let bot = create_bot_application(&ctx, "BoundComponentBot").await?;
+    let guild_id = create_guild(&ctx, "BoundComponentGuild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "panel").await?;
+    authorize_bot_in_guild(&ctx, &bot.app_id, &guild_id).await?;
+    let message_id = post_bot_message(&ctx, &bot, &guild_id, &channel_id, "bound-panel").await?;
+
+    for (custom_id, component_type) in [("admin:forged", 2), ("ban:victim", 3)] {
+        let (status, payload) = ctx
+            .request_json(
+                Method::POST,
+                "/api/v1/interactions",
+                Some(json!({
+                    "type": 3,
+                    "guild_id": guild_id,
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                    "custom_id": custom_id,
+                    "component_type": component_type,
+                })),
+            )
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "forged component must be rejected: {payload}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn modal_submit_requires_issued_user_bound_single_use_modal() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let bot = create_bot_application(&ctx, "BoundModalBot").await?;
+    let guild_id = create_guild(&ctx, "BoundModalGuild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "modals").await?;
+    authorize_bot_in_guild(&ctx, &bot.app_id, &guild_id).await?;
+    create_global_command(&ctx, &bot.app_id, "open-modal", "opens a modal").await?;
+
+    let (source, token) = invoke_slash_command(&ctx, "open-modal", &guild_id, &channel_id).await?;
+    let source_id = source["id"].as_str().context("source interaction id")?;
+    let (status, callback) = interaction_callback(
+        &ctx,
+        source_id,
+        &token,
+        9,
+        Some(json!({
+            "title": "Confirm action",
+            "custom_id": "confirm-modal",
+            "components": [{
+                "type": 1,
+                "components": [{
+                    "type": 4,
+                    "custom_id": "reason",
+                    "label": "Reason",
+                    "required": true,
+                    "min_length": 3,
+                    "max_length": 100
+                }]
+            }]
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "modal callback failed: {callback}");
+
+    let submit = json!({
+        "type": 5,
+        "guild_id": guild_id,
+        "channel_id": channel_id,
+        "application_id": bot.app_id,
+        "source_interaction_id": source_id,
+        "custom_id": "confirm-modal",
+        "components": [{
+            "type": 1,
+            "components": [{
+                "type": 4,
+                "custom_id": "reason",
+                "value": "approved reason"
+            }]
+        }]
+    });
+    let (status, submitted) = ctx
+        .request_json(Method::POST, "/api/v1/interactions", Some(submit.clone()))
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "valid modal failed: {submitted}"
+    );
+
+    let (status, replay) = ctx
+        .request_json(Method::POST, "/api/v1/interactions", Some(submit))
+        .await?;
+    assert!(
+        matches!(status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN),
+        "modal replay must fail: {replay}"
+    );
+
+    let (status, forged) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/interactions",
+            Some(json!({
+                "type": 5,
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "application_id": bot.app_id,
+                "custom_id": "confirm-modal",
+                "components": []
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unissued modal accepted: {forged}"
+    );
     Ok(())
 }
 

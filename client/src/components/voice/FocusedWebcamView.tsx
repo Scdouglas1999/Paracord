@@ -11,14 +11,18 @@ interface FocusedWebcamViewProps {
 /**
  * Renders a single participant's webcam filling its container.
  * Extracted from VideoGrid's VideoTileView pattern for use in split panes.
+ * Supports LiveKit (`room`) and native/browser MediaEngine canvas paths.
  */
 export function FocusedWebcamView({ participantId, username, isLocal }: FocusedWebcamViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const room = useVoiceStore((s) => s.room);
+  const mediaEngine = useVoiceStore((s) => s.mediaEngine);
   const speakingUsers = useVoiceStore((s) => s.speakingUsers);
   const [hasTrack, setHasTrack] = useState(false);
 
   const isSpeaking = speakingUsers.has(participantId);
+  const useCanvas = !room && Boolean(mediaEngine);
 
   useEffect(() => {
     if (!room || !videoRef.current) return;
@@ -106,27 +110,59 @@ export function FocusedWebcamView({ participantId, username, isLocal }: FocusedW
     };
   }, [room, participantId, isLocal]);
 
+  useEffect(() => {
+    if (room || !mediaEngine || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    let sawFrame = false;
+    const onFrame = () => {
+      if (!sawFrame) {
+        sawFrame = true;
+        setHasTrack(true);
+      }
+    };
+    const unsubscribe = mediaEngine.subscribeVideo(
+      participantId,
+      canvas,
+      onFrame,
+      { preferredTrackId: 'camera' },
+    );
+    return () => {
+      unsubscribe();
+      if (!sawFrame) setHasTrack(false);
+    };
+  }, [room, mediaEngine, participantId]);
+
   const initial = username.trim().charAt(0).toUpperCase() || '?';
 
   return (
     <div
       className="relative h-full w-full overflow-hidden bg-bg-tertiary transition-shadow duration-[var(--duration-normal)] ease-[var(--ease-out)]"
       style={{
-        // Speaking = an emerald inset ring on the spotlight, never a color wash.
         boxShadow: isSpeaking ? 'inset 0 0 0 2px var(--accent-primary)' : 'none',
       }}
     >
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={isLocal}
-        className="h-full w-full object-cover"
-        style={{
-          transform: isLocal ? 'scaleX(-1)' : undefined,
-          display: hasTrack ? 'block' : 'none',
-        }}
-      />
+      {useCanvas ? (
+        <canvas
+          ref={canvasRef}
+          className="h-full w-full object-cover"
+          style={{
+            transform: isLocal ? 'scaleX(-1)' : undefined,
+            display: hasTrack ? 'block' : 'none',
+          }}
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted={isLocal}
+          className="h-full w-full object-cover"
+          style={{
+            transform: isLocal ? 'scaleX(-1)' : undefined,
+            display: hasTrack ? 'block' : 'none',
+          }}
+        />
+      )}
       {!hasTrack && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-bg-secondary">
           <div
@@ -139,7 +175,6 @@ export function FocusedWebcamView({ participantId, username, isLocal }: FocusedW
           <span className="text-label text-text-muted">{username}&rsquo;s camera is off</span>
         </div>
       )}
-      {/* Name pill — floating surface + meta type (design-spec §7). */}
       <div className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-sm bg-bg-floating px-2.5 py-1 backdrop-blur-md">
         {isSpeaking && <span className="h-1.5 w-1.5 rounded-full bg-accent-primary" />}
         <span className="text-meta font-semibold text-text-primary">{username}</span>

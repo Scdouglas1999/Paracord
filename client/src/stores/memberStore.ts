@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Member } from '../types';
+import type { Member, User } from '../types';
 import { guildApi } from '../api/guilds';
 import { extractApiError } from '../api/client';
 import { toast } from './toastStore';
@@ -17,6 +17,7 @@ interface MemberState {
   addMember: (guildId: string, member: Member) => void;
   removeMember: (guildId: string, userId: string) => void;
   updateMember: (guildId: string, member: Partial<Member> & { user: { id: string } }) => void;
+  updateUserIdentity: (user: User) => void;
 }
 
 const _fetchInFlight = new Set<string>();
@@ -80,6 +81,22 @@ export const useMemberStore = create<MemberState>()((set, get) => ({
           m.user.id === memberData.user.id ? { ...m, ...memberData } : m
         )
       );
+      return { members };
+    }),
+
+  updateUserIdentity: (user) =>
+    set((state) => {
+      const members = new Map(state.members);
+      for (const [guildId, existing] of members) {
+        members.set(
+          guildId,
+          existing.map((member) =>
+            member.user.id === user.id
+              ? { ...member, user: { ...member.user, ...user } }
+              : member
+          ),
+        );
+      }
       return { members };
     }),
 }));

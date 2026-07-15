@@ -51,6 +51,19 @@ describe('useFocusTrap', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('stops Escape from bubbling to outer shell handlers', () => {
+    const onClose = vi.fn();
+    const outer = vi.fn();
+    window.addEventListener('keydown', outer);
+    render(<FocusTrapHarness onClose={onClose} />);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(outer).not.toHaveBeenCalled();
+    window.removeEventListener('keydown', outer);
+  });
+
   it('restores the previously focused element when unmounted', () => {
     render(<button type="button">Before dialog</button>);
     const previous = screen.getByRole('button', { name: 'Before dialog' });

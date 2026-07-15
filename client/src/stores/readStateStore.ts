@@ -84,6 +84,42 @@ function resolveActiveServerId(): string {
 // top bar) mount together and each calls refresh() — they should share one pass.
 let inFlightRefresh: Promise<void> | null = null;
 
+// A REST snapshot can finish after a local read/mention event. Track per-channel
+// revisions so that response cannot overwrite state that changed while it was
+// in flight. A later refresh starts with the new revision and reconciles normally.
+const localRevisionByChannel = new Map<string, number>();
+
+function revisionKey(serverId: string, channelId: string): string {
+  return `${serverId}\u0000${channelId}`;
+}
+
+function bumpLocalRevision(serverId: string, channelId: string): void {
+  const key = revisionKey(serverId, channelId);
+  localRevisionByChannel.set(key, (localRevisionByChannel.get(key) ?? 0) + 1);
+}
+
+function mergeSnapshot(
+  serverId: string,
+  states: ReadState[],
+  existing: ServerReadStates,
+  revisionsAtStart: Map<string, number>,
+): ServerReadStates {
+  const incoming = indexByChannel(states);
+  const next: ServerReadStates = {};
+  const channelIds = new Set([...Object.keys(existing), ...Object.keys(incoming)]);
+  for (const channelId of channelIds) {
+    const key = revisionKey(serverId, channelId);
+    const changedWhileFetching =
+      (localRevisionByChannel.get(key) ?? 0) !== (revisionsAtStart.get(key) ?? 0);
+    if (changedWhileFetching && existing[channelId]) {
+      next[channelId] = existing[channelId];
+    } else if (incoming[channelId]) {
+      next[channelId] = incoming[channelId];
+    }
+  }
+  return next;
+}
+
 export const useReadStateStore = create<ReadStateStore>()((set, get) => {
   // Recompute the active-server mirror alongside every `byServer` write so the
   // legacy single-arg call sites keep resolving without edits.
@@ -99,6 +135,7 @@ export const useReadStateStore = create<ReadStateStore>()((set, get) => {
     const serverId = c !== undefined ? a : resolveActiveServerId();
     const channelId = c !== undefined ? b : a;
     const lastMessageId = c !== undefined ? c : b;
+    bumpLocalRevision(serverId, channelId);
     set((state) => {
       const existingMap = state.byServer[serverId] ?? EMPTY_READ_STATES;
       const nextMap: ServerReadStates = {
@@ -113,6 +150,7 @@ export const useReadStateStore = create<ReadStateStore>()((set, get) => {
     // 2 args → (serverId, channelId); 1 arg → legacy (channelId).
     const serverId = b !== undefined ? a : resolveActiveServerId();
     const channelId = b !== undefined ? b : a;
+    bumpLocalRevision(serverId, channelId);
     set((state) => {
       const existingMap = state.byServer[serverId] ?? EMPTY_READ_STATES;
       const existing = existingMap[channelId];
@@ -145,6 +183,7 @@ export const useReadStateStore = create<ReadStateStore>()((set, get) => {
       if (inFlightRefresh) return inFlightRefresh;
       inFlightRefresh = (async () => {
         try {
+          const revisionsAtStart = new Map(localRevisionByChannel);
           const { servers, activeServerId } = useServerListStore.getState();
           const activeId = activeServerId ?? LOCAL_SERVER_ID;
 
@@ -179,7 +218,14 @@ export const useReadStateStore = create<ReadStateStore>()((set, get) => {
             for (const result of results) {
               // Null = this server's fetch failed: keep its prior snapshot so an
               // unreachable background server degrades gracefully (§9 flag 2).
-              if (result) nextByServer[result.serverId] = indexByChannel(result.states);
+              if (result) {
+                nextByServer[result.serverId] = mergeSnapshot(
+                  result.serverId,
+                  result.states,
+                  state.byServer[result.serverId] ?? EMPTY_READ_STATES,
+                  revisionsAtStart,
+                );
+              }
             }
             return withMirror(nextByServer);
           });
@@ -194,6 +240,9 @@ export const useReadStateStore = create<ReadStateStore>()((set, get) => {
 
     incrementMention: incrementMentionImpl as ReadStateStore['incrementMention'],
 
-    reset: () => set({ byServer: {}, readStates: EMPTY_READ_STATES }),
+    reset: () => {
+      localRevisionByChannel.clear();
+      set({ byServer: {}, readStates: EMPTY_READ_STATES });
+    },
   };
 });

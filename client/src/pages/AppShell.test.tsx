@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,6 +6,8 @@ import { AppShell } from './AppShell';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
 import { useMobile } from '../hooks/useMobile';
+
+const fetchRelationshipsMock = vi.hoisted(() => vi.fn());
 
 // Heavy children are stubbed — this suite asserts the frame wiring (which surfaces
 // mount, and under which conditions), not the internals of the sidebar/panels.
@@ -27,6 +29,9 @@ vi.mock('../components/layout/CommandPalette', () => ({
 vi.mock('../components/ui/ConfirmDialog', () => ({
   ConfirmDialog: () => <div data-testid="confirm-dialog" />,
 }));
+vi.mock('../components/message/InteractionModal', () => ({
+  InteractionModal: () => <div data-testid="interaction-modal-host" />,
+}));
 vi.mock('./SettingsPage', () => ({
   SettingsPage: () => <div data-testid="settings-page" />,
 }));
@@ -42,6 +47,13 @@ vi.mock('../hooks/useMobile', () => ({
   useMobile: vi.fn(() => false),
   DEFAULT_MOBILE_MAX_WIDTH: 768,
 }));
+vi.mock('../stores/relationshipStore', () => ({
+  useRelationshipStore: Object.assign(
+    (selector: (state: { fetchRelationships: typeof fetchRelationshipsMock }) => unknown) =>
+      selector({ fetchRelationships: fetchRelationshipsMock }),
+    { getState: () => ({ fetchRelationships: fetchRelationshipsMock }) },
+  ),
+}));
 
 const mockedUseMobile = vi.mocked(useMobile);
 
@@ -51,6 +63,7 @@ function renderShell(initialPath = '/app') {
       <Routes>
         <Route path="/app" element={<AppShell />}>
           <Route index element={<div data-testid="outlet-content">home body</div>} />
+          <Route path="dms/:channelId" element={<div data-testid="outlet-content">dm body</div>} />
           <Route
             path="guilds/:guildId/channels/:channelId"
             element={<div data-testid="outlet-content">chat body</div>}
@@ -62,6 +75,8 @@ function renderShell(initialPath = '/app') {
 }
 
 beforeEach(() => {
+  fetchRelationshipsMock.mockReset();
+  fetchRelationshipsMock.mockResolvedValue(undefined);
   mockedUseMobile.mockReturnValue(false);
   useUIStore.setState({
     contextPanelMode: null,
@@ -80,23 +95,49 @@ describe('AppShell', () => {
     // Persistent chrome is always mounted.
     expect(screen.getByTestId('command-palette')).toBeInTheDocument();
     expect(screen.getByTestId('confirm-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('interaction-modal-host')).toBeInTheDocument();
   });
 
   it('renders the ContextPanel only when contextPanelMode is set', () => {
-    const { rerender } = renderShell();
+    const { rerender } = renderShell('/app/guilds/g1/channels/c1');
     expect(screen.queryByTestId('context-panel')).not.toBeInTheDocument();
 
     act(() => useUIStore.setState({ contextPanelMode: 'members' }));
     rerender(
-      <MemoryRouter initialEntries={['/app']}>
+      <MemoryRouter initialEntries={['/app/guilds/g1/channels/c1']}>
         <Routes>
           <Route path="/app" element={<AppShell />}>
-            <Route index element={<div data-testid="outlet-content">home body</div>} />
+            <Route
+              path="guilds/:guildId/channels/:channelId"
+              element={<div data-testid="outlet-content">chat body</div>}
+            />
           </Route>
         </Routes>
       </MemoryRouter>,
     );
     expect(screen.getByTestId('context-panel')).toBeInTheDocument();
+  });
+
+  it('clears an incompatible context panel mode instead of showing an empty panel', async () => {
+    useUIStore.setState({ contextPanelMode: 'economy' });
+
+    renderShell('/app/dms/dm-1');
+
+    expect(screen.queryByTestId('context-panel')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(useUIStore.getState().contextPanelMode).toBeNull();
+    });
+  });
+
+  it('collapses the mobile sidebar overlay after route entry', async () => {
+    mockedUseMobile.mockReturnValue(true);
+    useUIStore.setState({ sidebarCollapsed: false });
+
+    renderShell('/app/guilds/g1/channels/c1');
+
+    await waitFor(() => {
+      expect(useUIStore.getState().sidebarCollapsed).toBe(true);
+    });
   });
 
   it('mounts the mobile MiniVoiceBar dock when mobile + connected off the voice channel page', () => {

@@ -31,6 +31,7 @@ export interface Guild {
   vanity_url_code?: string;
   created_at: string;
   visibility?: 'private' | 'public' | 'roles';
+  allowed_roles?: string[];
   discovery_tags?: string[];
   hub_settings?: HubSettings;
   bot_settings?: Record<string, GuildBotConfig>;
@@ -106,8 +107,11 @@ export interface GuildEmoji {
 
 export interface Ban {
   user: User;
-  reason?: string;
+  user_id?: string;
+  reason?: string | null;
   guild_id: string;
+  banned_by?: string | null;
+  created_at?: string;
 }
 
 export interface AuditLogEntry {

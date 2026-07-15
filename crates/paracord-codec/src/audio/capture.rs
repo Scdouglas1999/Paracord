@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SampleRate as CpalSampleRate, Stream, StreamConfig};
 use rubato::{FftFixedOut, Resampler};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -124,10 +124,9 @@ impl AudioCapture {
         let (tx, rx) = mpsc::channel::<Vec<f32>>(50);
         let stop_flag = Arc::new(AtomicBool::new(false));
 
-        // Calculate how many device samples correspond to one 20ms frame
-        let device_frame_samples = (device_sample_rate as usize * 20) / 1000;
-
-        // Set up resampler if device rate != 48 kHz
+        // Set up resampler if device rate != 48 kHz. It is owned by the capture
+        // callback (below) — nothing else touches it — so it needs no Mutex; the
+        // real-time audio thread must never lock (AU8).
         let resampler = if device_sample_rate != SAMPLE_RATE {
             info!(
                 from = device_sample_rate,
@@ -142,19 +141,12 @@ impl AudioCapture {
                 1, // channels (mono after downmix)
             )
             .map_err(|e| CaptureError::Resampler(e.to_string()))?;
-            Some(Arc::new(Mutex::new(resampler)))
+            Some(resampler)
         } else {
             None
         };
 
-        // Accumulation buffer for incoming samples (mono, device rate)
-        let accumulator = Arc::new(Mutex::new(Vec::<f32>::with_capacity(
-            device_frame_samples * 2,
-        )));
-
         let stop = stop_flag.clone();
-        let acc = accumulator.clone();
-        let resamp = resampler.clone();
 
         let error_callback = {
             let stop = stop_flag.clone();
@@ -170,8 +162,7 @@ impl AudioCapture {
             SampleFormat::F32 => device.build_input_stream(
                 &stream_config,
                 build_data_callback::<f32>(
-                    acc,
-                    resamp,
+                    resampler,
                     tx.clone(),
                     stop,
                     device_channels,
@@ -183,8 +174,7 @@ impl AudioCapture {
             SampleFormat::I16 => device.build_input_stream(
                 &stream_config,
                 build_data_callback::<i16>(
-                    acc,
-                    resamp,
+                    resampler,
                     tx.clone(),
                     stop,
                     device_channels,
@@ -196,8 +186,7 @@ impl AudioCapture {
             SampleFormat::U16 => device.build_input_stream(
                 &stream_config,
                 build_data_callback::<u16>(
-                    acc,
-                    resamp,
+                    resampler,
                     tx.clone(),
                     stop,
                     device_channels,
@@ -211,8 +200,7 @@ impl AudioCapture {
                 device.build_input_stream(
                     &stream_config,
                     build_data_callback::<f32>(
-                        acc,
-                        resamp,
+                        resampler,
                         tx.clone(),
                         stop,
                         device_channels,
@@ -281,9 +269,12 @@ impl ToF32Sample for u16 {
 }
 
 /// Build the cpal data callback for a given sample type.
+///
+/// The accumulator and resampler are owned by the returned closure — no `Mutex`
+/// is taken on the real-time audio thread (AU8). The resampler's fixed-input
+/// scratch buffer is preallocated once and reused every frame.
 fn build_data_callback<S: ToF32Sample + cpal::SizedSample>(
-    accumulator: Arc<Mutex<Vec<f32>>>,
-    resampler: Option<Arc<Mutex<FftFixedOut<f32>>>>,
+    mut resampler: Option<FftFixedOut<f32>>,
     tx: mpsc::Sender<Vec<f32>>,
     stop_flag: Arc<AtomicBool>,
     device_channels: usize,
@@ -298,56 +289,47 @@ fn build_data_callback<S: ToF32Sample + cpal::SizedSample>(
         TARGET_FRAME_SIZE // 960 at 48kHz
     };
 
+    // Owned callback state (no shared Mutex): accumulation buffer at device
+    // rate, plus a preallocated single-channel input scratch for the resampler.
+    let mut accumulator: Vec<f32> = Vec::with_capacity(target_frame * 2);
+    let mut resample_in: Vec<f32> = vec![0.0; target_frame];
+
     move |data: &[S], _info: &cpal::InputCallbackInfo| {
         if stop_flag.load(Ordering::Relaxed) {
             return;
         }
 
-        // Downmix to mono
-        let mono: Vec<f32> = if device_channels == 1 {
-            data.iter().map(|s| s.to_f32_sample()).collect()
+        // Downmix to mono in place into the accumulator.
+        if device_channels == 1 {
+            accumulator.extend(data.iter().map(|s| s.to_f32_sample()));
         } else {
-            data.chunks(device_channels)
-                .map(|frame| {
-                    let sum: f32 = frame.iter().map(|s| s.to_f32_sample()).sum();
-                    sum / device_channels as f32
-                })
-                .collect()
-        };
-
-        let mut acc = match accumulator.lock() {
-            Ok(acc) => acc,
-            Err(_) => return,
-        };
-
-        acc.extend_from_slice(&mono);
+            accumulator.extend(data.chunks(device_channels).map(|frame| {
+                let sum: f32 = frame.iter().map(|s| s.to_f32_sample()).sum();
+                sum / device_channels as f32
+            }));
+        }
 
         // Emit complete frames
-        while acc.len() >= target_frame {
-            let frame_data: Vec<f32> = acc.drain(..target_frame).collect();
-
-            let output = if let Some(ref resampler) = resampler {
-                // Resample to 48 kHz
-                if let Ok(mut r) = resampler.lock() {
-                    let input = vec![frame_data];
-                    match r.process(&input, None) {
-                        Ok(resampled) => {
-                            if !resampled.is_empty() && resampled[0].len() == TARGET_FRAME_SIZE {
-                                resampled.into_iter().next().unwrap()
-                            } else {
-                                continue;
-                            }
-                        }
-                        Err(e) => {
-                            warn!("resampler error: {e}");
-                            continue;
-                        }
+        while accumulator.len() >= target_frame {
+            let output = if let Some(resampler) = resampler.as_mut() {
+                // Resample to 48 kHz using the preallocated input scratch.
+                resample_in.copy_from_slice(&accumulator[..target_frame]);
+                accumulator.drain(..target_frame);
+                let input = [&resample_in[..]];
+                match resampler.process(&input, None) {
+                    Ok(mut resampled)
+                        if !resampled.is_empty() && resampled[0].len() == TARGET_FRAME_SIZE =>
+                    {
+                        resampled.swap_remove(0)
                     }
-                } else {
-                    continue;
+                    Ok(_) => continue,
+                    Err(e) => {
+                        warn!("resampler error: {e}");
+                        continue;
+                    }
                 }
             } else {
-                frame_data
+                accumulator.drain(..target_frame).collect()
             };
 
             // Non-blocking send; drop frame if consumer is too slow

@@ -1,20 +1,23 @@
-import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSSProperties, type MouseEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMessages } from '../../hooks/useMessages';
 import { useTypingStore } from '../../stores/typingStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useMessageStore } from '../../stores/messageStore';
 import { useChannelStore } from '../../stores/channelStore';
+import { useGuildStore } from '../../stores/guildStore';
+import { useServerListStore } from '../../stores/serverListStore';
 import { useReadStateStore } from '../../stores/readStateStore';
 import { useMemberStore } from '../../stores/memberStore';
+import { useSavedMessageStore } from '../../stores/savedMessageStore';
 import { useUIStore } from '../../stores/uiStore';
 import { channelApi } from '../../api/channels';
 import { fileApi } from '../../api/files';
 import { extractApiError } from '../../api/client';
-import { MessageType, Permissions, hasPermission, type Channel, type Member, type Message, type Role } from '../../types';
+import { MessageType, Permissions, hasPermission, type Channel, type ChannelOverwrite, type Member, type Message, type Role } from '../../types';
 import { guildApi } from '../../api/guilds';
 import { UserProfilePopup } from '../user/UserProfile';
 import { EmojiPicker } from '../ui/EmojiPicker';
@@ -31,18 +34,60 @@ import { formatTimestamp, formatDate } from '../../lib/formatters';
 import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore';
 import { confirm } from '../../stores/confirmStore';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from '../../lib/customEmoji';
-import { isAllowedImageMimeType, safeClientResourceUrl, safeStoredImageDataUrl } from '../../lib/security';
+import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
+import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
 import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
 import { PollMessageCard } from './PollMessageCard';
 import { EphemeralMessage } from './EphemeralMessage';
+import { MessageComponents } from './MessageComponents';
 import { toast } from '../../stores/toastStore';
 import { LoadingSpinner, ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
+import { displayName } from '../../lib/displayName';
 
 const EMPTY_TYPING: string[] = [];
 const EMPTY_CHANNELS: Channel[] = [];
 const EMPTY_MEMBERS: Member[] = [];
+const EMPTY_SAVED_IDS = new Set<string>();
+
+/** Avoid re-parsing markdown on hover/typing re-renders when message content is unchanged. */
+const markdownParseCache = new Map<string, {
+  nodes: ReactNode[];
+  mentionMap: Map<string, string>;
+  onMentionClick: ((userId: string) => void) | undefined;
+}>();
+const MARKDOWN_CACHE_MAX = 400;
+
+function getCachedParsedMarkdown(
+  messageId: string,
+  content: string,
+  editedKey: string,
+  guildId: string | undefined,
+  mentionMap: Map<string, string>,
+  onMentionClick: ((userId: string) => void) | undefined,
+): ReactNode[] {
+  const key = `${messageId}\0${editedKey}\0${content}\0${guildId ?? ''}`;
+  const hit = markdownParseCache.get(key);
+  if (hit && hit.mentionMap === mentionMap && hit.onMentionClick === onMentionClick) {
+    return hit.nodes;
+  }
+  const nodes = parseMarkdown(content || '', guildId, mentionMap, onMentionClick);
+  markdownParseCache.set(key, { nodes, mentionMap, onMentionClick });
+  if (markdownParseCache.size > MARKDOWN_CACHE_MAX) {
+    const oldest = markdownParseCache.keys().next().value;
+    if (oldest !== undefined) markdownParseCache.delete(oldest);
+  }
+  return nodes;
+}
+
+/** Match gateway mention logic: @everyone or <@id> / <@!id> in content. */
+export function messageMentionsUser(msg: Message, userId: string | undefined | null): boolean {
+  if (!userId || msg.author.id === userId) return false;
+  if (msg.mention_everyone) return true;
+  const content = typeof msg.content === 'string' ? msg.content : '';
+  return new RegExp(`<@!?${userId}>`).test(content);
+}
 
 const MAX_REPLY_NEST_DEPTH = 6;
 const REPLY_INDENT_PX = 18;
@@ -396,6 +441,7 @@ const initialMessageListUIState: MessageListUIState = {
 export function MessageList({ channelId, onReply }: MessageListProps) {
   const lowBandwidthMode = useUIStore((s) => s.lowBandwidthMode);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { messages, isLoading, hasMore, loadMore, error } = useMessages(channelId);
   const fetchMessages = useMessageStore((s) => s.fetchMessages);
   const addReaction = useMessageStore((s) => s.addReaction);
@@ -406,14 +452,57 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const unpinMessage = useMessageStore((s) => s.unpinMessage);
   const setMessages = useMessageStore((s) => s.setMessages);
   const decryptingIds = useMessageStore((s) => s.decryptingIds);
-  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
   const activeChannel = useChannelStore((s) => s.channelsById[channelId]);
   const typingUsers = useTypingStore((s) => s.typingByChannel[channelId] ?? EMPTY_TYPING);
   const me = useAuthStore((s) => s.user?.id);
   const activeGuildId = activeChannel?.guild_id || null;
-  const activeGuildChannels = activeGuildId ? (channelsByGuild[activeGuildId] ?? EMPTY_CHANNELS) : EMPTY_CHANNELS;
-  const { permissions, isAdmin } = usePermissions(activeGuildId);
+  const originServerId = useGuildStore((state) => {
+    if (!activeChannel?.guild_id) return null;
+    return state.guilds.find((guild) => guild.id === activeChannel.guild_id)?.originServerId ?? null;
+  });
+  const activeServerId = useServerListStore((state) => state.activeServerId);
+  const savedServerScope = activeServerId ?? '__local__';
+  const savedIds = useSavedMessageStore((state) =>
+    state.serverId === savedServerScope ? state.savedIds : EMPTY_SAVED_IDS,
+  );
+  const channelServerId = originServerId ?? activeServerId;
+  const activeGuildChannels = useChannelStore(
+    useCallback(
+      (s) => (activeGuildId ? (s.channelsByGuild[activeGuildId] ?? EMPTY_CHANNELS) : EMPTY_CHANNELS),
+      [activeGuildId],
+    ),
+  );
+  const [channelOverwrites, setChannelOverwrites] = useState<ChannelOverwrite[]>([]);
+  useEffect(() => {
+    void useSavedMessageStore.getState().load();
+  }, [savedServerScope]);
+  useEffect(() => {
+    if (!activeGuildId || !channelId) {
+      setChannelOverwrites([]);
+      return;
+    }
+    let cancelled = false;
+    channelApi
+      .getOverwrites(channelId)
+      .then(({ data }) => {
+        if (!cancelled) setChannelOverwrites(data);
+      })
+      .catch(() => {
+        if (!cancelled) setChannelOverwrites([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeGuildId, channelId]);
+  const { permissions, isAdmin } = usePermissions(activeGuildId, {
+    channelId,
+    channelOverwrites,
+  });
   const canManageMessages = isAdmin || hasPermission(permissions, Permissions.MANAGE_MESSAGES);
+  // DMs: API only requires recipient membership (no MANAGE_MESSAGES). Guild: MANAGE_MESSAGES.
+  const canPinInChannel = Boolean(activeGuildId) ? canManageMessages : true;
+  const canAddReactions =
+    !activeGuildId || isAdmin || hasPermission(permissions, Permissions.ADD_REACTIONS);
   const activeChannelType = activeChannel?.channel_type ?? activeChannel?.type;
   const canCreateThreads =
     Boolean(activeGuildId) &&
@@ -444,6 +533,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const activeTyping = typingUsers.filter((id) => id !== me);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const lastMessageId = messages[messages.length - 1]?.id ?? null;
 
   // All overlay/dialog UI state lives in one reducer; slice setters below are
   // thin wrappers over dispatch that keep the previous call-site API intact.
@@ -538,6 +628,16 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     return window.matchMedia('(hover: none), (pointer: coarse)').matches;
   });
   const [guildRoles, setGuildRoles] = useState<Role[]>([]);
+  /** Revealed real authors for anonymous messages (keyed by message id). */
+  const [deanonymizedById, setDeanonymizedById] = useState<Record<string, string>>({});
+  const [deanonymizingId, setDeanonymizingId] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [threadCreating, setThreadCreating] = useState(false);
+  const jumpFetchAttemptedRef = useRef<string | null>(null);
+  const queryJumpAttemptedRef = useRef<string | null>(null);
+  const pendingScrollMessageRef = useRef<string | null>(null);
+  const jumpHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
   const hasHydratedChannelRef = useRef(false);
   const lastReadStateMessageIdRef = useRef<string | null>(null);
   const prevMessagesLenRef = useRef(0);
@@ -558,7 +658,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const mentionMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const member of activeGuildMembers) {
-      map.set(member.user.id, member.nick || member.user.username);
+      map.set(member.user.id, displayName(member.user, member.nick));
     }
     return map;
   }, [activeGuildMembers]);
@@ -645,19 +745,33 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   }, []);
 
   const readStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readStateRetryRef = useRef(0);
   const markLatestRead = useCallback(() => {
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage?.id || lastReadStateMessageIdRef.current === lastMessage.id) return;
-    lastReadStateMessageIdRef.current = lastMessage.id;
+    const serverId = channelServerId ?? useServerListStore.getState().activeServerId;
+    if (!serverId) return;
+
+    // Update the visible state immediately. Persistence is retried below and the
+    // server enforces a monotonic cursor, so a delayed older request cannot undo it.
+    useReadStateStore.getState().markRead(serverId, channelId, lastMessage.id);
     if (readStateTimerRef.current) clearTimeout(readStateTimerRef.current);
     readStateTimerRef.current = setTimeout(() => {
-      channelApi.updateReadState(channelId, lastMessage.id).then(() => {
-        useReadStateStore.getState().markRead(channelId, lastMessage.id);
-      }).catch(() => {
-        /* ignore */
+      channelApi.updateReadStateForServer(serverId, channelId, lastMessage.id).then(() => {
+        lastReadStateMessageIdRef.current = lastMessage.id;
+        readStateRetryRef.current = 0;
+      }).catch((error) => {
+        // Do not permanently dedupe a failed write. Keep the optimistic cursor,
+        // retry on the next near-bottom signal, and make the failure observable.
+        lastReadStateMessageIdRef.current = null;
+        readStateRetryRef.current += 1;
+        if (readStateRetryRef.current >= 3) {
+          toast.error(`Failed to save read position: ${extractApiError(error)}`);
+          readStateRetryRef.current = 0;
+        }
       });
-    }, 500);
-  }, [messages, channelId]);
+    }, 300);
+  }, [messages, channelId, channelServerId]);
 
   // Virtualizer
   const virtualizer = useVirtualizer({
@@ -750,7 +864,9 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   useEffect(() => {
     hasHydratedChannelRef.current = false;
     lastReadStateMessageIdRef.current = null;
+    readStateRetryRef.current = 0;
     prevMessagesLenRef.current = 0;
+    isLoadingMoreRef.current = false;
     setShowScrollButton(false);
     setThreadModalForMessageId(null);
     setThreadCreateError(null);
@@ -759,6 +875,30 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     setSelectedMessageIds([]);
     setBulkDeleting(false);
     setAttachmentBusyId(null);
+    // Clear overlays that would otherwise stick across channel switches
+    // (edit mode, delete confirm, menus, report modal, etc.).
+    dispatchUI({
+      slice: 'popup',
+      patch: {
+        hoveredMessageId: null,
+        focusedMessageId: null,
+        menuMessageId: null,
+        profileUser: null,
+        emojiPickerFor: null,
+        deleteConfirmId: null,
+      },
+    });
+    dispatchUI({ slice: 'edit', patch: { editingMessageId: null, editContent: '' } });
+    dispatchUI({
+      slice: 'report',
+      patch: { reportingMessage: null, reportReason: '', reportEvidence: '', reportSubmitting: false },
+    });
+    dispatchUI({
+      slice: 'editHistory',
+      patch: { editHistoryMsgId: null, editHistoryData: [], editHistoryLoading: false },
+    });
+    setDeanonymizedById({});
+    setDeanonymizingId(null);
   }, [channelId]);
 
   useEffect(() => {
@@ -792,6 +932,13 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     };
   }, [channelId, activeGuildId, activeChannelType]);
 
+  // Clear the load-more guard when the store finishes loading (including failures).
+  useEffect(() => {
+    if (!isLoading) {
+      isLoadingMoreRef.current = false;
+    }
+  }, [isLoading]);
+
   // Scroll to bottom on new messages / initial load
   useEffect(() => {
     if (!messages.length) return;
@@ -819,18 +966,118 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     }
     hasHydratedChannelRef.current = true;
     prevMessagesLenRef.current = messages.length;
-  }, [messages.length]);
+  }, [channelId, channelServerId, messages.length, lastMessageId]);
+
+  const highlightJumpTarget = useCallback((messageId: string) => {
+    setJumpHighlightId(messageId);
+    if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
+    jumpHighlightTimerRef.current = setTimeout(() => {
+      setJumpHighlightId((current) => current === messageId ? null : current);
+      jumpHighlightTimerRef.current = null;
+    }, 2200);
+  }, []);
+
+  useEffect(() => () => {
+    if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
+  }, []);
 
   useEffect(() => {
-    if (!window.location.hash.startsWith('#msg-')) return;
+    if (!window.location.hash.startsWith('#msg-')) {
+      jumpFetchAttemptedRef.current = null;
+      return;
+    }
     const msgId = window.location.hash.slice(5); // strip '#msg-'
     const rowIndex = rows.findIndex(
       (r) => r.type === 'message' && r.message.id === msgId
     );
     if (rowIndex >= 0) {
       virtualizer.scrollToIndex(rowIndex, { align: 'center', behavior: 'smooth' });
+      highlightJumpTarget(msgId);
+      jumpFetchAttemptedRef.current = msgId;
+      return;
     }
-  }, [messages.length]);
+    // Message not in the loaded window — fetch around the anchor once, then scroll.
+    if (jumpFetchAttemptedRef.current === msgId) return;
+    jumpFetchAttemptedRef.current = msgId;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await fetchMessages(channelId, { around: msgId, limit: 50 });
+        if (cancelled) return;
+        requestAnimationFrame(() => {
+          if (cancelled) return;
+          const el = document.getElementById(`msg-${msgId}`);
+          if (el) {
+            el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          }
+        });
+      } catch {
+        // Leave hash in place; user can retry by reopening search/pins.
+        jumpFetchAttemptedRef.current = null;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [messages.length, channelId, fetchMessages, highlightJumpTarget, rows, virtualizer]);
+
+  const scrollToMessage = useCallback((messageId: string) => {
+    const rowIndex = rows.findIndex(
+      (entry) => entry.type === 'message' && entry.message.id === messageId
+    );
+    if (rowIndex >= 0) {
+      virtualizer.scrollToIndex(rowIndex, { align: 'center', behavior: 'smooth' });
+      highlightJumpTarget(messageId);
+      return;
+    }
+    pendingScrollMessageRef.current = messageId;
+    void (async () => {
+      try {
+        await fetchMessages(channelId, { around: messageId, limit: 50 });
+      } catch (err) {
+        if (pendingScrollMessageRef.current === messageId) pendingScrollMessageRef.current = null;
+        if (queryJumpAttemptedRef.current === messageId) queryJumpAttemptedRef.current = null;
+        toast.error(`Failed to jump to message: ${extractApiError(err)}`);
+      }
+    })();
+  }, [rows, virtualizer, highlightJumpTarget, fetchMessages, channelId]);
+
+  useEffect(() => {
+    const messageId = pendingScrollMessageRef.current;
+    if (!messageId) return;
+    const rowIndex = rows.findIndex(
+      (entry) => entry.type === 'message' && entry.message.id === messageId,
+    );
+    if (rowIndex < 0) return;
+    pendingScrollMessageRef.current = null;
+    virtualizer.scrollToIndex(rowIndex, { align: 'center', behavior: 'smooth' });
+    highlightJumpTarget(messageId);
+  }, [rows, virtualizer, highlightJumpTarget]);
+
+  useEffect(() => {
+    const messageId = searchParams.get('message');
+    if (!messageId) {
+      queryJumpAttemptedRef.current = null;
+      return;
+    }
+    if (queryJumpAttemptedRef.current === messageId) return;
+    queryJumpAttemptedRef.current = messageId;
+    scrollToMessage(messageId);
+  }, [scrollToMessage, searchParams]);
+
+  // Strip ?message= only after the target is in the loaded window so a failed
+  // around-fetch can be retried from the same deep link.
+  useEffect(() => {
+    const messageId = searchParams.get('message');
+    if (!messageId) return;
+    const rowIndex = rows.findIndex(
+      (entry) => entry.type === 'message' && entry.message.id === messageId,
+    );
+    if (rowIndex < 0) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('message');
+    setSearchParams(nextParams, { replace: true });
+  }, [rows, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -863,14 +1110,6 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     markLatestRead();
     setShowScrollButton(false);
   }, [virtualizer, rows.length, markLatestRead]);
-
-  const scrollToMessage = useCallback((messageId: string) => {
-    const rowIndex = rows.findIndex(
-      (entry) => entry.type === 'message' && entry.message.id === messageId
-    );
-    if (rowIndex < 0) return;
-    virtualizer.scrollToIndex(rowIndex, { align: 'center', behavior: 'smooth' });
-  }, [rows, virtualizer]);
 
   const openReactionPicker = (e: React.MouseEvent, messageId: string) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -907,6 +1146,24 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     }
   };
 
+  const deanonymizeMessage = async (message: Message) => {
+    if (!message.anonymous?.can_deanonymize || deanonymizingId) return;
+    setDeanonymizingId(message.id);
+    try {
+      const { data } = await channelApi.deanonymizeMessage(channelId, message.id);
+      const label =
+        data.user?.username
+          ? `${data.user.username}${data.user.discriminator != null ? `#${data.user.discriminator}` : ''}`
+          : data.user_id;
+      setDeanonymizedById((prev) => ({ ...prev, [message.id]: label }));
+      toast.success(`Revealed author: ${label}`);
+    } catch (err) {
+      toast.error(`Failed to deanonymize: ${extractApiError(err)}`);
+    } finally {
+      setDeanonymizingId(null);
+    }
+  };
+
   const togglePin = async (message: Message) => {
     try {
       if (message.pinned) {
@@ -920,6 +1177,22 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     }
   };
 
+  const toggleSavedMessage = async (message: Message) => {
+    const isSaved = savedIds.has(message.id);
+    setMenuMessageId(null);
+    try {
+      if (isSaved) {
+        await useSavedMessageStore.getState().remove(message.id);
+        toast.success('Removed from saved messages.');
+      } else {
+        await useSavedMessageStore.getState().save(message.id);
+        toast.success('Saved for later.');
+      }
+    } catch (err) {
+      toast.error(`Failed to ${isSaved ? 'remove' : 'save'} message: ${extractApiError(err)}`);
+    }
+  };
+
   const startEditingMessage = (msg: Message) => {
     setEditingMessageId(msg.id);
     setEditContent(msg.content || '');
@@ -929,10 +1202,11 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const cancelEditing = () => {
     setEditingMessageId(null);
     setEditContent('');
+    setEditSaving(false);
   };
 
   const saveEditMessage = async () => {
-    if (!editingMessageId) return;
+    if (!editingMessageId || editSaving) return;
     const trimmed = editContent.trim();
     if (!trimmed) return;
     const msg = messages.find((m) => m.id === editingMessageId);
@@ -940,12 +1214,15 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       cancelEditing();
       return;
     }
+    setEditSaving(true);
     try {
       await editMessage(channelId, editingMessageId, trimmed);
     } catch (err) {
       toast.error(`Failed to edit message: ${extractApiError(err)}`);
       // keep editing state so user can retry
       return;
+    } finally {
+      setEditSaving(false);
     }
     cancelEditing();
   };
@@ -953,7 +1230,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const handleEditKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      void saveEditMessage();
+      if (!editSaving) void saveEditMessage();
     } else if (e.key === 'Escape') {
       cancelEditing();
     }
@@ -1075,6 +1352,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       setProfileUser({
         id: member.user.id,
         username: member.user.username,
+        display_name: member.user.display_name,
         discriminator: String(member.user.discriminator ?? '0'),
         avatar_hash: member.user.avatar_hash || null,
         bot: member.user.bot ?? false,
@@ -1151,13 +1429,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   };
 
   const submitCreateThread = async () => {
-    if (!canCreateThreads || !threadModalForMessageId || !activeGuildId) return;
+    if (!canCreateThreads || !threadModalForMessageId || !activeGuildId || threadCreating) return;
     const trimmed = threadName.trim();
     if (!trimmed || trimmed.length > 100) {
       setThreadCreateError('Thread name must be between 1 and 100 characters.');
       return;
     }
     setThreadCreateError(null);
+    setThreadCreating(true);
     try {
       const { data: thread } = await channelApi.createThread(channelId, {
         name: trimmed,
@@ -1171,6 +1450,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     } catch (err) {
       const responseData = (err as { response?: { data?: { message?: string; error?: string } } }).response?.data;
       setThreadCreateError(responseData?.message || responseData?.error || 'Failed to create thread.');
+    } finally {
+      setThreadCreating(false);
     }
   };
 
@@ -1178,7 +1459,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     const isOwnMessage = msg.author.id === me;
     const canEditMsg = isOwnMessage;
     const canDeleteMsg = isOwnMessage || canManageMessages;
-    const canPinMsg = canManageMessages || !activeChannel?.guild_id;
+    const canPinMsg = canPinInChannel;
     const items: ContextMenuItem[] = [];
 
     if (onReply) {
@@ -1197,19 +1478,32 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       });
     }
 
-    items.push({
-      label: 'React',
-      icon: <Smile size={14} />,
-      action: () => {
-        setEmojiPickerFor({
-          messageId: msg.id,
-          position: {
-            x: contextMenuAnchor.x + 4,
-            y: contextMenuAnchor.y + 4,
-          },
-        });
-      },
-    });
+    if (canAddReactions) {
+      items.push({
+        label: 'React',
+        icon: <Smile size={14} />,
+        action: () => {
+          setEmojiPickerFor({
+            messageId: msg.id,
+            position: {
+              x: contextMenuAnchor.x + 4,
+              y: contextMenuAnchor.y + 4,
+            },
+          });
+        },
+      });
+    }
+
+    if (msg.anonymous?.can_deanonymize) {
+      items.push({
+        label: deanonymizedById[msg.id] ? `Author: ${deanonymizedById[msg.id]}` : 'Reveal Author',
+        icon: <Eye size={14} />,
+        disabled: Boolean(deanonymizedById[msg.id]) || deanonymizingId === msg.id,
+        action: () => {
+          void deanonymizeMessage(msg);
+        },
+      });
+    }
 
     if (canEditMsg) {
       items.push({
@@ -1228,6 +1522,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         },
       });
     }
+
+    items.push({
+      label: savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for Later',
+      icon: savedIds.has(msg.id) ? <BookmarkCheck size={14} /> : <Bookmark size={14} />,
+      action: () => {
+        void toggleSavedMessage(msg);
+      },
+    });
 
     items.push({ label: '', action: () => {}, divider: true });
 
@@ -1316,7 +1618,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       const resolveUsername = (userId: string): string => {
         if (guildMembers) {
           const member = guildMembers.find((m) => m.user.id === userId);
-          if (member) return member.nick || member.user.username;
+          if (member) return displayName(member.user, member.nick);
         }
         return 'Someone';
       };
@@ -1346,31 +1648,34 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     const isOwnMessage = msg.author.id === me;
     const canEditMessage = isOwnMessage;
     const canDeleteMessage = isOwnMessage || canManageMessages;
-    const canPinMessage = canManageMessages || !activeChannel?.guild_id;
+    const canPinMessage = canPinInChannel;
     const canReportMessage = Boolean(activeGuildId) && msg.author.id !== me;
     const canOpenMessageMenu =
-      canEditMessage || canDeleteMessage || canPinMessage || canCreateThreads || canReportMessage;
+      canEditMessage || canDeleteMessage || canPinMessage || canCreateThreads || canReportMessage || Boolean(msg.anonymous?.can_deanonymize);
     const linkedThreads = linkedThreadsByStarterMessageId[msg.id] ?? [];
     const authorGuildMember = activeGuildMemberById.get(msg.author.id);
+    const authorName = displayName(msg.author, authorGuildMember?.nick);
     const authorRoleColor = authorGuildMember ? getHighestRoleColor(authorGuildMember.roles ?? [], guildRoles) : undefined;
-    const authorAvatarSrc = safeStoredImageDataUrl(msg.author.avatar_hash ?? msg.author.avatar);
+    const authorAvatarSrc = resolveUserAvatarUrl(msg.author.avatar_hash ?? msg.author.avatar);
     // A message that pings the reader gets the mention-line treatment (§7):
     // a persistent emerald tint plus a 2px accent left border, hover-independent.
-    const mentionsMe = !isOwnMessage && Boolean(msg.mention_everyone);
+    const mentionsMe = messageMentionsUser(msg, me);
     const isActiveRow = hoveredMessageId === msg.id || focusedMessageId === msg.id;
-    const rowBackground = isActiveRow
-      ? mentionsMe
-        ? 'var(--accent-tint-strong)'
-        : 'var(--bg-mod-subtle)'
-      : mentionsMe
-        ? 'var(--accent-tint)'
-        : 'transparent';
+    const rowBackground = jumpHighlightId === msg.id
+      ? 'var(--accent-tint-strong)'
+      : isActiveRow
+        ? mentionsMe
+          ? 'var(--accent-tint-strong)'
+          : 'var(--bg-mod-subtle)'
+        : mentionsMe
+          ? 'var(--accent-tint)'
+          : 'transparent';
 
     return (
       <div
         id={`msg-${msg.id}`}
         role="article"
-        aria-label={`Message from ${msg.author.username}`}
+        aria-label={`Message from ${authorName}`}
         aria-posinset={row.messageIndex + 1}
         aria-setsize={messages.length}
         tabIndex={msg.id === activeRowMessageId ? 0 : -1}
@@ -1378,7 +1683,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         style={{
           marginTop: isGrouped ? '2px' : replyDepth > 0 ? '0.5rem' : '1.25rem',
           paddingLeft: replyIndent > 0 ? `${16 + replyIndent}px` : undefined,
-          borderLeft: mentionsMe ? '2px solid var(--accent-primary)' : undefined,
+          borderLeft: mentionsMe || jumpHighlightId === msg.id ? '2px solid var(--accent-primary)' : undefined,
           backgroundColor: rowBackground,
         }}
         onMouseEnter={() => setHoveredMessageId(msg.id)}
@@ -1422,7 +1727,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         ) : (
           <button
             type="button"
-            aria-label={`Open profile for ${msg.author.username}`}
+            aria-label={`Open profile for ${authorName}`}
             className="relative h-10 w-10 flex-shrink-0 overflow-hidden rounded-full border-0 p-0 shadow-sm transition-transform duration-[140ms] ease-[var(--ease-out)] active:scale-95 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             onClick={(e) => openAuthorProfile(e, msg)}
           >
@@ -1441,7 +1746,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                   color: authorRoleColor ?? 'var(--text-secondary)',
                 }}
               >
-                {msg.author.username.charAt(0).toUpperCase()}
+                {authorName.charAt(0).toUpperCase()}
               </span>
             )}
           </button>
@@ -1474,7 +1779,12 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               >
                 <Reply size={12} className="shrink-0" />
                 <span className="max-w-[8rem] truncate font-semibold" style={{ color: 'var(--text-secondary)' }}>
-                  {replyParentMessage?.author.username || 'Original message'}
+                  {replyParentMessage
+                    ? displayName(
+                        replyParentMessage.author,
+                        activeGuildMemberById.get(replyParentMessage.author.id)?.nick,
+                      )
+                    : 'Original message'}
                 </span>
                 <span className="truncate">
                   {replyParentMessage ? getReplyPreviewText(replyParentMessage) : 'Message not loaded'}
@@ -1488,10 +1798,10 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 type="button"
                 className="rounded-xs text-left text-[15px] font-semibold leading-tight hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 style={{ color: authorRoleColor ?? 'var(--text-primary)' }}
-                aria-label={`Open profile for ${msg.author.username}`}
+                aria-label={`Open profile for ${authorName}`}
                 onClick={(e) => openAuthorProfile(e, msg)}
               >
-                {msg.author.username}
+                {authorName}
               </button>
               {msg.anonymous?.is_anonymous && (
                 <span className="rounded-xs bg-warning-tint px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-warning">
@@ -1531,7 +1841,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             <div className="mt-0.5">
               <textarea
                 autoFocus
-                aria-label={`Edit message from ${msg.author.username}`}
+                aria-label={`Edit message from ${authorName}`}
                 className="w-full resize-none rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-body text-text-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)]"
                 style={{ minHeight: '2.5rem', maxHeight: '50vh' }}
                 value={editContent}
@@ -1548,9 +1858,10 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               <div className="mt-1.5 flex items-center gap-2">
                 <button
                   onClick={() => void saveEditMessage()}
-                  className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-meta font-semibold text-accent-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                  disabled={editSaving}
+                  className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-meta font-semibold text-accent-primary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                 >
-                  <Check size={13} /> Save
+                  <Check size={13} /> {editSaving ? 'Saving…' : 'Save'}
                 </button>
                 <button
                   onClick={cancelEditing}
@@ -1574,7 +1885,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                     </div>
                   ) : (
                     <div className="break-words text-[15px]" style={{ lineHeight: '1.58rem' }}>
-                      {parseMarkdown(msg.content || '', activeGuildId || undefined, mentionMap, handleMentionClick)}
+                      {getCachedParsedMarkdown(
+                        msg.id,
+                        msg.content || '',
+                        String(msg.edited_timestamp || msg.edited_at || ''),
+                        activeGuildId || undefined,
+                        mentionMap,
+                        handleMentionClick,
+                      )}
                     </div>
                   )}
                 </EphemeralMessage>
@@ -1585,7 +1903,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 </div>
               ) : !msg.poll ? (
                 <div className="break-words text-[15px]" style={{ color: 'var(--text-primary)', lineHeight: '1.58rem' }}>
-                  {parseMarkdown(msg.content || '', activeGuildId || undefined, mentionMap, handleMentionClick)}
+                  {getCachedParsedMarkdown(
+                    msg.id,
+                    msg.content || '',
+                    String(msg.edited_timestamp || msg.edited_at || ''),
+                    activeGuildId || undefined,
+                    mentionMap,
+                    handleMentionClick,
+                  )}
                   {isGrouped && (msg.edited_timestamp || msg.edited_at) && (
                     <button
                       type="button"
@@ -1607,6 +1932,21 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 />
               )}
             </>
+          )}
+
+          {msg.components && msg.components.length > 0 && (
+            <MessageComponents
+              components={msg.components}
+              messageId={msg.id}
+              channelId={channelId}
+              guildId={activeGuildId || undefined}
+            />
+          )}
+
+          {msg.anonymous?.is_anonymous && deanonymizedById[msg.id] && (
+            <p className="mt-1 text-meta text-text-muted">
+              Real author: <span className="font-semibold text-text-secondary">{deanonymizedById[msg.id]}</span>
+            </p>
           )}
 
           {/* GitHub webhook embed */}
@@ -1912,9 +2252,11 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
         {(hoveredMessageId === msg.id || focusedMessageId === msg.id) && !isCoarsePointer && (
           <div className="absolute -top-3.5 right-2 flex items-center gap-0.5 overflow-hidden rounded-sm border border-border-subtle bg-bg-accent p-0.5 shadow-md">
-            <button className="hover-action-btn rounded-sm" title="Add Reaction" aria-label="Add Reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
-              <Smile size={16} />
-            </button>
+            {canAddReactions && (
+              <button className="hover-action-btn rounded-sm" title="Add Reaction" aria-label="Add Reaction" onClick={(e) => openReactionPicker(e, msg.id)}>
+                <Smile size={16} />
+              </button>
+            )}
             <button className="hover-action-btn rounded-sm" title="Reply" aria-label="Reply" onClick={() => onReply?.(msg)}>
               <Reply size={16} />
             </button>
@@ -1934,15 +2276,35 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           <div
             className="glass-modal absolute right-1 top-11 z-10 min-w-[10rem] max-w-[calc(100vw-2.75rem)] rounded-md p-1 sm:right-2"
           >
-            <button
-              className="context-menu-item w-full text-left"
-              onClick={(e) => {
-                setMenuMessageId(null);
-                openReactionPicker(e, msg.id);
-              }}
-            >
-              Add Reaction
-            </button>
+            {canAddReactions && (
+              <button
+                className="context-menu-item w-full text-left"
+                onClick={(e) => {
+                  setMenuMessageId(null);
+                  openReactionPicker(e, msg.id);
+                }}
+              >
+                Add Reaction
+              </button>
+            )}
+            {msg.anonymous?.can_deanonymize && (
+              <button
+                className="context-menu-item w-full text-left"
+                disabled={Boolean(deanonymizedById[msg.id]) || deanonymizingId === msg.id}
+                onClick={() => {
+                  setMenuMessageId(null);
+                  void deanonymizeMessage(msg);
+                }}
+              >
+                {deanonymizingId === msg.id ? (
+                  <span className="inline-flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" /> Revealing…</span>
+                ) : deanonymizedById[msg.id] ? (
+                  `Author: ${deanonymizedById[msg.id]}`
+                ) : (
+                  'Reveal Author'
+                )}
+              </button>
+            )}
             {onReply && (
               <button
                 className="context-menu-item w-full text-left"
@@ -1978,6 +2340,13 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 {msg.pinned ? 'Unpin' : 'Pin'}
               </button>
             )}
+            <button
+              className="context-menu-item flex w-full items-center gap-2 text-left"
+              onClick={() => void toggleSavedMessage(msg)}
+            >
+              {savedIds.has(msg.id) ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
+              {savedIds.has(msg.id) ? 'Remove from Saved' : 'Save for Later'}
+            </button>
             {activeGuildId && msg.author.id !== me && (
               <button className="context-menu-item w-full text-left" onClick={() => openReportDialog(msg)}>
                 Report
@@ -1991,7 +2360,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           </div>
         )}
         {deleteConfirmId === msg.id && (
-          <div className="glass-modal absolute right-1 top-11 z-10 rounded-md p-3 sm:right-2" style={{ minWidth: '220px', maxWidth: 'calc(100vw - 2.75rem)' }}>
+          <div className="glass-modal absolute right-1 top-11 z-10 min-w-[min(13.75rem,calc(100vw-2.75rem))] max-w-[calc(100vw-2.75rem)] rounded-md p-3 sm:right-2">
             <p className="mb-1 text-label font-semibold text-text-primary">Delete message?</p>
             <p className="mb-3 text-meta text-text-muted">This can't be undone — the message is gone for everyone.</p>
             <div className="flex items-center gap-2">
@@ -2116,12 +2485,13 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                 maxLength={100}
                 onChange={(e) => setThreadName(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') void submitCreateThread();
+                  if (e.key === 'Enter' && !threadCreating) void submitCreateThread();
                   if (e.key === 'Escape') {
                     closeThreadCreateDialog();
                   }
                 }}
                 autoFocus
+                disabled={threadCreating}
               />
             </label>
             {threadCreateError && (
@@ -2130,8 +2500,12 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
               </div>
             )}
             <div className="mt-5 flex flex-wrap items-center gap-2.5">
-              <button className="btn-primary" onClick={() => void submitCreateThread()}>
-                Create Thread
+              <button
+                className="btn-primary"
+                onClick={() => void submitCreateThread()}
+                disabled={threadCreating}
+              >
+                {threadCreating ? 'Creating…' : 'Create Thread'}
               </button>
               <button
                 className="rounded-sm px-3.5 py-2 text-label font-semibold text-text-secondary transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
@@ -2160,7 +2534,10 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             </p>
             <div className="mt-3 rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2 text-meta text-text-secondary">
               <div className="font-semibold text-text-primary">
-                {reportingMessage.author.username} ({reportingMessage.author.id})
+                {displayName(
+                  reportingMessage.author,
+                  activeGuildMemberById.get(reportingMessage.author.id)?.nick,
+                )} ({reportingMessage.author.id})
               </div>
               <div className="mt-1 line-clamp-4 break-words">
                 {reportingMessage.content || 'No text content'}
@@ -2255,7 +2632,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
             username: profileUser.username,
             discriminator: profileUser.discriminator,
             avatar_hash: profileUser.avatar_hash || null,
-            display_name: null,
+            display_name: profileUser.display_name ?? null,
             bot: profileUser.bot ?? false,
             system: false,
             flags: profileUser.flags ?? 0,
@@ -2276,16 +2653,17 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       {editHistoryMsgId && createPortal(
         <div
           className="fixed inset-0 z-[9999]"
-          onClick={() => setEditHistoryMsgId(null)}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setEditHistoryMsgId(null);
+          }}
         >
           <div
-            className="glass-modal absolute max-h-80 w-80 overflow-y-auto rounded-md border border-border-subtle shadow-xl backdrop-blur-md"
+            className="glass-modal absolute max-h-[min(20rem,calc(100dvh-1rem))] w-[min(20rem,calc(100vw-1rem))] overflow-y-auto rounded-md border border-border-subtle shadow-xl backdrop-blur-md"
             style={{
-              left: Math.min(editHistoryPos.x, window.innerWidth - 340),
-              top: Math.min(editHistoryPos.y, window.innerHeight - 320),
+              left: Math.max(8, Math.min(editHistoryPos.x, window.innerWidth - Math.min(320, window.innerWidth - 16) - 8)),
+              top: Math.max(8, Math.min(editHistoryPos.y, window.innerHeight - Math.min(320, window.innerHeight - 16) - 8)),
               boxShadow: 'var(--shadow-lg)',
             }}
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="border-b border-border-subtle px-3 py-2 text-label font-semibold text-text-primary">
               Edit History

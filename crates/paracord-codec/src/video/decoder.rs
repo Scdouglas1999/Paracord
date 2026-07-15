@@ -11,10 +11,30 @@
 //! Each remote video stream gets its own decoder instance to maintain
 //! independent codec state.
 
+use super::handle::DecodedFrameHandle;
 use super::{DecodedFrame, DecoderConfig, EncodedFrame, VideoCodec, VideoError};
 
 #[cfg(feature = "vpx")]
 use super::PixelFormat;
+
+// ── Decode output mode ───────────────────────────────────────────────
+
+/// Where a decoder places its output, chosen once at construction (spec §3.2).
+///
+/// This is fixed for the decoder's life — there is no per-frame or runtime
+/// switching. A [`Gpu`](DecodeOutput::Gpu)-mode decoder that cannot keep a
+/// frame on the GPU returns a decode error rather than silently falling back to
+/// a CPU download (spec §0, §3.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeOutput {
+    /// Decode to CPU I420 ([`DecodedFrameHandle::CpuI420`]). Software decoders,
+    /// the WebCodecs probe path, and the §3.4 tier-2 floor use this.
+    Cpu,
+    /// Keep the decoded frame GPU-resident (CUDA `AVFrame` / VAAPI DRM-PRIME
+    /// dma-bufs). Requires a hardware decode backend; construction fails loudly
+    /// otherwise.
+    Gpu,
+}
 
 // ── VideoDecoder trait ───────────────────────────────────────────────
 
@@ -28,6 +48,25 @@ pub trait VideoDecoder: Send {
     /// Returns zero or more decoded frames. Some codecs may internally
     /// buffer frames and return them out of order or in batches.
     fn decode(&mut self, frame: &EncodedFrame) -> Result<Vec<DecodedFrame>, VideoError>;
+
+    /// Decode into [`DecodedFrameHandle`]s — the single type a native video
+    /// surface consumes (spec §3.2). The default implementation decodes to CPU
+    /// I420 and wraps each frame as [`DecodedFrameHandle::CpuI420`], which is
+    /// exactly what the software floor (libvpx VP9 — task G4) needs. Hardware
+    /// decoders that keep frames GPU-resident override this.
+    ///
+    /// The CPU [`decode`](Self::decode) API is unchanged and still used by the
+    /// WebCodecs probe path and existing tests (task G5).
+    fn decode_to_handles(
+        &mut self,
+        frame: &EncodedFrame,
+    ) -> Result<Vec<DecodedFrameHandle>, VideoError> {
+        Ok(self
+            .decode(frame)?
+            .into_iter()
+            .map(DecodedFrameHandle::cpu_i420_from)
+            .collect())
+    }
 
     /// Signal that a keyframe is needed from the remote sender.
     ///
@@ -53,18 +92,134 @@ pub fn create_decoder(
     _config: DecoderConfig,
 ) -> Result<Box<dyn VideoDecoder>, VideoError> {
     match codec {
-        #[cfg(feature = "vpx")]
+        // VP9 can decode on the GPU too: LavcDecoder supports vp9 via
+        // NVDEC/VAAPI. On Linux with lavc, prefer hardware VP9 decode and fall
+        // back to libvpx as the software floor — a deterministic choice made
+        // once at construction, logged loudly (K5). Elsewhere, libvpx only.
+        #[cfg(all(unix, not(target_os = "macos"), feature = "lavc", feature = "vpx"))]
+        VideoCodec::Vp9 => {
+            match crate::video::lavc::LavcDecoder::new(VideoCodec::Vp9, _config.clone()) {
+                Ok(dec) if dec.is_hardware_accelerated() => {
+                    tracing::info!(
+                        backend = dec.backend_name(),
+                        "vp9 decode: using lavc hardware path"
+                    );
+                    Ok(Box::new(dec))
+                }
+                // The lavc VP9 decoder opened but only as software; libvpx is the
+                // tuned software floor for VP9, so use it instead.
+                Ok(_) => {
+                    tracing::info!("vp9 decode: lavc offered only software; using libvpx floor");
+                    Ok(Box::new(Vp9Decoder::new(_config)?))
+                }
+                Err(err) => {
+                    tracing::info!(error = %err, "vp9 decode: lavc unavailable; using libvpx floor");
+                    Ok(Box::new(Vp9Decoder::new(_config)?))
+                }
+            }
+        }
+        #[cfg(all(
+            feature = "vpx",
+            not(all(unix, not(target_os = "macos"), feature = "lavc"))
+        ))]
         VideoCodec::Vp9 => Ok(Box::new(Vp9Decoder::new(_config)?)),
         #[cfg(not(feature = "vpx"))]
         VideoCodec::Vp9 => Err(VideoError::CodecUnavailable(
             "vp9 decoder unavailable without 'vpx' feature".into(),
         )),
+        // H.264/AV1 decode is native in-process via the lavc engine (hardware
+        // NVDEC → VAAPI, libavcodec software floor). VP9 stays on libvpx above.
+        #[cfg(all(unix, not(target_os = "macos"), feature = "lavc"))]
+        VideoCodec::Av1 => Ok(Box::new(crate::video::lavc::LavcDecoder::new(
+            VideoCodec::Av1,
+            _config,
+        )?)),
+        #[cfg(not(all(unix, not(target_os = "macos"), feature = "lavc")))]
         VideoCodec::Av1 => Err(VideoError::CodecUnavailable(
-            "av1 decoder backend not implemented yet".into(),
+            "av1 decoder backend requires the 'lavc' feature on this platform".into(),
         )),
+        #[cfg(all(unix, not(target_os = "macos"), feature = "lavc"))]
+        VideoCodec::H264 => Ok(Box::new(crate::video::lavc::LavcDecoder::new(
+            VideoCodec::H264,
+            _config,
+        )?)),
+        // macOS: VideoToolbox hardware H.264 decode → I420. The session is built
+        // lazily from the SPS/PPS in the first keyframe, so construction only
+        // needs to succeed here to advertise native decode support.
+        #[cfg(target_os = "macos")]
+        VideoCodec::H264 => Ok(Box::new(
+            crate::video::encoder::videotoolbox::VideoToolboxH264Decoder::new(_config)?,
+        )),
+        #[cfg(all(
+            not(target_os = "macos"),
+            not(all(unix, not(target_os = "macos"), feature = "lavc"))
+        ))]
         VideoCodec::H264 => Err(VideoError::CodecUnavailable(
-            "h264 decoder backend not implemented yet".into(),
+            "h264 decoder backend requires the 'lavc' feature on this platform".into(),
         )),
+    }
+}
+
+/// Create a decoder that places its output where `output` selects (spec §3.2).
+///
+/// This is the constructor the native-surface route uses: a platform surface
+/// that can only present GPU-resident handles (macOS `AVSampleBufferDisplayLayer`
+/// consumes `CVPixelBuffer`; Linux CUDA/VAAPI interop consumes device memory /
+/// dma-bufs) must be fed a [`DecodeOutput::Gpu`] decoder. [`DecodeOutput::Cpu`]
+/// keeps the existing behaviour (software floor / tier-2), so it delegates to
+/// [`create_decoder`] unchanged.
+///
+/// A [`DecodeOutput::Gpu`] request on a platform/codec with no GPU decode backend
+/// is a loud error (never a silent CPU substitution): the route selector must
+/// choose the CPU floor up front instead (spec §0, §3.4, §3.7).
+pub fn create_decoder_with_output(
+    codec: VideoCodec,
+    config: DecoderConfig,
+    output: DecodeOutput,
+) -> Result<Box<dyn VideoDecoder>, VideoError> {
+    match output {
+        DecodeOutput::Cpu => create_decoder(codec, config),
+        DecodeOutput::Gpu => {
+            // macOS: VideoToolbox decodes H.264 to a GPU-resident CVPixelBuffer
+            // that the AVSampleBufferDisplayLayer surface enqueues directly
+            // (spec §3.5). VP9/AV1 have no VideoToolbox GPU decoder here, so a
+            // GPU request for them fails loudly and the route selector takes the
+            // passthrough/CPU path instead.
+            #[cfg(target_os = "macos")]
+            {
+                match codec {
+                    VideoCodec::H264 => Ok(Box::new(
+                        crate::video::encoder::videotoolbox::VideoToolboxH264Decoder::new_with_output(
+                            config,
+                            DecodeOutput::Gpu,
+                        )?,
+                    )),
+                    other => Err(VideoError::CodecUnavailable(format!(
+                        "no macOS GPU decode backend for {other:?} (native surface requires CVPixelBuffer output)"
+                    ))),
+                }
+            }
+            // Linux: lavc keeps the frame GPU-resident (CUDA AVFrame / VAAPI
+            // DRM-PRIME dma-bufs) for the zero-copy surface import (spec §3.3).
+            #[cfg(all(unix, not(target_os = "macos"), feature = "lavc"))]
+            {
+                Ok(Box::new(crate::video::lavc::LavcDecoder::new_with_output(
+                    codec,
+                    config,
+                    DecodeOutput::Gpu,
+                )?))
+            }
+            #[cfg(not(any(
+                target_os = "macos",
+                all(unix, not(target_os = "macos"), feature = "lavc")
+            )))]
+            {
+                let _ = (codec, config);
+                Err(VideoError::CodecUnavailable(
+                    "GPU decode output has no backend on this platform/build".into(),
+                ))
+            }
+        }
     }
 }
 
@@ -119,6 +274,25 @@ mod vpx_impl {
         config: DecoderConfig,
         needs_keyframe: bool,
         initialized: bool,
+        /// Decode thread count, sized once from the first frame's resolution.
+        threads: u32,
+    }
+
+    /// Decoder thread budget for a decoded resolution. VP9 tile/row threading
+    /// only helps at larger sizes, and every extra thread costs memory and
+    /// scheduling; a fixed 4 over-threads SD calls and under-threads 4K. Capped
+    /// to the machine's parallelism minus headroom for audio/UI.
+    fn decode_threads_for_pixels(pixels: u32) -> u32 {
+        let available = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(4);
+        let recommended = match pixels {
+            p if p >= 3840 * 2160 => 16,
+            p if p >= 2560 * 1440 => 8,
+            p if p >= 1280 * 720 => 4,
+            _ => 2,
+        };
+        available.clamp(1, recommended)
     }
 
     // Safety: vpx_codec_ctx_t is only accessed via &mut self.
@@ -127,14 +301,46 @@ mod vpx_impl {
     impl Vp9Decoder {
         /// Create a new VP9 decoder.
         pub fn new(config: DecoderConfig) -> Result<Self, VideoError> {
-            let mut dec = Self {
+            // The libvpx context is initialized lazily on the first frame, once
+            // its resolution is known via vpx_codec_peek_stream_info, so the
+            // decode thread count can be sized to the frame instead of a fixed
+            // guess. A fresh decoder always requires a keyframe first, so the
+            // first decoded frame carries a stream header to peek.
+            Ok(Self {
                 ctx: unsafe { MaybeUninit::zeroed().assume_init() },
                 config,
                 needs_keyframe: true, // need a keyframe to start
                 initialized: false,
-            };
-            dec.init_context()?;
-            Ok(dec)
+                threads: 4,
+            })
+        }
+
+        /// Peek the first frame's resolution to size the decode thread count,
+        /// then initialize the context. Called lazily on the first decode.
+        fn ensure_initialized(&mut self, first_frame: &[u8]) -> Result<(), VideoError> {
+            unsafe {
+                let iface = vpx_codec_vp9_dx();
+                if iface.is_null() {
+                    return Err(VideoError::DecoderInit(
+                        "vpx_codec_vp9_dx returned null".into(),
+                    ));
+                }
+                let mut si: vpx_codec_stream_info_t = MaybeUninit::zeroed().assume_init();
+                si.sz = std::mem::size_of::<vpx_codec_stream_info_t>() as u32;
+                let ret = vpx_codec_peek_stream_info(
+                    iface,
+                    first_frame.as_ptr(),
+                    first_frame.len() as u32,
+                    &mut si,
+                );
+                // Only used to size threads (bounded to a small max); the real
+                // resolution bound still runs per decoded image. If peek fails,
+                // keep the default thread count.
+                if ret == VPX_CODEC_OK && si.w > 0 && si.h > 0 {
+                    self.threads = decode_threads_for_pixels(si.w.saturating_mul(si.h));
+                }
+            }
+            self.init_context()
         }
 
         fn init_context(&mut self) -> Result<(), VideoError> {
@@ -147,7 +353,7 @@ mod vpx_impl {
                 }
 
                 let mut cfg: vpx_codec_dec_cfg_t = MaybeUninit::zeroed().assume_init();
-                cfg.threads = 4;
+                cfg.threads = self.threads;
 
                 let ret = vpx_codec_dec_init_ver(
                     &mut self.ctx,
@@ -170,13 +376,15 @@ mod vpx_impl {
 
     impl VideoDecoder for Vp9Decoder {
         fn decode(&mut self, frame: &EncodedFrame) -> Result<Vec<DecodedFrame>, VideoError> {
-            if !self.initialized {
-                return Err(VideoError::DecoderInit("decoder not initialized".into()));
-            }
-
             // If we need a keyframe and this isn't one, skip it.
             if self.needs_keyframe && !frame.is_keyframe {
                 return Err(VideoError::KeyframeRequired);
+            }
+
+            // Lazily initialize on the first frame (always a keyframe), sizing
+            // the decode thread count from its peeked resolution.
+            if !self.initialized {
+                self.ensure_initialized(&frame.data)?;
             }
 
             // We got a keyframe (or didn't need one), clear the flag.
@@ -266,12 +474,23 @@ mod vpx_impl {
                         data.extend_from_slice(src);
                     }
 
+                    // Map the bitstream's signaled matrix so the consumer picks
+                    // the right YUV→RGB coefficients (contract C1). Unknown maps
+                    // to the project default 709; the SD matrices map to 601.
+                    let colorspace = match img.cs {
+                        vpx_color_space::VPX_CS_BT_601 | vpx_color_space::VPX_CS_SMPTE_170 => {
+                            crate::video::ColorSpace::Bt601
+                        }
+                        _ => crate::video::ColorSpace::Bt709,
+                    };
+
                     decoded_frames.push(DecodedFrame {
                         data,
                         pixel_format: PixelFormat::I420,
                         width: w,
                         height: h,
                         pts: frame.pts,
+                        colorspace,
                     });
                 }
 
@@ -295,7 +514,9 @@ mod vpx_impl {
                 self.initialized = false;
             }
             self.needs_keyframe = true;
-            self.init_context()
+            // Re-initialize lazily on the next keyframe so threads are re-sized
+            // to the (possibly changed) resolution of the fresh stream.
+            Ok(())
         }
 
         fn config(&self) -> &DecoderConfig {
@@ -358,6 +579,7 @@ impl VideoDecoder for NullDecoder {
             width: frame.width,
             height: frame.height,
             pts: frame.pts,
+            colorspace: frame.colorspace,
         }])
     }
 
@@ -411,6 +633,7 @@ mod tests {
             layer: None,
             width: 320,
             height: 180,
+            colorspace: crate::video::ColorSpace::Bt709,
         };
         assert!(dec.decode(&non_kf).is_err());
         assert!(dec.needs_keyframe());
@@ -429,6 +652,7 @@ mod tests {
             layer: None,
             width: 4,
             height: 4,
+            colorspace: crate::video::ColorSpace::Bt709,
         };
         let decoded = dec.decode(&kf).unwrap();
         assert_eq!(decoded.len(), 1);
@@ -452,6 +676,7 @@ mod tests {
             layer: None,
             width: 4,
             height: 2,
+            colorspace: crate::video::ColorSpace::Bt709,
         };
         dec.decode(&kf).unwrap();
 
@@ -464,6 +689,7 @@ mod tests {
             layer: None,
             width: 4,
             height: 2,
+            colorspace: crate::video::ColorSpace::Bt709,
         };
         let decoded = dec.decode(&non_kf).unwrap();
         assert_eq!(decoded.len(), 1);
@@ -484,6 +710,7 @@ mod tests {
             layer: None,
             width: 2,
             height: 2,
+            colorspace: crate::video::ColorSpace::Bt709,
         };
         dec.decode(&kf).unwrap();
         assert!(!dec.needs_keyframe());
@@ -501,6 +728,7 @@ mod tests {
             layer: None,
             width: 2,
             height: 2,
+            colorspace: crate::video::ColorSpace::Bt709,
         };
         assert!(dec.decode(&non_kf).is_err());
     }
@@ -559,6 +787,7 @@ mod tests {
             layer: None,
             width: w,
             height: h,
+            colorspace: crate::video::ColorSpace::Bt709,
         };
         let decoded = dec.decode(&kf).unwrap();
         assert_eq!(decoded.len(), 1);
@@ -573,6 +802,7 @@ mod tests {
                 layer: None,
                 width: w,
                 height: h,
+                colorspace: crate::video::ColorSpace::Bt709,
             };
             let decoded = dec.decode(&f).unwrap();
             assert_eq!(decoded.len(), 1);
@@ -593,6 +823,7 @@ mod tests {
             layer: Some(SimulcastLayer::High),
             width: 4,
             height: 2,
+            colorspace: crate::video::ColorSpace::Bt709,
         };
         let decoded = dec.decode(&f).unwrap();
         assert_eq!(decoded[0].pts, 42);
@@ -749,6 +980,7 @@ mod vpx_tests {
             layer: None,
             width: W,
             height: H,
+            colorspace: crate::video::ColorSpace::Bt709,
         };
         assert!(
             matches!(dec.decode(&non_kf), Err(VideoError::KeyframeRequired)),

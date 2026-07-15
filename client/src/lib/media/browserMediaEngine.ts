@@ -18,7 +18,10 @@ import {
   PROTOCOL_VERSION,
   HEADER_SIZE,
   createPacket,
+  decodeHeader,
+  encodeHeader,
   encodeVideoFrameMetadata,
+  decodeVideoFrameMetadata,
   parsePacket,
 } from './transport/protocol';
 import { SenderKeyManager } from './senderKeys';
@@ -33,12 +36,14 @@ import { MediaVideoDecoder } from './video/videoDecoder';
 import { CanvasRenderer } from './video/canvasRenderer';
 import { unwrapDeliveredMediaSenderKey } from './mediaSenderKeyEnvelope';
 import {
+  codecLabelFromHeader,
   deriveTrackSsrc,
   parseRoomIdFromToken,
   parseUserIdFromToken,
   reassembleVideoPayload,
   selectPublishedLayer,
   wrapSenderKeyForRecipients,
+  type ReassembledVideoFrame,
   type VideoReassemblyState,
 } from './engineShared';
 
@@ -53,6 +58,66 @@ const VP9_CODEC = 'vp09.00.10.08';
 const H264_CODEC = 'avc1.640028';
 const AV1_CODEC = 'av01.0.10M.08';
 
+/**
+ * Mirror of the native `STREAM_FRAGMENT_THRESHOLD`: a video frame is delivered on
+ * a reliable unidirectional stream (whole-frame, single AEAD unit) instead of
+ * datagram fragments when it is a keyframe or would fragment into more than this
+ * many datagrams. Keeping the threshold identical to the native publisher keeps
+ * both engines choosing the same transport per frame (§5, contract S5).
+ */
+export const STREAM_FRAGMENT_THRESHOLD = 48;
+
+/** Mirror of the native `should_send_on_stream`. */
+export function shouldSendVideoFrameOnStream(
+  isKeyframe: boolean,
+  fragmentCount: number,
+): boolean {
+  return isKeyframe || fragmentCount > STREAM_FRAGMENT_THRESHOLD;
+}
+
+/**
+ * A whole-frame uni-stream message: cleartext 16-byte header (the relay routes on
+ * `ssrc`) + cleartext {@link VideoFrameMetadata} + the still-encrypted whole-frame
+ * ciphertext (one AEAD unit, AAD = the 16 header bytes).
+ */
+export interface StreamFrameMessage {
+  header: MediaHeader;
+  metadata: VideoFrameMetadata;
+  ciphertext: Uint8Array;
+}
+
+/**
+ * Serialize a whole-frame uni-stream message as `header(16) + metadata +
+ * ciphertext`. Byte-for-byte identical to the native `MediaStreamFrame::encode`
+ * wire layout, so the relay forwards it unchanged in either direction.
+ */
+export function buildStreamFrameMessage(
+  header: MediaHeader,
+  metadata: VideoFrameMetadata,
+  ciphertext: Uint8Array,
+): Uint8Array {
+  const headerBytes = new Uint8Array(encodeHeader(header).buffer);
+  const metadataBytes = encodeVideoFrameMetadata(metadata);
+  const out = new Uint8Array(
+    headerBytes.byteLength + metadataBytes.byteLength + ciphertext.byteLength,
+  );
+  out.set(headerBytes, 0);
+  out.set(metadataBytes, headerBytes.byteLength);
+  out.set(ciphertext, headerBytes.byteLength + metadataBytes.byteLength);
+  return out;
+}
+
+/** Parse a whole-frame uni-stream message; inverse of {@link buildStreamFrameMessage}. */
+export function parseStreamFrameMessage(data: Uint8Array): StreamFrameMessage {
+  if (data.byteLength < HEADER_SIZE) {
+    throw new Error('stream frame message too short for header');
+  }
+  const header = decodeHeader(new DataView(data.buffer, data.byteOffset, HEADER_SIZE));
+  const { metadata, payloadOffset } = decodeVideoFrameMetadata(data.subarray(HEADER_SIZE));
+  const ciphertext = data.slice(HEADER_SIZE + payloadOffset);
+  return { header, metadata, ciphertext };
+}
+
 type MediaStreamTrackProcessorCtor = new (init: { track: MediaStreamTrack }) => {
   readable: ReadableStream<VideoFrame>;
 };
@@ -64,6 +129,8 @@ interface ParticipantState {
   jitterBuffer: JitterBuffer;
   speaking: boolean;
   audioLevel: number;
+  /** Per-source playback gain (voice). Created when the shared playback context exists. */
+  gainNode: GainNode | null;
 }
 
 /** State for a remote participant's video stream. */
@@ -85,7 +152,9 @@ interface SessionParticipantCapabilities {
     codec: 'vp9' | 'av1' | 'h264' | string;
     encode: boolean;
     decode: boolean;
-    hardwareAccelerated: boolean;
+    // Split per contract C3 (was a single hardwareAccelerated flag).
+    encodeHardware: boolean;
+    decodeHardware: boolean;
   }>;
 }
 
@@ -149,26 +218,31 @@ async function detectBrowserStreamCapabilities(): Promise<MediaStreamCapabilitie
 
   return {
     video: [
+      // WebCodecs cannot reliably report hardware acceleration, so per contract
+      // C3 ("unknown is not hardware") both flags are false for every codec.
       {
         codec: 'vp9',
         backend: 'webcodecs',
         encode: vp9Encode,
         decode: vp9Decode,
-        hardwareAccelerated: false,
+        encodeHardware: false,
+        decodeHardware: false,
       },
       {
         codec: 'h264',
         backend: 'webcodecs',
         encode: h264Encode,
         decode: h264Decode,
-        hardwareAccelerated: h264Encode || h264Decode,
+        encodeHardware: false,
+        decodeHardware: false,
       },
       {
         codec: 'av1',
         backend: 'webcodecs',
         encode: av1Encode,
         decode: av1Decode,
-        hardwareAccelerated: av1Encode || av1Decode,
+        encodeHardware: false,
+        decodeHardware: false,
       },
     ],
     nativeDesktopRenderer: false,
@@ -226,6 +300,8 @@ export class BrowserMediaEngine implements MediaEngine {
       playbackContext: AudioContext;
     }
   >();
+  /** Explicit per-source gains from setSourceVolume (0..2). */
+  private sourceVolumes = new Map<string, number>();
   private screenSequence = 0;
   private screenShareEndedCb: (() => void) | null = null;
 
@@ -254,6 +330,13 @@ export class BrowserMediaEngine implements MediaEngine {
   // Participants
   private participants = new Map<number, ParticipantState>(); // ssrc -> state
   private ssrcToUserId = new Map<number, string>();
+  private participantMaterializePromises = new Map<string, Promise<void>>();
+  /** Audio packets that arrived before materialize finished for that SSRC. */
+  private orphanAudioPackets = new Map<
+    number,
+    Array<{ header: MediaHeader; payload: Uint8Array; raw: Uint8Array }>
+  >();
+  private static readonly ORPHAN_AUDIO_LIMIT = 64;
 
   // Callbacks
   private speakingChangeCb: ((speakers: Map<string, number>) => void) | null = null;
@@ -303,6 +386,7 @@ export class BrowserMediaEngine implements MediaEngine {
 
     this.transport.onStreamControl((msg) => this.handleStreamControlMessage(msg));
     this.transport.onDatagram((data) => this.handleDatagram(data));
+    this.transport.onUniStream((data) => this.handleVideoStreamFrame(data));
     this.transport.onRestored(() => {
       void this.restoreTransportSession().catch((err) => {
         console.warn('[BrowserMediaEngine] Failed to restore session after reconnect:', err);
@@ -326,7 +410,8 @@ export class BrowserMediaEngine implements MediaEngine {
         codec: capability.codec,
         encode: capability.encode,
         decode: capability.decode,
-        hardware_accelerated: capability.hardwareAccelerated,
+        encodeHardware: capability.encodeHardware,
+        decodeHardware: capability.decodeHardware,
       })),
     });
 
@@ -361,10 +446,13 @@ export class BrowserMediaEngine implements MediaEngine {
     }
     this.participants.clear();
     this.ssrcToUserId.clear();
+    this.participantMaterializePromises.clear();
+    this.orphanAudioPackets.clear();
     this.publishedTracks.clear();
     this.pendingTrackKeys.clear();
     this.sessionParticipantIds.clear();
     this.sessionParticipantCapabilities.clear();
+    this.sourceVolumes.clear();
 
     // Close all video subscriptions
     for (const [, sub] of this.videoSubscriptions) {
@@ -562,6 +650,27 @@ export class BrowserMediaEngine implements MediaEngine {
     this.transportLostCb = cb;
   }
 
+  /**
+   * Set per-source playback gain (0..2) for screen-share audio and remote voice.
+   * Mirrors TauriMediaEngine → voice_set_source_volume so StreamViewer volume
+   * works on both engines.
+   */
+  setSourceVolume(userId: string, gain: number): void {
+    const clamped = Math.min(2, Math.max(0, gain));
+    this.sourceVolumes.set(userId, clamped);
+
+    const screenSub = this.screenAudioSubscriptions.get(userId);
+    if (screenSub) {
+      screenSub.gainNode.gain.value = clamped;
+    }
+
+    for (const participant of this.participants.values()) {
+      if (participant.userId === userId && participant.gainNode) {
+        participant.gainNode.gain.value = clamped;
+      }
+    }
+  }
+
   subscribeScreenShareAudio(userId: string, getVolume: () => number): () => void {
     const existing = this.screenAudioSubscriptions.get(userId);
     if (existing) {
@@ -571,13 +680,14 @@ export class BrowserMediaEngine implements MediaEngine {
 
     const playbackContext = new AudioContext({ sampleRate: SAMPLE_RATE });
     const gainNode = playbackContext.createGain();
-    gainNode.gain.value = getVolume();
+    const initialGain = this.sourceVolumes.get(userId) ?? getVolume();
+    gainNode.gain.value = Math.min(2, Math.max(0, initialGain));
     gainNode.connect(playbackContext.destination);
 
     const publishedTrack = this.findPublishedScreenAudioTrack(userId);
-    const ssrc =
-      publishedTrack?.layers[0]?.ssrc ??
-      this.derivePlaceholderSsrc(`${userId}:screen:audio`);
+    // Prefer the published layer SSRC; fall back to the deterministic SHA-256
+    // derivation so decrypt keys and datagram routing agree before publish arrives.
+    const publishedSsrc = publishedTrack?.layers[0]?.ssrc ?? 0;
 
     const decoder = new OpusMediaDecoder({
       sampleRate: SAMPLE_RATE,
@@ -597,11 +707,21 @@ export class BrowserMediaEngine implements MediaEngine {
     const jitterBuffer = new JitterBuffer(FRAME_MS, 60);
 
     this.screenAudioSubscriptions.set(userId, {
-      ssrc,
+      ssrc: publishedSsrc,
       decoder,
       jitterBuffer,
       gainNode,
       playbackContext,
+    });
+
+    void deriveTrackSsrc(userId, 'screen:audio').then((derived) => {
+      const sub = this.screenAudioSubscriptions.get(userId);
+      if (!sub) return;
+      // Keep a published layer SSRC when present; otherwise pin the derived value
+      // so findScreenAudioUserIdForSsrc can match packets before track_publish.
+      if (sub.ssrc === 0 || !publishedTrack) {
+        sub.ssrc = publishedTrack?.layers[0]?.ssrc ?? derived;
+      }
     });
 
     if (publishedTrack) {
@@ -613,15 +733,10 @@ export class BrowserMediaEngine implements MediaEngine {
       void this.applyDeliveredTrackKeys(publishedTrack);
     }
 
-    const volumeTimer = setInterval(() => {
-      const sub = this.screenAudioSubscriptions.get(userId);
-      if (sub) {
-        sub.gainNode.gain.value = getVolume();
-      }
-    }, 100);
+    // Initial gain applied above; StreamViewer drives later changes via
+    // setSourceVolume — no 100ms poll.
 
     return () => {
-      clearInterval(volumeTimer);
       const sub = this.screenAudioSubscriptions.get(userId);
       if (!sub) return;
       const track = this.findPublishedScreenAudioTrack(userId);
@@ -645,14 +760,27 @@ export class BrowserMediaEngine implements MediaEngine {
     localCapabilities: MediaStreamCapabilities,
     participants: SessionParticipantCapabilities[],
   ): 'av1' | 'h264' | 'vp9' | null {
-    const localEncoders = new Set(
-      localCapabilities.video
-        .filter((capability) => capability.encode)
-        .map((capability) => String(capability.codec).toLowerCase()),
-    );
-    if (!localEncoders.size) {
+    const localEncoders = localCapabilities.video
+      .filter((capability) => capability.encode)
+      .map((capability) => ({
+        codec: String(capability.codec).toLowerCase(),
+        encodeHardware: Boolean(capability.encodeHardware),
+      }));
+    if (!localEncoders.length) {
       return null;
     }
+    const hasLocalEncoder = (
+      codec: 'av1' | 'h264' | 'vp9',
+      requireHardware: boolean,
+    ) =>
+      localEncoders.some(
+        (capability) =>
+          capability.codec === codec &&
+          (!requireHardware || capability.encodeHardware),
+      );
+    const localCodecSet = new Set(
+      localEncoders.map((capability) => capability.codec),
+    );
     const remoteDecoderSets = participants.map(
       (participant) =>
         new Set(
@@ -662,14 +790,16 @@ export class BrowserMediaEngine implements MediaEngine {
         ),
     );
     const codecPreference: Array<'av1' | 'h264' | 'vp9'> = ['av1', 'h264', 'vp9'];
-    for (const codec of codecPreference) {
-      if (!localEncoders.has(codec)) continue;
-      if (remoteDecoderSets.every((supported) => supported.size === 0 || supported.has(codec))) {
-        return codec;
+    for (const requireHardware of [true, false]) {
+      for (const codec of codecPreference) {
+        if (!hasLocalEncoder(codec, requireHardware)) continue;
+        if (remoteDecoderSets.every((supported) => supported.size === 0 || supported.has(codec))) {
+          return codec;
+        }
       }
     }
     for (const codec of codecPreference) {
-      if (localEncoders.has(codec)) return codec;
+      if (localCodecSet.has(codec)) return codec;
     }
     return null;
   }
@@ -813,7 +943,8 @@ export class BrowserMediaEngine implements MediaEngine {
           backend: 'session',
           encode: capability.encode,
           decode: capability.decode,
-          hardwareAccelerated: capability.hardwareAccelerated,
+          encodeHardware: capability.encodeHardware,
+          decodeHardware: capability.decodeHardware,
         })),
       })),
       localPublishCodecs: {
@@ -877,17 +1008,24 @@ export class BrowserMediaEngine implements MediaEngine {
    * Creates a decoder and renderer for the given user. If a subscription
    * already exists for this user, the old one is torn down first.
    */
-  subscribeVideo(userId: string, canvas: HTMLCanvasElement, onFrame?: () => void): () => void {
-    // Tear down any existing subscription for this user
-    const existing = this.videoSubscriptions.get(userId);
+  subscribeVideo(
+    userId: string,
+    canvas: HTMLCanvasElement,
+    onFrame?: () => void,
+    options?: { preferredTrackId?: 'camera' | 'screen' },
+  ): () => void {
+    const preferredTrackId = options?.preferredTrackId;
+    const subscriptionKey = preferredTrackId ? `${userId}:${preferredTrackId}` : userId;
+    // Tear down any existing subscription for this key
+    const existing = this.videoSubscriptions.get(subscriptionKey);
     if (existing) {
       existing.decoder.close();
       existing.renderer.destroy();
-      this.videoSubscriptions.delete(userId);
+      this.videoSubscriptions.delete(subscriptionKey);
     }
 
     // Resolve the SSRC for this user
-    const publishedTrack = this.findPreferredPublishedVideoTrack(userId);
+    const publishedTrack = this.findPreferredPublishedVideoTrack(userId, preferredTrackId);
     const viewport = {
       width: Math.max(1, Math.round((canvas.clientWidth || canvas.width || 1) * (window.devicePixelRatio || 1))),
       height: Math.max(1, Math.round((canvas.clientHeight || canvas.height || 1) * (window.devicePixelRatio || 1))),
@@ -895,15 +1033,16 @@ export class BrowserMediaEngine implements MediaEngine {
     const selectedLayer = publishedTrack
       ? selectPublishedLayer(publishedTrack, viewport.width, viewport.height)
       : null;
-    let ssrc = 0;
-    for (const [s, uid] of this.ssrcToUserId) {
-      if (uid === userId) {
-        ssrc = s;
-        break;
-      }
-    }
+    // Prefer the published track's layer SSRC over any placeholder audio SSRC
+    // that may already be mapped for this user.
+    let ssrc = selectedLayer?.ssrc ?? publishedTrack?.layers[0]?.ssrc ?? 0;
     if (ssrc === 0) {
-      ssrc = selectedLayer?.ssrc ?? publishedTrack?.layers[0]?.ssrc ?? 0;
+      for (const [s, uid] of this.ssrcToUserId) {
+        if (uid === userId) {
+          ssrc = s;
+          break;
+        }
+      }
     }
 
     const decoder = new MediaVideoDecoder({
@@ -928,7 +1067,7 @@ export class BrowserMediaEngine implements MediaEngine {
       activeLayer: selectedLayer?.layerId,
     };
 
-    this.videoSubscriptions.set(userId, subscription);
+    this.videoSubscriptions.set(subscriptionKey, subscription);
 
     if (publishedTrack) {
       void this.registerTrackSubscription({
@@ -940,7 +1079,7 @@ export class BrowserMediaEngine implements MediaEngine {
     }
 
     const updateViewportSubscription = () => {
-      const current = this.videoSubscriptions.get(userId);
+      const current = this.videoSubscriptions.get(subscriptionKey);
       if (!current?.streamId || !current.trackId) {
         return;
       }
@@ -987,6 +1126,37 @@ export class BrowserMediaEngine implements MediaEngine {
       resizeObserver.observe(canvas);
     }
 
+    // Mirror Tauri attachStreamVisibilityControls: pause canvas paint when the
+    // tab is hidden or the tile is fully off-screen. Decode still runs (no
+    // browser-side decode-pause API); this only skips rAF paint work.
+    let intersectionVisible = true;
+    let renderingEnabled = true;
+    const applyVisibility = () => {
+      const docVisible =
+        typeof document === 'undefined' || document.visibilityState !== 'hidden';
+      const next = docVisible && intersectionVisible;
+      if (next === renderingEnabled) return;
+      renderingEnabled = next;
+      renderer.setRenderingEnabled(next);
+    };
+    const onDocVisibility = () => applyVisibility();
+    let intersectionObserver: IntersectionObserver | null = null;
+    if (typeof IntersectionObserver !== 'undefined') {
+      intersectionObserver = new IntersectionObserver(
+        (entries) => {
+          intersectionVisible = entries.some(
+            (entry) => entry.isIntersecting && entry.intersectionRatio > 0,
+          );
+          applyVisibility();
+        },
+        { threshold: 0 },
+      );
+      intersectionObserver.observe(canvas);
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onDocVisibility);
+    }
+
     // Request a keyframe from this participant so we can start decoding immediately.
     if (this.transport && ssrc !== 0) {
       if (publishedTrack) {
@@ -1004,14 +1174,19 @@ export class BrowserMediaEngine implements MediaEngine {
         clearTimeout(resizeTimer);
       }
       resizeObserver?.disconnect();
-      const current = this.videoSubscriptions.get(userId);
+      intersectionObserver?.disconnect();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onDocVisibility);
+      }
+      renderer.setRenderingEnabled(true);
+      const current = this.videoSubscriptions.get(subscriptionKey);
       if (!current) return;
       if (current.streamId && current.trackId) {
         void this.unregisterTrackSubscription(current.streamId, current.trackId).catch(() => {});
       }
       current.decoder.close();
       current.renderer.destroy();
-      this.videoSubscriptions.delete(userId);
+      this.videoSubscriptions.delete(subscriptionKey);
     };
   }
 
@@ -1309,9 +1484,19 @@ export class BrowserMediaEngine implements MediaEngine {
     video.play();
 
     let active = true;
+    const targetFps = Math.max(1, settings.frameRate ?? 30);
+    const targetInterval = 1000 / targetFps;
+    let lastFrameTime = 0;
 
-    const captureLoop = (): void => {
+    const captureLoop = (now: number): void => {
       if (!active || track.readyState !== 'live') return;
+
+      if (now - lastFrameTime < targetInterval) {
+        const id = requestAnimationFrame(captureLoop);
+        setCallbackId(id);
+        return;
+      }
+      lastFrameTime = now;
 
       ctx.drawImage(video, 0, 0, width, height);
       const frame = new VideoFrame(canvas, {
@@ -1362,6 +1547,22 @@ export class BrowserMediaEngine implements MediaEngine {
     const senderSsrc = _isScreenShare
       ? this.localScreenLayerSsrcs.get(layerIndex) ?? this.localScreenSsrc
       : this.localVideoLayerSsrcs.get(layerIndex) ?? this.localVideoSsrc;
+
+    // Keyframes and any frame too large to survive datagram fragmentation ride a
+    // reliable unidirectional stream instead (§5), mirroring the native
+    // `should_send_on_stream` rule. Same wire framing, so the relay bridges it
+    // byte-for-byte to native and bridged viewers alike.
+    if (shouldSendVideoFrameOnStream(metadataBase.isKeyframe, fragmentCount)) {
+      await this.sendVideoFrameOnStream(encodedData, {
+        seq,
+        timestamp,
+        layerIndex,
+        senderSsrc,
+        metadataBase,
+      });
+      return;
+    }
+
     for (let fragmentIndex = 0; fragmentIndex < fragmentCount; fragmentIndex += 1) {
       const start = fragmentIndex * maxFragmentPayload;
       const end = Math.min(encodedData.byteLength, start + maxFragmentPayload);
@@ -1401,6 +1602,61 @@ export class BrowserMediaEngine implements MediaEngine {
     }
   }
 
+  /**
+   * Publish one whole encoded frame on a reliable unidirectional stream (§5).
+   * The entire frame is encrypted as a single AEAD unit — the 16-byte header is
+   * the AAD and the nonce derives from `(ssrc, epoch, sequence)` exactly as the
+   * datagram path — then wrapped in the native uni-stream framing (`header +
+   * metadata + ciphertext`) and written to a fresh WebTransport uni stream. One
+   * sequence number is consumed, so the nonce never collides with a datagram
+   * fragment's, and `payloadLength` stays 0 (the stream FIN delimits the frame).
+   */
+  private async sendVideoFrameOnStream(
+    encodedData: Uint8Array,
+    opts: {
+      seq: number;
+      timestamp: number;
+      layerIndex: number;
+      senderSsrc: number;
+      metadataBase: Omit<VideoFrameMetadata, 'fragmentIndex' | 'fragmentCount'>;
+    },
+  ): Promise<void> {
+    if (!this.transport) return;
+    const { seq, timestamp, layerIndex, senderSsrc, metadataBase } = opts;
+
+    const header: MediaHeader = {
+      version: PROTOCOL_VERSION,
+      trackType: TrackType.Video,
+      simulcastLayer: layerIndex,
+      sequence: seq & 0xffff,
+      timestamp,
+      ssrc: senderSsrc,
+      audioLevel: 127,
+      keyEpoch: this.senderKeys.currentEpoch,
+      payloadLength: 0,
+      codec: metadataBase.codec,
+    };
+
+    // The AAD is the exact 16 wire header bytes (payloadLength 0), so it is
+    // byte-identical to what the receiver reads off the stream and rebinds.
+    const headerAAD = createPacket(header, new Uint8Array(0)).slice(0, HEADER_SIZE);
+    const ciphertext = await this.senderKeys.encrypt(
+      headerAAD,
+      encodedData,
+      this.senderKeys.currentEpoch,
+      header.sequence,
+      senderSsrc,
+    );
+
+    const metadata: VideoFrameMetadata = {
+      ...metadataBase,
+      fragmentIndex: 0,
+      fragmentCount: 1,
+    };
+    const message = buildStreamFrameMessage(header, metadata, ciphertext);
+    await this.transport.sendUniStream(message);
+  }
+
   // ---------- Datagram handling ----------
 
   private handleDatagram(data: Uint8Array): void {
@@ -1423,38 +1679,85 @@ export class BrowserMediaEngine implements MediaEngine {
         return;
       }
 
-      // Audio handling (unchanged)
+      // Audio handling
       const participant = this.participants.get(header.ssrc);
       if (!participant) {
+        // Materialize is async (SHA-256 SSRC derive). Buffer briefly so the first
+        // packets after join are not silently dropped, and nudge any in-flight
+        // session peers that have not finished materializing yet.
+        this.bufferOrphanAudioPacket(header, payload, data);
+        for (const userId of this.sessionParticipantIds) {
+          this.ensureRemoteParticipantState(userId);
+        }
         return;
       }
 
-      // Update audio level and speaking state
-      participant.audioLevel = header.audioLevel;
-      const wasSpeaking = participant.speaking;
-      participant.speaking = header.audioLevel < 80; // Lower = louder
-      if (wasSpeaking !== participant.speaking) {
-        this.emitSpeakingChange();
-      }
+      this.ingestRemoteAudioPacket(participant, header, payload, data);
+    } catch {
+      // Malformed packet
+    }
+  }
 
-      // Decrypt if we have the key
-      this.senderKeys.decrypt(
-        data.slice(0, HEADER_SIZE),
+  private bufferOrphanAudioPacket(
+    header: MediaHeader,
+    payload: Uint8Array,
+    raw: Uint8Array,
+  ): void {
+    let queue = this.orphanAudioPackets.get(header.ssrc);
+    if (!queue) {
+      queue = [];
+      this.orphanAudioPackets.set(header.ssrc, queue);
+    }
+    if (queue.length >= BrowserMediaEngine.ORPHAN_AUDIO_LIMIT) {
+      queue.shift();
+    }
+    queue.push({
+      header,
+      payload: payload.slice(),
+      raw: raw.slice(0, HEADER_SIZE),
+    });
+  }
+
+  private flushOrphanAudioPackets(ssrc: number, participant: ParticipantState): void {
+    const queue = this.orphanAudioPackets.get(ssrc);
+    if (!queue || queue.length === 0) {
+      this.orphanAudioPackets.delete(ssrc);
+      return;
+    }
+    this.orphanAudioPackets.delete(ssrc);
+    for (const packet of queue) {
+      this.ingestRemoteAudioPacket(participant, packet.header, packet.payload, packet.raw);
+    }
+  }
+
+  private ingestRemoteAudioPacket(
+    participant: ParticipantState,
+    header: MediaHeader,
+    payload: Uint8Array,
+    aadSource: Uint8Array,
+  ): void {
+    participant.audioLevel = header.audioLevel;
+    const wasSpeaking = participant.speaking;
+    participant.speaking = header.audioLevel < 80; // Lower = louder
+    if (wasSpeaking !== participant.speaking) {
+      this.emitSpeakingChange();
+    }
+
+    this.senderKeys
+      .decrypt(
+        aadSource.slice(0, HEADER_SIZE),
         payload,
         header.keyEpoch,
         header.sequence,
         header.ssrc,
-      ).then((decrypted) => {
+      )
+      .then((decrypted) => {
         if (this.deafened) return;
-
-        // Push to jitter buffer
-        participant!.jitterBuffer.push(header.sequence, header.timestamp, decrypted);
-      }).catch(() => {
+        participant.jitterBuffer.push(header.sequence, header.timestamp, decrypted);
+      })
+      .catch(() => {
         // Decryption failed - missing key or corrupted
       });
-    } catch {
-      // Malformed packet
-    }
   }
 
   /**
@@ -1478,37 +1781,86 @@ export class BrowserMediaEngine implements MediaEngine {
       if (!reassembled) {
         return;
       }
-      const { data: videoPayload, isKeyframe, streamId, trackId, codec } = reassembled;
-
-      const publishedTrack = this.publishedTracks.get(this.trackKey(streamId, trackId));
-      const userId =
-        publishedTrack != null
-          ? String(publishedTrack.publisherUserId)
-          : this.ssrcToUserId.get(header.ssrc);
-      if (!userId) return;
-
-      const subscription = this.videoSubscriptions.get(userId);
-      if (!subscription) return;
-      subscription.ssrc = header.ssrc;
-      const decoderCodec = this.decoderCodecForTrack(publishedTrack, codec);
-      if (subscription.codec !== decoderCodec) {
-        subscription.decoder.close();
-        const decoder = new MediaVideoDecoder({ codec: decoderCodec });
-        decoder.onDecoded((frame) => {
-          subscription.renderer.renderFrame(frame);
-        });
-        subscription.decoder = decoder;
-        subscription.codec = decoderCodec;
-      }
-
-      subscription.decoder.decode(
-        videoPayload,
-        header.timestamp * 1000, // convert ms timestamp to microseconds
-        isKeyframe,
-      );
+      this.routeReassembledVideoFrame(header, reassembled);
     }).catch(() => {
       // Decryption failed - missing key or corrupted
     });
+  }
+
+  /**
+   * Handle a whole-frame keyframe message that arrived on a WebTransport
+   * unidirectional stream (§5). The wire framing is the native uni-stream layout:
+   * a cleartext 16-byte header, a cleartext {@link VideoFrameMetadata}, and the
+   * whole frame encrypted as a single AEAD unit (AAD = the 16 header bytes). After
+   * decrypting, the frame feeds the exact same frame_id-ordered decode path the
+   * datagram deltas use, so stream and datagram frames stay interleaved in order.
+   */
+  private handleVideoStreamFrame(data: Uint8Array): void {
+    let parsed: StreamFrameMessage;
+    try {
+      parsed = parseStreamFrameMessage(data);
+    } catch {
+      return;
+    }
+    const { header, metadata, ciphertext } = parsed;
+    if (header.trackType !== TrackType.Video) return;
+
+    this.senderKeys.decrypt(
+      data.slice(0, HEADER_SIZE),
+      ciphertext,
+      header.keyEpoch,
+      header.sequence,
+      header.ssrc,
+    ).then((decrypted) => {
+      this.routeReassembledVideoFrame(header, {
+        data: decrypted,
+        isKeyframe: metadata.isKeyframe,
+        streamId: metadata.streamId,
+        trackId: metadata.trackId,
+        codec: codecLabelFromHeader(metadata.codec),
+      });
+    }).catch(() => {
+      // Decryption failed - missing key or corrupted
+    });
+  }
+
+  /**
+   * Route a fully reassembled/whole encoded video frame to its subscription's
+   * decoder, swapping the decoder if the negotiated codec changed. Shared by the
+   * datagram-fragment path and the uni-stream whole-frame path.
+   */
+  private routeReassembledVideoFrame(
+    header: MediaHeader,
+    reassembled: ReassembledVideoFrame,
+  ): void {
+    const { data: videoPayload, isKeyframe, streamId, trackId, codec } = reassembled;
+
+    const publishedTrack = this.publishedTracks.get(this.trackKey(streamId, trackId));
+    const userId =
+      publishedTrack != null
+        ? String(publishedTrack.publisherUserId)
+        : this.ssrcToUserId.get(header.ssrc);
+    if (!userId) return;
+
+    const subscription = this.videoSubscriptions.get(userId);
+    if (!subscription) return;
+    subscription.ssrc = header.ssrc;
+    const decoderCodec = this.decoderCodecForTrack(publishedTrack, codec);
+    if (subscription.codec !== decoderCodec) {
+      subscription.decoder.close();
+      const decoder = new MediaVideoDecoder({ codec: decoderCodec });
+      decoder.onDecoded((frame) => {
+        subscription.renderer.renderFrame(frame);
+      });
+      subscription.decoder = decoder;
+      subscription.codec = decoderCodec;
+    }
+
+    subscription.decoder.decode(
+      videoPayload,
+      header.timestamp * 1000, // convert ms timestamp to microseconds
+      isKeyframe,
+    );
   }
 
   private handleStreamControlMessage(msg: StreamControlMessage): void {
@@ -1925,28 +2277,95 @@ export class BrowserMediaEngine implements MediaEngine {
   }
 
   private ensureRemoteParticipantState(userId: string): void {
+    void this.materializeRemoteParticipant(userId);
+  }
+
+  private materializeRemoteParticipant(userId: string): Promise<void> {
     const existing = Array.from(this.participants.values()).find(
       (participant) => participant.userId === userId,
     );
     if (existing) {
-      return;
+      return Promise.resolve();
     }
 
-    const ssrc = this.derivePlaceholderSsrc(userId);
-    const decoder = new OpusMediaDecoder({
-      sampleRate: SAMPLE_RATE,
-      channels: CHANNELS,
+    const pending = this.participantMaterializePromises.get(userId);
+    if (pending) {
+      return pending;
+    }
+
+    const promise = (async () => {
+      const ssrc = await deriveTrackSsrc(userId, 'audio');
+      if (this.participants.has(ssrc)) {
+        return;
+      }
+
+      // Another concurrent materialize may have won the race.
+      const raced = Array.from(this.participants.values()).find(
+        (participant) => participant.userId === userId,
+      );
+      if (raced) {
+        return;
+      }
+
+      const decoder = new OpusMediaDecoder({
+        sampleRate: SAMPLE_RATE,
+        channels: CHANNELS,
+      });
+      const jitterBuffer = new JitterBuffer(FRAME_MS, 60);
+
+      // Wire decoded PCM into the shared playback context so remote voice is audible.
+      // Route through a per-participant GainNode so setSourceVolume can adjust gain.
+      const gainNode =
+        this.playbackContext != null ? this.playbackContext.createGain() : null;
+      if (gainNode && this.playbackContext) {
+        const initial = this.sourceVolumes.get(userId);
+        if (initial != null) {
+          gainNode.gain.value = Math.min(2, Math.max(0, initial));
+        }
+        gainNode.connect(this.playbackContext.destination);
+      }
+
+      decoder.onDecoded((audioData) => {
+        if (this.deafened || !this.playbackContext) {
+          audioData.close();
+          return;
+        }
+        try {
+          const channelData = new Float32Array(audioData.numberOfFrames);
+          audioData.copyTo(channelData, { planeIndex: 0, format: 'f32' });
+          const buffer = this.playbackContext.createBuffer(1, channelData.length, SAMPLE_RATE);
+          buffer.copyToChannel(channelData, 0);
+          const source = this.playbackContext.createBufferSource();
+          source.buffer = buffer;
+          if (gainNode) {
+            source.connect(gainNode);
+          } else {
+            source.connect(this.playbackContext.destination);
+          }
+          source.start();
+        } finally {
+          audioData.close();
+        }
+      });
+
+      const state: ParticipantState = {
+        ssrc,
+        userId,
+        decoder,
+        jitterBuffer,
+        speaking: false,
+        audioLevel: 127,
+        gainNode,
+      };
+      this.participants.set(ssrc, state);
+      this.ssrcToUserId.set(ssrc, userId);
+      this.flushOrphanAudioPackets(ssrc, state);
+    })().finally(() => {
+      this.participantMaterializePromises.delete(userId);
     });
-    const jitterBuffer = new JitterBuffer(FRAME_MS, 60);
-    this.participants.set(ssrc, {
-      ssrc,
-      userId,
-      decoder,
-      jitterBuffer,
-      speaking: false,
-      audioLevel: 127,
-    });
-    this.ssrcToUserId.set(ssrc, userId);
+
+    this.participantMaterializePromises.set(userId, promise);
+    return promise;
   }
 
   private removePublishedTracksForUser(userId: string): void {
@@ -1974,6 +2393,7 @@ export class BrowserMediaEngine implements MediaEngine {
       this.participants.delete(ssrc);
       this.ssrcToUserId.delete(ssrc);
       this.senderKeys.removePeerKeys(ssrc);
+      this.orphanAudioPackets.delete(ssrc);
     }
     this.removePublishedTracksForUser(userId);
 
@@ -1985,20 +2405,6 @@ export class BrowserMediaEngine implements MediaEngine {
     }
 
     this.emitSpeakingChange();
-  }
-
-  private derivePlaceholderSsrc(userId: string): number {
-    const numeric = Number.parseInt(userId, 10);
-    if (Number.isFinite(numeric)) {
-      return (numeric >>> 0) || 1;
-    }
-
-    let hash = 2166136261;
-    for (let i = 0; i < userId.length; i += 1) {
-      hash ^= userId.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0) || 1;
   }
 
   private localScreenStreamId(): string {
@@ -2048,10 +2454,16 @@ export class BrowserMediaEngine implements MediaEngine {
     }
   }
 
-  private findPreferredPublishedVideoTrack(userId: string): PublishedTrackDescriptor | undefined {
+  private findPreferredPublishedVideoTrack(
+    userId: string,
+    preferredTrackId?: 'camera' | 'screen',
+  ): PublishedTrackDescriptor | undefined {
     const tracks = Array.from(this.publishedTracks.values()).filter(
       (track) => String(track.publisherUserId) === userId && track.kind === 'video',
     );
+    if (preferredTrackId) {
+      return tracks.find((track) => track.trackId === preferredTrackId);
+    }
     return (
       tracks.find((track) => track.trackId === 'screen') ??
       tracks.find((track) => track.trackId === 'camera') ??
@@ -2226,7 +2638,8 @@ export class BrowserMediaEngine implements MediaEngine {
         codec: capability.codec,
         encode: capability.encode,
         decode: capability.decode,
-        hardware_accelerated: capability.hardwareAccelerated,
+        encodeHardware: capability.encodeHardware,
+        decodeHardware: capability.decodeHardware,
       })),
     });
     const recipientUserIds = this.currentRemoteParticipantIds();
@@ -2491,7 +2904,7 @@ export class BrowserMediaEngine implements MediaEngine {
     const resolvedEpoch = decrypted.epoch || epoch;
     const ssrc = await deriveTrackSsrc(senderUserId, 'audio');
     await this.senderKeys.importPeerKey(ssrc, resolvedEpoch, rawKey);
-    this.ensureRemoteParticipantState(senderUserId);
+    await this.materializeRemoteParticipant(senderUserId);
   }
 
   private async rotateAndAnnounceLocalSenderKeys(recipientUserIds: string[]): Promise<void> {
@@ -2504,14 +2917,15 @@ export class BrowserMediaEngine implements MediaEngine {
   // ---------- Playback loop ----------
 
   private startPlaybackLoop(): void {
-    // Pull from jitter buffers and play at 20ms intervals
+    // Pull from jitter buffers and decode at 20ms intervals. Decoded PCM is
+    // rendered via each decoder's onDecoded callback (wired in
+    // materializeRemoteParticipant / subscribeScreenShareAudio).
     this.playbackInterval = setInterval(() => {
       if (this.deafened || !this.playbackContext) return;
 
       for (const [, participant] of this.participants) {
         const frame = participant.jitterBuffer.pull();
         if (frame) {
-          // Decode Opus -> PCM
           const timestamp = performance.now() * 1000; // rough timestamp in us
           participant.decoder.decode(frame, timestamp);
         }
@@ -2524,10 +2938,6 @@ export class BrowserMediaEngine implements MediaEngine {
         subscription.decoder.decode(frame, timestamp);
       }
     }, FRAME_MS);
-
-    // Wire up decoded audio to playback
-    // We set up a callback once per decoder in handleControlMessage
-    // Each decoded AudioData gets rendered to playbackContext
   }
 
   private stopPlaybackLoop(): void {

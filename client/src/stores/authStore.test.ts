@@ -46,6 +46,7 @@ vi.mock('../api/client', () => ({
 }));
 
 import { useAuthStore } from './authStore';
+import { setRefreshToken } from '../lib/authToken';
 
 const fakeUser = {
   id: 'u1',
@@ -100,7 +101,6 @@ describe('authStore', () => {
       await useAuthStore.getState().login('test@example.com', 'pass123');
       expect(mockAuthApi.login).toHaveBeenCalledWith({
         identifier: 'test@example.com',
-        email: 'test@example.com',
         password: 'pass123',
       });
       const state = useAuthStore.getState();
@@ -283,6 +283,17 @@ describe('authStore', () => {
       const state = useAuthStore.getState();
       expect(state.token).toBeNull();
       expect(state.sessionBootstrapComplete).toBe(true);
+      expect(setRefreshToken).not.toHaveBeenCalledWith(null);
+    });
+
+    it('clears the stored refresh token when refresh is unauthorized', async () => {
+      mockAuthApi.refresh.mockRejectedValue({ response: { status: 401 } });
+
+      await useAuthStore.getState().initializeSession();
+
+      expect(useAuthStore.getState().token).toBeNull();
+      expect(useAuthStore.getState().sessionBootstrapComplete).toBe(true);
+      expect(setRefreshToken).toHaveBeenCalledWith(null);
     });
   });
 

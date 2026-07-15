@@ -590,6 +590,12 @@ async fn oauth2_authorize_caps_permissions_to_authorizer() -> anyhow::Result<()>
     let requested =
         Permissions::MANAGE_GUILD | Permissions::SEND_MESSAGES | Permissions::BAN_MEMBERS;
     let bot = create_bot_app(&ctx, "CapBot", &requested.bits().to_string()).await?;
+    // Publicly list the bot so a non-owner manager may legitimately install it;
+    // this test exercises the permission-capping path, not the visibility gate.
+    sqlx::query("UPDATE bot_applications SET public_listed = TRUE WHERE id = $1")
+        .bind(bot.app_id.parse::<i64>()?)
+        .execute(&ctx.db)
+        .await?;
 
     let (status, payload) = ctx
         .request(
@@ -618,6 +624,131 @@ async fn oauth2_authorize_caps_permissions_to_authorizer() -> anyhow::Result<()>
         granted & Permissions::BAN_MEMBERS.bits(),
         0,
         "BAN_MEMBERS must not be granted since the authorizer lacks it"
+    );
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (10) a blocked user cannot clear the blocker's block via DELETE relationship
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn blocked_user_cannot_delete_blockers_block() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    // Owner ("A") is the blocked party; "B" is the blocker.
+    let uid_a = ctx.user_id(&ctx.owner_token).await?;
+    let (token_b, uid_b) = ctx.add_user("blocker").await?;
+
+    // B blocks A — stored as a single directional row (B -> A, type=2).
+    let (status, _) = ctx
+        .request(
+            Method::POST,
+            "/api/v1/users/@me/relationships",
+            Some(json!({ "user_id": uid_a.to_string(), "type": 2 })),
+            &token_b,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "block should succeed");
+    assert!(
+        paracord_db::relationships::is_blocked_either_direction(&ctx.db, uid_a, uid_b).await?,
+        "precondition: B's block on A must be in place"
+    );
+
+    // A (the blocked party) calls DELETE on the relationship with B. The call
+    // succeeds (A has no row of their own to remove) but must NOT touch B's block.
+    let (status, _) = ctx
+        .request(
+            Method::DELETE,
+            &format!("/api/v1/users/@me/relationships/{uid_b}"),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "delete should succeed");
+
+    // The block placed by B must still exist.
+    let block = paracord_db::relationships::get_relationship(&ctx.db, uid_b, uid_a)
+        .await?
+        .context("B's block row (B -> A, type=2) must be preserved")?;
+    assert_eq!(
+        block.rel_type, 2,
+        "a blocked user must not be able to clear the blocker's block"
+    );
+    assert!(
+        paracord_db::relationships::is_blocked_either_direction(&ctx.db, uid_a, uid_b).await?,
+        "B's block must still be reported after A's DELETE"
+    );
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (11) a genuine mutual unfriend still clears both friend rows
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn mutual_unfriend_removes_both_rows() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let uid_a = ctx.user_id(&ctx.owner_token).await?;
+    let (token_b, uid_b) = ctx.add_user("friend").await?;
+
+    // A sends a friend request to B, then B accepts — both directions become friends.
+    let (status, _) = ctx
+        .request(
+            Method::POST,
+            "/api/v1/users/@me/relationships",
+            Some(json!({ "user_id": uid_b.to_string(), "type": 1 })),
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = ctx
+        .request(
+            Method::PUT,
+            &format!("/api/v1/users/@me/relationships/{uid_a}"),
+            None,
+            &token_b,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "accept should succeed");
+
+    // Both friend rows should now exist.
+    assert_eq!(
+        paracord_db::relationships::get_relationship(&ctx.db, uid_a, uid_b)
+            .await?
+            .context("A -> B friend row")?
+            .rel_type,
+        1
+    );
+    assert_eq!(
+        paracord_db::relationships::get_relationship(&ctx.db, uid_b, uid_a)
+            .await?
+            .context("B -> A friend row")?
+            .rel_type,
+        1
+    );
+
+    // A unfriends B — a mutual friendship, so BOTH rows must be cleared.
+    let (status, _) = ctx
+        .request(
+            Method::DELETE,
+            &format!("/api/v1/users/@me/relationships/{uid_b}"),
+            None,
+            &ctx.owner_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "unfriend should succeed");
+
+    assert!(
+        paracord_db::relationships::get_relationship(&ctx.db, uid_a, uid_b)
+            .await?
+            .is_none(),
+        "A -> B friend row must be removed"
+    );
+    assert!(
+        paracord_db::relationships::get_relationship(&ctx.db, uid_b, uid_a)
+            .await?
+            .is_none(),
+        "B -> A friend row must be removed on a mutual unfriend"
     );
     Ok(())
 }

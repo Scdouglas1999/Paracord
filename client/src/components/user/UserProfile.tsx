@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag, Radio, BadgeCheck, StickyNote } from 'lucide-react';
+import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag, Radio, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
 import { isAdmin, type User } from '../../types/index';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
@@ -12,6 +12,7 @@ import { useGuildStore } from '../../stores/guildStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { usePresenceStore } from '../../stores/presenceStore';
 import { useServerListStore } from '../../stores/serverListStore';
+import { useRelationshipStore } from '../../stores/relationshipStore';
 import { toast } from '../../stores/toastStore';
 import {
   formatActivityElapsed,
@@ -22,6 +23,7 @@ import {
 import { roleColorToHex } from '../../lib/colors';
 import { parseMarkdown } from '../../lib/markdown';
 import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
+import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import {
   buildIdentityVerificationPayload,
   formatIdentityFingerprint,
@@ -108,8 +110,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export function UserProfilePopup({ user, position, onClose, roles = [] }: UserProfilePopupProps) {
   const navigate = useNavigate();
-  const popupWidth = 344;
-  const estimatedHeight = 520;
+  const popupWidth = Math.min(21.5 * 16, window.innerWidth - 16);
+  const estimatedHeight = Math.min(32.5 * 16, window.innerHeight - 16);
   const fitsLeft = position.x - popupWidth - 16 > 0;
   const left = fitsLeft
     ? Math.max(8, position.x - popupWidth - 12)
@@ -141,6 +143,10 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   const presence = usePresenceStore((state) =>
     state.getPresence(user.id, activeServerId ?? undefined)
   );
+  const relationships = useRelationshipStore((s) => s.relationships);
+  const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
+  const relationship = relationships.find((r) => r.user.id === user.id);
+  const relationshipType = relationship?.type ?? null;
   const status = (presence?.status as 'online' | 'idle' | 'dnd' | 'offline') || 'offline';
   const activity = useMemo(() => getPrimaryActivity(presence), [presence]);
   const activityLabel = useMemo(() => formatActivityLabel(activity), [activity]);
@@ -148,6 +154,10 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
     () => formatActivityElapsed(activity?.started_at, now),
     [activity?.started_at, now]
   );
+
+  useEffect(() => {
+    void fetchRelationships();
+  }, [fetchRelationships, user.id]);
 
   // Fetch profile data from API
   useEffect(() => {
@@ -267,7 +277,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   const isBotUser = user.bot;
   const isStaffUser = isAdmin(profileData?.user?.flags ?? user.flags);
   const isStreaming = activity ? getActivityType(activity) === 1 : false;
-  const avatarSrc = safeStoredImageDataUrl(
+  const avatarSrc = resolveUserAvatarUrl(
     profileData?.user?.avatar_hash ?? user.avatar_hash ?? user.avatar,
   );
   const displayName = user.display_name || user.username;
@@ -315,10 +325,38 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
   const handleAddFriend = async () => {
     try {
       setActionError(null);
-      await relationshipApi.addFriend(user.username);
-      onClose();
+      await useRelationshipStore.getState().addFriend(user.username);
+      await fetchRelationships();
+      const updated = useRelationshipStore.getState().relationships.find((r) => r.user.id === user.id);
+      toast.success(
+        updated?.type === 1
+          ? `You are now friends with ${user.username}.`
+          : `Friend request sent to ${user.username}.`,
+      );
     } catch (err) {
       setActionError(`Could not send a friend request: ${extractApiError(err)}`);
+    }
+  };
+
+  const handleAcceptFriend = async () => {
+    try {
+      setActionError(null);
+      await useRelationshipStore.getState().acceptFriend(user.id);
+      await fetchRelationships();
+      toast.success(`You are now friends with ${user.username}.`);
+    } catch (err) {
+      setActionError(`Could not accept friend request: ${extractApiError(err)}`);
+    }
+  };
+
+  const handleRemoveRelationship = async (label: string) => {
+    try {
+      setActionError(null);
+      await useRelationshipStore.getState().removeFriend(user.id);
+      await fetchRelationships();
+      toast.success(label);
+    } catch (err) {
+      setActionError(`Could not update relationship: ${extractApiError(err)}`);
     }
   };
 
@@ -326,6 +364,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
     try {
       setActionError(null);
       await relationshipApi.block(user.id);
+      await fetchRelationships();
       onClose();
     } catch (err) {
       setActionError(`Could not block this user: ${extractApiError(err)}`);
@@ -401,12 +440,11 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
     <>
       <div className="fixed inset-0 z-50" onClick={onClose} />
       <div
-        className="glass-modal popup-enter fixed z-50 overflow-hidden rounded-lg"
+        className="glass-modal popup-enter fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden rounded-lg"
         style={{
           left,
           top,
-          width: '344px',
-          maxHeight: 'calc(100vh - 16px)',
+          maxHeight: 'calc(100dvh - 1rem)',
           overflowY: 'auto',
         }}
       >
@@ -715,7 +753,56 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
             Message
           </button>
           <div className="flex items-center gap-2">
-            {!isBotUser && (
+            {!isBotUser && relationshipType === 1 && (
+              <button
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                aria-label={`Remove ${user.username} as a friend`}
+                onClick={() => void handleRemoveRelationship(`Removed ${user.username} from friends.`)}
+              >
+                <UserMinus size={16} />
+                Remove Friend
+              </button>
+            )}
+            {!isBotUser && relationshipType === 2 && (
+              <button
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                aria-label={`Unblock ${user.username}`}
+                onClick={() => void handleRemoveRelationship(`Unblocked ${user.username}.`)}
+              >
+                <UserCheck size={16} />
+                Unblock
+              </button>
+            )}
+            {!isBotUser && relationshipType === 3 && (
+              <>
+                <button
+                  className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                  aria-label={`Accept friend request from ${user.username}`}
+                  onClick={() => void handleAcceptFriend()}
+                >
+                  <UserCheck size={16} />
+                  Accept
+                </button>
+                <button
+                  className={`flex h-9 items-center justify-center gap-2 rounded-sm border border-border-subtle px-3 text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                  aria-label={`Decline friend request from ${user.username}`}
+                  onClick={() => void handleRemoveRelationship(`Declined friend request from ${user.username}.`)}
+                >
+                  <UserX size={16} />
+                </button>
+              </>
+            )}
+            {!isBotUser && relationshipType === 4 && (
+              <button
+                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
+                aria-label={`Cancel friend request to ${user.username}`}
+                onClick={() => void handleRemoveRelationship(`Cancelled friend request to ${user.username}.`)}
+              >
+                <UserX size={16} />
+                Cancel Request
+              </button>
+            )}
+            {!isBotUser && relationshipType == null && (
               <button
                 className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-sm border border-border-subtle text-label font-medium text-text-secondary transition-colors duration-150 hover:bg-bg-mod-subtle hover:text-text-primary active:scale-[.97] ${FOCUS_RING}`}
                 aria-label={`Add ${user.username} as a friend`}
@@ -725,14 +812,16 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
                 Add Friend
               </button>
             )}
-            <button
-              className={`flex h-9 items-center justify-center gap-2 rounded-sm border border-accent-danger/30 px-3 text-label font-medium text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating ${isBotUser ? 'flex-1' : ''}`}
-              aria-label={`Block ${user.username}`}
-              onClick={() => void handleBlock()}
-            >
-              <Ban size={16} />
-              Block
-            </button>
+            {relationshipType !== 2 && (
+              <button
+                className={`flex h-9 items-center justify-center gap-2 rounded-sm border border-accent-danger/30 px-3 text-label font-medium text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating ${isBotUser || relationshipType != null && relationshipType !== 1 ? 'flex-1' : ''}`}
+                aria-label={`Block ${user.username}`}
+                onClick={() => void handleBlock()}
+              >
+                <Ban size={16} />
+                Block
+              </button>
+            )}
             {!isBotUser && activeGuildId && (
               <button
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-accent-danger transition-colors duration-150 hover:bg-danger-tint active:scale-[.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg-floating"

@@ -95,6 +95,24 @@ describe('CommandPalette accessibility', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command Palette' })).not.toBeInTheDocument());
     await waitFor(() => expect(opener).toHaveFocus());
   });
+
+  it('toggles closed on a second Mod+K without a competing TopBar force-open', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <CommandPalette />
+      </MemoryRouter>,
+    );
+
+    await user.keyboard('{Control>}k{/Control}');
+    expect(await screen.findByRole('dialog', { name: 'Command Palette' })).toBeInTheDocument();
+
+    await user.keyboard('{Control>}k{/Control}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Command Palette' })).not.toBeInTheDocument(),
+    );
+    expect(useUIStore.getState().commandPaletteOpen).toBe(false);
+  });
 });
 
 describe('CommandPalette social action commands', () => {

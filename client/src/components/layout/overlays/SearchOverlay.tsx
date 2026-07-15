@@ -6,6 +6,7 @@ import { channelApi } from '../../../api/channels';
 import type { Message } from '../../../types';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
 import { cn } from '../../../lib/utils';
+import { displayName } from '../../../lib/displayName';
 import { TopBarOverlay } from './TopBarOverlay';
 
 interface SearchOverlayProps {
@@ -14,6 +15,8 @@ interface SearchOverlayProps {
   channelId?: string;
   channelName?: string;
   allChannels: Array<{ id: string; guild_id?: string | null; name?: string | null }>;
+  presentation?: 'overlay' | 'panel';
+  panelRef?: RefObject<HTMLElement | null>;
 }
 
 type SearchFilter = 'all' | 'text' | 'files';
@@ -48,7 +51,15 @@ function highlightMatch(text: string, query: string): ReactNode {
   return parts;
 }
 
-export function SearchOverlay({ open, onClose, channelId, channelName, allChannels }: SearchOverlayProps) {
+export function SearchOverlay({
+  open,
+  onClose,
+  channelId,
+  channelName,
+  allChannels,
+  presentation = 'overlay',
+  panelRef,
+}: SearchOverlayProps) {
   const navigate = useNavigate();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -57,7 +68,7 @@ export function SearchOverlay({ open, onClose, channelId, channelName, allChanne
   const [searching, setSearching] = useState(false);
   const [filter, setFilter] = useState<SearchFilter>('all');
 
-  useFocusTrap(dialogRef as RefObject<HTMLDivElement | null>, open, onClose);
+  useFocusTrap(dialogRef as RefObject<HTMLDivElement | null>, open && presentation === 'overlay', onClose);
 
   useEffect(() => {
     if (!open || !channelId || !searchQuery.trim()) {
@@ -162,16 +173,8 @@ export function SearchOverlay({ open, onClose, channelId, channelName, allChanne
     </header>
   );
 
-  return (
-    <TopBarOverlay
-      open={open}
-      onClose={onClose}
-      dialogRef={dialogRef as RefObject<HTMLDivElement | null>}
-      titleId="topbar-search-title"
-      header={header}
-      panelClassName="max-h-[min(82dvh,44rem)] w-full max-w-3xl"
-      bodyClassName="p-2"
-    >
+  const content = (
+    <>
       {filteredResults.length > 0 ? (
         <ul className="space-y-0.5">
           {filteredResults.map((msg) => {
@@ -193,7 +196,7 @@ export function SearchOverlay({ open, onClose, channelId, channelName, allChanne
                   }}
                 >
                   <div className="mb-0.5 flex items-baseline justify-between gap-2">
-                    <span className="truncate text-label font-semibold text-text-primary">{msg.author.username}</span>
+                    <span className="truncate text-label font-semibold text-text-primary">{displayName(msg.author)}</span>
                     <span className="shrink-0 font-code text-meta tabular-nums text-text-muted">
                       {Number.isNaN(at.getTime()) ? '' : at.toLocaleString()}
                     </span>
@@ -250,6 +253,39 @@ export function SearchOverlay({ open, onClose, channelId, channelName, allChanne
           </div>
         </div>
       )}
+    </>
+  );
+
+  if (!open) return null;
+  if (presentation === 'panel') {
+    return (
+      <aside
+        ref={panelRef}
+        role="complementary"
+        aria-label="Search messages"
+        tabIndex={-1}
+        data-testid="context-panel"
+        data-mode="search"
+        className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm outline-none"
+        style={{ width: 'var(--member-list-width)' }}
+      >
+        {header}
+        <div className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">{content}</div>
+      </aside>
+    );
+  }
+
+  return (
+    <TopBarOverlay
+      open
+      onClose={onClose}
+      dialogRef={dialogRef as RefObject<HTMLDivElement | null>}
+      titleId="topbar-search-title"
+      header={header}
+      panelClassName="max-h-[min(82dvh,44rem)] w-full max-w-3xl"
+      bodyClassName="p-2"
+    >
+      {content}
     </TopBarOverlay>
   );
 }

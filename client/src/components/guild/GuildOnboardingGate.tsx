@@ -3,6 +3,7 @@ import { ShieldCheck, UserRoundCheck, Check, X } from 'lucide-react';
 import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
+import { useChannelStore } from '../../stores/channelStore';
 import { ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
 import { cn } from '../../lib/utils';
@@ -114,7 +115,11 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
   }, [payload]);
 
   const isComplete = Boolean(payload?.member_state.completed_at);
-  const requiresRules = Boolean(payload?.settings.rules_text);
+  const requiresRules = Boolean(payload?.settings.rules_text?.trim());
+  // Rules acceptance is enforced server-side for channel visibility; soft-dismiss
+  // must not bypass a required rules gate until onboarding is completed.
+  const mustComplete = requiresRules && !isComplete;
+  const canDismiss = !mustComplete;
   const canSubmit = !saving && (!requiresRules || acceptedRules);
 
   const submit = async () => {
@@ -141,6 +146,8 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
             }
           : prev,
       );
+      // Progressive channel unlocks depend on completed_at — refresh the list.
+      void useChannelStore.getState().fetchChannels(guildId);
     } catch (err: unknown) {
       setError(extractApiError(err));
     } finally {
@@ -149,7 +156,7 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
   };
 
   if (loading) return null;
-  if (!payload || !hasConfig || isComplete || dismissed) return null;
+  if (!payload || !hasConfig || isComplete || (dismissed && canDismiss)) return null;
 
   const helperCopy = requiresRules && !acceptedRules
     ? 'Accept the server rules to continue.'
@@ -172,14 +179,16 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
               </p>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => setDismissed(true)}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-            aria-label="Dismiss onboarding"
-          >
-            <X size={16} />
-          </button>
+          {canDismiss && (
+            <button
+              type="button"
+              onClick={() => setDismissed(true)}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-text-muted outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+              aria-label="Dismiss onboarding"
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         <div className="space-y-6 px-6 py-5">
@@ -273,9 +282,11 @@ export function GuildOnboardingGate({ guildId }: GuildOnboardingGateProps) {
         <div className="flex flex-col gap-3 border-t border-border-subtle bg-bg-secondary px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-meta text-text-muted">{helperCopy}</p>
           <div className="flex items-center justify-end gap-2">
-            <Button variant="ghost" onClick={() => setDismissed(true)}>
-              Later
-            </Button>
+            {canDismiss && (
+              <Button variant="ghost" onClick={() => setDismissed(true)}>
+                Later
+              </Button>
+            )}
             <Button onClick={() => void submit()} disabled={!canSubmit} loading={saving}>
               {saving ? 'Saving…' : 'Complete Onboarding'}
             </Button>

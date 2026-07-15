@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::control::{ControlError, ControlMessage};
 
 const PRE_AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+const CLIENT_AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_AUTH_MESSAGE_SIZE: u32 = 8 * 1024;
 
 /// Connection type: client-to-server relay or peer-to-peer.
@@ -162,45 +163,54 @@ impl MediaConnection {
         token: &str,
         mode: ConnectionMode,
     ) -> Result<Self, ConnectionError> {
-        let remote_addr = conn.remote_address();
+        tokio::time::timeout(CLIENT_AUTH_TIMEOUT, async move {
+            let remote_addr = conn.remote_address();
 
-        // Open the control stream
-        let (mut send, mut recv) = conn.open_bi().await.map_err(ConnectionError::Connection)?;
+            // Open the control stream
+            let (mut send, mut recv) = conn.open_bi().await.map_err(ConnectionError::Connection)?;
 
-        // Send auth message
-        let auth_msg = ControlMessage::Auth {
-            token: token.to_string(),
-        };
-        let encoded = auth_msg.encode()?;
-        send.write_all(&encoded).await?;
+            // Send auth message
+            let auth_msg = ControlMessage::Auth {
+                token: token.to_string(),
+            };
+            let encoded = auth_msg.encode()?;
+            send.write_all(&encoded).await?;
 
-        // Wait for Pong acknowledgement
-        let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf)
-            .await
-            .map_err(ConnectionError::ReadError)?;
-        let len = u32::from_be_bytes(len_buf) as usize;
+            // Wait for Pong acknowledgement
+            let mut len_buf = [0u8; 4];
+            recv.read_exact(&mut len_buf)
+                .await
+                .map_err(ConnectionError::ReadError)?;
+            let len = u32::from_be_bytes(len_buf) as usize;
 
-        let mut msg_buf = vec![0u8; len];
-        recv.read_exact(&mut msg_buf)
-            .await
-            .map_err(ConnectionError::ReadError)?;
+            let mut msg_buf = vec![0u8; len];
+            recv.read_exact(&mut msg_buf)
+                .await
+                .map_err(ConnectionError::ReadError)?;
 
-        // We don't strictly validate the pong, just that we got a response
+            // We don't strictly validate the pong, just that we got a response
 
-        // For client-initiated connections we don't know our own user_id
-        // from the JWT (server validates it). Use 0 as placeholder; the server
-        // will track the real user_id.
-        let meta = ConnectionMeta {
-            user_id: 0,
-            session_id: None,
-            auth_session_id: None,
-            room_id: None,
-            remote_addr,
-            mode,
-        };
+            // For client-initiated connections we don't know our own user_id
+            // from the JWT (server validates it). Use 0 as placeholder; the server
+            // will track the real user_id.
+            let meta = ConnectionMeta {
+                user_id: 0,
+                session_id: None,
+                auth_session_id: None,
+                room_id: None,
+                remote_addr,
+                mode,
+            };
 
-        Ok(Self { conn, meta })
+            Ok(Self { conn, meta })
+        })
+        .await
+        .map_err(|_| {
+            ConnectionError::AuthFailed(format!(
+                "auth acknowledgement timeout after {}s",
+                CLIENT_AUTH_TIMEOUT.as_secs()
+            ))
+        })?
     }
 
     /// Send an unreliable datagram (for media packets).

@@ -31,6 +31,8 @@ interface BotStoreSectionProps {
   guildId: string;
   canManage: boolean;
   onBotSettingsChanged?: () => Promise<void> | void;
+  onOpenSettings?: (section: 'onboarding' | 'economy') => void;
+  onOpenChannel?: (channelId: string) => void;
 }
 
 type RuleType =
@@ -96,24 +98,24 @@ const BUILT_IN_BOTS: BuiltInBot[] = [
   },
 ];
 
-const UPCOMING_BOTS: BuiltInBot[] = [
+const INCLUDED_TOOLS: BuiltInBot[] = [
   {
     id: 'system-roles',
-    name: 'Role Assigner',
-    description: 'Let users instantly self-assign optional roles via clickable buttons.',
+    name: 'Member Onboarding',
+    description: 'Let new members choose optional roles and acknowledge community rules.',
     icon: <Zap className="text-accent-primary" size={24} />,
-    features: ['Reaction roles', 'Button UI', 'Multiple role categories'],
+    features: ['Self-selected roles', 'Rules acknowledgement', 'Welcome prompts'],
   },
   {
     id: 'system-economy',
-    name: 'Economy & Leveling',
+    name: 'Economy & Levels',
     description: 'Gamify your server with XP, levels, and leaderboards for active members.',
     icon: <Gamepad2 className="text-accent-warning" size={24} />,
     features: ['Activity tracking', 'Level up alerts', 'Server leaderboard'],
   },
   {
     id: 'system-polls',
-    name: 'Polls & Voting',
+    name: 'Polls',
     description: 'Quickly spin up robust, multi-option polls with real-time tracking.',
     icon: <Volume2 className="text-text-secondary" size={24} />,
     features: ['Multiple choices', 'Anonymous voting', 'Timed polls'],
@@ -234,7 +236,13 @@ function botStoreSectionError(action: string, err: unknown): string {
   return detail ? `${action}: ${detail}` : action;
 }
 
-export function BotStoreSection({ guildId, canManage, onBotSettingsChanged }: BotStoreSectionProps) {
+export function BotStoreSection({
+  guildId,
+  canManage,
+  onBotSettingsChanged,
+  onOpenSettings,
+  onOpenChannel,
+}: BotStoreSectionProps) {
   const [activeTab, setActiveTab] = useState<'built-in' | 'public'>('built-in');
   const [searchQuery, setSearchQuery] = useState('');
   const [installingId, setInstallingId] = useState<string | null>(null);
@@ -261,16 +269,16 @@ export function BotStoreSection({ guildId, canManage, onBotSettingsChanged }: Bo
   }, [configuringId, botSettings]);
 
   const filteredBots = useMemo(() => {
-    const allBots = [...BUILT_IN_BOTS, ...UPCOMING_BOTS];
-    if (!searchQuery.trim()) return allBots;
+    if (!searchQuery.trim()) return BUILT_IN_BOTS;
     const q = searchQuery.toLowerCase();
-    return allBots.filter((b) => b.name.toLowerCase().includes(q) || b.description.toLowerCase().includes(q));
+    return BUILT_IN_BOTS.filter((b) => b.name.toLowerCase().includes(q) || b.description.toLowerCase().includes(q));
   }, [searchQuery]);
 
   const textLikeChannels = useMemo(() => guildChannels.filter((channel) => {
     const type = channel.channel_type ?? channel.type;
     return type === 0 || type === 5;
   }), [guildChannels]);
+  const firstTextChannel = textLikeChannels[0];
 
   const loadPublicBots = useCallback(() => {
     setPublicBotsLoading(true);
@@ -599,7 +607,6 @@ export function BotStoreSection({ guildId, canManage, onBotSettingsChanged }: Bo
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {filteredBots.map((bot) => {
-          const isUpcoming = UPCOMING_BOTS.some((b) => b.id === bot.id);
           const installed = botSettings[bot.id]?.enabled === true;
           return (
             <div key={bot.id} className={cn('card-surface flex flex-col rounded-2xl border border-border-subtle bg-bg-mod-subtle/40 p-5 transition-colors', installed ? 'border-accent-primary/50 shadow-sm shadow-accent-primary/5' : 'hover:border-border-strong hover:bg-bg-mod-subtle/60')}>
@@ -616,7 +623,6 @@ export function BotStoreSection({ guildId, canManage, onBotSettingsChanged }: Bo
                   <div className="flex items-center justify-between">
                     <h3 className="text-base font-bold text-text-primary">{bot.name}</h3>
                     {installed && <span className="text-[10px] font-bold uppercase tracking-wider text-accent-primary bg-accent-primary/10 px-2 py-0.5 rounded-full">Active</span>}
-                    {isUpcoming && <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted bg-bg-secondary px-2 py-0.5 rounded-full">Coming Soon</span>}
                   </div>
                   <p className="text-[13px] text-text-muted mt-0.5 line-clamp-2 leading-relaxed">{bot.description}</p>
                 </div>
@@ -627,11 +633,7 @@ export function BotStoreSection({ guildId, canManage, onBotSettingsChanged }: Bo
               </div>
               <div className="mt-auto pt-4 border-t border-border-subtle/50 flex items-center justify-between">
                 <span className="text-xs font-semibold text-text-muted flex items-center gap-1"><Wrench size={12} />Native App</span>
-                {isUpcoming ? (
-                  <Button disabled size="sm" variant="outline" className="cursor-not-allowed">
-                    In Development
-                  </Button>
-                ) : installed ? (
+                {installed ? (
                   <Button
                     onClick={() => setConfiguringId(bot.id)}
                     disabled={!canManage}
@@ -657,6 +659,39 @@ export function BotStoreSection({ guildId, canManage, onBotSettingsChanged }: Bo
           );
         })}
       </div>
+
+      <section className="mt-6 rounded-xl border border-border-subtle bg-bg-primary/35 p-4" aria-labelledby="included-tools-heading">
+        <div className="mb-3">
+          <h3 id="included-tools-heading" className="text-sm font-semibold text-text-primary">Already included with every space</h3>
+          <p className="mt-0.5 text-xs text-text-muted">These are native Paracord tools, so there is no bot to install.</p>
+        </div>
+        <div className="grid gap-2 lg:grid-cols-3">
+          {INCLUDED_TOOLS.map((tool) => {
+            const action = tool.id === 'system-roles'
+              ? { label: 'Open Onboarding', disabled: !onOpenSettings, run: () => onOpenSettings?.('onboarding') }
+              : tool.id === 'system-economy'
+                ? { label: 'Open Economy', disabled: !onOpenSettings, run: () => onOpenSettings?.('economy') }
+                : { label: 'Open a channel', disabled: !firstTextChannel || !onOpenChannel, run: () => firstTextChannel && onOpenChannel?.(firstTextChannel.id) };
+            return (
+              <div key={tool.id} className="flex flex-col rounded-lg border border-border-subtle bg-bg-secondary/45 p-3.5">
+                <div className="flex items-center gap-2.5">
+                  <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg', BOT_ICON_BG_CLASS[tool.id] || 'bg-bg-mod-strong')}>
+                    {tool.icon}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-text-primary">{tool.name}</div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-accent-primary">Available now</div>
+                  </div>
+                </div>
+                <p className="mt-2 flex-1 text-xs leading-relaxed text-text-secondary">{tool.description}</p>
+                <Button type="button" size="sm" variant="secondary" className="mt-3 w-full" disabled={action.disabled} onClick={action.run}>
+                  {action.label}
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      </section>
       </>}
     </div>
   );

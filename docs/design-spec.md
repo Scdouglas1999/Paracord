@@ -101,6 +101,8 @@ redefined per theme in `tokens.css` and in `useTheme.ts` — keep the two in loc
 The accent is user-swappable via `ACCENT_PRESETS` (default **emerald**). The chosen
 preset drives `--accent-primary`/`-hover`/`-active`, `--text-link`, and
 `--accent-primary-rgb` at runtime. `--accent-secondary` (teal) is brand-fixed.
+Light mode renders presets through a darker hue-preserving scale so accent controls
+retain at least 3:1 contrast on the warm-paper canvas; dark themes use the preset directly.
 
 ---
 

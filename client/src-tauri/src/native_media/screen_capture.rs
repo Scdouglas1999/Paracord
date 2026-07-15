@@ -2,11 +2,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
-// `Instant` is only used by the non-Linux thumbnail capture path below.
 #[cfg(not(target_os = "linux"))]
-use std::time::Instant;
+use std::sync::{LazyLock, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant, SystemTime};
 
 // base64 + image are only used by the non-Linux thumbnail encode path below.
 #[cfg(not(target_os = "linux"))]
@@ -21,6 +20,8 @@ use image::ColorType;
 use image::ImageEncoder;
 use serde::Serialize;
 use tauri::Emitter;
+#[cfg(not(target_os = "linux"))]
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use super::{session::NativeMediaSession, video_pipeline, MediaState};
 use paracord_transport::control::{ControlMessage, TrackKind};
@@ -38,6 +39,77 @@ const PICKER_THUMBNAIL_MAX_WIDTH: u32 = 320;
 const PICKER_THUMBNAIL_MAX_HEIGHT: u32 = 180;
 #[cfg(not(target_os = "linux"))]
 const THUMBNAIL_JPEG_QUALITY: u8 = 74;
+#[cfg(not(target_os = "linux"))]
+const SCREEN_CAPTURE_CONSENT_TTL: Duration = Duration::from_secs(120);
+#[cfg(not(target_os = "linux"))]
+static SCREEN_CAPTURE_CONSENT_AT: LazyLock<Mutex<Option<Instant>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[cfg(not(target_os = "linux"))]
+fn screen_capture_consent_is_fresh() -> bool {
+    SCREEN_CAPTURE_CONSENT_AT
+        .lock()
+        .ok()
+        .and_then(|value| *value)
+        .is_some_and(|granted| granted.elapsed() <= SCREEN_CAPTURE_CONSENT_TTL)
+}
+
+fn revoke_screen_capture_consent() {
+    #[cfg(not(target_os = "linux"))]
+    if let Ok(mut consent) = SCREEN_CAPTURE_CONSENT_AT.lock() {
+        *consent = None;
+    }
+}
+
+/// On Windows and macOS, native enumeration and thumbnails bypass the browser's
+/// capture picker, so gate them with an OS-native confirmation. Linux capture
+/// is mediated by the desktop portal and already presents a trusted picker.
+pub async fn ensure_screen_capture_consent(app: &tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = app;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        if screen_capture_consent_is_fresh() {
+            return Ok(());
+        }
+        if crate::NATIVE_PRIVILEGE_PROMPT_ACTIVE
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err("another native permission prompt is already open".into());
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .message(
+                "Paracord wants to view screen/window names and previews and may broadcast the source you select.\n\nOnly allow this when you are intentionally starting screen sharing.",
+            )
+            .title("Allow screen sharing access?")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Allow screen sharing".to_string(),
+                "Cancel".to_string(),
+            ))
+            .show(move |approved| {
+                let _ = tx.send(approved);
+            });
+        let approved = matches!(
+            tokio::time::timeout(Duration::from_secs(60), rx).await,
+            Ok(Ok(true))
+        );
+        crate::NATIVE_PRIVILEGE_PROMPT_ACTIVE.store(false, Ordering::SeqCst);
+        if !approved {
+            return Err("screen sharing access was not approved".into());
+        }
+        if let Ok(mut consent) = SCREEN_CAPTURE_CONSENT_AT.lock() {
+            *consent = Some(Instant::now());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,15 +153,27 @@ pub struct ActiveScreenCapture {
     worker: Option<JoinHandle<()>>,
 }
 
-#[derive(Clone)]
-struct PendingVideoFrame {
-    width: u32,
-    height: u32,
-    bgra: Vec<u8>,
+pub(crate) struct PendingVideoFrame {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) bgra: Vec<u8>,
+    /// True capture time of this frame (scap `display_time`), carried so the
+    /// wire PTS can be derived from the actual capture cadence instead of a
+    /// synthesized frame_index/fps. See P5 note in the encoder loop below.
+    pub(crate) capture_time: SystemTime,
+    /// Windows GPU texture route (spec §7, W3): when the negotiated encoder is a
+    /// hardware MFT, the frame is a GPU-resident D3D11 texture instead of the
+    /// CPU `bgra` readback, and `bgra` is left empty. `None` on the CPU BGRA
+    /// route (the VP9 floor) and for every non-Windows platform. The encode loop
+    /// selects `encode_texture` when this is `Some` and the plain `encode`
+    /// (CPU I420) path otherwise, so a single retained frame re-encodes cleanly
+    /// for keyframe/keepalive ticks on either route.
+    #[cfg(target_os = "windows")]
+    pub(crate) texture: Option<scap::frame::D3D11TextureFrame>,
 }
 
 struct LatestVideoFrame {
-    frame: std::sync::Mutex<Option<PendingVideoFrame>>,
+    frame: std::sync::Mutex<Option<Arc<PendingVideoFrame>>>,
     notify: std::sync::Condvar,
 }
 
@@ -166,6 +250,8 @@ pub fn capture_source_thumbnail(source_id: &str) -> Result<Option<ScreenShareThu
             excluded_targets: None,
             captures_audio: false,
             exclude_current_process_audio: false,
+            // Thumbnail probe: a one-shot CPU BGRA read, never the encode path.
+            prefer_gpu_texture: false,
         };
 
         let mut capturer =
@@ -191,7 +277,7 @@ pub fn capture_source_thumbnail(source_id: &str) -> Result<Option<ScreenShareThu
         let Some(video) = result else {
             return Ok(None);
         };
-        let Some((width, height, bgra)) = convert_video_frame(video) else {
+        let Some((width, height, bgra, _capture_time)) = convert_video_frame(video) else {
             return Ok(None);
         };
         let (thumb_width, thumb_height, thumb_data) = resize_bgra(
@@ -216,7 +302,8 @@ pub async fn start_capture(
     app: tauri::AppHandle,
     request: StartScreenShareRequest,
 ) -> Result<(), String> {
-    stop_capture(state).await?;
+    ensure_screen_capture_consent(&app).await?;
+    stop_capture_internal(state, false).await?;
 
     if !scap::is_supported() {
         return Err("Native screen capture is not supported on this platform.".into());
@@ -251,6 +338,8 @@ pub async fn start_capture(
                 capture_width,
                 capture_height,
                 request.max_frame_rate.max(1),
+                request.max_width,
+                request.max_height,
                 request.max_bitrate_bps,
                 request.content_hint.as_deref(),
                 request.preferred_codec.as_deref(),
@@ -368,6 +457,10 @@ pub async fn start_capture(
 }
 
 pub async fn stop_capture(state: &MediaState) -> Result<(), String> {
+    stop_capture_internal(state, true).await
+}
+
+async fn stop_capture_internal(state: &MediaState, revoke_consent: bool) -> Result<(), String> {
     if let Ok(mut guard) = state.screen_capture.lock() {
         if let Some(mut active) = guard.take() {
             active.stop();
@@ -404,6 +497,9 @@ pub async fn stop_capture(state: &MediaState) -> Result<(), String> {
         }
         video_pipeline::stop_screen_share(session);
         session.screen_audio_enabled.store(false, Ordering::SeqCst);
+    }
+    if revoke_consent {
+        revoke_screen_capture_consent();
     }
     Ok(())
 }
@@ -595,62 +691,191 @@ fn run_capture_loop(
     let encoder_app = app.clone();
     let encoder_startup = Arc::new(std::sync::Mutex::new(Some(startup_tx)));
     let encoder_startup_signal = encoder_startup.clone();
+    // Clone the force-keyframe flag so the encoder loop can serve keyframe
+    // requests (and the static-screen keepalive) by re-encoding the retained
+    // frame, without taking the session lock every iteration. The Arc is created
+    // once at session construction and only ever `store`d into, so this clone
+    // stays valid across encoder reinits.
+    let encoder_force_keyframe = runtime_handle
+        .block_on(async {
+            session_arc
+                .lock()
+                .await
+                .as_ref()
+                .map(|session| session.screen_force_keyframe.clone())
+        })
+        .ok_or("no active session")?;
     let encoder = thread::spawn(move || -> Result<(), String> {
+        // Video encoding is throughput work: run it below normal priority so
+        // a saturated encoder cannot starve audio, the UI, or a co-located
+        // server into QUIC idle timeouts. libvpx worker threads are spawned
+        // from this thread and inherit the priority.
+        #[cfg(unix)]
+        unsafe {
+            libc::nice(10);
+        }
+        // Windows parity with the Unix nice(10) above. Compile-unverified on the
+        // Linux toolchain used here; flagged in the change report.
+        #[cfg(windows)]
+        unsafe {
+            use windows::Win32::System::Threading::{
+                GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+            };
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        }
+
+        // Minimum wall-clock interval between ENCODED frames. Capture can burst
+        // above the requested rate (WGC compositor cadence, damage-driven
+        // coalescing), so pace here: the keep-latest slot means we can drop
+        // everything but the newest frame and still encode on cadence.
         let frame_interval =
             Duration::from_millis((1_000u64 / u64::from(max_frame_rate.max(1))).max(1));
-        let mut last_frame: Option<PendingVideoFrame> = None;
+        // Static-screen keepalive: a damage-driven source stops producing frames
+        // when nothing changes. Re-encode the retained frame at ~1fps so the
+        // periodic-keyframe cadence keeps advancing and a late joiner's keyframe
+        // request is serviced within ~1s even on a frozen screen.
+        let keepalive_interval = Duration::from_secs(1);
+
+        let mut last_encode_at: Option<Instant> = None;
+        // Retain the most recent captured frame (cheap Arc clone) so it can be
+        // re-encoded for a keyframe request or the keepalive tick when capture
+        // has gone quiet.
+        let mut retained: Option<Arc<PendingVideoFrame>> = None;
+        // A fresh frame that arrived but was held back by the pacing gate. It must
+        // still be encoded as soon as pacing allows, even if capture then goes
+        // idle — otherwise the newest content stalls until the ~1s keepalive tick.
+        let mut pending_fresh = false;
+
         while !encoder_stop.load(Ordering::SeqCst) {
-            let next_frame = {
+            // Block until a fresh frame arrives or one frame interval elapses.
+            // The condvar wakes immediately on a new frame; the timeout bounds
+            // the wait so keyframe/keepalive checks still run on a static screen.
+            let fresh = {
                 let mut guard = encoder_frames.frame.lock().map_err(|e| e.to_string())?;
                 if guard.is_none() && !encoder_stop.load(Ordering::SeqCst) {
-                    let (next_guard, timeout) = encoder_frames
+                    let (next_guard, _timeout) = encoder_frames
                         .notify
                         .wait_timeout(guard, frame_interval)
                         .map_err(|e| e.to_string())?;
                     guard = next_guard;
-                    if timeout.timed_out() && guard.is_none() {
-                        last_frame.clone()
-                    } else {
-                        guard.take()
-                    }
-                } else {
-                    guard.take()
                 }
+                guard.take()
             };
 
-            let Some(frame) = next_frame else {
+            if encoder_stop.load(Ordering::SeqCst) {
+                break;
+            }
+
+            // Keep-latest: a fresh frame always replaces the retained frame.
+            let had_fresh = fresh.is_some();
+            if let Some(fresh_frame) = fresh {
+                retained = Some(fresh_frame);
+                pending_fresh = true;
+            }
+
+            let now = Instant::now();
+            let elapsed = last_encode_at.map(|t| now.saturating_duration_since(t));
+            let paced_due = elapsed.map(|e| e >= frame_interval).unwrap_or(true);
+            let keepalive_due = elapsed.map(|e| e >= keepalive_interval).unwrap_or(true);
+            let keyframe_requested = encoder_force_keyframe.load(Ordering::SeqCst);
+
+            // Encode this iteration when:
+            //  * a fresh frame is due (pacing gate, P1b), OR
+            //  * a fresh frame the pacing gate held back is now due even though
+            //    capture went idle (trailing-frame latency, P1c), OR
+            //  * capture is quiet but a keyframe was requested (late joiner), OR
+            //    the keepalive tick is due (static-screen keepalive, P2).
+            let should_encode = retained.is_some()
+                && if had_fresh {
+                    paced_due
+                } else {
+                    (pending_fresh && paced_due) || keyframe_requested || keepalive_due
+                };
+
+            if !should_encode {
+                // Pacing gate / nothing to send: keep the retained frame and
+                // wait for the next fresh frame or tick.
+                continue;
+            }
+
+            let Some(frame) = retained.clone() else {
                 continue;
             };
-            last_frame = Some(frame.clone());
+            // P5/L2: the frame's true capture time drives the wire PTS. It is
+            // threaded through `begin_screen_frame` into the frame's
+            // `timestamp_us` (monotonic per track) instead of a synthesized
+            // frame_index/fps.
+            let capture_time = frame.capture_time;
+            last_encode_at = Some(now);
+            // The retained frame is being encoded now; any pacing-deferred fresh
+            // frame is satisfied.
+            pending_fresh = false;
 
-            let encode_result = encoder_runtime.block_on(async {
+            // Phase 1 (brief, under the session lock): seed the encoder config
+            // on the first frame, then run `begin_screen_frame`, which moves the
+            // encoder and everything the encode needs out of the session.
+            let begin_result = encoder_runtime.block_on(async {
                 let mut guard = encoder_session.lock().await;
-                if let Some(session) = guard.as_mut() {
-                    if session.screen_encoder_config.is_none() {
-                        video_pipeline::start_screen_share(
-                            session,
-                            frame.width,
-                            frame.height,
-                            max_frame_rate.max(1),
-                            max_bitrate_bps,
-                            content_hint.as_deref(),
-                            preferred_codec.as_deref(),
-                        )?;
-                    }
-                    video_pipeline::encode_and_send_video_frame(
+                let Some(session) = guard.as_mut() else {
+                    return Err("no active session".to_string());
+                };
+                #[cfg(feature = "vpx")]
+                if session.screen_encoder_config.is_none() {
+                    video_pipeline::start_screen_share(
                         session,
                         frame.width,
                         frame.height,
-                        &frame.bgra,
-                        true,
-                        true,
-                        Some(&encoder_app),
-                    )
-                    .await
-                } else {
-                    Err("no active session".to_string())
+                        max_frame_rate.max(1),
+                        max_width,
+                        max_height,
+                        max_bitrate_bps,
+                        content_hint.as_deref(),
+                        preferred_codec.as_deref(),
+                    )?;
                 }
+                video_pipeline::begin_screen_frame(
+                    session,
+                    frame.width,
+                    frame.height,
+                    true,
+                    Some(&encoder_app),
+                    capture_time,
+                )
+                .await
             });
+
+            let encode_result = match begin_result {
+                Ok(mut job) => {
+                    // Phase 2 (heavy, session lock RELEASED): the crop,
+                    // conversion, encode, encrypt, and datagram sends. Enter the
+                    // runtime so the self-view native-decode branch can spawn.
+                    let run_result = {
+                        let _runtime_guard = encoder_runtime.enter();
+                        video_pipeline::run_screen_frame(
+                            &mut job,
+                            &frame.bgra,
+                            frame.width,
+                            frame.height,
+                            true,
+                            Some(&encoder_app),
+                        )
+                    };
+                    match run_result {
+                        // Phase 3 (brief, re-lock): write the frame's results
+                        // back, or drop the encoder if the stream was
+                        // stopped/reconfigured while the lock was released.
+                        Ok(outcome) => encoder_runtime.block_on(async {
+                            let mut guard = encoder_session.lock().await;
+                            let Some(session) = guard.as_mut() else {
+                                return Err("no active session".to_string());
+                            };
+                            video_pipeline::finish_screen_frame(session, outcome)
+                        }),
+                        Err(err) => Err(err),
+                    }
+                }
+                Err(err) => Err(err),
+            };
 
             match encode_result {
                 Ok(()) => {
@@ -663,6 +888,10 @@ fn run_capture_loop(
                     }
                 }
                 Err(err) => {
+                    video_pipeline::native_diag(
+                        Some(&encoder_app),
+                        &format!("screen encoder thread stopping on error: {err}"),
+                    );
                     if let Some(startup_tx) = encoder_startup_signal
                         .lock()
                         .map_err(|e| e.to_string())?
@@ -670,6 +899,10 @@ fn run_capture_loop(
                     {
                         let _ = startup_tx.send(Err(err.clone()));
                     }
+                    // Stop the whole capture, not just this thread: a dead
+                    // encoder with a live capture loop is a zombie stream that
+                    // looks active while delivering nothing to anyone.
+                    encoder_stop.store(true, Ordering::SeqCst);
                     return Err(err);
                 }
             }
@@ -679,6 +912,12 @@ fn run_capture_loop(
     });
 
     let mut audio_accumulator = Vec::<f32>::new();
+    // Bound the blocking frame wait to one frame interval (capped so an external
+    // stop is still observed within ~100ms at low frame rates). Replaces the old
+    // 5ms busy-poll (P6): this thread owns the capturer, so it parks on the
+    // capture channel instead of spinning.
+    let poll_interval = Duration::from_millis((1_000u64 / u64::from(max_frame_rate.max(1))).max(1))
+        .min(Duration::from_millis(100));
     let result = (|| -> Result<(), String> {
         while !stop_flag.load(Ordering::SeqCst) {
             let mut latest_video: Option<scap::frame::VideoFrame> = None;
@@ -701,8 +940,20 @@ fn run_capture_loop(
             }
 
             if latest_video.is_none() && audio_frames.is_empty() {
-                thread::sleep(Duration::from_millis(5));
-                continue;
+                // Nothing buffered: park until the next frame or the poll
+                // interval elapses, then re-check the stop flag.
+                match capturer.recv_frame_timeout(poll_interval) {
+                    Ok(Some(scap::frame::Frame::Video(video))) => {
+                        latest_video = Some(video);
+                    }
+                    Ok(Some(scap::frame::Frame::Audio(audio))) => {
+                        audio_frames.push(audio);
+                    }
+                    Ok(None) => continue,
+                    Err(_) => {
+                        return Err("capture stream disconnected".into());
+                    }
+                }
             }
 
             for audio in audio_frames {
@@ -716,15 +967,44 @@ fn run_capture_loop(
             }
 
             if let Some(video) = latest_video {
-                let Some((width, height, bgra)) = convert_video_frame(video) else {
+                // Windows GPU texture route (spec §7, W3): a WGC `D3D11Texture`
+                // frame is not a CPU BGRA readback. Build the `PendingVideoFrame`
+                // directly from the texture — so the encode loop can hand the
+                // `ID3D11Texture2D` to the MFT via `encode_texture` — instead of
+                // routing it through `convert_video_frame`, which returns `None`
+                // for this variant (dropping the frame). The `match` rebinds
+                // `video` to the non-texture frame so the CPU path below still
+                // runs for BGRA frames on the VP9 floor; the whole block is
+                // `cfg(windows)` so Linux/mac never see it.
+                #[cfg(target_os = "windows")]
+                let video = match video {
+                    scap::frame::VideoFrame::D3D11Texture(texture) => {
+                        let pending = pending_frame_from_texture(texture);
+                        let mut guard =
+                            latest_video_frame.frame.lock().map_err(|e| e.to_string())?;
+                        *guard = Some(Arc::new(pending));
+                        drop(guard);
+                        latest_video_frame.notify.notify_one();
+                        continue;
+                    }
+                    other => other,
+                };
+
+                let Some((width, height, bgra, capture_time)) = convert_video_frame(video) else {
                     continue;
                 };
                 let mut guard = latest_video_frame.frame.lock().map_err(|e| e.to_string())?;
-                *guard = Some(PendingVideoFrame {
+                *guard = Some(Arc::new(PendingVideoFrame {
                     width,
                     height,
                     bgra,
-                });
+                    capture_time,
+                    // CPU BGRA route: no GPU texture. The Windows texture route
+                    // populates this via `pending_frame_from_texture` instead of
+                    // going through `convert_video_frame` (spec §7, W3).
+                    #[cfg(target_os = "windows")]
+                    texture: None,
+                }));
                 drop(guard);
                 latest_video_frame.notify.notify_one();
             }
@@ -764,7 +1044,20 @@ fn build_capture_options(
         output_resolution: scap::capturer::Resolution::Captured,
         excluded_targets: None,
         captures_audio: capture_audio && integrated_audio_capture(),
-        exclude_current_process_audio: false,
+        // Keep Paracord's own playback (voice chat) out of the captured mix —
+        // otherwise every participant hears themselves echoed in the stream.
+        exclude_current_process_audio: true,
+        // Windows zero-copy WGC→MFT capture route (spec §7). The deterministic,
+        // fixed route for this build is CPU BGRA readback: the screen encoder is
+        // a `SimulcastEncoder`, whose per-layer encoders take system-memory input
+        // (I420/NV12) — it has no `encode_texture` path, so a GPU-texture capture
+        // frame would have no consumer. Selecting the texture route here without
+        // that encode-side support would deliver a `VideoFrame::D3D11Texture` with
+        // an empty CPU buffer and panic the CPU encode path. Keeping this `false`
+        // makes the CPU BGRA route the single deterministic route (spec §0) and
+        // keeps the reviewed `MfVideoEncoder::encode_texture` / WGC texture path
+        // dormant-but-compiled until SimulcastEncoder gains texture input.
+        prefer_gpu_texture: false,
     };
 
     #[cfg(not(target_os = "linux"))]
@@ -888,47 +1181,73 @@ fn guess_app_name(title: &str) -> Option<String> {
     None
 }
 
-fn convert_video_frame(video: scap::frame::VideoFrame) -> Option<(u32, u32, Vec<u8>)> {
+fn convert_video_frame(video: scap::frame::VideoFrame) -> Option<(u32, u32, Vec<u8>, SystemTime)> {
     match video {
-        scap::frame::VideoFrame::BGRA(frame) => {
-            Some((frame.width as u32, frame.height as u32, frame.data))
-        }
+        scap::frame::VideoFrame::BGRA(frame) => Some((
+            frame.width as u32,
+            frame.height as u32,
+            frame.data,
+            frame.display_time,
+        )),
         scap::frame::VideoFrame::BGR0(frame) => Some((
             frame.width as u32,
             frame.height as u32,
-            bgr0_to_bgra(frame.data),
+            frame.data,
+            frame.display_time,
         )),
         // Formats produced by the Linux PipeWire engine.
         scap::frame::VideoFrame::BGRx(frame) => Some((
             frame.width as u32,
             frame.height as u32,
-            bgr0_to_bgra(frame.data),
+            frame.data,
+            frame.display_time,
         )),
         scap::frame::VideoFrame::RGBx(frame) => Some((
             frame.width as u32,
             frame.height as u32,
             rgbx_to_bgra(frame.data),
+            frame.display_time,
         )),
         scap::frame::VideoFrame::XBGR(frame) => Some((
             frame.width as u32,
             frame.height as u32,
             xbgr_to_bgra(frame.data),
+            frame.display_time,
         )),
         scap::frame::VideoFrame::RGB(frame) => Some((
             frame.width as u32,
             frame.height as u32,
             rgb_to_bgra(&frame.data),
+            frame.display_time,
         )),
+        // Windows GPU texture route (spec §7, W3): D3D11 texture frames are not a
+        // CPU BGRA readback and are threaded through `pending_frame_from_texture`,
+        // never this converter. An explicit arm documents that reaching here is a
+        // routing bug (the texture route was chosen but a frame took the CPU
+        // path), distinct from the "unknown pixel format" catch-all below.
+        #[cfg(target_os = "windows")]
+        scap::frame::VideoFrame::D3D11Texture(_) => None,
         _ => None,
     }
 }
 
-fn bgr0_to_bgra(data: Vec<u8>) -> Vec<u8> {
-    let mut out = data;
-    for alpha in out.iter_mut().skip(3).step_by(4) {
-        *alpha = 255;
+/// Build a [`PendingVideoFrame`] from a Windows GPU texture frame (spec §7, W3).
+///
+/// The `bgra` buffer stays empty — on the texture route the encode loop hands
+/// the `ID3D11Texture2D` straight to the MFT via `encode_texture` and never
+/// materialises system-memory pixels for this frame. This is the texture-route
+/// counterpart to the CPU `PendingVideoFrame` built from `convert_video_frame`.
+#[cfg(target_os = "windows")]
+pub(crate) fn pending_frame_from_texture(
+    texture: scap::frame::D3D11TextureFrame,
+) -> PendingVideoFrame {
+    PendingVideoFrame {
+        width: texture.width as u32,
+        height: texture.height as u32,
+        bgra: Vec::new(),
+        capture_time: texture.display_time,
+        texture: Some(texture),
     }
-    out
 }
 
 fn rgbx_to_bgra(data: Vec<u8>) -> Vec<u8> {

@@ -10,9 +10,11 @@ import { useAuthStore } from '../../stores/authStore';
 import { useServerListStore } from '../../stores/serverListStore';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { LOCAL_SERVER_ID } from '../../lib/connectionManager';
+import { canAccessGuildSettingsSync } from '../../lib/guildSettingsAccess';
 import { isAdmin } from '../../types';
 import { cn } from '../../lib/utils';
 import type { Channel, Guild } from '../../types';
+import { displayName } from '../../lib/displayName';
 
 interface PaletteItem {
   id: string;
@@ -156,11 +158,11 @@ export function CommandPalette() {
       items.push({
         id: 'nav-admin',
         label: 'Admin Dashboard',
-        sublabel: 'Server administration',
+        sublabel: 'Instance administration',
         icon: <Shield size={16} />,
         action: () => navigate('/app/admin'),
         category: 'Navigation',
-        keywords: 'admin dashboard administration server',
+        keywords: 'admin dashboard administration server instance',
       });
     }
 
@@ -186,6 +188,19 @@ export function CommandPalette() {
           keywords: `${channel.name} ${guild.name} channel ${isVoice ? 'voice' : 'text'}`,
         });
       });
+
+      // Space settings — only when the viewer can open them (not instance admin).
+      if (canAccessGuildSettingsSync(guild.id)) {
+        items.push({
+          id: `guild-settings-${guild.id}`,
+          label: 'Space settings',
+          sublabel: guild.name,
+          icon: <Settings size={16} />,
+          action: () => useUIStore.getState().setGuildSettingsId(guild.id),
+          category: 'Navigation',
+          keywords: `${guild.name} space settings server settings admin manage`,
+        });
+      }
 
       // Guild itself (navigate to first channel)
       items.push({
@@ -229,7 +244,7 @@ export function CommandPalette() {
       }
     }
     dmById.forEach(({ channel: dm, serverId }) => {
-      const recipientName = dm.recipient?.username || 'Direct Message';
+      const recipientName = dm.recipient ? displayName(dm.recipient) : 'Direct Message';
       items.push({
         id: `dm-${serverId}-${dm.id}`,
         label: recipientName,

@@ -12,44 +12,13 @@ fn header_opt(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Whether X-Forwarded-For may be trusted for this request. Only honored when
-/// proxy trust is explicitly enabled AND the connecting peer's IP is in the
-/// configured allowlist — otherwise a client could spoof its source IP by
-/// setting the header directly.
-fn proxy_peer_is_trusted(peer_ip: Option<&str>) -> bool {
-    let trust_proxy = std::env::var("PARACORD_TRUST_PROXY")
-        .ok()
-        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(false);
-    if !trust_proxy {
-        return false;
-    }
-    let Some(peer_ip) = peer_ip else {
-        return false;
-    };
-    std::env::var("PARACORD_TRUSTED_PROXY_IPS")
-        .ok()
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .any(|trusted| trusted == peer_ip)
-        })
-        .unwrap_or(false)
-}
-
-/// Resolve the client IP for logging: the first X-Forwarded-For hop when the
-/// peer is a trusted proxy, otherwise the raw peer address.
+/// Resolve a client address using the same trusted-proxy boundary as the
+/// request rate limiter and authentication guard.
 fn resolve_client_ip(headers: Option<&HeaderMap>, peer_ip: Option<&str>) -> Option<String> {
-    if proxy_peer_is_trusted(peer_ip) {
-        if let Some(forwarded) = headers.and_then(|h| header_opt(h, "x-forwarded-for")) {
-            return Some(forwarded);
-        }
-    }
-    peer_ip
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
+    let forwarded_for = headers
+        .and_then(|values| values.get("x-forwarded-for"))
+        .and_then(|value| value.to_str().ok());
+    paracord_util::client_ip::resolve_client_ip_from_env(peer_ip, forwarded_for)
 }
 
 fn request_metadata(

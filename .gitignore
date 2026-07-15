@@ -2,7 +2,11 @@
 /target/
 **/*.rs.bk
 
+# Local security-audit tooling/baseline snapshot (not part of the product)
+/security-audit/
+
 # Node / Client
+/node_modules/
 client/node_modules/
 client/dist/
 client/.vite/

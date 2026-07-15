@@ -23,6 +23,14 @@ vi.mock('../../stores/toastStore', () => ({
   },
 }));
 
+vi.mock('../../stores/channelStore', () => ({
+  useChannelStore: {
+    getState: () => ({
+      fetchChannels: vi.fn().mockResolvedValue(undefined),
+    }),
+  },
+}));
+
 describe('GuildOnboardingGate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -60,5 +68,28 @@ describe('GuildOnboardingGate', () => {
     await screen.findByRole('heading', { name: 'Welcome to QA Guild' });
     expect(screen.getByText('Read the rules and pick roles.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /complete onboarding/i })).toBeInTheDocument();
+  });
+
+  it('does not allow dismissing required rules onboarding', async () => {
+    mocks.getMyOnboardingState.mockResolvedValueOnce({
+      data: {
+        settings: {
+          welcome_title: 'Welcome',
+          rules_text: 'Be respectful.',
+          role_options: [],
+        },
+        member_state: {
+          accepted_rules: false,
+          selected_role_ids: [],
+          completed_at: null,
+        },
+      },
+    });
+
+    render(<GuildOnboardingGate guildId="guild-1" />);
+
+    await screen.findByRole('heading', { name: 'Welcome' });
+    expect(screen.queryByRole('button', { name: /dismiss onboarding/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^later$/i })).not.toBeInTheDocument();
   });
 });

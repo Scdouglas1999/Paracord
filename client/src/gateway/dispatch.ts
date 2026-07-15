@@ -1,5 +1,5 @@
 import { useGuildStore } from '../stores/guildStore';
-import { useChannelStore } from '../stores/channelStore';
+import { refreshGuildChannelVisibility, useChannelStore } from '../stores/channelStore';
 import { useMemberStore } from '../stores/memberStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useVoiceStore } from '../stores/voiceStore';
@@ -11,11 +11,14 @@ import { usePollStore } from '../stores/pollStore';
 import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useReadStateStore } from '../stores/readStateStore';
+import { useInteractionStore } from '../stores/interactionStore';
 import { hasUnlockedPrivateKey } from '../lib/accountSession';
 import { ensurePrekeysUploaded } from '../lib/signalPrekeys';
 import { GatewayEvents } from './events';
 import { sendNotification, isEnabled as notificationsEnabled } from '../lib/features/notifications';
 import type { Channel, Guild, Member, Message, Poll, Presence, User, VoiceState } from '../types';
+import type { Component } from '../types/components';
+import { InteractionCallbackType } from '../types/interactions';
 
 interface ReadyChannelPayload extends Partial<Channel> {
   id: string;
@@ -30,16 +33,38 @@ interface ReadyGuildPayload extends Partial<Guild> {
 
 type EmojiRef = string | { name?: string | null; id?: string | null };
 
-type GatewayDispatchData = Partial<Message> &
-  Partial<Guild> &
-  Partial<Channel> &
-  Partial<VoiceState> & {
+type InteractionCallbackPayload = {
+  interaction_id?: string;
+  application_id?: string;
+  /** Callback type (8 = autocomplete result, 9 = modal). Distinct from Channel.type. */
+  callback_type?: number;
+  channel_id?: string;
+  guild_id?: string;
+  data?: {
+    title?: string;
+    custom_id?: string;
+    components?: Component[];
+    choices?: { name: string; value: unknown }[];
+    content?: string;
+    flags?: number;
+  };
+};
+
+// Omit Channel/Message `type` — INTERACTION_CREATE reuses `type` for callback
+// kind (8/9), which is not assignable to ChannelType.
+type GatewayDispatchData = Omit<
+  Partial<Message> & Partial<Guild> & Partial<Channel> & Partial<VoiceState>,
+  'type'
+> &
+  InteractionCallbackPayload & {
     user?: User;
     guilds?: ReadyGuildPayload[];
     ids?: string[];
     message_id?: string;
     emoji?: EmojiRef;
     poll?: unknown;
+    /** Channel.type, Message.type, or INTERACTION_CREATE callback type. */
+    type?: number;
   };
 
 /**
@@ -182,6 +207,26 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       if (!data.channel_id || !data.id) break;
       useMessageStore.getState().addMessage(data.channel_id, data as Message);
       useChannelStore.getState().updateLastMessageId(data.channel_id, data.id);
+      // Slash / component responses arrive as MESSAGE_CREATE with an interaction
+      // payload. Clear the invoking client's pending/thinking state.
+      {
+        const interactionId = data.interaction?.id;
+        if (interactionId) {
+          const store = useInteractionStore.getState();
+          const isEmptyDeferred =
+            !(data.content && String(data.content).trim()) &&
+            !(data.components && data.components.length > 0);
+          if (isEmptyDeferred) {
+            store.handleInteractionResponse(interactionId, {
+              type: InteractionCallbackType.DeferredChannelMessageWithSource,
+            });
+          } else {
+            store.handleInteractionResponse(interactionId, {
+              type: InteractionCallbackType.ChannelMessageWithSource,
+            });
+          }
+        }
+      }
       // Keep the read-state cache live for mention badges between authoritative
       // refreshes: a message the user didn't author that mentions them — either
       // directly (<@id> / <@!id> in the content) or via @everyone — bumps the
@@ -227,6 +272,71 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
     case GatewayEvents.MESSAGE_UPDATE: {
       if (!data.channel_id || !data.id) break;
       useMessageStore.getState().updateMessage(data.channel_id, { ...data, id: data.id });
+      {
+        const store = useInteractionStore.getState();
+        const interactionId = data.interaction?.id;
+        if (interactionId) {
+          store.handleInteractionResponse(interactionId, {
+            type: InteractionCallbackType.UpdateMessage,
+          });
+        } else {
+          // Deferred slash responses are edited without an interaction payload on
+          // MESSAGE_UPDATE — clear pending/thinking for this channel.
+          for (const [id, interaction] of store.pendingInteractions) {
+            if (interaction.channel_id === data.channel_id) {
+              store.handleInteractionResponse(id, {
+                type: InteractionCallbackType.UpdateMessage,
+              });
+            }
+          }
+        }
+      }
+      break;
+    }
+    case GatewayEvents.INTERACTION_CREATE: {
+      // Bot callbacks for Modal (9) and Autocomplete (8) are dispatched only to
+      // the invoking user. Wire them into the interaction store.
+      // Prefer `callback_type` (client-normalized); fall back to numeric `type`
+      // when the payload is the raw server echo (which uses `type` for the
+      // callback kind — distinct from Channel.type on other events).
+      const interactionId = data.interaction_id;
+      if (!interactionId) break;
+      const rawType = data.callback_type ?? data.type;
+      const callbackType =
+        typeof rawType === 'number' ? (rawType as InteractionCallbackType) : undefined;
+      if (callbackType === InteractionCallbackType.Modal && data.data?.title && data.data.custom_id) {
+        const store = useInteractionStore.getState();
+        const pending = store.pendingInteractions.get(interactionId);
+        // Prefer gateway stamp (from interaction token), then pending invoke.
+        const channelId = data.channel_id ?? pending?.channel_id;
+        const guildId = data.guild_id ?? pending?.guild_id;
+        const applicationId = data.application_id ?? pending?.application_id;
+        store.handleInteractionResponse(interactionId, {
+          type: InteractionCallbackType.Modal,
+          data: {
+            title: data.data.title,
+            custom_id: data.data.custom_id,
+            components: data.data.components,
+          },
+        });
+        // Stamp channel/guild/application so ModalSubmit can POST /interactions.
+        const modal = useInteractionStore.getState().activeModal;
+        if (modal) {
+          store.openModal({
+            ...modal,
+            channelId: modal.channelId ?? channelId,
+            guildId: modal.guildId ?? guildId,
+            applicationId: modal.applicationId ?? applicationId,
+          });
+        }
+      } else if (callbackType === InteractionCallbackType.ApplicationCommandAutocompleteResult) {
+        useInteractionStore.getState().handleInteractionResponse(interactionId, {
+          type: InteractionCallbackType.ApplicationCommandAutocompleteResult,
+          data: {
+            choices: data.data?.choices,
+          },
+        });
+      }
       break;
     }
     case GatewayEvents.MESSAGE_DELETE:
@@ -402,16 +512,18 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       break;
 
     case GatewayEvents.USER_UPDATE: {
-      // USER_UPDATE fans out for every guild member. Only react when it targets
-      // the current user, and apply the payload directly when present to avoid
-      // a /users/@me round-trip on each member's update.
+      // Profile identity is projected into member lists, cached messages,
+      // relationships, and DM titles. Keep all of them live from one event.
+      if (!data.user?.id) break;
       const currentUserId = useAuthStore.getState().user?.id;
-      if (!currentUserId || data.user?.id !== currentUserId) break;
-      if (data.user) {
-        useAuthStore.setState({ user: data.user });
-      } else {
-        void useAuthStore.getState().fetchUser();
+      if (currentUserId === data.user.id) {
+        const current = useAuthStore.getState().user;
+        useAuthStore.setState({ user: current ? { ...current, ...data.user } : data.user });
       }
+      useMemberStore.getState().updateUserIdentity(data.user);
+      useMessageStore.getState().updateUserIdentity(data.user);
+      void useRelationshipStore.getState().fetchRelationships();
+      void useChannelStore.getState().loadAllDmChannels();
       break;
     }
 
@@ -436,9 +548,72 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       }));
       break;
 
+    case GatewayEvents.GUILD_ROLE_CREATE:
+    case GatewayEvents.GUILD_ROLE_UPDATE:
+    case GatewayEvents.GUILD_ROLE_DELETE:
+      window.dispatchEvent(new CustomEvent('paracord:roles-changed', {
+        detail: { guild_id: data.guild_id },
+      }));
+      break;
+
+    case GatewayEvents.GUILD_BAN_ADD:
+    case GatewayEvents.GUILD_BAN_REMOVE:
+      window.dispatchEvent(new CustomEvent('paracord:bans-changed', {
+        detail: { guild_id: data.guild_id },
+      }));
+      break;
+
+    case GatewayEvents.INVITE_CREATE:
+    case GatewayEvents.INVITE_DELETE:
+      window.dispatchEvent(new CustomEvent('paracord:invites-changed', {
+        detail: { guild_id: data.guild_id },
+      }));
+      break;
+
+    case GatewayEvents.GUILD_STICKERS_UPDATE:
+      window.dispatchEvent(new CustomEvent('paracord:stickers-changed', {
+        detail: { guild_id: data.guild_id },
+      }));
+      break;
+
+    case GatewayEvents.STAGE_INSTANCE_CREATE:
+    case GatewayEvents.STAGE_INSTANCE_UPDATE:
+    case GatewayEvents.STAGE_INSTANCE_DELETE:
+      window.dispatchEvent(new CustomEvent('paracord:stage-instance-changed', {
+        detail: {
+          guild_id: data.guild_id,
+          channel_id: data.channel_id,
+        },
+      }));
+      break;
+
+    case GatewayEvents.GUILD_MEMBER_XP_UPDATE:
+      if (!data.guild_id) break;
+      window.dispatchEvent(
+        new CustomEvent('paracord:guild-member-xp-update', {
+          detail: {
+            guild_id: data.guild_id,
+            user_id: data.user_id,
+            xp: (data as { xp?: number }).xp,
+            level: (data as { level?: number }).level,
+          },
+        }),
+      );
+      {
+        // Level/XP activity can unlock progressive channels for the local user.
+        const selfUserId =
+          useServerListStore.getState().getServer(serverId)?.userId ||
+          useAuthStore.getState().user?.id ||
+          '';
+        const eventUserId = (data as { user_id?: string }).user_id;
+        if (selfUserId && eventUserId && eventUserId === selfUserId) {
+          refreshGuildChannelVisibility(data.guild_id);
+        }
+      }
+      break;
+
     case GatewayEvents.SERVER_RESTART:
       useUIStore.getState().setServerRestarting(true);
       break;
   }
 }
-

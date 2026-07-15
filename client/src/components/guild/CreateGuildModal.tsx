@@ -45,7 +45,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
   const user = useAuthStore(s => s.user);
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('create');
-  const [serverName, setServerName] = useState(`${user?.username || 'My'}'s server`);
+  const [serverName, setServerName] = useState(`${user?.username || 'My'}'s space`);
   const [inviteCode, setInviteCode] = useState('');
   const [iconPreview, setIconPreview] = useState<string | null>(null);
   const [iconDataUrl, setIconDataUrl] = useState<string | null>(null);
@@ -123,7 +123,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
       const guild = await useGuildStore.getState().createGuild(serverName.trim(), iconDataUrl || undefined);
       await navigateToGuild(guild);
     } catch (err: unknown) {
-      setError(extractApiError(err) || 'Failed to create server');
+      setError(extractApiError(err) || 'Failed to create space');
     } finally {
       setLoading(false);
     }
@@ -155,7 +155,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
         navigate(`/app`);
       }
     } catch (err: unknown) {
-      setError(extractApiError(err) || 'Failed to join server');
+      setError(extractApiError(err) || 'Failed to join space');
     } finally {
       setLoading(false);
     }
@@ -172,7 +172,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
       useGuildStore.getState().addGuild(guild);
       await navigateToGuild(guild);
     } catch (err: unknown) {
-      setError(extractApiError(err) || 'Failed to create server from template');
+      setError(extractApiError(err) || 'Failed to create space from template');
     } finally {
       setLoading(false);
     }
@@ -186,17 +186,17 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
     }
   };
 
-  const tabTitle = tab === 'create' ? 'Create a server' : tab === 'join' ? 'Join a server' : 'Start from a template';
+  const tabTitle = tab === 'create' ? 'Create a space' : tab === 'join' ? 'Join a space' : 'Start from a template';
   const tabSubtitle =
     tab === 'create'
-      ? 'Your server is where you and your people hang out — give it a name and make it yours.'
+      ? 'Your space is where you and your people hang out — give it a name and make it yours.'
       : tab === 'join'
         ? 'Have an invite? Drop it in below to land in an existing community.'
         : 'Skip the setup — pick a ready-made structure and rename it in one step.';
 
   const footerAction =
     tab === 'create' ? handleCreate : tab === 'join' ? handleJoin : handleApplyTemplate;
-  const footerLabel = tab === 'create' ? 'Create' : tab === 'join' ? 'Join Server' : 'Create from Template';
+  const footerLabel = tab === 'create' ? 'Create' : tab === 'join' ? 'Join space' : 'Create from Template';
 
   return (
     <Modal
@@ -256,7 +256,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                 >
                   <input type="file" accept="image/*" className="hidden" onChange={handleIconChange} />
                   {iconPreview ? (
-                    <img src={iconPreview} alt="Server icon preview" className="h-full w-full object-cover" />
+                    <img src={iconPreview} alt="Space icon preview" className="h-full w-full object-cover" />
                   ) : (
                     <>
                       <Upload size={20} className="text-text-muted transition-colors group-hover:text-accent-primary" />
@@ -269,12 +269,13 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
               </div>
 
               <label className="block">
-                <FieldLabel>Server Name</FieldLabel>
+                <FieldLabel>Space name</FieldLabel>
                 <input
                   type="text"
                   value={serverName}
                   onChange={(e) => setServerName(e.target.value)}
                   className="input-field"
+                  aria-label="Space name"
                 />
               </label>
             </div>
@@ -307,7 +308,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                 <EmptyState
                   icon={<LayoutTemplate size={20} />}
                   title="No templates yet"
-                  description="Templates come from existing servers — open a server's settings and save its structure to reuse it here."
+                  description="Templates come from existing spaces — open a space's settings and save its structure to reuse it here."
                 />
               ) : !selectedTemplate ? (
                 <div className="max-h-60 space-y-2 overflow-y-auto">
@@ -319,7 +320,7 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                       aria-label={`Use template ${t.name}`}
                       onClick={() => {
                         setSelectedTemplate(t);
-                        setTemplateGuildName(`${user?.username || 'My'}'s server`);
+                        setTemplateGuildName(`${user?.username || 'My'}'s space`);
                         setError('');
                       }}
                     >
@@ -389,10 +390,10 @@ export function CreateGuildModal({ onClose }: CreateGuildModalProps) {
                   </div>
 
                   <label className="block">
-                    <FieldLabel>Server Name</FieldLabel>
+                    <FieldLabel>Space name</FieldLabel>
                     <input
                       type="text"
-                      aria-label="Template server name"
+                      aria-label="Template space name"
                       value={templateGuildName}
                       onChange={(e) => setTemplateGuildName(e.target.value)}
                       className="input-field"

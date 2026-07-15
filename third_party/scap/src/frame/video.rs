@@ -75,6 +75,37 @@ pub enum FrameType {
     BGRAFrame,
 }
 
+/// A captured frame kept as a GPU-resident D3D11 texture instead of a CPU BGRA
+/// readback (spec §7). Delivered on the zero-copy WGC→MFT route so the WGC output
+/// feeds an MFT hardware encoder with no PCIe round trip.
+///
+/// OWNERSHIP / LIFETIME: `texture` is an encoder-owned copy (a fresh
+/// `CreateTexture2D` allocation the WGC pool texture was blitted into inside the
+/// capture callback), NOT the recycled WGC pool texture. `device` is a COM-ref
+/// clone of the texture's owning `ID3D11Device`; it is the SAME device the MFT
+/// binds via `IMFDXGIDeviceManager` (spec §7 "shared device"). The COM handles
+/// are moved (never shared) across the capture→encode channel, and the device has
+/// D3D11 multithread protection enabled before the first frame — see the producer
+/// in `capturer::engine::win`.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug)]
+pub struct D3D11TextureFrame {
+    pub display_time: SystemTime,
+    pub width: i32,
+    pub height: i32,
+    /// Encoder-owned BGRA (`DXGI_FORMAT_B8G8R8A8_UNORM`) texture, subresource 0.
+    pub texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    /// Shared device the texture lives on; also the device the MFT binds to.
+    pub device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
+}
+
+// SAFETY: the frame carries only a D3D11 texture and its device. With multithread
+// protection enabled on the device before the first frame is produced, both may
+// be referenced from the encoder thread while the device context is driven from
+// the MFT's threads. The frame is moved, never shared, across the channel.
+#[cfg(target_os = "windows")]
+unsafe impl Send for D3D11TextureFrame {}
+
 #[derive(Debug, Clone)]
 pub enum VideoFrame {
     YUVFrame(YUVFrame),
@@ -84,6 +115,11 @@ pub enum VideoFrame {
     BGRx(BGRxFrame),
     BGR0(BGRFrame),
     BGRA(BGRAFrame),
+    /// Windows zero-copy WGC→MFT route (spec §7): a GPU-resident D3D11 texture
+    /// instead of a CPU readback. Produced only when `Options::prefer_gpu_texture`
+    /// selects the GPU capture route.
+    #[cfg(target_os = "windows")]
+    D3D11Texture(D3D11TextureFrame),
 }
 
 pub enum FrameData<'a> {

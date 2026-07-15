@@ -37,7 +37,12 @@ export function CallDock({ collapsed = false }: CallDockProps) {
         data-testid="call-dock-collapsed"
         aria-label="In a call — go to voice channel"
         onClick={() => {
-          if (guildId && channelId) navigate(`/app/guilds/${guildId}/channels/${channelId}`);
+          if (!channelId) return;
+          if (guildId === 'dm') {
+            navigate(`/app/dms/${channelId}`);
+          } else if (guildId) {
+            navigate(`/app/guilds/${guildId}/channels/${channelId}`);
+          }
         }}
         className="relative flex h-11 w-11 items-center justify-center rounded-md bg-accent-tint text-accent-primary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-tint-strong focus-visible:shadow-[var(--focus-ring)]"
       >

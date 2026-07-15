@@ -19,8 +19,11 @@ import { useChannelStore } from '../stores/channelStore';
 import { useMessageStore } from '../stores/messageStore';
 import { useAuthStore } from '../stores/authStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useRelationshipStore } from '../stores/relationshipStore';
+import { useInteractionStore } from '../stores/interactionStore';
+import { InteractionCallbackType, InteractionType } from '../types/interactions';
 import * as notifications from '../lib/features/notifications';
-import type { User } from '../types';
+import type { Message, User } from '../types';
 
 const SERVER = '__test_server__';
 
@@ -189,6 +192,11 @@ describe('dispatch reaction emoji keying', () => {
 });
 
 describe('dispatch USER_UPDATE self-vs-other', () => {
+  beforeEach(() => {
+    vi.spyOn(useRelationshipStore.getState(), 'fetchRelationships').mockResolvedValue();
+    vi.spyOn(useChannelStore.getState(), 'loadAllDmChannels').mockResolvedValue();
+  });
+
   it('applies the payload directly when it targets the current user', () => {
     useAuthStore.setState({ user: { id: 'me', username: 'old' } as User });
     const fetchSpy = vi.spyOn(useAuthStore.getState(), 'fetchUser');
@@ -200,15 +208,194 @@ describe('dispatch USER_UPDATE self-vs-other', () => {
     fetchSpy.mockRestore();
   });
 
-  it('ignores USER_UPDATE for another user (no refetch, no state change)', () => {
+  it('updates cached authors for another user without replacing the signed-in user', () => {
     useAuthStore.setState({ user: { id: 'me', username: 'me-name' } as User });
-    const fetchSpy = vi.spyOn(useAuthStore.getState(), 'fetchUser');
+    useMessageStore.setState({
+      messages: {
+        ch1: [{
+          id: 'm1',
+          channel_id: 'ch1',
+          author: { id: 'someone-else', username: 'them', discriminator: '0' },
+        } as Message],
+      },
+    });
     dispatchGatewayEvent(SERVER, GatewayEvents.USER_UPDATE, {
-      user: { id: 'someone-else', username: 'them' } as User,
+      user: { id: 'someone-else', username: 'them', display_name: 'Visible Name' } as User,
     });
     expect(useAuthStore.getState().user?.username).toBe('me-name');
-    expect(fetchSpy).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
+    expect(useMessageStore.getState().messages.ch1[0].author.display_name).toBe('Visible Name');
+  });
+});
+
+describe('dispatch role/ban/sticker/stage events', () => {
+  it('emits paracord:roles-changed for GUILD_ROLE_*', () => {
+    const handler = vi.fn();
+    window.addEventListener('paracord:roles-changed', handler);
+    dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_ROLE_CREATE, { guild_id: 'g1' });
+    expect(handler).toHaveBeenCalled();
+    const detail = (handler.mock.calls[0][0] as CustomEvent).detail;
+    expect(detail).toEqual({ guild_id: 'g1' });
+    window.removeEventListener('paracord:roles-changed', handler);
+  });
+
+  it('emits paracord:bans-changed for GUILD_BAN_*', () => {
+    const handler = vi.fn();
+    window.addEventListener('paracord:bans-changed', handler);
+    dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_BAN_ADD, { guild_id: 'g1' });
+    expect(handler).toHaveBeenCalled();
+    window.removeEventListener('paracord:bans-changed', handler);
+  });
+
+  it('emits paracord:stickers-changed for GUILD_STICKERS_UPDATE', () => {
+    const handler = vi.fn();
+    window.addEventListener('paracord:stickers-changed', handler);
+    dispatchGatewayEvent(SERVER, GatewayEvents.GUILD_STICKERS_UPDATE, { guild_id: 'g1' });
+    expect(handler).toHaveBeenCalled();
+    window.removeEventListener('paracord:stickers-changed', handler);
+  });
+
+  it('emits paracord:stage-instance-changed for STAGE_INSTANCE_*', () => {
+    const handler = vi.fn();
+    window.addEventListener('paracord:stage-instance-changed', handler);
+    dispatchGatewayEvent(SERVER, GatewayEvents.STAGE_INSTANCE_CREATE, {
+      guild_id: 'g1',
+      channel_id: 'c1',
+    });
+    expect(handler).toHaveBeenCalled();
+    const detail = (handler.mock.calls[0][0] as CustomEvent).detail;
+    expect(detail).toEqual({ guild_id: 'g1', channel_id: 'c1' });
+    window.removeEventListener('paracord:stage-instance-changed', handler);
+  });
+
+  it('emits paracord:invites-changed for INVITE_*', () => {
+    const handler = vi.fn();
+    window.addEventListener('paracord:invites-changed', handler);
+    dispatchGatewayEvent(SERVER, GatewayEvents.INVITE_DELETE, { guild_id: 'g1' });
+    expect(handler).toHaveBeenCalled();
+    window.removeEventListener('paracord:invites-changed', handler);
+  });
+});
+
+describe('dispatch INTERACTION_CREATE / slash feedback', () => {
+  beforeEach(() => {
+    useInteractionStore.setState({
+      pendingInteractions: new Map(),
+      thinkingInteractions: new Set(),
+      activeModal: null,
+      autocompleteChoices: [],
+      autocompleteInteractionId: null,
+    });
+  });
+
+  it('marks deferred empty interaction responses as thinking', () => {
+    useInteractionStore.getState().addPendingInteraction({
+      id: 'ix1',
+      application_id: 'app1',
+      type: InteractionType.ApplicationCommand,
+      channel_id: 'ch1',
+      token: 'tok',
+      version: 1,
+    });
+    dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, {
+      id: 'm-deferred',
+      channel_id: 'ch1',
+      content: '',
+      author: { id: 'bot', username: 'Bot', discriminator: '0000', bot: true },
+      interaction: { id: 'ix1', type: 2, name: 'ping' },
+    } as Partial<Message>);
+    expect(useInteractionStore.getState().thinkingInteractions.has('ix1')).toBe(true);
+  });
+
+  it('clears pending state when a filled interaction message arrives', () => {
+    useInteractionStore.getState().addPendingInteraction({
+      id: 'ix2',
+      application_id: 'app1',
+      type: InteractionType.ApplicationCommand,
+      channel_id: 'ch1',
+      token: 'tok',
+      version: 1,
+    });
+    useInteractionStore.getState().handleInteractionResponse('ix2', {
+      type: InteractionCallbackType.DeferredChannelMessageWithSource,
+    });
+    dispatchGatewayEvent(SERVER, GatewayEvents.MESSAGE_CREATE, {
+      id: 'm-done',
+      channel_id: 'ch1',
+      content: 'pong',
+      author: { id: 'bot', username: 'Bot', discriminator: '0000', bot: true },
+      interaction: { id: 'ix2', type: 2, name: 'ping' },
+    } as Partial<Message>);
+    expect(useInteractionStore.getState().pendingInteractions.has('ix2')).toBe(false);
+    expect(useInteractionStore.getState().thinkingInteractions.has('ix2')).toBe(false);
+  });
+
+  it('opens a modal from INTERACTION_CREATE callback type 9', () => {
+    dispatchGatewayEvent(SERVER, GatewayEvents.INTERACTION_CREATE, {
+      interaction_id: 'ix3',
+      type: InteractionCallbackType.Modal,
+      channel_id: 'ch1',
+      guild_id: 'g1',
+      application_id: 'app1',
+      data: {
+        title: 'Report',
+        custom_id: 'report_modal',
+        components: [],
+      },
+    });
+    expect(useInteractionStore.getState().activeModal).toMatchObject({
+      interactionId: 'ix3',
+      title: 'Report',
+      customId: 'report_modal',
+      components: [],
+      channelId: 'ch1',
+      guildId: 'g1',
+      applicationId: 'app1',
+    });
+  });
+
+  it('stores autocomplete choices from INTERACTION_CREATE callback type 8', () => {
+    dispatchGatewayEvent(SERVER, GatewayEvents.INTERACTION_CREATE, {
+      interaction_id: 'ix4',
+      type: InteractionCallbackType.ApplicationCommandAutocompleteResult,
+      data: {
+        choices: [
+          { name: 'Alpha', value: 'alpha' },
+          { name: 'Beta', value: 'beta' },
+        ],
+      },
+    });
+    expect(useInteractionStore.getState().autocompleteChoices).toEqual([
+      { name: 'Alpha', value: 'alpha' },
+      { name: 'Beta', value: 'beta' },
+    ]);
+    expect(useInteractionStore.getState().autocompleteInteractionId).toBe('ix4');
+  });
+
+  it('stamps modal channel/guild from pending interaction when gateway omits them', () => {
+    useInteractionStore.getState().addPendingInteraction({
+      id: 'ix5',
+      application_id: 'app5',
+      type: InteractionType.MessageComponent,
+      channel_id: 'ch5',
+      guild_id: 'g5',
+      token: 'tok',
+      version: 1,
+    });
+    dispatchGatewayEvent(SERVER, GatewayEvents.INTERACTION_CREATE, {
+      interaction_id: 'ix5',
+      type: InteractionCallbackType.Modal,
+      data: {
+        title: 'Edit',
+        custom_id: 'edit_modal',
+        components: [],
+      },
+    });
+    expect(useInteractionStore.getState().activeModal).toMatchObject({
+      interactionId: 'ix5',
+      channelId: 'ch5',
+      guildId: 'g5',
+      applicationId: 'app5',
+    });
   });
 });
 

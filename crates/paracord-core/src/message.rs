@@ -355,7 +355,13 @@ pub async fn edit_message_with_options(
         .await?
         .ok_or(CoreError::NotFound)?;
 
-    if channel.guild_id().is_some() {
+    // For the non-author (moderator) case, decide MANAGE_MESSAGES authority via
+    // compute_channel_permissions so channel permission overwrites are honored.
+    // Trusting base role bits here would let a role denied MANAGE_MESSAGES on this
+    // channel still edit other users' messages. Mirrors delete_message.
+    let mut can_manage = false;
+
+    if let Some(guild_id) = channel.guild_id() {
         if dm_e2ee.is_some() {
             return Err(CoreError::BadRequest(
                 "DM E2EE payloads are only valid for direct messages".into(),
@@ -364,6 +370,20 @@ pub async fn edit_message_with_options(
         paracord_util::validation::validate_message_content(content).map_err(|_| {
             CoreError::BadRequest("Content must be between 1 and 2000 characters".into())
         })?;
+        if msg.author_id != user_id {
+            let guild = paracord_db::guilds::get_guild(pool, guild_id)
+                .await?
+                .ok_or(CoreError::NotFound)?;
+            let perms = permissions::compute_channel_permissions(
+                pool,
+                guild_id,
+                channel_id,
+                guild.owner_id,
+                user_id,
+            )
+            .await?;
+            can_manage = perms.contains(Permissions::MANAGE_MESSAGES);
+        }
     } else {
         if !paracord_db::dms::is_dm_recipient(pool, channel_id, user_id).await? {
             return Err(CoreError::Forbidden);
@@ -402,6 +422,7 @@ pub async fn edit_message_with_options(
         &stored_content,
         nonce.as_deref(),
         flags,
+        can_manage,
     )
     .await?;
     if let Some(updated) = updated {
@@ -435,9 +456,35 @@ pub async fn delete_message(
         return Err(CoreError::NotFound);
     }
 
-    let deleted =
-        paracord_db::messages::delete_message_authorized(pool, message_id, channel_id, user_id)
+    // For the non-author (moderator) case, decide MANAGE_MESSAGES authority via
+    // compute_channel_permissions so channel permission overwrites are honored.
+    // Trusting base role bits here would let a role denied MANAGE_MESSAGES on this
+    // channel still delete other users' messages.
+    let mut can_manage = false;
+    if msg.author_id != user_id {
+        if let Some(guild_id) = paracord_db::channels::get_channel(pool, channel_id)
+            .await?
+            .and_then(|c| c.guild_id())
+        {
+            let guild = paracord_db::guilds::get_guild(pool, guild_id)
+                .await?
+                .ok_or(CoreError::NotFound)?;
+            let perms = permissions::compute_channel_permissions(
+                pool,
+                guild_id,
+                channel_id,
+                guild.owner_id,
+                user_id,
+            )
             .await?;
+            can_manage = perms.contains(Permissions::MANAGE_MESSAGES);
+        }
+    }
+
+    let deleted = paracord_db::messages::delete_message_authorized(
+        pool, message_id, channel_id, user_id, can_manage,
+    )
+    .await?;
     if deleted {
         return Ok(());
     }

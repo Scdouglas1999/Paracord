@@ -1,9 +1,17 @@
 import { render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NeedsYou } from './NeedsYou';
 import { usePresenceStore } from '../../../stores/presenceStore';
+import { useVoiceStore } from '../../../stores/voiceStore';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
 import type { FriendRequestEntry } from '../../../hooks/useUnifiedConversations';
+import type { VoiceState } from '../../../types/index';
+import type { ReactElement } from 'react';
+
+function renderNeedsYou(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 function makeEntry(over: Partial<ConversationEntry> & { key: string }): ConversationEntry {
   return {
@@ -31,6 +39,7 @@ function makeRequest(over: Partial<FriendRequestEntry> & { userId: string }): Fr
 
 beforeEach(() => {
   usePresenceStore.setState({ presences: new Map(), presenceOrder: new Map() });
+  useVoiceStore.setState({ channelParticipants: new Map(), watchedStreamerId: null });
 });
 
 describe('NeedsYou', () => {
@@ -39,7 +48,7 @@ describe('NeedsYou', () => {
     const entries = [makeEntry({ key: 'a:1', title: 'urgent', mentionCount: 2 })];
     const onOpenRequest = vi.fn();
 
-    render(
+    renderNeedsYou(
       <NeedsYou
         entries={entries}
         requests={requests}
@@ -64,19 +73,73 @@ describe('NeedsYou', () => {
   });
 
   it('keeps the empty state only when there are neither requests nor conversations', () => {
-    const { rerender } = render(<NeedsYou entries={[]} requests={[]} onSelect={vi.fn()} />);
+    const { rerender } = renderNeedsYou(<NeedsYou entries={[]} requests={[]} onSelect={vi.fn()} />);
     expect(screen.getByText("You're all caught up")).toBeInTheDocument();
     expect(screen.queryByRole('option')).not.toBeInTheDocument();
 
     // A lone friend request replaces the empty state with a request row.
     rerender(
-      <NeedsYou
-        entries={[]}
-        requests={[makeRequest({ userId: 'u1', username: 'Bo' })]}
-        onSelect={vi.fn()}
-      />,
+      <MemoryRouter>
+        <NeedsYou
+          entries={[]}
+          requests={[makeRequest({ userId: 'u1', username: 'Bo' })]}
+          onSelect={vi.fn()}
+        />
+      </MemoryRouter>,
     );
     expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Bo sent a friend request/ })).toBeInTheDocument();
+  });
+
+  it('signals attention entries that continue below the six-row shortlist', () => {
+    renderNeedsYou(
+      <NeedsYou
+        entries={[makeEntry({ key: 'a:1', title: 'urgent' })]}
+        overflowCount={4}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('+4 below')).toBeInTheDocument();
+  });
+
+  it('nests voice occupants under voice conversation rows', () => {
+    const channelParticipants = new Map<string, VoiceState[]>([
+      [
+        'voice-1',
+        [
+          {
+            user_id: 'user-2',
+            session_id: 's1',
+            username: 'Streamer',
+            deaf: false,
+            mute: false,
+            self_deaf: false,
+            self_mute: false,
+            self_stream: true,
+            self_video: false,
+            suppress: false,
+          },
+        ],
+      ],
+    ]);
+    useVoiceStore.setState({ channelParticipants });
+
+    renderNeedsYou(
+      <NeedsYou
+        entries={[
+          makeEntry({
+            key: 'g1:voice-1',
+            channelId: 'voice-1',
+            kind: 'voice',
+            title: 'Lounge',
+            hasVoiceActivity: true,
+          }),
+        ]}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: "Watch Streamer's stream" })).toBeInTheDocument();
   });
 });

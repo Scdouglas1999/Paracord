@@ -32,6 +32,9 @@ export function useFocusTrap(
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && onClose) {
         e.preventDefault();
+        // Stop other shell Escape handlers (TopBar, keyboard nav) from also
+        // collapsing a lower layer on the same keypress.
+        e.stopPropagation();
         onClose();
         return;
       }

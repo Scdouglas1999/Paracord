@@ -193,6 +193,24 @@ describe('readStateStore.refresh — per-server fan-out', () => {
     expect(useReadStateStore.getState().getReadStateMap('srv-b')).toEqual({ b1: rs('b1', 'old') });
   });
 
+  it('does not let a stale refresh overwrite a read made while it was in flight', async () => {
+    setActive('srv-a', [server('srv-a')]);
+    let resolveFetch!: (value: unknown) => void;
+    mockGetReadStates.mockReturnValueOnce(
+      new Promise<any>((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    useReadStateStore.getState().setAll([rs('c1', 'm1', 2)], 'srv-a');
+
+    const refresh = useReadStateStore.getState().refresh();
+    useReadStateStore.getState().markRead('srv-a', 'c1', 'm9');
+    resolveFetch({ data: [rs('c1', 'm1', 2)] });
+    await refresh;
+
+    expect(useReadStateStore.getState().getReadState('srv-a', 'c1')).toEqual(rs('c1', 'm9', 0));
+  });
+
   it('skips disconnected servers and servers without an API client', async () => {
     setActive('srv-a', [server('srv-a'), server('srv-b', false), server('srv-c')]);
     mockGetReadStates.mockResolvedValue({ data: [] } as never);

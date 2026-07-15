@@ -36,6 +36,7 @@ pub mod reactions;
 pub mod read_states;
 pub mod relationships;
 pub mod roles;
+pub mod saved_messages;
 pub mod scheduled_events;
 pub mod scheduled_messages;
 pub mod security_events;

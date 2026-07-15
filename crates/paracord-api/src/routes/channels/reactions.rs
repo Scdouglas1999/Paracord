@@ -21,6 +21,14 @@ pub async fn add_reaction(
     )
     .await?;
 
+    let message = paracord_db::messages::get_message(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if message.channel_id != channel_id {
+        return Err(ApiError::NotFound);
+    }
+
     paracord_db::reactions::add_reaction(&state.db, message_id, auth.user_id, &emoji, None)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -82,6 +90,14 @@ pub async fn remove_reaction(
         &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
     )
     .await?;
+
+    let message = paracord_db::messages::get_message(&state.db, message_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if message.channel_id != channel_id {
+        return Err(ApiError::NotFound);
+    }
 
     paracord_db::reactions::remove_reaction(&state.db, message_id, auth.user_id, &emoji)
         .await

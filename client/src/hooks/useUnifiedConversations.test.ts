@@ -123,8 +123,9 @@ describe('useUnifiedConversations — needs-you scoring', () => {
     // 'v' has a live occupant.
     useVoiceStore.setState({ channelParticipants: new Map([['v', [{} as VoiceState]]]) });
 
-    const { needsYou } = run();
+    const { needsYou, needsYouOverflowCount } = run();
     expect(needsYou).toHaveLength(6);
+    expect(needsYouOverflowCount).toBe(1);
     expect(needsYou[0].channelId).toBe('m'); // mention tier first
     expect(needsYou[1].channelId).toBe('d'); // DM unread
     expect(needsYou[2].channelId).toBe('t'); // thread reply

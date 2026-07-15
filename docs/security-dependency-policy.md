@@ -23,5 +23,10 @@
 
 ## Current Exceptions
 - `RUSTSEC-2023-0071` (`rsa` via `sqlx-mysql` in sqlx macro internals, SQLite-only deployment path).
+- `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` (`quick-xml 0.37.5` through the
+  Tauri Windows notification helper). The reachable code uses only
+  `quick_xml::escape` to construct outbound toast XML, not the vulnerable
+  `Reader`/`NsReader` parsing APIs. Re-review by 2026-08-10.
 
-Review date: **2026-06-30**.
+Review dates are tracked per exception in `.cargo/audit.toml` and enforced by
+`scripts/check_audit_exceptions.py`.

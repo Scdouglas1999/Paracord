@@ -154,11 +154,22 @@ vi.mock('../../stores/toastStore', () => ({
 vi.mock('../../api/channels', () => ({
   channelApi: {
     updateReadState: vi.fn().mockResolvedValue({ data: {} }),
+    updateReadStateForServer: vi.fn().mockResolvedValue({ data: {} }),
     getThreads: vi.fn().mockResolvedValue({ data: [] }),
     getArchivedThreads: vi.fn().mockResolvedValue({ data: [] }),
     getEditHistory: vi.fn().mockResolvedValue({ data: [] }),
     bulkDeleteMessages: vi.fn().mockResolvedValue({ data: {} }),
     createThread: vi.fn().mockResolvedValue({ data: {} }),
+    getOverwrites: vi.fn().mockResolvedValue({ data: [] }),
+    deanonymizeMessage: vi.fn().mockResolvedValue({
+      data: {
+        message_id: 'msg-1',
+        channel_id: 'ch1',
+        user_id: 'real-user',
+        alias: 'Anonymous User',
+        user: { id: 'real-user', username: 'alice', discriminator: '0001' },
+      },
+    }),
   },
 }));
 
@@ -319,5 +330,25 @@ describe('MessageList anonymous and disappearing message display', () => {
 
     expect(await screen.findByRole('button', { name: 'unsafe.png' })).toBeInTheDocument();
     expect(container.querySelector('img[src="//evil.example/unsafe.png"]')).toBeNull();
+  });
+
+  it('offers Reveal Author when can_deanonymize is true', async () => {
+    const user = userEvent.setup();
+    mocks.permissionsState.isAdmin = true;
+
+    render(
+      <MemoryRouter>
+        <MessageList channelId="ch1" />
+      </MemoryRouter>,
+    );
+
+    fireEvent.contextMenu(await screen.findByRole('article', { name: /Anonymous User/ }), {
+      clientX: 16,
+      clientY: 16,
+    });
+    await user.click(await screen.findByRole('menuitem', { name: /Reveal Author/ }));
+
+    expect(await screen.findByText(/Real author:/)).toBeInTheDocument();
+    expect(screen.getByText(/alice/)).toBeInTheDocument();
   });
 });

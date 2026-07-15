@@ -76,6 +76,12 @@ export function invalidateGuildPermissionCache(guildId?: string) {
   rolePermissionCache.clear();
 }
 
+/** Read-only snapshot of cached role → permission bits for a guild, if loaded. */
+export function getCachedRolePermissions(guildId: string): Map<string, bigint> | null {
+  const cached = rolePermissionCache.get(guildId);
+  return cached ? new Map(cached) : null;
+}
+
 function getUserIdFromToken(token: string | null): string | null {
   if (!token) return null;
   const parts = token.split('.');

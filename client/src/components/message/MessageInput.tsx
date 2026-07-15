@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Plus, Smile, Send, X, FileText, BarChart3, PlusCircle, MinusCircle, Image, Clock3, EyeOff, Type, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -9,22 +9,22 @@ import { useMemberStore } from '../../stores/memberStore';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useTyping } from '../../hooks/useTyping';
 import { MAX_MESSAGE_LENGTH, SCHEDULED_MESSAGE_MIN_LEAD_MS } from '../../lib/constants';
-import { EmojiPicker } from '../ui/EmojiPicker';
 import { channelApi } from '../../api/channels';
 import type { ChannelFeatureSettings } from '../../api/channels';
 import { usePollStore } from '../../stores/pollStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { MarkdownToolbar, applyMarkdownToolbarAction, resolveMarkdownShortcut } from './MarkdownToolbar';
-import { GifPicker } from './GifPicker';
-import { StickerPicker } from './StickerPicker';
 import { SlashCommandPopup } from './SlashCommandPopup';
 import { ScheduledMessagesPanel } from './ScheduledMessagesPanel';
-import type { ApplicationCommand } from '../../types/commands';
+import type { ApplicationCommand, CommandOption } from '../../types/commands';
 import { ApplicationCommandType, CommandOptionType } from '../../types/commands';
 import type { ResolvedCommandOption } from '../../types/interactions';
+import { InteractionType } from '../../types/interactions';
 import { interactionApi } from '../../api/interactions';
 import { useCommandStore } from '../../stores/commandStore';
-import { useInteractionStore } from '../../stores/interactionStore';
+import { useInteractionStore, type AutocompleteChoice } from '../../stores/interactionStore';
+import { usePermissions } from '../../hooks/usePermissions';
+import { Permissions, hasPermission, type ChannelOverwrite } from '../../types';
 import {
   getVersionedStorageItem,
   removeVersionedStorageItem,
@@ -34,6 +34,17 @@ import { isAllowedImageMimeType } from '../../lib/security';
 import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
+import { displayName } from '../../lib/displayName';
+
+const EmojiPicker = lazy(() =>
+  import('../ui/EmojiPicker').then((m) => ({ default: m.EmojiPicker })),
+);
+const GifPicker = lazy(() =>
+  import('./GifPicker').then((m) => ({ default: m.GifPicker })),
+);
+const StickerPicker = lazy(() =>
+  import('./StickerPicker').then((m) => ({ default: m.StickerPicker })),
+);
 
 interface MessageInputProps {
   channelId: string;
@@ -82,6 +93,20 @@ function parseSlashArgs(text: string): string[] {
   return args;
 }
 
+function coerceOptionValue(opt: CommandOption, raw: string): unknown {
+  if (opt.type === CommandOptionType.Integer || opt.type === CommandOptionType.Number) {
+    const parsed = Number(raw);
+    return Number.isNaN(parsed) ? raw : parsed;
+  }
+  if (opt.type === CommandOptionType.Boolean) {
+    const lower = raw.toLowerCase();
+    if (lower === 'true') return true;
+    if (lower === 'false') return false;
+    return raw;
+  }
+  return raw;
+}
+
 function parseSlashCommandOptions(
   command: ApplicationCommand,
   argsText: string,
@@ -102,19 +127,19 @@ function parseSlashCommandOptions(
     const subOptions: ResolvedCommandOption[] = [];
     for (const opt of sub.options ?? []) {
       if (index >= parts.length) break;
-      if (opt.type === CommandOptionType.String) {
-        subOptions.push({ name: opt.name, type: opt.type, value: parts[index++] });
-      } else if (opt.type === CommandOptionType.Integer || opt.type === CommandOptionType.Number) {
-        const raw = parts[index++];
-        const parsed = Number(raw);
-        if (!Number.isNaN(parsed)) {
-          subOptions.push({ name: opt.name, type: opt.type, value: parsed });
-        }
-      } else if (opt.type === CommandOptionType.Boolean) {
-        const raw = parts[index++]?.toLowerCase();
-        if (raw === 'true' || raw === 'false') {
-          subOptions.push({ name: opt.name, type: opt.type, value: raw === 'true' });
-        }
+      if (
+        opt.type === CommandOptionType.String ||
+        opt.type === CommandOptionType.Integer ||
+        opt.type === CommandOptionType.Number ||
+        opt.type === CommandOptionType.Boolean
+      ) {
+        subOptions.push({
+          name: opt.name,
+          type: opt.type,
+          value: coerceOptionValue(opt, parts[index++]),
+        });
+      } else {
+        index++;
       }
     }
     options.push({ name: sub.name, type: CommandOptionType.SubCommand, options: subOptions });
@@ -123,22 +148,110 @@ function parseSlashCommandOptions(
 
   for (const opt of topLevel) {
     if (index >= parts.length) break;
-    if (opt.type === CommandOptionType.String) {
-      options.push({ name: opt.name, type: opt.type, value: parts[index++] });
-    } else if (opt.type === CommandOptionType.Integer || opt.type === CommandOptionType.Number) {
-      const raw = parts[index++];
-      const parsed = Number(raw);
-      if (!Number.isNaN(parsed)) {
-        options.push({ name: opt.name, type: opt.type, value: parsed });
-      }
-    } else if (opt.type === CommandOptionType.Boolean) {
-      const raw = parts[index++]?.toLowerCase();
-      if (raw === 'true' || raw === 'false') {
-        options.push({ name: opt.name, type: opt.type, value: raw === 'true' });
-      }
+    if (
+      opt.type === CommandOptionType.String ||
+      opt.type === CommandOptionType.Integer ||
+      opt.type === CommandOptionType.Number ||
+      opt.type === CommandOptionType.Boolean
+    ) {
+      options.push({
+        name: opt.name,
+        type: opt.type,
+        value: coerceOptionValue(opt, parts[index++]),
+      });
+    } else {
+      index++;
     }
   }
   return options;
+}
+
+/** Build options for an autocomplete request, marking the focused option. */
+function buildAutocompleteOptions(
+  command: ApplicationCommand,
+  argsText: string,
+  trailingPartial: string,
+  endsWithSpace: boolean,
+): ResolvedCommandOption[] | null {
+  if (!command.options?.length) return null;
+  const parts = parseSlashArgs(argsText);
+  const topLevel = command.options;
+  const first = topLevel[0];
+
+  const fillOptions = (
+    optionDefs: CommandOption[],
+    filledParts: string[],
+  ): { options: ResolvedCommandOption[]; focused: boolean } => {
+    const options: ResolvedCommandOption[] = [];
+    let partIdx = 0;
+    let focused = false;
+    for (const opt of optionDefs) {
+      const isAutocomplete =
+        !!opt.autocomplete &&
+        (opt.type === CommandOptionType.String ||
+          opt.type === CommandOptionType.Integer ||
+          opt.type === CommandOptionType.Number);
+      if (partIdx < filledParts.length) {
+        const value = coerceOptionValue(opt, filledParts[partIdx++]);
+        const isLastFilled = partIdx === filledParts.length && !endsWithSpace && isAutocomplete;
+        options.push({
+          name: opt.name,
+          type: opt.type,
+          value,
+          focused: isLastFilled || undefined,
+        });
+        if (isLastFilled) focused = true;
+      } else if (endsWithSpace || trailingPartial !== undefined) {
+        // Next option is focused (empty or partial trailing token).
+        if (isAutocomplete && !focused) {
+          options.push({
+            name: opt.name,
+            type: opt.type,
+            value: endsWithSpace ? '' : trailingPartial,
+            focused: true,
+          });
+          focused = true;
+        }
+        break;
+      } else {
+        break;
+      }
+    }
+    return { options, focused };
+  };
+
+  if (first?.type === CommandOptionType.SubCommand) {
+    if (parts.length === 0 && !endsWithSpace) return null;
+    const subName = parts[0];
+    if (!subName) return null;
+    const sub = topLevel.find((entry) => entry.name === subName);
+    if (!sub?.options?.length) return null;
+    const rest = parts.slice(1);
+    const { options: subOptions, focused } = fillOptions(sub.options, rest);
+    if (!focused) return null;
+    return [
+      {
+        name: sub.name,
+        type: CommandOptionType.SubCommand,
+        options: subOptions,
+      },
+    ];
+  }
+
+  const { options, focused } = fillOptions(topLevel, parts);
+  return focused ? options : null;
+}
+
+function commandHasAutocomplete(command: ApplicationCommand): boolean {
+  const walk = (opts: CommandOption[] | undefined): boolean => {
+    if (!opts) return false;
+    for (const opt of opts) {
+      if (opt.autocomplete) return true;
+      if (opt.options && walk(opt.options)) return true;
+    }
+    return false;
+  };
+  return walk(command.options);
 }
 
 async function resolveGuildSlashCommand(
@@ -200,20 +313,52 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const [showScheduleComposer, setShowScheduleComposer] = useState(false);
   const [scheduledAt, setScheduledAt] = useState('');
   const [schedulingMessage, setSchedulingMessage] = useState(false);
+  const [sending, setSending] = useState(false);
   const [showScheduledPanel, setShowScheduledPanel] = useState(false);
   const [scheduledCount, setScheduledCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerShellRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false);
   const { upload, uploading, maxUploadSize } = useFileUpload(channelId);
   const { triggerTyping } = useTyping(channelId);
   const reduceMotion = useReducedMotion();
-  const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
-  const activeChannel = useMemo(
-    () => Object.values(channelsByGuild).flat().find((channel) => channel.id === channelId),
-    [channelsByGuild, channelId],
-  );
+  const activeChannel = useChannelStore((s) => s.channelsById[channelId]);
   const activeChannelType = activeChannel?.channel_type ?? activeChannel?.type;
   const canCreatePoll = activeChannelType == null || (activeChannelType !== 2 && activeChannelType !== 4);
+
+  const [channelOverwrites, setChannelOverwrites] = useState<ChannelOverwrite[]>([]);
+  useEffect(() => {
+    if (!guildId || !channelId) {
+      setChannelOverwrites([]);
+      return;
+    }
+    let cancelled = false;
+    channelApi
+      .getOverwrites(channelId)
+      .then(({ data }) => {
+        if (!cancelled) setChannelOverwrites(data);
+      })
+      .catch(() => {
+        if (!cancelled) setChannelOverwrites([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId, channelId]);
+
+  const { permissions, isAdmin } = usePermissions(guildId ?? null, {
+    channelId,
+    channelOverwrites,
+  });
+  // DMs have no guild permission bits — recipients can always send/attach.
+  const canSendMessages =
+    !guildId || isAdmin || hasPermission(permissions, Permissions.SEND_MESSAGES);
+  const canAttachFiles =
+    !guildId || isAdmin || hasPermission(permissions, Permissions.ATTACH_FILES);
+
+  const channelWaiting = useInteractionStore((s) => s.isChannelWaiting(channelId));
+  const showCommandThinking = channelWaiting;
 
   // Anonymous posting detection
   const [channelFeatures, setChannelFeatures] = useState<ChannelFeatureSettings | null>(null);
@@ -230,22 +375,27 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
   // Slash command state
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const [slashOptionMode, setSlashOptionMode] = useState(false);
+  const [autocompleteLoading, setAutocompleteLoading] = useState(false);
+  const autocompleteChoices = useInteractionStore((s) => s.autocompleteChoices);
+  const clearAutocompleteChoices = useInteractionStore((s) => s.clearAutocompleteChoices);
+  const autocompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autocompleteRequestIdRef = useRef(0);
 
-  // @mention autocomplete
-  const allMembers = useMemberStore((s) => s.members);
+  // @mention autocomplete — subscribe only to this guild's member list
+  const guildMembers = useMemberStore((s) => (guildId ? s.members.get(guildId) : undefined));
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const mentionResults = useMemo(() => {
     if (mentionQuery === null || !guildId) return [];
-    const guildMembers = allMembers.get(guildId) || [];
     const q = mentionQuery.toLowerCase();
-    return guildMembers
+    return (guildMembers || [])
       .filter((m) => {
-        const name = (m.nick || m.user.username).toLowerCase();
-        return name.includes(q);
+        const visibleName = displayName(m.user, m.nick).toLowerCase();
+        return visibleName.includes(q) || m.user.username.toLowerCase().includes(q);
       })
       .slice(0, 8);
-  }, [mentionQuery, guildId, allMembers]);
+  }, [mentionQuery, guildId, guildMembers]);
 
   // Draft persistence: save on content change (debounced), restore on channel switch
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -275,12 +425,22 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   }, [content]);
 
   useEffect(() => {
-    // Restore draft for this channel
+    // Restore draft for this channel; clear composer UI that must not leak across channels.
     setContent(loadDraft(channelId));
     setMentionQuery(null);
     setSlashQuery(null);
+    setSlashOptionMode(false);
+    useInteractionStore.getState().clearAutocompleteChoices();
+    setAutocompleteLoading(false);
+    if (autocompleteTimerRef.current) {
+      clearTimeout(autocompleteTimerRef.current);
+      autocompleteTimerRef.current = null;
+    }
+    autocompleteRequestIdRef.current += 1;
+    setStagedFiles([]);
     setShowPollComposer(false);
     setShowFormattingTools(false);
+    setShowEmojiPicker(false);
     setShowGifPicker(false);
     setShowStickerPicker(false);
     setPollQuestion('');
@@ -291,10 +451,26 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     setShowScheduleComposer(false);
     setScheduledAt('');
     setSchedulingMessage(false);
+    setSending(false);
+    sendingRef.current = false;
     setSubmitError(null);
     setShowScheduledPanel(false);
     setScheduledCount(0);
   }, [channelId]);
+
+  // Click-outside dismiss for inline emoji picker and formatting toolbar.
+  useEffect(() => {
+    if (!showEmojiPicker && !showFormattingTools) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (composerShellRef.current?.contains(target)) return;
+      setShowEmojiPicker(false);
+      setShowFormattingTools(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [showEmojiPicker, showFormattingTools]);
 
   const refreshScheduledCount = useCallback(async () => {
     try {
@@ -338,6 +514,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   };
 
   const handleSubmit = async () => {
+    if (sendingRef.current || uploading || creatingPoll || schedulingMessage) return;
+
     if (showPollComposer) {
       const question = pollQuestion.trim();
       const options = pollOptions.map((opt) => opt.trim()).filter(Boolean);
@@ -425,41 +603,55 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       return;
     }
 
+    if (!canSendMessages) {
+      setSubmitError("You don't have permission to send messages in this channel.");
+      return;
+    }
+    if (stagedFiles.length > 0 && !canAttachFiles) {
+      setSubmitError("You don't have permission to attach files in this channel.");
+      return;
+    }
+
     if (!content.trim() && stagedFiles.length === 0) return;
     if (content.length > MAX_MESSAGE_LENGTH) {
       setSubmitError(`Message is too long (${content.length}/${MAX_MESSAGE_LENGTH}).`);
       return;
     }
 
-    const trimmed = content.trim();
-    const slashMatch = trimmed.match(/^\/(\w+)(?:\s+([\s\S]*))?$/);
-    if (guildId && slashMatch && stagedFiles.length === 0) {
-      const commandName = slashMatch[1];
-      const argsText = (slashMatch[2] ?? '').trim();
-      const command = await resolveGuildSlashCommand(guildId, commandName);
-      if (command) {
-        try {
-          setSubmitError(null);
-          const { data: interaction } = await interactionApi.invokeCommand({
-            command_name: commandName,
-            guild_id: guildId,
-            channel_id: channelId,
-            options: parseSlashCommandOptions(command, argsText),
-          });
-          useInteractionStore.getState().addPendingInteraction(interaction);
-          clearDraftTimer();
-          setContent('');
-          saveDraft(channelId, '');
-          onCancelReply?.();
-          if (textareaRef.current) textareaRef.current.style.height = 'auto';
-        } catch (err) {
-          setSubmitError(messageInputError(err, 'Failed to run command.'));
-        }
-        return;
-      }
-    }
+    // Lock before any await so rapid Enter cannot double-fire.
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
 
+    const trimmed = content.trim();
     try {
+      const slashMatch = trimmed.match(/^\/(\w+)(?:\s+([\s\S]*))?$/);
+      if (guildId && slashMatch && stagedFiles.length === 0) {
+        const commandName = slashMatch[1];
+        const argsText = (slashMatch[2] ?? '').trim();
+        const command = await resolveGuildSlashCommand(guildId, commandName);
+        if (command) {
+          try {
+            setSubmitError(null);
+            const { data: interaction } = await interactionApi.invokeCommand({
+              command_name: commandName,
+              guild_id: guildId,
+              channel_id: channelId,
+              options: parseSlashCommandOptions(command, argsText),
+            });
+            useInteractionStore.getState().addPendingInteraction(interaction);
+            clearDraftTimer();
+            setContent('');
+            saveDraft(channelId, '');
+            onCancelReply?.();
+            if (textareaRef.current) textareaRef.current.style.height = 'auto';
+          } catch (err) {
+            setSubmitError(messageInputError(err, 'Failed to run command.'));
+          }
+          return;
+        }
+      }
+
       setSubmitError(null);
       const attachmentIds: string[] = [];
       for (const file of stagedFiles) {
@@ -482,6 +674,9 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       if (textareaRef.current) textareaRef.current.style.height = 'auto';
     } catch (err) {
       setSubmitError(messageInputError(err, 'Failed to send message.'));
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
   };
 
@@ -496,14 +691,110 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       setMentionQuery(null);
     }
 
-    // Detect slash command: only at position 0, e.g. "/cmd"
-    const slashMatch = text.match(/^\/(\w*)$/);
-    if (slashMatch) {
-      setSlashQuery(slashMatch[1]);
-    } else {
-      setSlashQuery(null);
+    // Detect slash command name entry: "/cmd" with no args yet
+    const slashNameMatch = text.match(/^\/(\w*)$/);
+    if (slashNameMatch) {
+      setSlashQuery(slashNameMatch[1]);
+      setSlashOptionMode(false);
+      clearAutocompleteChoices();
+      setAutocompleteLoading(false);
+      return;
     }
-  }, []);
+
+    // Detect slash option entry: "/cmd args…" — may trigger autocomplete
+    const slashArgsMatch = text.match(/^\/(\w+)\s([\s\S]*)$/);
+    if (slashArgsMatch && guildId) {
+      setSlashQuery(null);
+      setSlashOptionMode(true);
+      const commandName = slashArgsMatch[1];
+      const argsText = slashArgsMatch[2] ?? '';
+      const endsWithSpace = /\s$/.test(text);
+      const trailingPartial = endsWithSpace ? '' : (parseSlashArgs(argsText).at(-1) ?? '');
+
+      if (autocompleteTimerRef.current) clearTimeout(autocompleteTimerRef.current);
+      autocompleteTimerRef.current = setTimeout(() => {
+        void (async () => {
+          const command = await resolveGuildSlashCommand(guildId, commandName);
+          if (!command || !commandHasAutocomplete(command)) {
+            clearAutocompleteChoices();
+            setAutocompleteLoading(false);
+            setSlashOptionMode(false);
+            return;
+          }
+          const options = buildAutocompleteOptions(
+            command,
+            argsText.trimEnd(),
+            trailingPartial,
+            endsWithSpace,
+          );
+          if (!options) {
+            clearAutocompleteChoices();
+            setAutocompleteLoading(false);
+            return;
+          }
+          const requestId = ++autocompleteRequestIdRef.current;
+          setAutocompleteLoading(true);
+          try {
+            const { data: interaction } = await interactionApi.invokeCommand({
+              command_name: commandName,
+              guild_id: guildId,
+              channel_id: channelId,
+              options,
+              type: InteractionType.ApplicationCommandAutocomplete,
+            });
+            if (requestId !== autocompleteRequestIdRef.current) return;
+            useInteractionStore.getState().addPendingInteraction(interaction);
+          } catch {
+            if (requestId !== autocompleteRequestIdRef.current) return;
+            clearAutocompleteChoices();
+          } finally {
+            if (requestId === autocompleteRequestIdRef.current) {
+              setAutocompleteLoading(false);
+            }
+          }
+        })();
+      }, 200);
+      return;
+    }
+
+    setSlashQuery(null);
+    setSlashOptionMode(false);
+    clearAutocompleteChoices();
+    setAutocompleteLoading(false);
+  }, [guildId, channelId, clearAutocompleteChoices]);
+
+  const insertAutocompleteChoice = useCallback(
+    (choice: AutocompleteChoice) => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const text = content;
+      const slashArgsMatch = text.match(/^\/(\w+)\s([\s\S]*)$/);
+      if (!slashArgsMatch) return;
+      const commandName = slashArgsMatch[1];
+      const argsText = slashArgsMatch[2] ?? '';
+      const endsWithSpace = /\s$/.test(text);
+      const parts = parseSlashArgs(argsText.trimEnd());
+      const valueStr =
+        typeof choice.value === 'string' && /\s/.test(choice.value)
+          ? `"${choice.value}"`
+          : String(choice.value);
+      if (endsWithSpace || parts.length === 0) {
+        parts.push(valueStr);
+      } else {
+        parts[parts.length - 1] = valueStr;
+      }
+      const newContent = `/${commandName} ${parts.join(' ')} `;
+      setContent(newContent);
+      setSlashOptionMode(false);
+      clearAutocompleteChoices();
+      requestAnimationFrame(() => {
+        textarea.focus();
+        const pos = newContent.length;
+        textarea.setSelectionRange(pos, pos);
+      });
+    },
+    [content, clearAutocompleteChoices],
+  );
 
   const insertMention = useCallback((userId: string) => {
     const textarea = textareaRef.current;
@@ -525,6 +816,30 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   }, [content]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Dismiss composer popovers first (including mention mode with zero matches).
+    if (e.key === 'Escape') {
+      if (mentionQuery !== null) {
+        e.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+      if (slashQuery !== null || slashOptionMode) {
+        e.preventDefault();
+        setSlashQuery(null);
+        setSlashOptionMode(false);
+        clearAutocompleteChoices();
+        return;
+      }
+      if (showEmojiPicker || showFormattingTools || showGifPicker || showStickerPicker) {
+        e.preventDefault();
+        setShowEmojiPicker(false);
+        setShowFormattingTools(false);
+        setShowGifPicker(false);
+        setShowStickerPicker(false);
+        return;
+      }
+    }
+
     // Handle mention autocomplete navigation
     if (mentionQuery !== null && mentionResults.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -543,20 +858,6 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         if (selected) insertMention(selected.user.id);
         return;
       }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setMentionQuery(null);
-        return;
-      }
-    }
-
-    // Dismiss slash popup on Escape
-    if (slashQuery !== null) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setSlashQuery(null);
-        return;
-      }
     }
 
     const textarea = textareaRef.current;
@@ -572,6 +873,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      if (sendingRef.current || uploading || creatingPoll || schedulingMessage || sending) return;
       void handleSubmit();
     }
   };
@@ -626,6 +928,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const togglePollComposer = () => {
     if (!canCreatePoll) return;
     if (showPollComposer) {
+      if (pollQuestion.trim()) setContent(pollQuestion);
       resetPollComposer();
       setSubmitError(null);
       return;
@@ -662,9 +965,10 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
     });
   };
 
-  const busy = uploading || creatingPoll || schedulingMessage;
+  const busy = uploading || creatingPoll || schedulingMessage || sending;
   const sendDisabled =
     busy ||
+    !canSendMessages ||
     (showScheduleComposer
       ? !content.trim() || !scheduledAt
       : !showPollComposer && !content.trim() && stagedFiles.length === 0);
@@ -678,10 +982,32 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   return (
     <div
       className="relative flex w-full flex-col gap-2 px-4 pb-[calc(var(--safe-bottom)+1.25rem)] pt-2 sm:px-6 sm:pb-8"
-      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+      onDragOver={(e) => {
+        if (!canAttachFiles || !canSendMessages) return;
+        e.preventDefault();
+        setIsDragOver(true);
+      }}
       onDragLeave={() => setIsDragOver(false)}
-      onDrop={handleDrop}
+      onDrop={canAttachFiles && canSendMessages ? handleDrop : undefined}
     >
+      {showCommandThinking && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-meta text-text-secondary"
+        >
+          <Loader2 size={14} className="shrink-0 animate-spin text-accent-primary" />
+          <span>Waiting for command response…</span>
+        </div>
+      )}
+      {!canSendMessages && (
+        <div
+          role="status"
+          className="rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 py-2 text-meta text-text-muted"
+        >
+          You don&apos;t have permission to send messages in this channel.
+        </div>
+      )}
       {isAnonymousChannel && (
         <div className="flex items-center gap-2 rounded-sm border border-accent-primary/30 bg-accent-tint px-3 py-2 text-meta text-accent-primary">
           <EyeOff size={14} className="shrink-0" />
@@ -883,6 +1209,7 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       )}
 
       <div
+        ref={composerShellRef}
         className={cn(
           // Constant 1px border so the drop state never reflows the composer (§7 Input,
           // no outer glow); focus-within paints the emerald edge + inset focus ring.
@@ -933,13 +1260,26 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           <SlashCommandPopup
             query={slashQuery ?? ''}
             guildId={guildId}
-            visible={slashQuery !== null}
+            visible={slashQuery !== null || slashOptionMode}
+            autocompleteChoices={slashOptionMode ? autocompleteChoices : undefined}
+            autocompleteLoading={autocompleteLoading}
             onSelectCommand={(cmd: ApplicationCommand) => {
               setContent(`/${cmd.name} `);
               setSlashQuery(null);
-              requestAnimationFrame(() => textareaRef.current?.focus());
+              setSlashOptionMode(false);
+              clearAutocompleteChoices();
+              requestAnimationFrame(() => {
+                textareaRef.current?.focus();
+                const next = `/${cmd.name} `;
+                detectMentionQuery(next, next.length);
+              });
             }}
-            onDismiss={() => setSlashQuery(null)}
+            onSelectChoice={insertAutocompleteChoice}
+            onDismiss={() => {
+              setSlashQuery(null);
+              setSlashOptionMode(false);
+              clearAutocompleteChoices();
+            }}
           />
         )}
 
@@ -965,11 +1305,11 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
                 onMouseEnter={() => setMentionIndex(i)}
               >
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-tint-strong text-meta font-semibold text-accent-primary">
-                  {member.user.username.charAt(0).toUpperCase()}
+                  {displayName(member.user, member.nick).charAt(0).toUpperCase()}
                 </span>
                 <span className="min-w-0 flex-1 truncate">
-                  <span className="text-label text-text-primary">{member.nick || member.user.username}</span>
-                  {member.nick && (
+                  <span className="text-label text-text-primary">{displayName(member.user, member.nick)}</span>
+                  {displayName(member.user, member.nick) !== member.user.username && (
                     <span className="ml-1.5 text-meta text-text-muted">@{member.user.username}</span>
                   )}
                 </span>
@@ -980,6 +1320,10 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
 
         <button
           onClick={() => {
+            if (!canAttachFiles) {
+              setSubmitError("You don't have permission to attach files in this channel.");
+              return;
+            }
             if (showPollComposer) {
               setSubmitError('Disable poll composer before adding attachments.');
               return;
@@ -987,15 +1331,17 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
             fileInputRef.current?.click();
           }}
           className={ICON_BTN}
-          disabled={showPollComposer}
+          disabled={showPollComposer || !canAttachFiles || !canSendMessages}
           aria-label="Attach files"
-          title="Attach files"
+          title={canAttachFiles ? 'Attach files' : "You can't attach files here"}
         >
           <Plus size={18} />
         </button>
 
         <button
           type="button"
+          data-composer-picker-toggle="formatting"
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={() => setShowFormattingTools((prev) => !prev)}
           className={cn(ICON_BTN, showFormattingTools && ICON_BTN_ACTIVE)}
           aria-label="Formatting tools"
@@ -1045,10 +1391,18 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={showPollComposer ? 'Poll question above will be sent as a poll message' : showScheduleComposer ? `Schedule message for ${channelName ? '#' + channelName : 'this channel'}` : `Message ${channelName ? '#' + channelName : 'this channel'}`}
+          placeholder={
+            !canSendMessages
+              ? "You can't send messages here"
+              : showPollComposer
+                ? 'Poll question above will be sent as a poll message'
+                : showScheduleComposer
+                  ? `Schedule message for ${channelName ? '#' + channelName : 'this channel'}`
+                  : `Message ${channelName ? '#' + channelName : 'this channel'}`
+          }
           rows={1}
           maxLength={MAX_MESSAGE_LENGTH}
-          disabled={showPollComposer}
+          disabled={showPollComposer || !canSendMessages}
           className="flex-1 resize-none self-center bg-transparent px-1.5 py-2 text-body text-text-primary outline-none placeholder:text-text-muted disabled:cursor-not-allowed disabled:opacity-70"
           style={{ maxHeight: '50vh' }}
         />
@@ -1057,6 +1411,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           <div className="relative">
             <button
               className={ICON_BTN}
+              data-composer-picker-toggle="sticker"
+              onMouseDown={(e) => e.stopPropagation()}
               onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowEmojiPicker(false); }}
               disabled={showPollComposer}
               aria-label="Stickers"
@@ -1072,21 +1428,23 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
             </button>
             {showStickerPicker && (
               <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
-                <StickerPicker
-                  guildId={guildId}
-                  onSelect={(stickerId) => {
-                    setShowStickerPicker(false);
-                    void (async () => {
-                      try {
-                        await useMessageStore.getState().sendMessage(channelId, '', replyingTo?.id, undefined, [stickerId]);
-                        onCancelReply?.();
-                      } catch (err) {
-                        setSubmitError(`Failed to send sticker: ${messageInputError(err, 'Request failed')}`);
-                      }
-                    })();
-                  }}
-                  onClose={() => setShowStickerPicker(false)}
-                />
+                <Suspense fallback={null}>
+                  <StickerPicker
+                    guildId={guildId}
+                    onSelect={(stickerId) => {
+                      setShowStickerPicker(false);
+                      void (async () => {
+                        try {
+                          await useMessageStore.getState().sendMessage(channelId, '', replyingTo?.id, undefined, [stickerId]);
+                          onCancelReply?.();
+                        } catch (err) {
+                          setSubmitError(`Failed to send sticker: ${messageInputError(err, 'Request failed')}`);
+                        }
+                      })();
+                    }}
+                    onClose={() => setShowStickerPicker(false)}
+                  />
+                </Suspense>
               </div>
             )}
           </div>
@@ -1095,6 +1453,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         <div className="relative">
           <button
             className={ICON_BTN}
+            data-composer-picker-toggle="gif"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={() => { setShowGifPicker(!showGifPicker); setShowEmojiPicker(false); setShowStickerPicker(false); }}
             disabled={showPollComposer}
             aria-label="GIF"
@@ -1104,20 +1464,22 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           </button>
           {showGifPicker && (
             <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
-              <GifPicker
-                onSelect={(gifUrl) => {
-                  setShowGifPicker(false);
-                  void (async () => {
-                    try {
-                      await useMessageStore.getState().sendMessage(channelId, gifUrl, replyingTo?.id);
-                      onCancelReply?.();
-                    } catch (err) {
-                      setSubmitError(`Failed to send GIF: ${messageInputError(err, 'Request failed')}`);
-                    }
-                  })();
-                }}
-                onClose={() => setShowGifPicker(false)}
-              />
+              <Suspense fallback={null}>
+                <GifPicker
+                  onSelect={(gifUrl) => {
+                    setShowGifPicker(false);
+                    void (async () => {
+                      try {
+                        await useMessageStore.getState().sendMessage(channelId, gifUrl, replyingTo?.id);
+                        onCancelReply?.();
+                      } catch (err) {
+                        setSubmitError(`Failed to send GIF: ${messageInputError(err, 'Request failed')}`);
+                      }
+                    })();
+                  }}
+                  onClose={() => setShowGifPicker(false)}
+                />
+              </Suspense>
             </div>
           )}
         </div>
@@ -1125,6 +1487,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
         <div className="relative">
           <button
             className={ICON_BTN}
+            data-composer-picker-toggle="emoji"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowGifPicker(false); setShowStickerPicker(false); }}
             disabled={showPollComposer}
             aria-label="Emoji"
@@ -1134,15 +1498,17 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
           </button>
           {showEmojiPicker && (
             <div className="absolute bottom-full right-0 mb-2 max-w-[90vw]" style={{ zIndex: 50 }}>
-              <EmojiPicker
-                onSelect={(emoji) => {
-                  setContent((prev) => `${prev}${emoji}`);
-                  triggerTyping();
-                  setShowEmojiPicker(false);
-                }}
-                onClose={() => setShowEmojiPicker(false)}
-                guildId={guildId}
-              />
+              <Suspense fallback={null}>
+                <EmojiPicker
+                  onSelect={(emoji) => {
+                    setContent((prev) => `${prev}${emoji}`);
+                    triggerTyping();
+                    setShowEmojiPicker(false);
+                  }}
+                  onClose={() => setShowEmojiPicker(false)}
+                  guildId={guildId}
+                />
+              </Suspense>
             </div>
           )}
         </div>

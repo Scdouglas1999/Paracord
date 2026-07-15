@@ -109,6 +109,7 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "member_roles",
     "message_edits",
     "message_embeds",
+    "saved_messages",
     "message_stickers",
     "poll_options",
     "poll_votes",

@@ -44,12 +44,16 @@ pub async fn list_members(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    let roles_by_user = paracord_db::roles::get_member_roles_for_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
     let mut result: Vec<Value> = Vec::with_capacity(members.len());
     for m in members {
-        let roles = paracord_db::roles::get_member_roles(&state.db, m.user_id, guild_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-        let role_ids: Vec<String> = roles.iter().map(|r| r.id.to_string()).collect();
+        let role_ids: Vec<String> = roles_by_user
+            .get(&m.user_id)
+            .map(|roles| roles.iter().map(|r| r.id.to_string()).collect())
+            .unwrap_or_default();
         result.push(json!({
             "user_id": m.user_id.to_string(),
             "guild_id": guild_id.to_string(),
@@ -62,6 +66,7 @@ pub async fn list_members(
             "user": {
                 "id": m.user_id.to_string(),
                 "username": m.username,
+                "display_name": m.user_display_name,
                 "discriminator": m.discriminator,
                 "avatar_hash": m.user_avatar_hash,
                 "flags": m.user_flags,
@@ -163,7 +168,15 @@ pub async fn update_member(
 
         if auth.user_id != guild.owner_id {
             let actor_top_role_pos = actor_roles.iter().map(|r| r.position).max().unwrap_or(0);
-            for role_id in &requested_ids {
+            // Hierarchy is enforced on both the roles being added/kept AND the
+            // roles being removed: a non-owner may not manage (assign or strip)
+            // a role at or above their own top position. Checking only the
+            // add/keep set would let a lower-ranked MANAGE_ROLES actor demote a
+            // higher-ranked member by omitting their superior role.
+            for role_id in requested_ids
+                .iter()
+                .chain(existing_ids.difference(&requested_ids))
+            {
                 if *role_id == guild_id {
                     continue;
                 }
@@ -307,6 +320,14 @@ pub async fn kick_member(
 ) -> Result<StatusCode, ApiError> {
     paracord_core::admin::kick_member(&state.db, guild_id, auth.user_id, user_id).await?;
 
+    // Terminate any in-progress voice/video call the kicked member is part of so
+    // they stop eavesdropping on and injecting into the call.
+    crate::routes::voice::evict_user_from_guild_media(&state, guild_id, user_id).await;
+
+    // Evict the removed member's cached channel permissions so a stale cache hit
+    // cannot keep granting access for the remainder of the cache TTL.
+    paracord_core::permissions::invalidate_user(&state.permission_cache, user_id).await;
+
     state.member_index.remove_member(guild_id, user_id);
     state.event_bus.dispatch(
         "GUILD_MEMBER_REMOVE",
@@ -371,6 +392,13 @@ pub async fn leave_guild(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    // Terminate any in-progress voice/video call the leaving member is part of.
+    crate::routes::voice::evict_user_from_guild_media(&state, guild_id, auth.user_id).await;
+
+    // Evict the leaving member's cached channel permissions so a stale cache hit
+    // cannot keep granting access for the remainder of the cache TTL.
+    paracord_core::permissions::invalidate_user(&state.permission_cache, auth.user_id).await;
+
     state.member_index.remove_member(guild_id, auth.user_id);
     state.event_bus.dispatch(
         "GUILD_MEMBER_REMOVE",
@@ -398,6 +426,118 @@ pub async fn leave_guild(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT /guilds/{guild_id}/members/@me — invite-less join for public discoverable guilds.
+pub async fn join_public_guild(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(guild_id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    if !guild.visibility.eq_ignore_ascii_case("public") {
+        return Err(ApiError::Forbidden);
+    }
+    if !paracord_db::guilds::parse_allowed_role_ids(&guild.allowed_roles).is_empty() {
+        return Err(ApiError::Forbidden);
+    }
+
+    if paracord_db::members::get_member(&state.db, auth.user_id, guild_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        let member_count = paracord_db::members::get_member_count(&state.db, guild_id)
+            .await
+            .unwrap_or(0);
+        return Ok(Json(crate::routes::guilds::guild_json(
+            &guild,
+            Some(member_count),
+        )));
+    }
+
+    // Block users currently banned from this guild from silently rejoining. A
+    // ban removes the member row, so a banned user reaches this non-member path;
+    // without this check they could evade the ban by self-joining the public
+    // guild. Mirrors the invite-accept path (invites.rs::accept_invite).
+    let banned = paracord_db::bans::get_ban(&state.db, auth.user_id, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .is_some();
+    if banned {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Honor an active anti-raid lockdown, matching accept_invite parity so the
+    // invite-less join path can't be used to slip past a lockdown.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let bot_settings_json: Value = guild
+        .bot_settings
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_else(|| json!({}));
+    let anti_raid_config = bot_settings_json
+        .get("auto_mod")
+        .and_then(|value| value.get("anti_raid"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let anti_raid_enabled = anti_raid_config
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if anti_raid_enabled {
+        let locked_until_ms = match anti_raid_config.get("lockdown_until_ms") {
+            Some(Value::Number(raw)) => raw.as_i64().unwrap_or(0),
+            Some(Value::String(raw)) => raw.parse::<i64>().unwrap_or(0),
+            _ => 0,
+        };
+        if locked_until_ms > now_ms {
+            return Err(ApiError::BadRequest(
+                "Server is temporarily in raid lockdown".into(),
+            ));
+        }
+    }
+
+    paracord_db::members::add_member(&state.db, auth.user_id, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let _ = paracord_db::roles::add_member_role(&state.db, auth.user_id, guild_id, guild_id).await;
+
+    state.member_index.add_member(guild_id, auth.user_id);
+
+    let user = paracord_db::users::get_user_by_id(&state.db, auth.user_id)
+        .await
+        .ok()
+        .flatten();
+    if let Some(user) = user {
+        state.event_bus.dispatch(
+            "GUILD_MEMBER_ADD",
+            json!({
+                "guild_id": guild_id.to_string(),
+                "user": {
+                    "id": user.id.to_string(),
+                    "username": user.username,
+                    "display_name": user.display_name,
+                    "discriminator": user.discriminator,
+                    "avatar_hash": user.avatar_hash,
+                }
+            }),
+            Some(guild_id),
+        );
+    }
+
+    let member_count = paracord_db::members::get_member_count(&state.db, guild_id)
+        .await
+        .unwrap_or(0);
+    Ok(Json(crate::routes::guilds::guild_json(
+        &guild,
+        Some(member_count),
+    )))
 }
 
 pub(crate) async fn federation_forward_member_event(

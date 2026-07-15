@@ -33,12 +33,22 @@ export interface VideoCodecCapability {
   backend: string;
   encode: boolean;
   decode: boolean;
-  hardwareAccelerated: boolean;
+  // Split per contract C3 (was a single hardwareAccelerated flag). Codec
+  // negotiation's hardware-first pass keys only on encodeHardware.
+  encodeHardware: boolean;
+  decodeHardware: boolean;
 }
 
 export interface MediaStreamCapabilities {
   video: VideoCodecCapability[];
   nativeDesktopRenderer: boolean;
+  /** True when the platform surface composites BELOW the webview (Linux GTK
+   * underlay): DOM chrome renders over the video and the tile punches a
+   * transparent hole. Underlay backends disable DOM-occlusion blanking
+   * (`occlusion: false`) so menus/tooltips never hide the whole GL tile;
+   * opaque portal CSS keeps floating UI readable over live video. False for
+   * overlay backends (macOS) where the surface floats above the webview. */
+  nativeRenderUnderlay?: boolean;
   browserInteropProtocolV1: boolean;
   realMediaE2ee: boolean;
   simulcastV1: boolean;
@@ -131,16 +141,30 @@ export interface MediaEngine {
   onParticipantLeave(cb: (userId: string) => void): void;
   /** Fired when the transport is permanently lost after reconnect exhaustion. */
   onTransportLost(cb: (reason: string) => void): void;
+  /** Fired when the camera pipeline fails hard mid-session (device unplugged,
+   *  format loss). Engine-specific: only the native desktop engine runs a
+   *  camera capture pipeline that can fail this way after enableVideo resolved. */
+  onCameraFailure?(cb: (error: Error) => void): void;
   subscribeScreenShareAudio(
     userId: string,
     getVolume: () => number,
   ): () => void;
+  /**
+   * Set per-source playback gain (0..2).
+   * Native path maps to voice_set_source_volume; browser path adjusts GainNode(s).
+   */
+  setSourceVolume(userId: string, gain: number): void;
   getStreamCapabilities(): Promise<MediaStreamCapabilities>;
   getStreamingDiagnostics(): Promise<MediaStreamDiagnostics>;
   listPublishedTracks(): Promise<PublishedTrackDescriptor[]>;
   registerTrackSubscription(request: TrackSubscriptionRequest): Promise<void>;
   unregisterTrackSubscription(streamId: string, trackId: string): Promise<void>;
-  subscribeVideo(userId: string, canvas: HTMLCanvasElement, onFrame?: () => void): () => void;
+  subscribeVideo(
+    userId: string,
+    canvas: HTMLCanvasElement,
+    onFrame?: () => void,
+    options?: { preferredTrackId?: 'camera' | 'screen' },
+  ): () => void;
   subscribeLocalPublishedScreen(canvas: HTMLCanvasElement, onFrame?: () => void): () => void;
 }
 

@@ -16,7 +16,7 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Hash, Volume2, MessageSquare, Megaphone, Trash2, Plus, Shield, ChevronDown, ChevronRight } from 'lucide-react';
+import { GripVertical, Hash, Volume2, MessageSquare, Megaphone, Radio, Trash2, Plus, Shield, ChevronDown, ChevronRight, SlidersHorizontal } from 'lucide-react';
 import type { Channel, Role } from '../../types';
 import { guildApi } from '../../api/guilds';
 import { channelApi, type ChannelFeatureSettings } from '../../api/channels';
@@ -58,6 +58,7 @@ function channelTypeIcon(type: number) {
 function channelTypeBadge(type: number) {
   if (type === 2) return 'Voice';
   if (type === 7) return 'Forum';
+  if (type === 13) return 'Stage';
   if (type === 4) return 'Category';
   return 'Text';
 }
@@ -66,7 +67,7 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
   const reorderChannels = useChannelStore((s) => s.reorderChannels);
 
   const [newChannelName, setNewChannelName] = useState('');
-  const [newChannelType, setNewChannelType] = useState<'text' | 'voice' | 'forum'>('text');
+  const [newChannelType, setNewChannelType] = useState<'text' | 'voice' | 'forum' | 'stage'>('text');
   const [newChannelCategoryId, setNewChannelCategoryId] = useState<string>('');
   const [newChannelRequiredRoleIds, setNewChannelRequiredRoleIds] = useState<string[]>([]);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -263,7 +264,8 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
     if (!newChannelName.trim()) return;
     setError(null);
     try {
-      const typeNum = newChannelType === 'voice' ? 2 : newChannelType === 'forum' ? 7 : 0;
+      const typeNum =
+        newChannelType === 'voice' ? 2 : newChannelType === 'forum' ? 7 : newChannelType === 'stage' ? 13 : 0;
       await guildApi.createChannel(guildId, {
         name: newChannelName.trim(),
         channel_type: typeNum,
@@ -489,11 +491,12 @@ export function ChannelManager({ guildId, channels, roles, canManageRoles, highl
         <FieldLabel className="!mb-0">New channel</FieldLabel>
 
         {/* Type picker — selectable tiles */}
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {([
             { value: 'text', label: 'Text', icon: Hash, hint: 'Send messages' },
             { value: 'voice', label: 'Voice', icon: Volume2, hint: 'Talk & video' },
             { value: 'forum', label: 'Forum', icon: MessageSquare, hint: 'Threaded posts' },
+            { value: 'stage', label: 'Stage', icon: Radio, hint: 'Audience & speakers' },
           ] as const).map(({ value, label, icon: Icon, hint }) => {
             const active = newChannelType === value;
             return (
@@ -1031,6 +1034,12 @@ function SortableChannelItem({
   }, [channel.id, followTargetId, refreshFollowers]);
 
   const activeFollow = followers.some((entry) => entry.target_channel_id === followTargetId);
+  const activeFeatureCount = featureSettings
+    ? Number(featureSettings.disappearing_seconds > 0)
+      + Number(featureSettings.anonymous_posting_enabled)
+      + Number(featureSettings.adaptive_slowmode_enabled)
+      + Number(featureSettings.slowmode_exempt_role_ids.length > 0)
+    : 0;
 
   useEffect(() => {
     if (!isHighlighted) return;
@@ -1173,13 +1182,20 @@ function SortableChannelItem({
         {channel.type !== 4 && !isVoice && (
           <button
             className={cn(
-              'flex h-7 w-7 items-center justify-center rounded-sm text-text-muted outline-none transition-colors hover:bg-bg-mod-strong hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]',
+              'flex h-7 items-center gap-1.5 rounded-sm px-2 text-meta font-semibold text-text-muted outline-none transition-colors hover:bg-bg-mod-strong hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]',
               featuresExpanded && 'bg-accent-tint text-accent-primary',
             )}
             onClick={() => void handleToggleFeatures()}
             title="Advanced channel features"
             aria-label={`${featuresExpanded ? 'Hide' : 'Show'} advanced features for ${channel.name || 'channel'}`}
           >
+            <SlidersHorizontal size={14} aria-hidden />
+            <span>Features</span>
+            {activeFeatureCount > 0 && (
+              <span className="rounded-full bg-accent-primary/15 px-1.5 text-[10px] tabular-nums text-accent-primary">
+                {activeFeatureCount}
+              </span>
+            )}
             {featuresExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
           </button>
         )}
@@ -1204,6 +1220,15 @@ function SortableChannelItem({
       {/* Advanced feature settings panel */}
       {featuresExpanded && channel.type !== 4 && !isVoice && (
         <div className="ml-6 mt-1 space-y-3 rounded-sm border border-border-subtle bg-bg-tertiary px-4 py-3">
+          <div className="flex items-start gap-2.5 border-b border-border-subtle pb-3">
+            <SlidersHorizontal size={16} className="mt-0.5 shrink-0 text-accent-primary" aria-hidden />
+            <div>
+              <h4 className="text-label font-semibold text-text-primary">Channel features</h4>
+              <p className="mt-0.5 text-meta leading-relaxed text-text-secondary">
+                Automation and privacy controls that apply only to #{channel.name || 'this channel'}.
+              </p>
+            </div>
+          </div>
           {featuresBusy && (
             <p className="text-meta text-text-muted">Loading…</p>
           )}

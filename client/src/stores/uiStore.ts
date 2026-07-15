@@ -51,6 +51,7 @@ interface UIState {
   connectionLatency: number;
   lowBandwidthMode: boolean;
   userSettingsOpen: boolean;
+  userSettingsInitialSection: string | null;
   guildSettingsId: string | null;
   guildSettingsInitialSection: string | null;
   guildSettingsChannelId: string | null;
@@ -69,7 +70,7 @@ interface UIState {
   setConnectionStatus: (status: ConnectionStatus) => void;
   setConnectionLatency: (latency: number) => void;
   setLowBandwidthMode: (enabled: boolean) => void;
-  setUserSettingsOpen: (open: boolean) => void;
+  setUserSettingsOpen: (open: boolean, initialSection?: string | null) => void;
   setGuildSettingsId: (id: string | null) => void;
   openGuildSettings: (id: string, initialSection?: string | null, channelId?: string | null) => void;
 }
@@ -89,6 +90,7 @@ export const useUIStore = create<UIState>()(
       connectionLatency: 0,
       lowBandwidthMode: false,
       userSettingsOpen: false,
+      userSettingsInitialSection: null,
       guildSettingsId: null,
       guildSettingsInitialSection: null,
       guildSettingsChannelId: null,
@@ -111,7 +113,13 @@ export const useUIStore = create<UIState>()(
       setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
       setConnectionLatency: (connectionLatency) => set({ connectionLatency }),
       setLowBandwidthMode: (lowBandwidthMode) => set({ lowBandwidthMode }),
-      setUserSettingsOpen: (userSettingsOpen) => set({ userSettingsOpen }),
+      setUserSettingsOpen: (userSettingsOpen, userSettingsInitialSection = null) =>
+        set({
+          userSettingsOpen,
+          userSettingsInitialSection: userSettingsOpen
+            ? (userSettingsInitialSection ?? null)
+            : null,
+        }),
       setGuildSettingsId: (guildSettingsId) => set({
         guildSettingsId,
         guildSettingsInitialSection: null,
@@ -126,7 +134,8 @@ export const useUIStore = create<UIState>()(
         theme: state.theme,
         accentPreset: state.accentPreset,
         customCss: state.customCss,
-        contextPanelMode: state.contextPanelMode,
+        // Context panels are transient route context. Persisting one makes an
+        // old Members/Search panel unexpectedly reappear after relaunch.
         sidebarWidth: state.sidebarWidth,
         sidebarCollapsed: state.sidebarCollapsed,
         lowBandwidthMode: state.lowBandwidthMode,

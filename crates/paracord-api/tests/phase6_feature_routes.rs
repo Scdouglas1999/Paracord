@@ -381,6 +381,60 @@ async fn onboarding_flow_enforces_rules_and_assigns_selected_roles() -> anyhow::
 }
 
 #[tokio::test]
+async fn onboarding_rejects_self_assigning_unlisted_admin_role() -> anyhow::Result<()> {
+    // Regression: with NO onboarding role options configured (the default), an
+    // empty allow-list must reject any selection instead of allowing members to
+    // self-assign arbitrary guild roles (privilege escalation to ADMINISTRATOR).
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Onboarding Escalation Guild").await?;
+    let guild_id_i64 = guild_id.parse::<i64>()?;
+
+    // An ADMINISTRATOR role that is deliberately NOT added to onboarding options.
+    let admin_role_id = paracord_util::snowflake::generate(1);
+    let admin_bits = paracord_models::permissions::Permissions::ADMINISTRATOR.bits();
+    paracord_db::roles::create_role(&ctx.db, admin_role_id, guild_id_i64, "Admin", admin_bits)
+        .await?;
+
+    let member_token = create_authenticated_user_token(
+        &ctx.db,
+        &ctx._test_app.jwt_secret,
+        "escalation_member",
+        "Phase6Pass123!",
+    )
+    .await?;
+    let member_id = current_user_id(&ctx, &member_token).await?;
+    let member_id_i64 = member_id.parse::<i64>()?;
+    paracord_db::members::add_member(&ctx.db, member_id_i64, guild_id_i64).await?;
+
+    let (status, payload) = ctx
+        .request_json_with_token(
+            Method::PUT,
+            &format!("/api/v1/guilds/{guild_id}/onboarding/me"),
+            Some(json!({
+                "accepted_rules": true,
+                "selected_role_ids": [admin_role_id.to_string()],
+                "completed": true
+            })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "onboarding must reject self-assigning a role outside the allow-list: {payload}"
+    );
+
+    let member_roles =
+        paracord_db::roles::get_member_roles(&ctx.db, member_id_i64, guild_id_i64).await?;
+    assert!(
+        !member_roles.iter().any(|role| role.id == admin_role_id),
+        "admin role must NOT have been self-assigned via onboarding"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sticker_upload_list_image_and_delete_flow() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let guild_id = create_guild(&ctx, "Sticker Feature Guild").await?;

@@ -1,6 +1,6 @@
 import { useState, ChangeEvent } from 'react';
 import { Upload, X, Hash } from 'lucide-react';
-import { Guild, Channel, HubSettings } from '../../types';
+import { Guild, Channel, HubSettings, Role } from '../../types';
 import { isAllowedImageMimeType, isSafeImageDataUrl, safeStoredImageDataUrl } from '../../lib/security';
 import { cn } from '../../lib/utils';
 import { guildApi } from '../../api/guilds';
@@ -9,22 +9,29 @@ import { Button } from '../ui/Button';
 import { Input, Textarea } from '../ui/Input';
 import { SectionHeader, FieldLabel, GroupLabel, ToggleRow } from './SettingsPrimitives';
 
+type VisibilityMode = 'private' | 'public' | 'roles';
+
 interface ServerHubSettingsProps {
     guild: Guild;
     channels: Channel[];
+    roles?: Role[];
     onUpdate: () => void;
     setError: (msg: string | null) => void;
 }
 
-export function ServerHubSettings({ guild, channels, onUpdate, setError }: ServerHubSettingsProps) {
+export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setError }: ServerHubSettingsProps) {
     const [loading, setLoading] = useState(false);
     const [hubSettings, setHubSettings] = useState<HubSettings>(
         guild.hub_settings || {}
     );
-    const [isDiscoverable, setIsDiscoverable] = useState(guild.visibility === 'public');
+    const [visibility, setVisibility] = useState<VisibilityMode>(
+        guild.visibility === 'public' || guild.visibility === 'roles' ? guild.visibility : 'private'
+    );
     const [discoveryTags, setDiscoveryTags] = useState((guild.discovery_tags || []).join(', '));
+    const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>(guild.allowed_roles || []);
 
     const textChannels = channels.filter(c => c.type === 0 || c.channel_type === 0);
+    const assignableRoles = roles.filter((role) => role.id !== guild.id);
 
     const handleTextChange = (field: keyof HubSettings, value: string) => {
         setHubSettings(prev => ({ ...prev, [field]: value }));
@@ -38,6 +45,12 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
             }
             return { ...prev, pinned_channels: [...current, channelId] };
         });
+    };
+
+    const toggleAllowedRole = (roleId: string) => {
+        setAllowedRoleIds((prev) =>
+            prev.includes(roleId) ? prev.filter((id) => id !== roleId) : [...prev, roleId]
+        );
     };
 
     const handleBannerUpload = (e: ChangeEvent<HTMLInputElement>) => {
@@ -69,16 +82,21 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
     };
 
     const handleSave = async () => {
+        if (visibility === 'roles' && allowedRoleIds.length === 0) {
+            setError('Pick at least one role when visibility is role-gated.');
+            return;
+        }
         setLoading(true);
         setError(null);
         try {
             await guildApi.update(guild.id, {
                 hub_settings: hubSettings,
-                visibility: isDiscoverable ? 'public' : 'private',
+                visibility,
                 discovery_tags: discoveryTags
                     .split(',')
                     .map(tag => tag.trim())
                     .filter(Boolean),
+                allowed_roles: visibility === 'roles' ? allowedRoleIds : [],
             });
             onUpdate();
         } catch (err: unknown) {
@@ -94,7 +112,7 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
         <div className="settings-surface-card min-h-[calc(100dvh-13.5rem)] !p-8 max-sm:!p-6">
             <div className="flex flex-col gap-8">
                 <SectionHeader
-                    title="Server Hub"
+                    title="Space Hub"
                     description="Design the landing page members see before they join — a banner, a welcome, and the channels you want front and center."
                     action={
                         <Button onClick={handleSave} loading={loading} disabled={loading}>
@@ -148,7 +166,7 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
                             />
                         </label>
                         <label className="block">
-                            <FieldLabel>About this server</FieldLabel>
+                            <FieldLabel>About this space</FieldLabel>
                             <Textarea
                                 value={hubSettings.description || ''}
                                 onChange={e => handleTextChange('description', e.target.value)}
@@ -160,17 +178,71 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
                     </div>
                 </section>
 
-                {/* Discovery */}
+                {/* Discovery / visibility */}
                 <section className="border-t border-border-subtle pt-6">
-                    <GroupLabel>Discovery</GroupLabel>
+                    <GroupLabel>Visibility</GroupLabel>
                     <div className="mt-2 divide-y divide-border-subtle">
                         <ToggleRow
-                            label="List this server publicly"
-                            description="Public servers can surface in discovery. Leave off for invite-only communities."
-                            checked={isDiscoverable}
-                            onChange={setIsDiscoverable}
+                            label="List this space publicly"
+                            description="Public spaces can surface in discovery. Leave off for invite-only communities."
+                            checked={visibility === 'public'}
+                            onChange={(checked) => setVisibility(checked ? 'public' : 'private')}
+                        />
+                        <ToggleRow
+                            label="Role-gated sidebar"
+                            description="Only members with one of the selected roles see this space in their list. Not listed in discovery."
+                            checked={visibility === 'roles'}
+                            onChange={(checked) =>
+                                setVisibility(checked ? 'roles' : visibility === 'public' ? 'public' : 'private')
+                            }
                         />
                     </div>
+                    {visibility === 'roles' && (
+                        <div className="mt-5">
+                            <FieldLabel>Allowed roles</FieldLabel>
+                            <p className="mt-2 text-meta text-text-muted">
+                                Members need at least one of these roles to see the server.
+                            </p>
+                            {assignableRoles.length === 0 ? (
+                                <p className="mt-3 text-[13.5px] leading-relaxed text-text-secondary">
+                                    Create a role first, then pick it here.
+                                </p>
+                            ) : (
+                                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                    {assignableRoles.map((role) => {
+                                        const selected = allowedRoleIds.includes(role.id);
+                                        return (
+                                            <label
+                                                key={role.id}
+                                                className={cn(
+                                                    'flex cursor-pointer items-center gap-2.5 rounded-sm border px-3 py-2.5 text-label transition-colors',
+                                                    selected
+                                                        ? 'border-accent-primary/50 bg-accent-tint text-text-primary'
+                                                        : 'border-border-subtle text-text-secondary hover:bg-bg-mod-subtle'
+                                                )}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selected}
+                                                    onChange={() => toggleAllowedRole(role.id)}
+                                                    className="h-4 w-4 rounded-sm border-border-subtle accent-accent-primary"
+                                                />
+                                                <span
+                                                    className="h-3 w-3 shrink-0 rounded-full"
+                                                    style={{
+                                                        backgroundColor: role.color
+                                                            ? `#${role.color.toString(16).padStart(6, '0')}`
+                                                            : 'var(--text-muted)',
+                                                    }}
+                                                />
+                                                <span className="truncate">{role.name}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
                     <div className="mt-5">
                         <label className="block">
                             <FieldLabel>Discovery tags</FieldLabel>
@@ -179,6 +251,7 @@ export function ServerHubSettings({ guild, channels, onUpdate, setError }: Serve
                                 onChange={e => setDiscoveryTags(e.target.value)}
                                 placeholder="gaming, open-source, friends"
                                 maxLength={240}
+                                disabled={visibility !== 'public'}
                             />
                         </label>
                         <p className="mt-2 text-meta text-text-muted">Comma-separated — helps the right people find you.</p>

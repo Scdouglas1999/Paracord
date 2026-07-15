@@ -67,7 +67,11 @@ def run_smoke(args: argparse.Namespace) -> None:
                 "PARACORD_REGISTRATION_ENABLED": "true",
                 "PARACORD_AUTH_REQUIRE_EMAIL": "true",
                 "PARACORD_LOG_ANSI": "false",
-                "PARACORD_WS_MAX_CONNECTIONS": str(args.max_connections),
+                # Pre-auth sockets deliberately use a separate, smaller budget
+                # than authenticated connections. Exercising the authenticated
+                # global limit here would not test the flood-control path this
+                # smoke script is named for.
+                "PARACORD_WS_MAX_PREAUTH_CONNECTIONS": str(args.max_connections),
             }
         )
 

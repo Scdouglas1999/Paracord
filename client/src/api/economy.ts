@@ -5,6 +5,7 @@ export interface EconomyLeaderboardEntry {
   user: {
     id: string;
     username: string;
+    display_name?: string | null;
     discriminator: number;
     avatar?: string | null;
   };

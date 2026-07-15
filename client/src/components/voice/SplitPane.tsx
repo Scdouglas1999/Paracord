@@ -37,7 +37,10 @@ export function SplitPane({
   };
 
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-border-subtle">
+    <div
+      data-native-underlay-clear=""
+      className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-border-subtle"
+    >
       {/* Source picker overlay */}
       <div className="absolute left-2 top-2 z-20">
         <SplitPaneSourcePicker

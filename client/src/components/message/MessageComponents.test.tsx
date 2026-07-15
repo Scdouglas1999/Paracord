@@ -7,7 +7,9 @@ import { MessageComponents } from './MessageComponents';
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
   getMembers: vi.fn(),
+  getRoles: vi.fn(),
   toastError: vi.fn(),
+  addPendingInteraction: vi.fn(),
 }));
 
 vi.mock('../../api/client', () => ({
@@ -15,21 +17,48 @@ vi.mock('../../api/client', () => ({
   extractApiError: (err: unknown) => (err instanceof Error ? err.message : 'Unexpected failure'),
 }));
 
+vi.mock('../../api/activeClient', () => ({
+  getApi: () => ({ post: mocks.post }),
+}));
+
 vi.mock('../../api/guilds', () => ({
   guildApi: {
     getChannels: vi.fn(),
     getMembers: mocks.getMembers,
-    getRoles: vi.fn(),
+    getRoles: mocks.getRoles,
   },
 }));
 
 vi.mock('../../stores/channelStore', () => ({
-  useChannelStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      channelsByGuild: {
-        'guild-1': [{ id: 'channel-1', type: 0, name: 'general', position: 0 }],
-      },
-    }),
+  useChannelStore: Object.assign(
+    (selector: (state: unknown) => unknown) =>
+      selector({
+        channelsByGuild: {
+          'guild-1': [{ id: 'channel-1', type: 0, name: 'general', position: 0 }],
+        },
+      }),
+    {
+      getState: () => ({
+        channelsByGuild: {
+          'guild-1': [{ id: 'channel-1', type: 0, name: 'general', position: 0 }],
+        },
+      }),
+    },
+  ),
+}));
+
+vi.mock('../../stores/interactionStore', () => ({
+  useInteractionStore: Object.assign(
+    (selector: (state: unknown) => unknown) =>
+      selector({
+        addPendingInteraction: mocks.addPendingInteraction,
+      }),
+    {
+      getState: () => ({
+        addPendingInteraction: mocks.addPendingInteraction,
+      }),
+    },
+  ),
 }));
 
 vi.mock('../../stores/toastStore', () => ({
@@ -41,6 +70,17 @@ vi.mock('../../stores/toastStore', () => ({
 describe('MessageComponents interaction feedback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.post.mockResolvedValue({
+      data: {
+        id: 'ix-1',
+        application_id: 'app-1',
+        type: 3,
+        channel_id: 'channel-1',
+        guild_id: 'guild-1',
+        token: 'tok',
+        version: 1,
+      },
+    });
     vi.stubGlobal('open', vi.fn());
   });
 
@@ -56,6 +96,7 @@ describe('MessageComponents interaction feedback', () => {
       <MessageComponents
         channelId="channel-1"
         messageId="message-1"
+        guildId="guild-1"
         components={[
           {
             type: ComponentType.ActionRow,
@@ -77,6 +118,49 @@ describe('MessageComponents interaction feedback', () => {
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalledWith(
         'Could not run message action: Bot endpoint rejected the click',
+      );
+    });
+  });
+
+  it('posts guild_id and tracks pending on successful button click', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MessageComponents
+        channelId="channel-1"
+        messageId="message-1"
+        guildId="guild-1"
+        components={[
+          {
+            type: ComponentType.ActionRow,
+            components: [
+              {
+                type: ComponentType.Button,
+                style: ButtonStyle.Primary,
+                custom_id: 'approve',
+                label: 'Approve',
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Approve' }));
+
+    await waitFor(() => {
+      expect(mocks.post).toHaveBeenCalledWith(
+        '/interactions',
+        expect.objectContaining({
+          type: 3,
+          guild_id: 'guild-1',
+          channel_id: 'channel-1',
+          message_id: 'message-1',
+          custom_id: 'approve',
+        }),
+      );
+      expect(mocks.addPendingInteraction).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'ix-1', guild_id: 'guild-1' }),
       );
     });
   });
@@ -145,6 +229,55 @@ describe('MessageComponents interaction feedback', () => {
       'Could not load options: Members unavailable',
     );
     expect(mocks.toastError).toHaveBeenCalledWith('Could not load options: Members unavailable');
+  });
+
+  it('strips user/role prefixes before submitting mentionable select values', async () => {
+    const user = userEvent.setup();
+    mocks.getMembers.mockResolvedValueOnce({
+      data: [
+        {
+          user: { id: '111', username: 'Ada', avatar_hash: null },
+          nick: null,
+        },
+      ],
+    });
+    mocks.getRoles.mockResolvedValueOnce({
+      data: [{ id: '222', name: 'Mods', color: 0, position: 1 }],
+    });
+
+    render(
+      <MessageComponents
+        channelId="channel-1"
+        messageId="message-1"
+        guildId="guild-1"
+        components={[
+          {
+            type: ComponentType.ActionRow,
+            components: [
+              {
+                type: ComponentType.MentionableSelect,
+                custom_id: 'ping-target',
+                placeholder: 'Select a user or role...',
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Select a user or role...' }));
+    await user.click(await screen.findByRole('button', { name: /Ada/i }));
+
+    await waitFor(() => {
+      expect(mocks.post).toHaveBeenCalledWith(
+        '/interactions',
+        expect.objectContaining({
+          custom_id: 'ping-target',
+          values: ['111'],
+        }),
+      );
+    });
+    expect(mocks.post.mock.calls[0][1].values[0]).not.toMatch(/^user:/);
   });
 
   it('renders safe entity avatars and falls back for unresolved avatar hashes', async () => {

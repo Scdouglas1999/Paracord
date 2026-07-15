@@ -75,6 +75,26 @@ const _fetchInFlight = new Set<string>();
 const _channelFetchControllers = new Map<string, AbortController>();
 const MAX_FETCH_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 500;
+/** Debounce progressive-unlock refreshes so message spam doesn't thrash the API. */
+const _visibilityRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const VISIBILITY_REFRESH_DEBOUNCE_MS = 750;
+
+/** Re-fetch a guild's channel list after onboarding/XP/message activity that may unlock channels. */
+export function refreshGuildChannelVisibility(guildId: string | null | undefined): void {
+  if (!guildId) return;
+  const existing = _visibilityRefreshTimers.get(guildId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    _visibilityRefreshTimers.delete(guildId);
+    // If a fetch is already in flight, reschedule rather than dropping the unlock refresh.
+    if (_fetchInFlight.has(guildId)) {
+      refreshGuildChannelVisibility(guildId);
+      return;
+    }
+    void useChannelStore.getState().fetchChannels(guildId);
+  }, VISIBILITY_REFRESH_DEBOUNCE_MS);
+  _visibilityRefreshTimers.set(guildId, timer);
+}
 
 export const useChannelStore = create<ChannelState>()((set, get) => ({
   channelsByGuild: {},
@@ -123,7 +143,22 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
           timeout: 5_000,
           signal: controller.signal,
         });
-        const sorted = data.map(normalizeChannel).sort((a, b) => a.position - b.position);
+        // Progressive / rules onboarding can hide channels the member is not
+        // ready for yet. Prefer the visible-id list when the endpoint responds;
+        // fall back to the full permission-filtered list on failure.
+        let visibleIds: Set<string> | null = null;
+        try {
+          const visible = await channelApi.getVisibleChannels(guildId);
+          if (Array.isArray(visible.data?.channel_ids)) {
+            visibleIds = new Set(visible.data.channel_ids.map(String));
+          }
+        } catch {
+          visibleIds = null;
+        }
+        const sorted = data
+          .map(normalizeChannel)
+          .filter((channel) => (visibleIds ? visibleIds.has(channel.id) : true))
+          .sort((a, b) => a.position - b.position);
         set((state) => {
           const channelsById = reindexGuild(
             state.channelsById,
@@ -323,7 +358,25 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
       const channelsById = reindexGuild(state.channelsById, existing, updated);
       const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
       const channels = state.selectedGuildId === guildId ? updated : state.channels;
-      return { channelsByGuild, channelsById, channels };
+
+      // Keep the live DM index in sync for DM / group-DM creates (CHANNEL_CREATE).
+      let dmChannelsByServer = state.dmChannelsByServer;
+      const isDm = !guildId && (normalized.type === 1 || normalized.type === 3
+        || normalized.channel_type === 1 || normalized.channel_type === 3);
+      if (isDm) {
+        const serverId = useServerListStore.getState().activeServerId;
+        if (serverId) {
+          const serverDms = dmChannelsByServer[serverId] || [];
+          if (!serverDms.some((c) => c.id === normalized.id)) {
+            dmChannelsByServer = {
+              ...dmChannelsByServer,
+              [serverId]: [...serverDms, normalized],
+            };
+          }
+        }
+      }
+
+      return { channelsByGuild, channelsById, channels, dmChannelsByServer };
     }),
 
   updateChannel: (channel) =>
@@ -337,7 +390,17 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
       const channelsById = reindexGuild(state.channelsById, existing, updated);
       const channelsByGuild = { ...state.channelsByGuild, [guildId]: updated };
       const channels = state.selectedGuildId === guildId ? updated : state.channels;
-      return { channelsByGuild, channelsById, channels };
+
+      let dmChannelsByServer = state.dmChannelsByServer;
+      if (!guildId) {
+        const next: Record<string, Channel[]> = {};
+        for (const [serverId, list] of Object.entries(dmChannelsByServer)) {
+          next[serverId] = list.map((c) => (c.id === normalized.id ? normalized : c));
+        }
+        dmChannelsByServer = next;
+      }
+
+      return { channelsByGuild, channelsById, channels, dmChannelsByServer };
     }),
 
   removeChannel: (guildId, channelId) =>
@@ -348,7 +411,18 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
       const channelsById = reindexGuild(state.channelsById, existing, updated);
       const channelsByGuild = { ...state.channelsByGuild, [gid]: updated };
       const channels = state.selectedGuildId === gid ? updated : state.channels;
-      return { channelsByGuild, channelsById, channels };
+
+      let dmChannelsByServer = state.dmChannelsByServer;
+      if (!gid) {
+        const next: Record<string, Channel[]> = {};
+        for (const [serverId, list] of Object.entries(dmChannelsByServer)) {
+          const filtered = list.filter((c) => c.id !== channelId);
+          if (filtered.length > 0) next[serverId] = filtered;
+        }
+        dmChannelsByServer = next;
+      }
+
+      return { channelsByGuild, channelsById, channels, dmChannelsByServer };
     }),
 
   updateLastMessageId: (channelId, messageId) =>

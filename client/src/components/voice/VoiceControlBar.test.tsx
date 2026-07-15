@@ -7,8 +7,13 @@ const voiceHook = vi.hoisted(() => ({
   current: {} as {
     selfMute: boolean;
     selfDeaf: boolean;
+    selfVideo: boolean;
+    micInputActive: boolean;
+    micInputLevel: number;
+    micUplinkState: string;
     toggleMute: ReturnType<typeof vi.fn>;
     toggleDeaf: ReturnType<typeof vi.fn>;
+    toggleVideo: ReturnType<typeof vi.fn>;
     leaveChannel: ReturnType<typeof vi.fn>;
   },
 }));
@@ -49,8 +54,13 @@ describe('VoiceControlBar', () => {
     voiceHook.current = {
       selfMute: false,
       selfDeaf: false,
+      selfVideo: false,
+      micInputActive: true,
+      micInputLevel: 0.36,
+      micUplinkState: 'sending',
       toggleMute: vi.fn(),
       toggleDeaf: vi.fn(),
+      toggleVideo: vi.fn(),
       leaveChannel: vi.fn().mockResolvedValue(undefined),
     };
     streamHook.current = {
@@ -79,6 +89,14 @@ describe('VoiceControlBar', () => {
     expect(screen.getByRole('button', { name: 'Unmute microphone' })).toBeInTheDocument();
   });
 
+  it('shows live microphone level feedback and opens audio devices', () => {
+    render(<VoiceControlBar />);
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio devices' }));
+    expect(screen.getByRole('dialog', { name: 'Audio devices and microphone check' })).toBeInTheDocument();
+    expect(screen.getByRole('meter', { name: 'Microphone input level' })).toHaveAttribute('aria-valuenow', '36');
+    expect(screen.getByText('Microphone is working')).toBeInTheDocument();
+  });
+
   it('does not dispatch toggleMute in push-to-talk mode', () => {
     setPttMode(true);
     render(<VoiceControlBar />);
@@ -105,6 +123,16 @@ describe('VoiceControlBar', () => {
     expect(screen.getByRole('button', { name: 'Undeafen audio' })).toBeInTheDocument();
   });
 
+  it('dispatches toggleVideo and reflects the camera-on label', () => {
+    const { rerender } = render(<VoiceControlBar />);
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on camera' }));
+    expect(voiceHook.current.toggleVideo).toHaveBeenCalledTimes(1);
+
+    voiceHook.current.selfVideo = true;
+    rerender(<VoiceControlBar />);
+    expect(screen.getByRole('button', { name: 'Turn off camera' })).toBeInTheDocument();
+  });
+
   it('dispatches leaveChannel from the disconnect button', () => {
     render(<VoiceControlBar />);
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect from voice' }));
@@ -118,7 +146,46 @@ describe('VoiceControlBar', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Share screen' }));
     });
-    expect(streamHook.current.startStream).toHaveBeenCalledWith('1080p60', undefined);
+    expect(streamHook.current.startStream).toHaveBeenCalledWith('720p30', undefined);
+  });
+
+  it('labels capture settings as share quality and dismisses on Escape', () => {
+    render(<VoiceControlBar />);
+    fireEvent.click(screen.getByRole('button', { name: 'Choose share quality' }));
+    expect(screen.getByText('Share quality')).toBeInTheDocument();
+    expect(screen.getByText(/Sets the quality you send/i)).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByText('Share quality')).toBeNull();
+  });
+
+  it('portals the share quality menu to document.body', () => {
+    render(
+      <div data-testid="mount">
+        <VoiceControlBar />
+      </div>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Choose share quality' }));
+    const portal = document.querySelector('[data-stream-overlay-portal]');
+    expect(portal).not.toBeNull();
+    expect(portal?.parentElement).toBe(document.body);
+    expect(screen.getByTestId('mount').contains(portal)).toBe(false);
+    expect(portal).toHaveTextContent('Share quality');
+  });
+
+  it('dismisses the screen share warning popover on outside pointerdown', () => {
+    voiceState.current.streamAudioWarning = 'System audio was not captured.';
+    render(
+      <div>
+        <VoiceControlBar />
+        <button type="button">Outside</button>
+      </div>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show screen share warning' }));
+    expect(screen.getByText('System audio was not captured.')).toBeInTheDocument();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside' }));
+    expect(screen.queryByText('System audio was not captured.')).toBeNull();
   });
 
   it('shows stop-stream affordances and dispatches stopStream while streaming', () => {
@@ -145,5 +212,38 @@ describe('VoiceControlBar', () => {
     rerender(<VoiceControlBar onToggleChat={onToggleChat} isChatOpen={false} />);
     fireEvent.click(screen.getByRole('button', { name: 'Show voice chat' }));
     expect(onToggleChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('replaces publishing controls with a request-to-speak action for stage audience members', () => {
+    const onToggleRequestToSpeak = vi.fn();
+    render(
+      <VoiceControlBar
+        listenOnly
+        onToggleRequestToSpeak={onToggleRequestToSpeak}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Request to speak' }));
+    expect(onToggleRequestToSpeak).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /microphone/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /camera/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /share screen/i })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Deafen audio' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Disconnect from voice' })).toBeInTheDocument();
+  });
+
+  it('shows a cancellable pending state after raising a hand', () => {
+    const onToggleRequestToSpeak = vi.fn();
+    render(
+      <VoiceControlBar
+        listenOnly
+        requestToSpeakPending
+        onToggleRequestToSpeak={onToggleRequestToSpeak}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: 'Cancel request to speak' });
+    expect(button).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Request sent')).toBeInTheDocument();
   });
 });

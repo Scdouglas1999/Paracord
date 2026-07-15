@@ -56,6 +56,14 @@ impl VoiceTestContext {
         let request = build_json_request(method, path, body, Some(&self.token))?;
         dispatch_json(&self.app, request).await
     }
+
+    /// Record a directional friendship from the authenticated caller to `other_id`
+    /// so the group-DM consent gate (friend-or-shared-guild) admits the recipient.
+    async fn befriend(&self, other_id: i64) -> anyhow::Result<()> {
+        let caller_id = paracord_core::auth::validate_token(&self.token, "voice-test-secret")?.sub;
+        paracord_db::relationships::create_relationship(&self.db, caller_id, other_id, 1).await?;
+        Ok(())
+    }
 }
 
 async fn create_guild_and_voice_channel(
@@ -95,6 +103,235 @@ async fn create_guild_and_voice_channel(
         .to_string();
 
     Ok((guild_id, channel_id))
+}
+
+async fn create_guild_and_stage_channel(
+    ctx: &VoiceTestContext,
+) -> anyhow::Result<(String, String, String)> {
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/guilds",
+            Some(json!({ "name": "Stage Test Guild", "icon": Value::Null })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "guild creation: {payload}");
+    let guild_id = payload["id"].as_str().context("guild id")?.to_string();
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/guilds/{guild_id}/channels"),
+            Some(json!({
+                "name": "town-hall",
+                "channel_type": 13,
+                "parent_id": Value::Null,
+                "required_role_ids": Value::Null,
+            })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "stage channel creation: {payload}"
+    );
+    let channel_id = payload["id"].as_str().context("channel id")?.to_string();
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/stage-instances",
+            Some(json!({
+                "channel_id": channel_id,
+                "topic": "Release town hall",
+                "privacy_level": 2,
+            })),
+        )
+        .await?;
+    if status != StatusCode::CREATED {
+        let db_stage = paracord_db::stage_instances::get_stage_instance_by_channel(
+            &ctx.db,
+            channel_id.parse()?,
+        )
+        .await;
+        anyhow::bail!("stage creation failed ({status}): {payload}; database row: {db_stage:?}");
+    }
+    let stage_id = payload["id"].as_str().context("stage id")?.to_string();
+    Ok((guild_id, channel_id, stage_id))
+}
+
+async fn request_json_with_token(
+    ctx: &VoiceTestContext,
+    token: &str,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+) -> anyhow::Result<(StatusCode, Value)> {
+    let request = build_json_request(method, path, body, Some(token))?;
+    dispatch_json(&ctx.app, request).await
+}
+
+#[tokio::test]
+async fn stage_audience_can_raise_hand_and_moderator_can_promote() -> anyhow::Result<()> {
+    let ctx = VoiceTestContext::new(true, false).await?;
+    let (guild_id, channel_id, stage_id) = create_guild_and_stage_channel(&ctx).await?;
+    let guild_id_num: i64 = guild_id.parse()?;
+    let channel_id_num: i64 = channel_id.parse()?;
+
+    let audience_token = create_authenticated_user_token(
+        &ctx.db,
+        "voice-test-secret",
+        "stageaudience",
+        "StageAudiencePass123!",
+    )
+    .await?;
+    let audience_id =
+        paracord_core::auth::validate_token(&audience_token, "voice-test-secret")?.sub;
+    paracord_db::members::add_member(&ctx.db, audience_id, guild_id_num).await?;
+
+    let (status, join_payload) = request_json_with_token(
+        &ctx,
+        &audience_token,
+        Method::GET,
+        &format!("/api/v1/voice/{channel_id}/join"),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "stage join: {join_payload}");
+    assert_eq!(join_payload["suppress"], json!(true));
+
+    let audience_state =
+        paracord_db::voice_states::get_user_voice_state(&ctx.db, audience_id, Some(guild_id_num))
+            .await?
+            .context("audience voice state")?;
+    assert_eq!(audience_state.channel_id, channel_id_num);
+    assert!(audience_state.suppress);
+    assert!(audience_state.request_to_speak_at.is_none());
+
+    let (status, payload) = request_json_with_token(
+        &ctx,
+        &audience_token,
+        Method::POST,
+        &format!("/api/v1/stage-instances/{stage_id}/speaker-requests/@me"),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "raise hand: {payload}");
+    let requested_state =
+        paracord_db::voice_states::get_user_voice_state(&ctx.db, audience_id, Some(guild_id_num))
+            .await?
+            .context("requested voice state")?;
+    assert!(requested_state.request_to_speak_at.is_some());
+
+    // A normal gateway voice-state sync (for example, deafening while waiting)
+    // must accept stage channels and preserve both the audience role and hand raise.
+    let (status, payload) = request_json_with_token(
+        &ctx,
+        &audience_token,
+        Method::POST,
+        "/api/v2/rt/commands",
+        Some(json!({
+            "command_id": "stage-audience-state-sync",
+            "type": "voice_state_update",
+            "payload": {
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "self_mute": true,
+                "self_deaf": true,
+                "self_video": false,
+            }
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "stage state sync: {payload}");
+    let synced_state =
+        paracord_db::voice_states::get_user_voice_state(&ctx.db, audience_id, Some(guild_id_num))
+            .await?
+            .context("synced audience voice state")?;
+    assert!(synced_state.suppress);
+    assert!(synced_state.request_to_speak_at.is_some());
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/stage-instances/{stage_id}/speakers/{audience_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT, "promote speaker: {payload}");
+    let promoted_state =
+        paracord_db::voice_states::get_user_voice_state(&ctx.db, audience_id, Some(guild_id_num))
+            .await?
+            .context("promoted voice state")?;
+    assert!(!promoted_state.suppress);
+    assert!(promoted_state.request_to_speak_at.is_none());
+    Ok(())
+}
+
+// ── Stage-instance GET is gated by VIEW_CHANNEL (info-disclosure regression) ──
+
+#[tokio::test]
+async fn stage_instance_get_requires_view_channel() -> anyhow::Result<()> {
+    let ctx = VoiceTestContext::new(true, false).await?;
+    let (guild_id, channel_id, _stage_id) = create_guild_and_stage_channel(&ctx).await?;
+    let guild_id_num: i64 = guild_id.parse()?;
+    let channel_id_num: i64 = channel_id.parse()?;
+
+    // A guild member who can view the stage channel reads the live instance.
+    let member_token = create_authenticated_user_token(
+        &ctx.db,
+        "voice-test-secret",
+        "stageviewer",
+        "StageViewerPass123!",
+    )
+    .await?;
+    let member_id = paracord_core::auth::validate_token(&member_token, "voice-test-secret")?.sub;
+    paracord_db::members::add_member(&ctx.db, member_id, guild_id_num).await?;
+
+    let (status, payload) = request_json_with_token(
+        &ctx,
+        &member_token,
+        Method::GET,
+        &format!("/api/v1/channels/{channel_id}/stage-instance"),
+        None,
+    )
+    .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "member with VIEW_CHANNEL should read the stage instance: {payload}"
+    );
+    assert_eq!(payload["channel_id"], json!(channel_id));
+
+    // Deny VIEW_CHANNEL on this stage channel for the member via a member-scoped
+    // permission overwrite. The member is still a guild member, so the old
+    // `ensure_guild_member`-only gate would (incorrectly) still return the
+    // instance; the new VIEW_CHANNEL gate must now forbid it.
+    paracord_db::channel_overwrites::upsert_channel_overwrite(
+        &ctx.db,
+        channel_id_num,
+        member_id,
+        paracord_core::permissions::OVERWRITE_TARGET_MEMBER,
+        0,
+        paracord_models::permissions::Permissions::VIEW_CHANNEL.bits(),
+    )
+    .await?;
+
+    let (status, payload) = request_json_with_token(
+        &ctx,
+        &member_token,
+        Method::GET,
+        &format!("/api/v1/channels/{channel_id}/stage-instance"),
+        None,
+    )
+    .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "member denied VIEW_CHANNEL must not read the stage instance: {payload}"
+    );
+
+    Ok(())
 }
 
 // ── Test D1: native=true + lk=true → native-only response with livekit_available ──
@@ -249,6 +486,7 @@ async fn native_dm_voice_token_uses_revocable_zero_guild_room() -> anyhow::Resul
         "hash",
     )
     .await?;
+    ctx.befriend(recipient_id).await?;
 
     let (status, dm_payload) = ctx
         .request_json(
@@ -369,6 +607,8 @@ async fn dm_voice_leave_requires_membership_and_preserves_other_active_dm() -> a
         "hash",
     )
     .await?;
+    ctx.befriend(recipient_one_id).await?;
+    ctx.befriend(recipient_two_id).await?;
     let outsider_token = create_authenticated_user_token(
         &ctx.db,
         "voice-test-secret",
@@ -569,6 +809,7 @@ async fn native_only_guild_and_dm_join_serve_full_native_contract() -> anyhow::R
         "hash",
     )
     .await?;
+    ctx.befriend(recipient_id).await?;
     let (status, dm_payload) = ctx
         .request_json(
             Method::POST,

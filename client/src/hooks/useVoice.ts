@@ -99,8 +99,16 @@ export function useVoice() {
     stopStreamStore();
   }, [stopStreamStore]);
 
-  const toggleVideo = useCallback(() => {
-    useVoiceStore.getState().toggleVideo();
+  const toggleVideo = useCallback(async () => {
+    await useVoiceStore.getState().toggleVideo();
+    const state = useVoiceStore.getState();
+    gateway.updateVoiceStateAll(
+      state.guildId,
+      state.channelId,
+      state.selfMute,
+      state.selfDeaf,
+      state.selfVideo,
+    );
   }, []);
 
   return {

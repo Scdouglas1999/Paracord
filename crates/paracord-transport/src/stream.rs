@@ -66,8 +66,14 @@ pub struct VideoCodecCapability {
     pub encode: bool,
     #[serde(default)]
     pub decode: bool,
+    /// Whether encoding for this codec is hardware-accelerated. Codec
+    /// negotiation's hardware-first pass keys only on this flag.
     #[serde(default)]
-    pub hardware_accelerated: bool,
+    pub encode_hardware: bool,
+    /// Whether decoding for this codec is hardware-accelerated. Webview-
+    /// contributed decode support is unknown and therefore not hardware.
+    #[serde(default)]
+    pub decode_hardware: bool,
 }
 
 impl VideoCodec {
@@ -186,7 +192,20 @@ impl TrackSubscription {
                 .layers
                 .iter()
                 .any(|layer| layer.layer_id == layer_id && layer.ssrc == ssrc),
-            None => track.layers.iter().any(|layer| layer.ssrc == ssrc),
+            // The requested/active layer id is not published on this track (e.g.
+            // a client asked for layer 2 but the ladder deduped to [0,1]). Do NOT
+            // fan out EVERY layer's ssrc — that forwards all simulcast layers of
+            // the track to this viewer at once, interleaving independent frame_id
+            // streams into one decoder (corruption + constant keyframe requests)
+            // and multiplying the downlink. Match only the lowest published layer
+            // so the viewer still receives a single decodable bitstream.
+            None => match track.layers.iter().map(|layer| layer.layer_id).min() {
+                Some(lowest) => track
+                    .layers
+                    .iter()
+                    .any(|layer| layer.layer_id == lowest && layer.ssrc == ssrc),
+                None => false,
+            },
         }
     }
 }

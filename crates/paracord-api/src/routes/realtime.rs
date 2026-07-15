@@ -36,6 +36,7 @@ pub struct RealtimeEventsQuery {
 /// expired. Short by design: the client fetches a fresh ticket immediately
 /// before opening (or reopening) the stream.
 const STREAM_TICKET_TTL: Duration = Duration::from_secs(45);
+const MAX_PENDING_STREAM_TICKETS: usize = 100_000;
 
 /// Single-use SSE stream tickets: `ticket -> (user_id, minted_at)`. A ticket is
 /// removed on redemption (so it cannot be replayed) and expired tickets are
@@ -603,8 +604,40 @@ async fn build_ready_payload(
         let voice_states = paracord_db::voice_states::get_guild_voice_states(&state.db, guild.id)
             .await
             .unwrap_or_default();
+
+        // Only expose the voice roster of channels this user can view. The live
+        // voice event path gates on VIEW_CHANNEL via can_receive_channel_event;
+        // apply the same check to the READY snapshot so a hidden voice channel's
+        // participant list is not leaked. Compute permissions once per distinct
+        // channel to bound extra queries.
+        let mut channel_visibility: HashMap<i64, bool> = HashMap::new();
+        for vs in &voice_states {
+            if let std::collections::hash_map::Entry::Vacant(e) =
+                channel_visibility.entry(vs.channel_id)
+            {
+                let visible = paracord_core::permissions::compute_channel_permissions_cached(
+                    &state.permission_cache,
+                    &state.db,
+                    guild.id,
+                    vs.channel_id,
+                    guild.owner_id,
+                    user_id,
+                )
+                .await
+                .map(|perms| perms.contains(Permissions::VIEW_CHANNEL))
+                .unwrap_or(false);
+                e.insert(visible);
+            }
+        }
+
         let voice_states_json: Vec<Value> = voice_states
             .iter()
+            .filter(|vs| {
+                channel_visibility
+                    .get(&vs.channel_id)
+                    .copied()
+                    .unwrap_or(false)
+            })
             .map(|vs| {
                 json!({
                     "user_id": vs.user_id.to_string(),
@@ -616,6 +649,7 @@ async fn build_ready_payload(
                     "self_stream": vs.self_stream,
                     "self_video": vs.self_video,
                     "suppress": vs.suppress,
+                    "request_to_speak_at": vs.request_to_speak_at.map(|value| value.to_rfc3339()),
                     "mute": false,
                     "deaf": false,
                     "username": &vs.username,
@@ -685,6 +719,17 @@ fn extract_channel_id_from_event(event_type: &str, payload: &Value) -> Option<i6
         }
     }
 
+    // Voice-leave events carry a null `channel_id` (the user is no longer in any
+    // channel) but retain `prior_channel_id`, the channel they departed, so the
+    // per-channel VIEW_CHANNEL filter can still gate delivery. Without this,
+    // leaves would fan out guild-wide, leaking presence in hidden voice channels
+    // even though the matching join was correctly filtered.
+    if let Some(raw) = payload.get("prior_channel_id").and_then(|v| v.as_str()) {
+        if let Ok(channel_id) = raw.parse::<i64>() {
+            return Some(channel_id);
+        }
+    }
+
     if matches!(
         event_type,
         "CHANNEL_CREATE"
@@ -738,6 +783,9 @@ pub async fn create_stream_ticket(
     // Opportunistic sweep of expired tickets so the map cannot grow unbounded
     // from tickets that are minted but never redeemed.
     tickets.retain(|_, (_, minted_at)| minted_at.elapsed() < STREAM_TICKET_TTL);
+    if tickets.len() >= MAX_PENDING_STREAM_TICKETS {
+        return Err(ApiError::RateLimited(1));
+    }
 
     let ticket = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     tickets.insert(ticket.clone(), (auth.user_id, Instant::now()));
@@ -1035,7 +1083,7 @@ pub async fn post_command(
                     .await
                     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
                     .ok_or(ApiError::NotFound)?;
-                if channel.channel_type != 2 {
+                if channel.channel_type != 2 && channel.channel_type != 13 {
                     return Err(ApiError::BadRequest("Not a voice channel".into()));
                 }
                 let guild_id = channel.guild_id().ok_or(ApiError::BadRequest(
@@ -1064,6 +1112,30 @@ pub async fn post_command(
                     return Err(ApiError::Forbidden);
                 }
 
+                let existing_voice_state = paracord_db::voice_states::get_user_voice_state(
+                    &state.db,
+                    auth.user_id,
+                    Some(guild_id),
+                )
+                .await
+                .ok()
+                .flatten();
+                let same_channel = existing_voice_state
+                    .as_ref()
+                    .is_some_and(|voice_state| voice_state.channel_id == channel_id);
+                let suppress = if channel.channel_type == 13 {
+                    if same_channel {
+                        existing_voice_state
+                            .as_ref()
+                            .is_some_and(|voice_state| voice_state.suppress)
+                    } else {
+                        !(perms.contains(Permissions::SPEAK)
+                            && perms.contains(Permissions::MANAGE_CHANNELS))
+                    }
+                } else {
+                    false
+                };
+
                 let session_id = auth
                     .session_id
                     .clone()
@@ -1076,6 +1148,15 @@ pub async fn post_command(
                     &session_id,
                 )
                 .await;
+                if !same_channel {
+                    let _ = paracord_db::voice_states::update_suppress(
+                        &state.db,
+                        auth.user_id,
+                        Some(guild_id),
+                        suppress,
+                    )
+                    .await;
+                }
                 state
                     .voice
                     .update_self_mute(channel_id, auth.user_id, self_mute)
@@ -1107,7 +1188,11 @@ pub async fn post_command(
                         "self_deaf": self_deaf,
                         "self_stream": current_self_stream,
                         "self_video": self_video,
-                        "suppress": false,
+                        "suppress": suppress,
+                        "request_to_speak_at": existing_voice_state
+                            .as_ref()
+                            .and_then(|voice_state| voice_state.request_to_speak_at)
+                            .map(|value| value.to_rfc3339()),
                         "mute": false,
                         "deaf": false,
                         "username": user.as_ref().map(|u| u.username.as_str()),
@@ -1144,6 +1229,7 @@ pub async fn post_command(
                         json!({
                             "user_id": auth.user_id.to_string(),
                             "channel_id": Value::Null,
+                            "prior_channel_id": existing_state.channel_id.to_string(),
                             "guild_id": existing_state.guild_id().map(|id| id.to_string()),
                             "self_mute": self_mute,
                             "self_deaf": self_deaf,

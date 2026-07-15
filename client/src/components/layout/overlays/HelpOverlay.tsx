@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import type { RefObject } from 'react';
 import { Keyboard } from 'lucide-react';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
+import { formatShortcutKey } from '../../../lib/keyboardShortcuts';
 import { TopBarOverlay } from './TopBarOverlay';
 
 interface HelpOverlayProps {
@@ -18,8 +19,8 @@ const SHORTCUT_GROUPS: Array<{ title: string; shortcuts: Shortcut[] }> = [
   {
     title: 'Navigation',
     shortcuts: [
-      { label: 'Command palette', keys: ['Ctrl', 'K'] },
-      { label: 'Search in channel', keys: ['Ctrl', 'F'] },
+      { label: 'Command palette', keys: ['Mod', 'K'] },
+      { label: 'Search in channel', keys: ['Mod', 'F'] },
       { label: 'Switch guild', keys: ['Ctrl', 'Alt', '↑/↓'] },
     ],
   },
@@ -74,7 +75,7 @@ export function HelpOverlay({ open, onClose }: HelpOverlayProps) {
                         key={k}
                         className="inline-flex min-w-[1.75rem] items-center justify-center rounded-xs bg-bg-mod-strong px-1.5 py-1 font-code text-meta font-semibold text-text-secondary"
                       >
-                        {k}
+                        {formatShortcutKey(k)}
                       </kbd>
                     ))}
                   </dd>

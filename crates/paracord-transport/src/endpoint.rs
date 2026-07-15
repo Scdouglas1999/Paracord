@@ -25,6 +25,64 @@ pub struct MediaEndpoint {
     endpoint: quinn::Endpoint,
 }
 
+/// Send-side datagram buffer for publisher/client endpoints.
+///
+/// Video frames are fragmented into MTU-sized unreliable datagrams, so a single
+/// keyframe at screen-share bitrates is a burst of hundreds of datagrams.
+/// quinn's default datagram send buffer is ~50 KB; anything beyond it is
+/// silently dropped before reaching the wire, starving frame reassembly
+/// (whole-frame loss). Publishers must absorb multi-megabyte keyframe bursts.
+const CLIENT_DATAGRAM_SEND_BUFFER: usize = 8 * 1024 * 1024;
+
+/// Send-side datagram buffer for the relay's server endpoint (egress to viewers).
+///
+/// On relay->viewer egress a large send buffer is harmful, not helpful: it lets
+/// quinn queue several seconds of stale video before it starts dropping, so a
+/// viewer whose downlink briefly dips sees latency balloon instead of the relay
+/// shedding old frames. A ~1MB egress buffer bounds queued staleness to a
+/// fraction of a second while still clearing a single fragmented frame.
+const RELAY_EGRESS_DATAGRAM_SEND_BUFFER: usize = 1024 * 1024;
+
+/// Receive-side datagram buffer, sized to absorb an ingress keyframe burst.
+const DATAGRAM_RECEIVE_BUFFER: usize = 8 * 1024 * 1024;
+
+/// Concurrent unidirectional streams a peer may open toward this endpoint.
+///
+/// The loss-resilient keyframe path opens one uni stream per whole keyframe
+/// (publisher->relay and relay->each viewer). One stream is normally in flight
+/// per track at a time, but under loss a retransmitting keyframe can briefly
+/// overlap the next, and a viewer subscribed to several tracks multiplies that.
+/// A generous ceiling keeps a keyframe from ever being flow-controlled off the
+/// wire while still bounding how many streams a peer can hold open.
+const MAX_CONCURRENT_UNI_STREAMS: u32 = 256;
+
+fn base_transport_config(send_buffer: usize) -> quinn::TransportConfig {
+    let mut transport = quinn::TransportConfig::default();
+    transport.datagram_send_buffer_size(send_buffer);
+    transport.datagram_receive_buffer_size(Some(DATAGRAM_RECEIVE_BUFFER));
+    transport.max_concurrent_uni_streams(MAX_CONCURRENT_UNI_STREAMS.into());
+    // quinn defaults to a 30s idle timeout with NO keep-alive pings. Media
+    // sessions must survive quiet periods (voice-only lulls, brief encoder
+    // stalls, a co-located server briefly starved for CPU) without the
+    // connection being torn down as "timed out".
+    transport.keep_alive_interval(Some(std::time::Duration::from_secs(5)));
+    transport.max_idle_timeout(Some(
+        quinn::IdleTimeout::try_from(std::time::Duration::from_secs(30))
+            .expect("30s fits in a QUIC idle timeout"),
+    ));
+    transport
+}
+
+/// Transport tuning for the relay's server endpoint (bounded egress buffer).
+pub(crate) fn server_transport_config() -> Arc<quinn::TransportConfig> {
+    Arc::new(base_transport_config(RELAY_EGRESS_DATAGRAM_SEND_BUFFER))
+}
+
+/// Transport tuning for publisher/client endpoints (large keyframe-burst buffer).
+pub(crate) fn client_transport_config() -> Arc<quinn::TransportConfig> {
+    Arc::new(base_transport_config(CLIENT_DATAGRAM_SEND_BUFFER))
+}
+
 impl MediaEndpoint {
     /// Bind a QUIC endpoint to the given address with the provided TLS config.
     ///
@@ -37,8 +95,9 @@ impl MediaEndpoint {
             .with_single_cert(tls.cert_chain.clone(), tls.private_key.clone_key())?;
         server_crypto.alpn_protocols = vec![b"paracord-media".to_vec()];
 
-        let server_config =
+        let mut server_config =
             quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
+        server_config.transport_config(server_transport_config());
 
         let endpoint = quinn::Endpoint::server(server_config, addr)?;
 
@@ -63,8 +122,9 @@ impl MediaEndpoint {
 
         server_crypto.alpn_protocols = alpn_protocols;
 
-        let server_config =
+        let mut server_config =
             quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
+        server_config.transport_config(server_transport_config());
 
         let endpoint = quinn::Endpoint::server(server_config, addr)?;
 
@@ -164,9 +224,11 @@ fn pinned_client_config(expected_sha256: [u8; 32]) -> anyhow::Result<quinn::Clie
         .with_no_client_auth();
     client_crypto.alpn_protocols = vec![b"paracord-media".to_vec()];
 
-    Ok(quinn::ClientConfig::new(Arc::new(
+    let mut client_config = quinn::ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
-    )))
+    ));
+    client_config.transport_config(client_transport_config());
+    Ok(client_config)
 }
 
 /// Verifies a self-signed media certificate against an exact SHA-256 pin and

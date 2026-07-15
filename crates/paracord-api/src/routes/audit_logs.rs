@@ -39,7 +39,7 @@ pub async fn get_audit_logs(
     );
     paracord_core::permissions::require_permission(perms, Permissions::VIEW_AUDIT_LOG)?;
 
-    let limit = params.limit.unwrap_or(50).min(100);
+    let limit = params.limit.unwrap_or(50).clamp(1, 100);
 
     let entries = paracord_db::audit_log::get_guild_entries(
         &state.db,

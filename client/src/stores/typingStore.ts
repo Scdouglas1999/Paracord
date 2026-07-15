@@ -9,42 +9,42 @@ interface TypingState {
   reset: () => void;
 }
 
-export const useTypingStore = create<TypingState>()((set) => ({
+export const useTypingStore = create<TypingState>()((set, get) => ({
   typingByChannel: {},
 
-  addTyping: (channelId, userId) =>
-    set((state) => {
-      const channelUsers = state.typingByChannel[channelId] || [];
-      const nextUsers = channelUsers.includes(userId)
-        ? channelUsers
-        : [...channelUsers, userId];
+  addTyping: (channelId, userId) => {
+    // Always refresh the expiry timer, even when the user is already listed.
+    const timeoutKey = `${channelId}:${userId}`;
+    const existing = typingTimeouts.get(timeoutKey);
+    if (existing) clearTimeout(existing);
+    typingTimeouts.set(
+      timeoutKey,
+      setTimeout(() => {
+        set((current) => {
+          const users = (current.typingByChannel[channelId] || []).filter((u) => u !== userId);
+          return {
+            typingByChannel: {
+              ...current.typingByChannel,
+              [channelId]: users,
+            },
+          };
+        });
+        typingTimeouts.delete(timeoutKey);
+      }, 8000)
+    );
 
-      const timeoutKey = `${channelId}:${userId}`;
-      const existing = typingTimeouts.get(timeoutKey);
-      if (existing) clearTimeout(existing);
-      typingTimeouts.set(
-        timeoutKey,
-        setTimeout(() => {
-          set((current) => {
-            const users = (current.typingByChannel[channelId] || []).filter((u) => u !== userId);
-            return {
-              typingByChannel: {
-                ...current.typingByChannel,
-                [channelId]: users,
-              },
-            };
-          });
-          typingTimeouts.delete(timeoutKey);
-        }, 8000)
-      );
+    // No-op store update when the user is already typing — avoids cloning the
+    // channel map / notifying subscribers on every TYPING_START refresh.
+    const channelUsers = get().typingByChannel[channelId] || [];
+    if (channelUsers.includes(userId)) return;
 
-      return {
-        typingByChannel: {
-          ...state.typingByChannel,
-          [channelId]: nextUsers,
-        },
-      };
-    }),
+    set((state) => ({
+      typingByChannel: {
+        ...state.typingByChannel,
+        [channelId]: [...(state.typingByChannel[channelId] || []), userId],
+      },
+    }));
+  },
 
   clearChannel: (channelId) =>
     set((state) => {

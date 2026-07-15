@@ -47,6 +47,7 @@ pub async fn list_dms(
                 "recipient": {
                     "id": c.recipient_id.to_string(),
                     "username": c.recipient_username,
+                    "display_name": c.recipient_display_name,
                     "discriminator": c.recipient_discriminator,
                     "avatar_hash": c.recipient_avatar_hash,
                     "public_key": c.recipient_public_key,
@@ -55,23 +56,30 @@ pub async fn list_dms(
         })
         .collect();
 
-    // Append group DMs with their recipients loaded
-    for g in &group_dms {
-        let recipients = paracord_db::dms::list_group_dm_recipients(&state.db, g.id)
+    // Append group DMs with their recipients loaded (one batch query).
+    let group_ids: Vec<i64> = group_dms.iter().map(|g| g.id).collect();
+    let recipients_by_channel =
+        paracord_db::dms::list_group_dm_recipients_for_channels(&state.db, &group_ids)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    for g in &group_dms {
+        let recipients = recipients_by_channel.get(&g.id);
         let recipients_json: Vec<Value> = recipients
-            .iter()
-            .map(|r| {
-                json!({
-                    "id": r.user_id.to_string(),
-                    "username": r.username,
-                    "discriminator": r.discriminator,
-                    "avatar_hash": r.avatar_hash,
-                    "public_key": r.public_key,
-                })
+            .map(|list| {
+                list.iter()
+                    .map(|r| {
+                        json!({
+                            "id": r.user_id.to_string(),
+                            "username": r.username,
+                            "display_name": r.display_name,
+                            "discriminator": r.discriminator,
+                            "avatar_hash": r.avatar_hash,
+                            "public_key": r.public_key,
+                        })
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
         result.push(json!({
             "id": g.id.to_string(),
             "type": g.channel_type,
@@ -155,6 +163,7 @@ pub async fn create_dm(
             "recipient": {
                 "id": recipient.id.to_string(),
                 "username": recipient.username,
+                "display_name": recipient.display_name,
                 "discriminator": recipient.discriminator,
                 "avatar_hash": recipient.avatar_hash,
                 "public_key": recipient.public_key,
@@ -203,12 +212,32 @@ pub async fn create_group_dm(
     }
     recipient_ids.dedup();
 
-    // Verify all recipients exist
+    // Verify all recipients exist and that the caller is permitted to add each
+    // of them: honor block-lists in either direction and require a friend or
+    // shared-guild relationship, mirroring the 1:1 create_dm consent gate.
     for &uid in &recipient_ids {
         paracord_db::users::get_user_by_id(&state.db, uid)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
             .ok_or(ApiError::NotFound)?;
+
+        let blocked =
+            paracord_db::relationships::is_blocked_either_direction(&state.db, auth.user_id, uid)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if blocked {
+            return Err(ApiError::Forbidden);
+        }
+
+        let are_friends = paracord_db::relationships::are_friends(&state.db, auth.user_id, uid)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let share_guild = paracord_db::members::share_any_guild(&state.db, auth.user_id, uid)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        if !are_friends && !share_guild {
+            return Err(ApiError::Forbidden);
+        }
     }
 
     let channel_id = paracord_util::snowflake::generate(1);
@@ -232,6 +261,7 @@ pub async fn create_group_dm(
             json!({
                 "id": r.user_id.to_string(),
                 "username": r.username,
+                "display_name": r.display_name,
                 "discriminator": r.discriminator,
                 "avatar_hash": r.avatar_hash,
                 "public_key": r.public_key,
@@ -260,6 +290,17 @@ pub async fn add_group_dm_recipient(
     auth: AuthUser,
     Path((channel_id, user_id)): Path<(i64, i64)>,
 ) -> Result<StatusCode, ApiError> {
+    // Only group DMs (type 3) may gain recipients — a 1:1 DM (type 1) must not be
+    // mutated into a multi-party channel, mirroring remove_group_dm_recipient.
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    if channel.channel_type != 3 {
+        return Err(ApiError::BadRequest("Not a group DM channel".into()));
+    }
+
     // Verify caller is a recipient
     let is_member = paracord_db::dms::is_dm_recipient(&state.db, channel_id, auth.user_id)
         .await
@@ -273,6 +314,26 @@ pub async fn add_group_dm_recipient(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+
+    // Honor block-lists and the friend/shared-guild consent gate, mirroring
+    // create_dm — a blocking user must not be pullable into a group DM.
+    let blocked =
+        paracord_db::relationships::is_blocked_either_direction(&state.db, auth.user_id, user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if blocked {
+        return Err(ApiError::Forbidden);
+    }
+
+    let are_friends = paracord_db::relationships::are_friends(&state.db, auth.user_id, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let share_guild = paracord_db::members::share_any_guild(&state.db, auth.user_id, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if !are_friends && !share_guild {
+        return Err(ApiError::Forbidden);
+    }
 
     // Count current members to enforce group size limit
     let current_members = paracord_db::dms::get_dm_recipient_ids(&state.db, channel_id)
@@ -347,6 +408,7 @@ pub async fn list_group_dm_recipients(
             json!({
                 "id": r.user_id.to_string(),
                 "username": r.username,
+                "display_name": r.display_name,
                 "discriminator": r.discriminator,
                 "avatar_hash": r.avatar_hash,
                 "public_key": r.public_key,
@@ -476,6 +538,7 @@ pub async fn join_dm_voice(
                 "mute": false,
                 "deaf": false,
                 "username": &user.username,
+                "display_name": &user.display_name,
                 "avatar_hash": user.avatar_hash,
             }),
             recipient_ids,
@@ -532,6 +595,7 @@ pub async fn join_dm_voice(
             "mute": false,
             "deaf": false,
             "username": &user.username,
+            "display_name": &user.display_name,
             "avatar_hash": user.avatar_hash,
         }),
         recipient_ids,
@@ -625,6 +689,7 @@ pub async fn leave_dm_voice(
                 "mute": false,
                 "deaf": false,
                 "username": user.as_ref().map(|u| u.username.as_str()),
+                "display_name": user.as_ref().and_then(|u| u.display_name.as_deref()),
                 "avatar_hash": user.as_ref().and_then(|u| u.avatar_hash.as_deref()),
             }),
             recipient_ids,

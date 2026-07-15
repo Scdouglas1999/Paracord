@@ -3,7 +3,10 @@
 # ============================================================================
 # Usage:
 #   docker build -t paracord .
-#   docker run -p 8090:8090 -v paracord-data:/data paracord
+#   # Publish the plaintext HTTP port to the host loopback only; front it with a
+#   # TLS-terminating reverse proxy (or set PARACORD_TLS_ENABLED=true) before
+#   # exposing it to a LAN/WAN, otherwise auth tokens travel in cleartext.
+#   docker run -p 127.0.0.1:8090:8090 -v paracord-data:/data paracord
 # ============================================================================
 
 # ---------- Stage 1: Build the client web UI ----------
@@ -60,6 +63,10 @@ ENV PARACORD_DATABASE_URL=sqlite:///data/paracord.db?mode=rwc
 ENV PARACORD_STORAGE_PATH=/data/uploads
 ENV PARACORD_MEDIA_STORAGE_PATH=/data/files
 ENV PARACORD_BACKUP_DIR=/data/backups
+# TLS terminates at a reverse proxy by default, so the container itself serves
+# plaintext HTTP on 8090. NEVER publish 8090 beyond the host loopback / a
+# trusted proxy in this mode (see the docker run example above and
+# docker-compose.yml), or set PARACORD_TLS_ENABLED=true to serve HTTPS directly.
 ENV PARACORD_TLS_ENABLED=false
 # Native QUIC/WebTransport media is the default voice path (no LiveKit needed).
 ENV PARACORD_VOICE_NATIVE_MEDIA=true

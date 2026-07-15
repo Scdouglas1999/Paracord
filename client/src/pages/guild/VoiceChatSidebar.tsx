@@ -2,6 +2,7 @@ import { MessageSquare, X } from 'lucide-react';
 import { MessageList } from '../../components/message/MessageList';
 import { MessageInput } from '../../components/message/MessageInput';
 import type { Message } from '../../types';
+import { displayName } from '../../lib/displayName';
 
 type ReplyTarget = { id: string; author: string; content: string } | null;
 
@@ -48,7 +49,7 @@ export function VoiceChatSidebar({
       {header}
       <MessageList
         channelId={channelId}
-        onReply={(msg: Message) => onReply({ id: msg.id, author: msg.author.username, content: msg.content || '' })}
+        onReply={(msg: Message) => onReply({ id: msg.id, author: displayName(msg.author), content: msg.content || '' })}
       />
       <MessageInput
         channelId={channelId}

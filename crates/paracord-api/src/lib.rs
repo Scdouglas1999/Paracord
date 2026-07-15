@@ -22,7 +22,6 @@ use axum::{
     routing::{any, delete, get, patch, post, put},
     Json, Router,
 };
-use dashmap::DashMap;
 use paracord_core::{observability, AppState};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -185,6 +184,14 @@ pub fn build_router() -> Router<AppState> {
                 .delete(routes::users::delete_me),
         )
         .route(
+            "/api/v1/users/@me/avatar",
+            post(routes::users::upload_avatar),
+        )
+        .route(
+            "/api/v1/users/{user_id}/avatar",
+            get(routes::users::get_user_avatar),
+        )
+        .route(
             "/api/v1/users/@me/settings",
             get(routes::users::get_settings).patch(routes::users::update_settings),
         )
@@ -238,6 +245,14 @@ pub fn build_router() -> Router<AppState> {
             "/api/v1/users/@me/read-states",
             get(routes::users::get_read_states),
         )
+        .route(
+            "/api/v1/users/@me/saved-messages",
+            get(routes::channels::list_saved_messages),
+        )
+        .route(
+            "/api/v1/users/@me/saved-messages/{message_id}",
+            put(routes::channels::save_message).delete(routes::channels::remove_saved_message),
+        )
         // Guilds
         .route("/api/v1/guilds", post(routes::guilds::create_guild))
         .route(
@@ -282,7 +297,7 @@ pub fn build_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/guilds/{guild_id}/members/@me",
-            delete(routes::members::leave_guild),
+            put(routes::members::join_public_guild).delete(routes::members::leave_guild),
         )
         .route(
             "/api/v1/guilds/{guild_id}/bans",
@@ -723,6 +738,14 @@ pub fn build_router() -> Router<AppState> {
             "/api/v1/stage-instances/{stage_id}/speakers/{user_id}",
             post(routes::stage::invite_speaker).delete(routes::stage::remove_speaker),
         )
+        .route(
+            "/api/v1/stage-instances/{stage_id}/speaker-requests/@me",
+            post(routes::stage::request_to_speak).delete(routes::stage::cancel_speaker_request),
+        )
+        .route(
+            "/api/v1/stage-instances/{stage_id}/speaker-requests/{user_id}",
+            delete(routes::stage::dismiss_speaker_request),
+        )
         // Voice
         .route(
             "/api/v1/voice/{channel_id}/join",
@@ -870,7 +893,10 @@ pub fn build_router() -> Router<AppState> {
                             kind = "http_request_in",
                             request_bytes,
                             content_type,
-                            query = request.uri().query(),
+                            // Query strings may contain download tickets or
+                            // other bearer material. Presence is useful for
+                            // wire diagnostics; values are never logged.
+                            query_present = request.uri().query().is_some(),
                             "server_in"
                         );
                     }
@@ -1094,25 +1120,39 @@ struct RateBucket {
     window_start: i64,
 }
 
+/// Maximum number of distinct rate-limit buckets kept in memory. Beyond this the
+/// least-recently-used entries are evicted so a flood of unique keys (e.g. an
+/// IPv6 source-address rotation) cannot grow the map without bound.
+const RATE_LIMITER_MAX_BUCKETS: u64 = 100_000;
+
+/// Idle lifetime of a bucket: buckets untouched for this long are evicted.
+const RATE_LIMITER_IDLE_SECONDS: u64 = 600;
+
 pub struct HttpRateLimiter {
-    buckets: DashMap<String, Mutex<RateBucket>>,
+    // moka::sync cache: bounded (LRU-style) and self-expiring, mirroring the
+    // permission cache in paracord-core. Values are shared behind an Arc<Mutex>
+    // so a bucket can be mutated in place after it is fetched from the cache.
+    buckets: moka::sync::Cache<String, Arc<Mutex<RateBucket>>>,
 }
 
 impl HttpRateLimiter {
     fn new() -> Self {
         Self {
-            buckets: DashMap::new(),
+            buckets: moka::sync::Cache::builder()
+                .max_capacity(RATE_LIMITER_MAX_BUCKETS)
+                .time_to_idle(Duration::from_secs(RATE_LIMITER_IDLE_SECONDS))
+                .build(),
         }
     }
 
     /// Returns `None` if the request is allowed, or `Some(retry_after_seconds)` if rate-limited.
     fn check_rate_limit(&self, key: &str, window_seconds: i64, max_count: u32) -> Option<i64> {
         let now = chrono::Utc::now().timestamp();
-        let bucket = self.buckets.entry(key.to_string()).or_insert_with(|| {
-            Mutex::new(RateBucket {
+        let bucket = self.buckets.get_with(key.to_string(), || {
+            Arc::new(Mutex::new(RateBucket {
                 count: 0,
                 window_start: now,
-            })
+            }))
         });
         let mut guard = match bucket.lock() {
             Ok(guard) => guard,
@@ -1133,16 +1173,23 @@ impl HttpRateLimiter {
         }
     }
 
-    fn cleanup_stale(&self, max_age_seconds: i64) {
-        let now = chrono::Utc::now().timestamp();
-        self.buckets.retain(|_, bucket| {
-            let guard = match bucket.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            now.saturating_sub(guard.window_start) <= max_age_seconds
-        });
+    /// Drive moka's pending eviction work so idle/over-capacity buckets are
+    /// reclaimed promptly rather than lazily on the next access.
+    fn run_maintenance(&self) {
+        self.buckets.run_pending_tasks();
     }
+}
+
+/// Normalize a client IP string into its rate-limit key form.
+///
+/// IPv6 addresses are collapsed to their `/64` routing prefix: a single routed
+/// `/64` (the norm for VPS/residential IPv6) exposes 2^64 source addresses, so
+/// keying on the full `/128` lets an attacker get a fresh bucket per request and
+/// defeat per-IP limits. Sharing one bucket across the whole allocation closes
+/// that bypass. IPv4 addresses and non-IP strings (e.g. `"unknown"`) are
+/// returned unchanged.
+pub(crate) fn normalize_ip_for_rate_limit(ip: &str) -> String {
+    paracord_util::client_ip::normalize_for_rate_limit(ip)
 }
 
 static HTTP_RATE_LIMITER: OnceLock<HttpRateLimiter> = OnceLock::new();
@@ -1250,7 +1297,7 @@ pub fn spawn_http_rate_limiter_cleanup(shutdown: Arc<Notify>) {
                 _ = shutdown.notified() => break,
                 _ = ticker.tick() => {
                     if let Some(limiter) = HTTP_RATE_LIMITER.get() {
-                        limiter.cleanup_stale(600);
+                        limiter.run_maintenance();
                     }
                 }
             }
@@ -1268,7 +1315,14 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
         return next.run(req).await;
     }
 
-    let path = req.uri().path().to_string();
+    // Route templates are sufficient for rate-limit class selection and avoid
+    // retaining secret-bearing path parameters longer than necessary.
+    let path = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(axum::extract::MatchedPath::as_str)
+        .unwrap_or_else(|| req.uri().path())
+        .to_string();
     if path == "/livekit" || path.starts_with("/livekit/") {
         // LiveKit signaling is authenticated by its own token and is highly
         // latency-sensitive. Keeping it out of the DB-backed HTTP rate limiter
@@ -1283,46 +1337,20 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
         method,
         Method::POST | Method::PUT | Method::PATCH | Method::DELETE
     );
-    let trust_proxy = std::env::var("PARACORD_TRUST_PROXY")
-        .ok()
-        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(false);
     let peer_ip = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|info| info.0.ip().to_string());
-    let trusted_proxy_ips = if trust_proxy {
-        std::env::var("PARACORD_TRUSTED_PROXY_IPS")
-            .ok()
-            .map(|raw| {
-                raw.split(',')
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty())
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    let can_trust_forwarded = trust_proxy
-        && peer_ip
-            .as_deref()
-            .is_some_and(|ip| trusted_proxy_ips.iter().any(|trusted| trusted == ip));
-
-    let key = if can_trust_forwarded {
-        req.headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split(',').next())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .or_else(|| peer_ip.clone())
-            .unwrap_or_else(|| "unknown".to_string())
-    } else {
-        peer_ip.unwrap_or_else(|| "unknown".to_string())
-    };
+    let forwarded_for = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok());
+    let key =
+        paracord_util::client_ip::resolve_client_ip_from_env(peer_ip.as_deref(), forwarded_for)
+            .unwrap_or_else(|| "unknown".to_owned());
+    // Collapse IPv6 sources to their /64 so an attacker rotating addresses within
+    // a routed allocation cannot mint a fresh bucket per request.
+    let key = normalize_ip_for_rate_limit(&key);
 
     if let Some(limiter) = HTTP_RATE_LIMITER.get() {
         let global_key = format!("http:global:{key}");
@@ -1486,14 +1514,14 @@ async fn security_headers_middleware(req: Request, next: Next) -> Response {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
-                "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: http:; connect-src 'self' ws: wss:; media-src 'self' data: blob: https: http:",
+                "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' wss:; media-src 'self' data: blob: https:",
             ),
         );
     }
     if is_https {
         headers.insert(
             header::STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+            HeaderValue::from_static("max-age=63072000; includeSubDomains"),
         );
     }
 
@@ -1513,7 +1541,14 @@ async fn metrics_middleware(req: Request, next: Next) -> Response {
 async fn request_trace_middleware(mut req: Request, next: Next) -> Response {
     let request_started = Instant::now();
     let method = req.method().clone();
-    let path = req.uri().path().to_string();
+    // Prefer the route template so secret-bearing path parameters (notably
+    // interaction webhook tokens) never enter slow-request logs.
+    let path = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(axum::extract::MatchedPath::as_str)
+        .unwrap_or_else(|| req.uri().path())
+        .to_string();
     let trace_id = Uuid::new_v4().to_string();
     let trace_header = HeaderValue::from_str(&trace_id).ok();
     if let Some(value) = trace_header.clone() {

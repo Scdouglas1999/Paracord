@@ -9,7 +9,7 @@ use thiserror::Error;
 
 /// 48 kHz sample rate (native for Opus).
 pub const SAMPLE_RATE: u32 = 48_000;
-/// 20 ms frame at 48 kHz = 960 samples.
+/// 20 ms frame at 48 kHz = 960 samples *per channel*.
 pub const FRAME_SIZE: usize = 960;
 /// Maximum Opus packet size (recommended by RFC 6716).
 const MAX_PACKET_SIZE: usize = 4000;
@@ -22,28 +22,32 @@ pub enum OpusError {
     FrameSizeMismatch { expected: usize, actual: usize },
 }
 
-/// Opus encoder configured for voice at 48 kHz mono.
+/// Opus encoder. Voice is 48 kHz mono; the stream/system-audio configuration
+/// (see [`OpusEncoder::new_stream_audio`]) is 48 kHz stereo.
 pub struct OpusEncoder {
     inner: OpusEncoderInner,
     encode_buf: Vec<u8>,
+    /// Number of interleaved channels this encoder expects per frame (1 or 2).
+    channels: usize,
 }
 
 impl OpusEncoder {
-    /// Create a new Opus encoder.
+    /// Create a new voice Opus encoder.
     ///
     /// - 48 kHz mono
     /// - Voip application (voice-optimized)
     /// - 96 kbps default bitrate
     /// - FEC enabled for packet loss resilience
     /// - DTX enabled for silence suppression
+    /// - Complexity 9 (this trades CPU, not latency — Opus's algorithmic delay
+    ///   is fixed by the frame/lookahead, independent of the complexity knob)
     pub fn new() -> Result<Self, OpusError> {
         let mut encoder =
             OpusEncoderInner::new(SampleRate::Hz48000, Channels::Mono, Application::Voip)?;
 
         encoder.set_bitrate(Bitrate::BitsPerSecond(96_000))?;
 
-        // Low complexity for low latency
-        encoder.set_complexity(5)?;
+        encoder.set_complexity(9)?;
 
         // Enable in-band FEC
         encoder.set_inband_fec(true)?;
@@ -57,15 +61,48 @@ impl OpusEncoder {
         Ok(Self {
             inner: encoder,
             encode_buf: vec![0u8; MAX_PACKET_SIZE],
+            channels: 1,
         })
     }
 
-    /// Encode a 20 ms frame of PCM f32 mono samples (960 samples at 48 kHz).
-    /// Returns the encoded Opus packet bytes.
+    /// Create a stereo Opus encoder for stream / system audio (contract C4).
+    ///
+    /// - 48 kHz stereo
+    /// - `Audio` application (full-bandwidth music/system audio, not voice)
+    /// - 192 kbps
+    /// - Complexity 10 (highest quality; CPU only, not latency)
+    /// - DTX **off** — system audio must never be gated to silence frames
+    /// - FEC off — the stream-audio track is not FEC-recovered on the wire
+    pub fn new_stream_audio() -> Result<Self, OpusError> {
+        let mut encoder =
+            OpusEncoderInner::new(SampleRate::Hz48000, Channels::Stereo, Application::Audio)?;
+
+        encoder.set_bitrate(Bitrate::BitsPerSecond(192_000))?;
+        encoder.set_complexity(10)?;
+        encoder.set_inband_fec(false)?;
+        encoder.set_dtx(false)?;
+
+        Ok(Self {
+            inner: encoder,
+            encode_buf: vec![0u8; MAX_PACKET_SIZE],
+            channels: 2,
+        })
+    }
+
+    /// Number of interleaved channels this encoder expects (1 = mono, 2 = stereo).
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Encode one 20 ms frame of interleaved PCM f32 samples.
+    ///
+    /// The expected length is channel-aware: `FRAME_SIZE * channels`
+    /// (960 for mono, 1920 for stereo). Returns the encoded Opus packet bytes.
     pub fn encode(&mut self, pcm: &[f32]) -> Result<Vec<u8>, OpusError> {
-        if pcm.len() != FRAME_SIZE {
+        let expected = FRAME_SIZE * self.channels;
+        if pcm.len() != expected {
             return Err(OpusError::FrameSizeMismatch {
-                expected: FRAME_SIZE,
+                expected,
                 actual: pcm.len(),
             });
         }
@@ -91,33 +128,52 @@ impl OpusEncoder {
 pub struct OpusDecoder {
     inner: OpusDecoderInner,
     decode_buf: Vec<f32>,
+    channels: usize,
 }
 
 impl OpusDecoder {
-    /// Create a new Opus decoder (48 kHz mono).
+    /// Create a new voice Opus decoder (48 kHz mono).
     pub fn new() -> Result<Self, OpusError> {
-        let decoder = OpusDecoderInner::new(SampleRate::Hz48000, Channels::Mono)?;
+        Self::with_channels(Channels::Mono, 1)
+    }
+
+    /// Create a stereo Opus decoder for stream / system audio (contract C4).
+    /// Decoded frames are interleaved L/R, `FRAME_SIZE * 2` samples per frame.
+    pub fn new_stereo() -> Result<Self, OpusError> {
+        Self::with_channels(Channels::Stereo, 2)
+    }
+
+    fn with_channels(channels: Channels, count: usize) -> Result<Self, OpusError> {
+        let decoder = OpusDecoderInner::new(SampleRate::Hz48000, channels)?;
         Ok(Self {
             inner: decoder,
-            decode_buf: vec![0.0f32; FRAME_SIZE],
+            // decode_float writes `samples_per_channel * channels` interleaved
+            // values; size the scratch buffer for a full 20 ms frame.
+            decode_buf: vec![0.0f32; FRAME_SIZE * count],
+            channels: count,
         })
     }
 
-    /// Decode an Opus packet into PCM f32 mono samples.
-    /// Returns exactly `FRAME_SIZE` (960) samples for a 20 ms frame.
+    /// Number of interleaved channels this decoder emits (1 = mono, 2 = stereo).
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Decode an Opus packet into interleaved PCM f32 samples.
+    /// Returns `FRAME_SIZE * channels` samples for a full 20 ms frame.
     pub fn decode(&mut self, packet_data: &[u8]) -> Result<Vec<f32>, OpusError> {
         let pkt: Packet<'_> = packet_data.try_into()?;
         let output: MutSignals<'_, f32> = (&mut self.decode_buf[..]).try_into()?;
-        let len = self.inner.decode_float(Some(pkt), output, false)?;
-        Ok(self.decode_buf[..len].to_vec())
+        let per_channel = self.inner.decode_float(Some(pkt), output, false)?;
+        Ok(self.decode_buf[..per_channel * self.channels].to_vec())
     }
 
     /// Perform packet loss concealment (PLC).
     /// Called when a packet is missing; the decoder generates a best-guess frame.
     pub fn decode_plc(&mut self) -> Result<Vec<f32>, OpusError> {
         let output: MutSignals<'_, f32> = (&mut self.decode_buf[..]).try_into()?;
-        let len = self.inner.decode_float(None, output, false)?;
-        Ok(self.decode_buf[..len].to_vec())
+        let per_channel = self.inner.decode_float(None, output, false)?;
+        Ok(self.decode_buf[..per_channel * self.channels].to_vec())
     }
 
     /// Decode with FEC. If the *next* packet has arrived but the *current* one
@@ -126,8 +182,8 @@ impl OpusDecoder {
     pub fn decode_fec(&mut self, next_packet_data: &[u8]) -> Result<Vec<f32>, OpusError> {
         let pkt: Packet<'_> = next_packet_data.try_into()?;
         let output: MutSignals<'_, f32> = (&mut self.decode_buf[..]).try_into()?;
-        let len = self.inner.decode_float(Some(pkt), output, true)?;
-        Ok(self.decode_buf[..len].to_vec())
+        let per_channel = self.inner.decode_float(Some(pkt), output, true)?;
+        Ok(self.decode_buf[..per_channel * self.channels].to_vec())
     }
 }
 
@@ -195,5 +251,48 @@ mod tests {
         let bad_pcm = vec![0.0f32; 480]; // 10ms instead of 20ms
         let result = encoder.encode(&bad_pcm);
         assert!(result.is_err());
+    }
+
+    /// Contract C4 / AU2: the screen-audio path pushes 20 ms *stereo* chunks
+    /// (960 frames × 2 channels = 1920 interleaved samples). The mono voice
+    /// encoder rejected these, so every macOS system-audio frame errored. The
+    /// stereo encoder must accept exactly 1920 and round-trip through a stereo
+    /// decoder back to 1920 interleaved samples.
+    #[test]
+    fn stream_audio_encodes_1920_sample_stereo_chunk() {
+        let mut encoder = OpusEncoder::new_stream_audio().expect("stream encoder creation failed");
+        assert_eq!(encoder.channels(), 2);
+
+        // Interleaved L/R tone: distinct per channel so a channel swap would show.
+        let pcm: Vec<f32> = (0..FRAME_SIZE)
+            .flat_map(|i| {
+                let l = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin()
+                    * 0.5;
+                let r = (2.0 * std::f32::consts::PI * 660.0 * i as f32 / SAMPLE_RATE as f32).sin()
+                    * 0.5;
+                [l, r]
+            })
+            .collect();
+        assert_eq!(pcm.len(), FRAME_SIZE * 2);
+
+        let packet = encoder.encode(&pcm).expect("stereo encode failed");
+        assert!(!packet.is_empty());
+
+        let mut decoder = OpusDecoder::new_stereo().expect("stereo decoder creation failed");
+        assert_eq!(decoder.channels(), 2);
+        let decoded = decoder.decode(&packet).expect("stereo decode failed");
+        assert_eq!(
+            decoded.len(),
+            FRAME_SIZE * 2,
+            "one 20ms stereo frame must decode to 1920 interleaved samples"
+        );
+    }
+
+    #[test]
+    fn stream_audio_rejects_mono_frame_size() {
+        let mut encoder = OpusEncoder::new_stream_audio().expect("stream encoder creation failed");
+        // A mono 960 chunk is half the stereo frame — must be rejected loudly.
+        let mono = vec![0.0f32; FRAME_SIZE];
+        assert!(encoder.encode(&mono).is_err());
     }
 }

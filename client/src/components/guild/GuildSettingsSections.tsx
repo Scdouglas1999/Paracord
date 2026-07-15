@@ -24,6 +24,7 @@ import { EmptyState } from '../ui/Feedback';
 import { buildGuildEmojiImageUrl } from '../../lib/customEmoji';
 import { cn } from '../../lib/utils';
 import { SectionHeader, GroupLabel, FieldLabel, ToggleRow, GateNotice } from './SettingsPrimitives';
+import { displayName } from '../../lib/displayName';
 
 export type ReportStatusFilter =
   | 'all'
@@ -132,12 +133,12 @@ export function OverviewSection({
     <SettingsPanel>
       <SectionHeader
         title="Overview"
-        description="Your server's identity — the name, icon, and blurb members see everywhere."
+        description="Your space's identity — the name, icon, and blurb members see everywhere."
         action={
           <div className="flex items-center gap-2">
             {guild && authUserId && guild.owner_id !== authUserId && (
               <Button variant="ghost" onClick={onLeave}>
-                Leave server
+                Leave space
               </Button>
             )}
             <Button onClick={onSave}>Save Changes</Button>
@@ -151,7 +152,7 @@ export function OverviewSection({
           <input type="file" accept="image/*" className="hidden" onChange={onIconChange} />
           <div className="flex h-24 w-24 flex-col items-center justify-center overflow-hidden rounded-full border border-border-strong bg-bg-tertiary transition-colors group-hover:border-accent-primary/60">
             {iconDataUrl ? (
-              <img src={iconDataUrl} alt="Server icon" className="h-full w-full object-cover" />
+              <img src={iconDataUrl} alt="Space icon" className="h-full w-full object-cover" />
             ) : (
               <>
                 <Upload size={20} className="text-text-muted" />
@@ -162,7 +163,7 @@ export function OverviewSection({
         </label>
         <div className="flex flex-1 flex-col gap-5">
           <label className="block">
-            <FieldLabel>Server name</FieldLabel>
+            <FieldLabel>Space name</FieldLabel>
             <Input value={name} onChange={(e) => onNameChange(e.target.value)} />
           </label>
           <label className="block">
@@ -172,7 +173,7 @@ export function OverviewSection({
               onChange={(e) => onDescriptionChange(e.target.value)}
               rows={3}
               className="resize-none"
-              placeholder="Describe what this server is about."
+              placeholder="Describe what this space is about."
             />
           </label>
         </div>
@@ -214,7 +215,7 @@ export function OverviewSection({
         <section className="border-t border-border-subtle pt-6">
           <GroupLabel>Transfer ownership</GroupLabel>
           <p className="mt-2 text-[13.5px] leading-relaxed text-text-secondary">
-            Hand this server to another member. You'll immediately lose owner privileges — this can't be undone.
+            Hand this space to another member. You'll immediately lose owner privileges — this can't be undone.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <Select
@@ -224,7 +225,7 @@ export function OverviewSection({
             >
               {ownershipCandidates.map((member) => (
                 <option key={member.user.id} value={member.user.id}>
-                  {(member.nick || member.user.username) + ' (' + member.user.id + ')'}
+                  {displayName(member.user, member.nick) + ' (' + member.user.id + ')'}
                 </option>
               ))}
             </Select>
@@ -245,13 +246,13 @@ export function OverviewSection({
           <GroupLabel className="!text-accent-danger">Danger zone</GroupLabel>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-label text-text-primary">Delete this server</div>
+              <div className="text-label text-text-primary">Delete this space</div>
               <div className="mt-0.5 text-meta text-text-secondary">
                 Every channel, message, and upload is permanently erased. This cannot be undone.
               </div>
             </div>
             <Button variant="destructive" onClick={onShowDeleteDialog}>
-              Delete Server
+              Delete space
             </Button>
           </div>
           {showDeleteGuildDialog && guild && (
@@ -570,6 +571,8 @@ interface MembersSectionProps {
   members: Member[];
   roles: Role[];
   canManage: boolean;
+  canKick: boolean;
+  canBan: boolean;
   memberRoleId: string;
   memberSearch: string;
   editingMemberRoleUserId: string | null;
@@ -593,6 +596,8 @@ export function MembersSection({
   members,
   roles,
   canManage,
+  canKick,
+  canBan,
   memberRoleId,
   memberSearch,
   editingMemberRoleUserId,
@@ -612,7 +617,7 @@ export function MembersSection({
   roleColorHex,
 }: MembersSectionProps) {
   const filteredMembers = memberSearch.trim()
-    ? members.filter((m) => (m.nick || m.user.username || '').toLowerCase().includes(memberSearch.toLowerCase()))
+    ? members.filter((m) => `${displayName(m.user, m.nick)} ${m.user.username}`.toLowerCase().includes(memberSearch.toLowerCase()))
     : members;
 
   const assignableRoles = roles.filter((role) => role.id !== memberRoleId);
@@ -621,7 +626,7 @@ export function MembersSection({
     <SettingsPanel>
       <SectionHeader
         title="Members"
-        description={`${members.length} ${members.length === 1 ? 'person is' : 'people are'} in this server. Manage their roles, or remove them.`}
+        description={`${members.length} ${members.length === 1 ? 'person is' : 'people are'} in this space. Manage their roles, or remove them.`}
       />
       <Input
         type="text"
@@ -647,11 +652,11 @@ export function MembersSection({
               <li key={member.user.id}>
                 <div className="group flex flex-wrap items-center gap-3 py-3">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary">
-                    {initialFor(member.user.username)}
+                    {initialFor(displayName(member.user, member.nick))}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <span className="block text-label text-text-primary">{member.nick || member.user.username}</span>
-                    {member.nick && <span className="text-meta text-text-muted">{member.user.username}</span>}
+                    <span className="block text-label text-text-primary">{displayName(member.user, member.nick)}</span>
+                    {displayName(member.user, member.nick) !== member.user.username && <span className="text-meta text-text-muted">@{member.user.username}</span>}
                   </div>
                   {member.roles && member.roles.length > 0 && (
                     <div className="mr-2 hidden items-center gap-1 sm:flex">
@@ -691,22 +696,26 @@ export function MembersSection({
                         {editingMemberRoleUserId === member.user.id ? 'Close roles' : 'Roles'}
                       </Button>
                     )}
-                    <Button variant="ghost" size="sm" onClick={() => onKickMember(member.user.id)}>
-                      Kick
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-accent-danger hover:bg-danger-tint hover:text-accent-danger"
-                      onClick={() => onShowBanConfirm(member.user.id)}
-                    >
-                      Ban
-                    </Button>
+                    {canKick && (
+                      <Button variant="ghost" size="sm" onClick={() => onKickMember(member.user.id)}>
+                        Kick
+                      </Button>
+                    )}
+                    {canBan && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-accent-danger hover:bg-danger-tint hover:text-accent-danger"
+                        onClick={() => onShowBanConfirm(member.user.id)}
+                      >
+                        Ban
+                      </Button>
+                    )}
                   </div>
                 </div>
                 {banConfirmUserId === member.user.id && (
                   <div className="mb-3 ml-12 space-y-2.5 rounded-md border border-accent-danger/30 bg-danger-tint p-3.5">
-                    <p className="text-label text-text-primary">Ban {member.user.username}?</p>
+                    <p className="text-label text-text-primary">Ban {displayName(member.user, member.nick)}?</p>
                     <Input
                       type="text"
                       placeholder="Reason (optional)"
@@ -903,7 +912,7 @@ export function EmojisSection({
       />
 
       {!canManage && (
-        <GateNotice>You can view server emojis, but the Manage Emojis permission is needed to add, rename, or delete.</GateNotice>
+        <GateNotice>You can view space emojis, but the Manage Emojis permission is needed to add, rename, or delete.</GateNotice>
       )}
 
       {canManage && (
@@ -1329,7 +1338,7 @@ export function BotsSection({
     <SettingsPanel>
       <SectionHeader
         title="Bots"
-        description="Automations installed in this server — your own apps, third-party apps, and Paracord's built-ins."
+        description="Automations installed in this space — your own apps, third-party apps, and Paracord's built-ins."
       />
 
       {!canManage && <GateNotice>You need the Manage Server permission to add or remove bots.</GateNotice>}
@@ -1467,10 +1476,10 @@ export function BansSection({ bans, onUnban }: BansSectionProps) {
             {bans.map((ban) => (
               <li key={ban.user.id} className="group flex flex-wrap items-center gap-3 py-3">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-danger-tint text-label font-semibold text-accent-danger">
-                  {initialFor(ban.user.username)}
+                  {initialFor(displayName(ban.user))}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <span className="block text-label text-text-primary">{ban.user.username}</span>
+                  <span className="block text-label text-text-primary">{displayName(ban.user)}</span>
                   {ban.reason && <span className="text-meta text-text-muted">{ban.reason}</span>}
                 </div>
                 <Button variant="secondary" size="sm" onClick={() => void onUnban(ban.user.id)}>
@@ -1545,7 +1554,7 @@ export function ReportsSection({
               const targetType = String(changes.target_type || 'unknown');
               const targetId = String(changes.target_id || report.target_id || 'unknown');
               const reporter = members.find((member) => member.user.id === report.reporter_id);
-              const reporterName = reporter?.nick || reporter?.user.username || report.reporter_id;
+              const reporterName = reporter ? displayName(reporter.user, reporter.nick) : report.reporter_id;
               const createdLabel = new Date(report.created_at).toLocaleString();
               const evidence = Array.isArray(changes.evidence)
                 ? changes.evidence.filter((item): item is string => typeof item === 'string')
@@ -1633,6 +1642,11 @@ interface AuditLogSectionProps {
   members: Member[];
   channels: Channel[];
   roles: Role[];
+  loadError?: string | null;
+  actionFilter?: string;
+  userFilter?: string;
+  onActionFilterChange?: (value: string) => void;
+  onUserFilterChange?: (value: string) => void;
 }
 
 const ACTION_LABELS: Record<number, string> = {
@@ -1657,30 +1671,85 @@ const ACTION_LABELS: Record<number, string> = {
   91: 'Report Resolved',
 };
 
-export function AuditLogSection({ auditEntries, members, channels, roles }: AuditLogSectionProps) {
+export function AuditLogSection({
+  auditEntries,
+  members,
+  channels,
+  roles,
+  loadError,
+  actionFilter = '',
+  userFilter = '',
+  onActionFilterChange,
+  onUserFilterChange,
+}: AuditLogSectionProps) {
   return (
     <SettingsPanel>
-      <SectionHeader title="Audit Log" description="A running record of administrative actions in this server." />
+      <SectionHeader title="Audit Log" description="A running record of administrative actions in this space." />
+      {(onActionFilterChange || onUserFilterChange) && (
+        <div className="flex flex-wrap gap-3 border-t border-border-subtle pt-4">
+          {onActionFilterChange && (
+            <label className="block min-w-[12rem] flex-1">
+              <FieldLabel>Action</FieldLabel>
+              <Select
+                value={actionFilter}
+                onChange={(e) => onActionFilterChange(e.target.value)}
+              >
+                <option value="">All actions</option>
+                {Object.entries(ACTION_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          )}
+          {onUserFilterChange && (
+            <label className="block min-w-[12rem] flex-1">
+              <FieldLabel>Actor</FieldLabel>
+              <Select
+                value={userFilter}
+                onChange={(e) => onUserFilterChange(e.target.value)}
+              >
+                <option value="">Anyone</option>
+                {members.map((member) => (
+                  <option key={member.user.id} value={member.user.id}>
+                    {displayName(member.user, member.nick)}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          )}
+        </div>
+      )}
+      {loadError && (
+        <div className="mt-4">
+          <GateNotice>{loadError}</GateNotice>
+        </div>
+      )}
       <section className="max-h-[calc(100dvh-20rem)] overflow-y-auto border-t border-border-subtle pt-2">
         {auditEntries.length === 0 ? (
           <EmptyState
             className="!py-8"
             icon={<ScrollText size={20} />}
-            title="Nothing logged yet"
-            description="Role edits, bans, channel changes, and other admin actions will appear here as they happen."
+            title={loadError ? 'Could not load audit log' : 'Nothing logged yet'}
+            description={
+              loadError
+                ? 'You may lack View Audit Log permission, or the request failed. Try again after refreshing.'
+                : 'Role edits, bans, channel changes, and other admin actions will appear here as they happen.'
+            }
           />
         ) : (
           <ul className="divide-y divide-border-subtle">
             {auditEntries.map((entry) => {
               const label = ACTION_LABELS[entry.action_type] || `Action ${entry.action_type}`;
               const actor = members.find((member) => member.user.id === entry.user_id);
-              const actorName = actor?.nick || actor?.user.username || entry.user_id;
+              const actorName = actor ? displayName(actor.user, actor.nick) : entry.user_id;
               const targetDesc = entry.target_id
                 ? (() => {
                     const targetChannel = channels.find((channel) => channel.id === entry.target_id);
                     if (targetChannel) return `#${targetChannel.name}`;
                     const targetMember = members.find((member) => member.user.id === entry.target_id);
-                    if (targetMember) return targetMember.nick || targetMember.user.username || entry.target_id;
+                    if (targetMember) return displayName(targetMember.user, targetMember.nick);
                     const targetRole = roles.find((role) => role.id === entry.target_id);
                     if (targetRole) return `@${targetRole.name}`;
                     return entry.target_id;

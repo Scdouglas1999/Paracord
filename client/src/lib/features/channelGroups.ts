@@ -41,7 +41,7 @@ function buildVirtualGroups(channels: Channel[]): ChannelGroup[] {
 
   for (const ch of channels) {
     if (ch.type === 4) continue;
-    if (ch.type === 2 || ch.channel_type === 2) {
+    if (ch.type === 2 || ch.channel_type === 2 || ch.type === 13 || ch.channel_type === 13) {
       voiceChannels.push(ch);
     } else {
       textChannels.push(ch);

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { Coins, Users, X } from 'lucide-react';
+import { AlertCircle, Archive, Coins, Loader2, MessageSquare, Users, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import type { Channel, Message } from '../../types';
 import { useUIStore } from '../../stores/uiStore';
 import { useChannelStore } from '../../stores/channelStore';
@@ -15,8 +16,8 @@ import { SearchOverlay } from './overlays/SearchOverlay';
 import { GuildEconomyPanel } from '../guild/GuildEconomyPanel';
 
 /**
- * Descriptor for the active thread surface. Supplied by the ChatView; when
- * absent the `threads` mode renders nothing (there is no thread to show).
+ * Descriptor for the active thread surface. Supplied by the ChatView or derived
+ * from the active channel when the user is inside a thread.
  */
 export interface ContextPanelThread {
   threadChannelId: string;
@@ -57,6 +58,12 @@ const PANEL_HEADERS: Record<'members' | 'economy', { title: string; icon: Lucide
 const isThreadChannel = (channel: Channel | undefined): boolean =>
   channel?.type === 6 || channel?.channel_type === 6;
 
+const isThreadableChannel = (channel: Channel | undefined, channelId: string | null | undefined): boolean => {
+  if (!channel || !channelId || isThreadChannel(channel)) return false;
+  const type = channel?.type ?? channel?.channel_type ?? 0;
+  return type === 0 || type === 5 || type === 7;
+};
+
 const isGroupDmChannel = (channel: Channel | undefined): boolean =>
   channel?.type === 3 || channel?.channel_type === 3;
 
@@ -80,6 +87,15 @@ function deriveActiveThread(
   };
 }
 
+function sortThreads(threads: Channel[]): Channel[] {
+  return [...threads].sort((a, b) => {
+    const aArchived = a.thread_metadata?.archived === true;
+    const bArchived = b.thread_metadata?.archived === true;
+    if (aArchived !== bArchived) return aArchived ? 1 : -1;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
+}
+
 const CLOSE_BUTTON =
   'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-text-muted ' +
   'outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] ' +
@@ -91,7 +107,7 @@ const CLOSE_BUTTON =
  * across the already-built surfaces without rebuilding any of them:
  *
  *   members  → components/layout/MemberList.tsx
- *   threads  → components/message/ThreadPanel.tsx
+ *   threads  → active ThreadPanel, or a channel-scoped thread list
  *   pins     → components/layout/overlays/PinnedMessagesOverlay.tsx
  *   search   → components/layout/overlays/SearchOverlay.tsx
  *   economy  → components/guild/GuildEconomyPanel.tsx
@@ -101,9 +117,9 @@ const CLOSE_BUTTON =
  * `border-border-subtle` hairline on the left edge, real elevation, and no
  * gradient hero (kill-list #1). `members` and `economy` are wrapped in the
  * shared panel chrome (title + close, focus-visible ring on close). `threads`,
- * `pins`, and `search` are self-chromed surfaces (ThreadPanel's own header;
- * the two overlay modals); ContextPanel wires each surface's close to clear
- * `contextPanelMode`. Esc-to-close is wired only where the panel owns focus and
+ * `pins`, and `search` are self-chromed panel-native surfaces; the AppShell
+ * supplies their modal containment only on narrow screens. ContextPanel wires
+ * each surface's close to clear `contextPanelMode`. Esc-to-close is wired only where the panel owns focus and
  * contains no text input (members/economy); global Esc precedence is SHELL-5.
  */
 export function ContextPanel({
@@ -121,6 +137,7 @@ export function ContextPanel({
   const mode = useUIStore((s) => s.contextPanelMode);
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
   const channelsById = useChannelStore((s) => s.channelsById);
+  const navigate = useNavigate();
   const asideRef = useRef<HTMLElement>(null);
 
   // The pins/search surfaces are rendered by the shell, not the ChatView, so the
@@ -131,9 +148,24 @@ export function ContextPanel({
   const controlledPins = pins !== undefined;
   const [fetchedPins, setFetchedPins] = useState<Message[]>([]);
   const [fetchedPinsError, setFetchedPinsError] = useState<string | null>(null);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threadsError, setThreadsError] = useState<string | null>(null);
+  const [fetchedThreadParentIds, setFetchedThreadParentIds] = useState<Set<string>>(() => new Set());
 
   const resolvedChannelName =
     channelName ?? (channelId ? channelsById[channelId]?.name ?? null : null);
+  const activeChannel = channelId ? channelsById[channelId] : undefined;
+  const threadListParentId =
+    mode === 'threads' && isThreadableChannel(activeChannel, channelId) ? channelId! : null;
+  const channelThreads = useMemo(
+    () =>
+      sortThreads(
+        Object.values(channelsById).filter(
+          (channel) => isThreadChannel(channel) && channel.parent_id === threadListParentId,
+        ),
+      ),
+    [channelsById, threadListParentId],
+  );
 
   const resolvedAllChannels = useMemo(
     () =>
@@ -166,6 +198,37 @@ export function ContextPanel({
     };
   }, [mode, channelId, controlledPins]);
 
+  useEffect(() => {
+    if (!threadListParentId) return;
+    let cancelled = false;
+    setThreadsLoading(true);
+    setThreadsError(null);
+    const upsert = useChannelStore.getState();
+    Promise.all([
+      channelApi.getThreads(threadListParentId),
+      channelApi.getArchivedThreads(threadListParentId),
+    ])
+      .then(([activeRes, archivedRes]) => {
+        if (cancelled) return;
+        for (const thread of [...activeRes.data, ...archivedRes.data]) {
+          upsert.addChannel(thread);
+          upsert.updateChannel(thread);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setThreadsError(`Failed to load threads: ${extractApiError(err)}`);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setFetchedThreadParentIds((prev) => new Set(prev).add(threadListParentId));
+          setThreadsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [threadListParentId]);
+
   const close = useCallback(() => setContextPanelMode(null), [setContextPanelMode]);
 
   const onAsideKeyDown = useCallback(
@@ -195,12 +258,14 @@ export function ContextPanel({
 
   if (mode === null) return null;
 
-  // Overlay surfaces bring their own chrome (title + close); their close button
-  // is wired to clear the panel mode.
+  // Panel-native query surfaces bring their own chrome; their close button is
+  // wired to clear the shared panel mode.
   if (mode === 'pins') {
     return (
       <PinnedMessagesOverlay
         open
+        presentation="panel"
+        panelRef={asideRef}
         onClose={close}
         channelId={channelId ?? undefined}
         pins={controlledPins ? pins ?? [] : fetchedPins}
@@ -215,6 +280,8 @@ export function ContextPanel({
     return (
       <SearchOverlay
         open
+        presentation="panel"
+        panelRef={asideRef}
         onClose={close}
         channelId={channelId ?? undefined}
         channelName={resolvedChannelName ?? undefined}
@@ -240,6 +307,91 @@ export function ContextPanel({
   if (mode === 'threads') {
     const thread = activeThread ?? deriveActiveThread(channelId, channelsById);
     const threadGuildId = guildId ?? (channelId ? channelsById[channelId]?.guild_id ?? null : null);
+    if (!thread && threadListParentId && threadGuildId) {
+      const openThread = (threadId: string) => {
+        useChannelStore.getState().selectChannel(threadId);
+        navigate(`/app/guilds/${threadGuildId}/channels/${threadId}`);
+      };
+      const hasFetchedThreads = fetchedThreadParentIds.has(threadListParentId);
+      return (
+        <aside
+          ref={asideRef}
+          role="complementary"
+          aria-label="Threads"
+          tabIndex={-1}
+          onKeyDown={onAsideKeyDown}
+          data-testid="context-panel"
+          data-mode="threads"
+          className="flex h-full shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-bg-secondary shadow-sm outline-none"
+          style={{ width: 'var(--member-list-width)' }}
+        >
+          <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
+            <MessageSquare size={18} className="shrink-0 text-text-secondary" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate text-label font-semibold text-text-primary">Threads</h2>
+              <p className="truncate text-meta text-text-muted">#{resolvedChannelName || 'channel'}</p>
+            </div>
+            <button
+              type="button"
+              className={CLOSE_BUTTON}
+              onClick={close}
+              aria-label="Close Threads panel"
+              title="Close"
+            >
+              <X size={18} aria-hidden />
+            </button>
+          </header>
+
+          {threadsError ? (
+            <div className="flex min-h-0 flex-1 flex-col items-start justify-center px-5 text-left">
+              <AlertCircle size={22} className="mb-3 text-danger" aria-hidden />
+              <h3 className="text-subhead text-text-primary">Threads unavailable</h3>
+              <p className="mt-1 text-label text-text-secondary">{threadsError}</p>
+            </div>
+          ) : (threadsLoading || !hasFetchedThreads) && channelThreads.length === 0 ? (
+            <div className="flex min-h-0 flex-1 items-center justify-center text-text-secondary">
+              <Loader2 size={20} className="animate-spin" aria-hidden />
+            </div>
+          ) : channelThreads.length === 0 ? (
+            <div className="flex min-h-0 flex-1 flex-col items-start justify-center px-5 text-left">
+              <MessageSquare size={24} className="mb-3 text-text-muted" aria-hidden />
+              <h3 className="text-subhead text-text-primary">No threads yet</h3>
+              <p className="mt-1 text-label text-text-secondary">Threaded conversations will appear here.</p>
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+              <div className="flex flex-col gap-1">
+                {channelThreads.map((thread) => {
+                  const isArchived = thread.thread_metadata?.archived === true;
+                  return (
+                    <button
+                      key={thread.id}
+                      type="button"
+                      onClick={() => openThread(thread.id)}
+                      className="flex min-h-[44px] w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                    >
+                      {isArchived ? (
+                        <Archive size={16} className="shrink-0 text-text-muted" aria-hidden />
+                      ) : (
+                        <MessageSquare size={16} className="shrink-0 text-accent-primary" aria-hidden />
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-label font-medium text-text-primary">
+                          {thread.name || 'Thread'}
+                        </span>
+                        {isArchived && (
+                          <span className="text-meta uppercase text-text-muted">Archived</span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </aside>
+      );
+    }
     if (!thread || !threadGuildId) return null;
     return (
       <div

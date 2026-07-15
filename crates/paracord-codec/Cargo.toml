@@ -14,13 +14,31 @@ default = []
 # On Linux: `apt install libvpx-dev` or equivalent.
 # On macOS: `brew install libvpx`.
 vpx = ["dep:vpx-encode", "dep:env-libvpx-sys"]
+# Enable the in-process GPU video codec engine backed by system libavcodec
+# (hardware H.264/AV1 encode via NVENC/VAAPI/QSV, hardware+software decode).
+# NOT in default features: it links the system FFmpeg 8.1 shared libraries via
+# pkg-config, so it is opt-in (`--features lavc`) and never affects the default
+# build. LGPL-only: the engine refuses to build encoders that require GPL
+# FFmpeg components.
+lavc = ["dep:ffmpeg-sys-next"]
 
 [dependencies]
+# In-process libavcodec bindings (optional, `lavc` feature). Dynamically linked
+# against the system FFmpeg via pkg-config.
+ffmpeg-sys-next = { workspace = true, optional = true }
 # Audio
 audiopus = "0.3.0-rc.0"
-nnnoiseless = "0.5"
+# Library API only; the upstream default enables an unused CLI binary.
+nnnoiseless = { version = "0.5", default-features = false }
 cpal = "0.15"
 rubato = "0.15"
+# Acoustic echo cancellation + AGC (SpeexDSP MDF echo canceller + preprocessor).
+# `aec-rs-sys` vendors the full libspeexdsp source and builds it statically via
+# CMake, so there is NO system libspeexdsp requirement — but the host DOES need
+# `cmake` + a C toolchain on the build path (Linux/macOS/Windows). This is a
+# deliberate, deterministic choice over webrtc-audio-processing (AEC3), whose
+# bundled build needs meson+ninja+abseil and is not sane cross-platform.
+aec-rs-sys = "1.0.0"
 
 # Video (optional, feature-gated)
 vpx-encode = { version = "0.6", features = ["vp9"], optional = true }
@@ -46,6 +64,14 @@ tracing = { workspace = true }
 # Bytes
 bytes = "1"
 
+# Hardware NVENC colorspace verification probe (streaming-native-render-spec §6).
+# NOT a CI target: examples are not built by `cargo test`/`cargo check --workspace`,
+# and `required-features` keeps it out of `--all-targets` builds that lack `lavc`.
+# It needs an NVIDIA GPU + the `ffmpeg` CLI and is run by hand — see the file header.
+[[example]]
+name = "nvenc_colorspace_probe"
+required-features = ["lavc"]
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
   "Win32_Foundation",
@@ -53,4 +79,9 @@ windows = { version = "0.61", features = [
   "Win32_System_Com",
   "Win32_System_Ole",
   "Win32_System_Variant",
+  # Zero-copy WGC→MFT encode input (spec §7): the D3D11 texture types used by
+  # `video/encoder/windows_h264.rs` (ID3D11Device/Multithread/Texture2D) and the
+  # DXGI surface buffer/common types the MFT input path references.
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi_Common",
 ] }

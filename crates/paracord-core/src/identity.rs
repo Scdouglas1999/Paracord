@@ -49,9 +49,17 @@ pub struct UserSettingsExport {
     pub message_display: String,
     pub custom_css: Option<String>,
     pub crypto_auth_enabled: bool,
+    #[serde(default = "default_presence_status")]
+    pub presence_status: String,
+    #[serde(default)]
+    pub custom_status: Option<String>,
     pub notifications: serde_json::Value,
     pub keybinds: serde_json::Value,
     pub updated_at: DateTime<Utc>,
+}
+
+fn default_presence_status() -> String {
+    "online".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,6 +228,8 @@ pub async fn export_identity(
             message_display: row.message_display,
             custom_css: row.custom_css,
             crypto_auth_enabled: row.crypto_auth_enabled,
+            presence_status: row.presence_status,
+            custom_status: row.custom_status,
             notifications: row.notifications,
             keybinds: row.keybinds,
             updated_at: row.updated_at,
@@ -442,6 +452,8 @@ pub async fn import_identity(
             &settings.message_display,
             settings.custom_css.as_deref(),
             Some(settings.crypto_auth_enabled),
+            Some(settings.presence_status.as_str()),
+            Some(settings.custom_status.as_deref()),
             Some(&settings.notifications),
             Some(&settings.keybinds),
         )

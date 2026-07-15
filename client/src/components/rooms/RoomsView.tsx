@@ -8,6 +8,7 @@ import { useServerListStore } from '../../stores/serverListStore';
 import { ChannelType, type Channel } from '../../types';
 import { GuildHomeHeader } from './GuildHomeHeader';
 import { LiveRoomsGrid } from './LiveRoomsGrid';
+import { SpaceBriefing } from './SpaceBriefing';
 import { AroundNowStrip } from './AroundNowStrip';
 import { TextChannelList } from './TextChannelList';
 
@@ -124,6 +125,11 @@ export function RoomsView({ guildId }: RoomsViewProps) {
       />
       <div className="flex flex-1 flex-col gap-8 overflow-y-auto scrollbar-thin p-6 sm:p-7 lg:p-8">
         <LiveRoomsGrid guildId={guildId} channels={channels} />
+        <SpaceBriefing
+          guildId={guildId}
+          settings={guild.hub_settings}
+          channels={channels}
+        />
         <AroundNowStrip guildId={guildId} />
         <TextChannelList guildId={guildId} channels={channels} />
       </div>

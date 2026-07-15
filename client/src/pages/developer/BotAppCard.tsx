@@ -100,7 +100,7 @@ export function BotAppCard({
           {token ? (
             <>
               <code className="flex-1 break-all font-code text-meta text-text-secondary">{token}</code>
-              <button type="button" className={actionBtn} onClick={onCopyToken}>
+              <button type="button" aria-label="Copy bot token" className={actionBtn} onClick={onCopyToken}>
                 {copied ? (<><Check size={13} /> Copied</>) : (<><Copy size={13} /> Copy</>)}
               </button>
             </>
@@ -117,7 +117,7 @@ export function BotAppCard({
         <span className="text-section uppercase text-text-secondary">Install link</span>
         <div className="flex flex-wrap items-center gap-2 rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2">
           <code className="flex-1 break-all font-code text-meta text-text-secondary">{installUrl}</code>
-          <button type="button" className={actionBtn} onClick={onCopyInstallUrl}>
+          <button type="button" aria-label="Copy install link" className={actionBtn} onClick={onCopyInstallUrl}>
             {copiedInvite ? (<><Check size={13} /> Copied</>) : (<><Copy size={13} /> Copy Link</>)}
           </button>
           <a href={installUrl} target="_blank" rel="noreferrer" className={actionBtn}>

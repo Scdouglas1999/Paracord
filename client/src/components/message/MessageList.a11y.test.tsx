@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '../../types';
@@ -29,12 +29,24 @@ const mocks = vi.hoisted(() => ({
     decryptingIds: new Set<string>(),
     fetchMessages: vi.fn(),
   },
+  readStateStoreState: {
+    markRead: vi.fn(),
+  },
+  updateReadStateForServer: vi.fn().mockResolvedValue({ data: {} }),
+  scrollToIndex: vi.fn(),
+  savedMessageStoreState: {
+    serverId: 'srv-a',
+    savedIds: new Set<string>(),
+    load: vi.fn().mockResolvedValue(undefined),
+    save: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
-function makeMessage(): Message {
+function makeMessage(over: Partial<Message> = {}): Message {
   return {
-    id: 'msg-1',
-    channel_id: 'ch1',
+    id: over.id ?? 'msg-1',
+    channel_id: over.channel_id ?? 'ch1',
     author: {
       id: 'author-1',
       username: 'Alice',
@@ -42,7 +54,7 @@ function makeMessage(): Message {
       bot: false,
       flags: 0,
     },
-    content: 'Hello there.',
+    content: over.content ?? 'Hello there.',
     timestamp: '2026-05-17T12:00:00.000Z',
     created_at: '2026-05-17T12:00:00.000Z',
     tts: false,
@@ -51,6 +63,7 @@ function makeMessage(): Message {
     type: MessageType.Default,
     attachments: [],
     reactions: [],
+    ...over,
   };
 }
 
@@ -64,7 +77,7 @@ vi.mock('@tanstack/react-virtual', () => ({
       })),
     getTotalSize: () => options.count * 80,
     measureElement: vi.fn(),
-    scrollToIndex: vi.fn(),
+    scrollToIndex: mocks.scrollToIndex,
   }),
 }));
 
@@ -87,10 +100,14 @@ vi.mock('../../stores/messageStore', () => ({
 vi.mock('../../stores/channelStore', () => {
   const state = {
     channelsByGuild: {
-      g1: [{ id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0, name: 'general', position: 0 }],
+      g1: [
+        { id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0, name: 'general', position: 0 },
+        { id: 'ch2', guild_id: 'g1', type: 0, channel_type: 0, name: 'random', position: 1 },
+      ],
     },
     channelsById: {
       ch1: { id: 'ch1', guild_id: 'g1', type: 0, channel_type: 0, name: 'general', position: 0 },
+      ch2: { id: 'ch2', guild_id: 'g1', type: 0, channel_type: 0, name: 'random', position: 1 },
     },
     addChannel: vi.fn(),
     updateChannel: vi.fn(),
@@ -115,6 +132,30 @@ vi.mock('../../stores/memberStore', () => {
 
 vi.mock('../../stores/authStore', () => ({
   useAuthStore: (selector: (s: { user: { id: string } }) => unknown) => selector({ user: { id: 'viewer' } }),
+}));
+
+vi.mock('../../stores/readStateStore', () => ({
+  useReadStateStore: Object.assign(
+    (selector: (s: typeof mocks.readStateStoreState) => unknown) =>
+      selector(mocks.readStateStoreState),
+    { getState: () => mocks.readStateStoreState },
+  ),
+}));
+
+vi.mock('../../stores/serverListStore', () => ({
+  useServerListStore: Object.assign(
+    (selector: (s: { activeServerId: string }) => unknown) =>
+      selector({ activeServerId: 'srv-a' }),
+    { getState: () => ({ activeServerId: 'srv-a' }) },
+  ),
+}));
+
+vi.mock('../../stores/savedMessageStore', () => ({
+  useSavedMessageStore: Object.assign(
+    (selector: (s: typeof mocks.savedMessageStoreState) => unknown) =>
+      selector(mocks.savedMessageStoreState),
+    { getState: () => mocks.savedMessageStoreState },
+  ),
 }));
 
 vi.mock('../../stores/typingStore', () => ({
@@ -146,11 +187,14 @@ vi.mock('../../stores/toastStore', () => ({
 vi.mock('../../api/channels', () => ({
   channelApi: {
     updateReadState: vi.fn().mockResolvedValue({ data: {} }),
+    updateReadStateForServer: mocks.updateReadStateForServer,
     getThreads: vi.fn().mockResolvedValue({ data: [] }),
     getArchivedThreads: vi.fn().mockResolvedValue({ data: [] }),
     getEditHistory: vi.fn().mockResolvedValue({ data: [] }),
     bulkDeleteMessages: vi.fn().mockResolvedValue({ data: {} }),
     createThread: vi.fn().mockResolvedValue({ data: {} }),
+    getOverwrites: vi.fn().mockResolvedValue({ data: [] }),
+    deanonymizeMessage: vi.fn(),
   },
 }));
 
@@ -202,6 +246,9 @@ describe('MessageList keyboard accessibility and error state', () => {
     mocks.useMessagesReturn.messages = [];
     mocks.useMessagesReturn.error = null;
     mocks.useMessagesReturn.isLoading = false;
+    mocks.readStateStoreState.markRead.mockReset();
+    mocks.updateReadStateForServer.mockClear();
+    mocks.scrollToIndex.mockClear();
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
       value: vi.fn().mockImplementation((query: string) => ({
@@ -217,7 +264,25 @@ describe('MessageList keyboard accessibility and error state', () => {
     });
   });
 
+  it('jumps to and temporarily highlights a message targeted by the inbox query', async () => {
+    mocks.useMessagesReturn.messages = [makeMessage({ id: 'saved-message' })];
+
+    render(
+      <MemoryRouter initialEntries={['/app/guilds/g1/channels/ch1?message=saved-message']}>
+        <MessageList channelId="ch1" />
+      </MemoryRouter>,
+    );
+
+    const row = await screen.findByRole('article', { name: /Alice/ });
+    await waitFor(() => expect(mocks.scrollToIndex).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(row.getAttribute('style')).toContain('background-color: var(--accent-tint-strong)');
+      expect(row.getAttribute('style')).toContain('border-left: 2px solid var(--accent-primary)');
+    });
+  });
+
   it('reveals the per-message action toolbar when a message row receives keyboard focus', async () => {
+    mocks.permissionsState.permissions = 1n << 6n; // ADD_REACTIONS
     mocks.useMessagesReturn.messages = [makeMessage()];
 
     render(
@@ -269,5 +334,33 @@ describe('MessageList keyboard accessibility and error state', () => {
 
     expect(await screen.findByText('#general is ready when you are')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('marks a re-entered channel read even when the cached message count is unchanged', async () => {
+    mocks.useMessagesReturn.messages = [makeMessage({ id: 'msg-1', channel_id: 'ch1' })];
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <MessageList channelId="ch1" />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith('srv-a', 'ch1', 'msg-1');
+    });
+    mocks.readStateStoreState.markRead.mockClear();
+
+    // Same array length as ch1: the re-entry mark-read must be keyed by channel
+    // + latest message id, not only by messages.length.
+    mocks.useMessagesReturn.messages = [makeMessage({ id: 'msg-2', channel_id: 'ch2' })];
+    rerender(
+      <MemoryRouter>
+        <MessageList channelId="ch2" />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(mocks.readStateStoreState.markRead).toHaveBeenCalledWith('srv-a', 'ch2', 'msg-2');
+    });
   });
 });

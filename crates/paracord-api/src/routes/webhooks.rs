@@ -666,13 +666,22 @@ pub async fn execute_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    // M13: Per-webhook rate limiting
-    check_webhook_rate_limit(webhook_id)?;
-
+    // Authenticate the webhook token BEFORE charging the per-webhook rate limit.
+    // The webhook_id is public (it is part of the delivery URL), so applying the
+    // per-webhook window before authentication would let anyone who knows the id
+    // exhaust it with bogus-token requests and deny legitimate deliveries. By
+    // validating the token first, only token-authenticated requests consume the
+    // webhook's rate budget. Unauthenticated request volume (which now reaches
+    // this indexed primary-key lookup before being rejected) is bounded by the
+    // global per-IP HTTP rate limiter in `rate_limit_middleware`.
     let webhook = paracord_db::webhooks::get_webhook_by_id_and_token(&state.db, webhook_id, &token)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+
+    // M13: Per-webhook rate limiting — enforced only against token-authenticated
+    // requests so a valid-token flood still cannot spam the channel.
+    check_webhook_rate_limit(webhook_id)?;
 
     // Check for GitHub webhook
     let (content, display_name, avatar_url, embeds) =

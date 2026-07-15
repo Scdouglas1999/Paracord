@@ -18,10 +18,12 @@ import { writeClipboardText } from '../../lib/clipboard';
 import { getHighestRoleColor } from '../../lib/colors';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
+import { displayName } from '../../lib/displayName';
 
 interface MemberWithUser {
   user_id: string;
   username: string;
+  display_name?: string | null;
   avatar_hash: string | null;
   nick: string | null;
   roles: string[];
@@ -70,8 +72,29 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
   const authToken = useAuthStore((s) => s.token);
   const storeMembers = useMemberStore(s => selectedGuildId ? s.members.get(selectedGuildId) : undefined);
   const fetchMembers = useMemberStore(s => s.fetchMembers);
-  // Subscribe so presence updates trigger recomputation.
-  const presences = usePresenceStore((s) => s.presences);
+  // Fingerprint presence writes for visible members only (any scope), so
+  // unrelated presence Map updates don't re-render the whole list.
+  const memberIdsKey = useMemo(() => {
+    if (!storeMembers?.length) return '';
+    return storeMembers.map((m) => String(m.user.id)).sort().join(',');
+  }, [storeMembers]);
+  const presenceFingerprint = usePresenceStore(
+    useCallback(
+      (s) => {
+        if (!memberIdsKey) return 0;
+        const ids = new Set(memberIdsKey.split(','));
+        let hash = 0;
+        for (const [key, order] of s.presenceOrder) {
+          const colon = key.indexOf(':');
+          const uid = colon >= 0 ? key.slice(colon + 1) : key;
+          if (!ids.has(uid)) continue;
+          hash = (hash * 31 + order) | 0;
+        }
+        return hash;
+      },
+      [memberIdsKey],
+    ),
+  );
   const getPresence = usePresenceStore((s) => s.getPresence);
   const voiceParticipants = useVoiceStore((s) => s.participants);
   const selfUserId = activeServer?.userId ?? authUserId;
@@ -114,6 +137,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
       return {
         user_id: m.user.id,
         username: m.user.username,
+        display_name: m.user.display_name,
         avatar_hash: m.user.avatar || null,
         nick: m.nick || null,
         roles: m.roles ?? [],
@@ -123,7 +147,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
         streaming: Boolean(voiceState?.self_stream),
       };
     });
-  }, [propMembers, storeMembers, presences, getPresence, activeServerId, voiceParticipants, selectedGuildId, isAuthenticated, selfUserId]);
+  }, [propMembers, storeMembers, presenceFingerprint, getPresence, activeServerId, voiceParticipants, selectedGuildId, isAuthenticated, selfUserId]);
   const [showOffline, setShowOffline] = useState(false);
   const [selectedMember, setSelectedMember] = useState<MemberWithUser | null>(null);
   const [popupPos, setPopupPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -204,7 +228,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
             className="flex h-8 w-8 items-center justify-center rounded-full text-label font-semibold text-white"
             style={{ backgroundColor: roleColor ?? 'var(--accent-primary)' }}
           >
-            {(member.nick || member.username).charAt(0).toUpperCase()}
+            {displayName(member, member.nick).charAt(0).toUpperCase()}
           </span>
         </span>
         <span
@@ -224,7 +248,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
             )}
             style={offline ? undefined : { color: roleColor ?? 'var(--text-secondary)' }}
           >
-            {member.nick || member.username}
+            {displayName(member, member.nick)}
           </span>
           {member.bot && (
             <span className="shrink-0 rounded-xs bg-accent-tint px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
@@ -330,7 +354,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
               return (
               <button
                 key={member.user_id}
-                title={member.nick || member.username}
+                title={displayName(member, member.nick)}
                 className="group relative flex h-9 w-9 items-center justify-center rounded-full text-label font-semibold text-white outline-none transition-transform duration-[140ms] ease-[var(--ease-out)] hover:brightness-110 active:scale-95 focus-visible:shadow-[var(--focus-ring)]"
                 style={{
                   backgroundColor: roleColor ?? 'var(--accent-primary)',
@@ -338,7 +362,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
                 }}
                 onClick={(e) => handleMemberClick(e, member)}
               >
-                {(member.nick || member.username).charAt(0).toUpperCase()}
+                {displayName(member, member.nick).charAt(0).toUpperCase()}
                 <span
                   className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full"
                   style={{
@@ -361,7 +385,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
               username: selectedMember.username,
               discriminator: '0000',
               avatar_hash: selectedMember.avatar_hash,
-              display_name: selectedMember.nick,
+              display_name: displayName(selectedMember, selectedMember.nick),
               bot: selectedMember.bot ?? false,
               system: false,
               flags: 0,
@@ -380,13 +404,9 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
   return (
     <div
       ref={scrollRef}
-      className="flex flex-col overflow-y-auto scrollbar-thin"
+      className="flex min-w-0 w-full flex-col overflow-y-auto scrollbar-thin"
       role="complementary"
       aria-label="Member list"
-      style={{
-        width: 'var(--member-list-width)',
-        minWidth: 'var(--member-list-width)',
-      }}
     >
       {isMemberListLoading ? (
         <div className="px-3 pt-4.5" aria-label="Loading members">
@@ -461,7 +481,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
         <>
           <div className="fixed inset-0 z-50" onClick={() => setContextMenuMember(null)} />
           <div
-            className="glass-modal fixed z-50 min-w-[200px] rounded-md p-1"
+            className="glass-modal fixed z-50 min-w-[min(12.5rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] rounded-md p-1"
             style={{ left: contextMenuMember.x + 10, top: contextMenuMember.y }}
             role="menu"
             aria-label="Member actions"
@@ -495,7 +515,7 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
             username: selectedMember.username,
             discriminator: '0000',
             avatar_hash: selectedMember.avatar_hash,
-            display_name: selectedMember.nick,
+            display_name: displayName(selectedMember, selectedMember.nick),
             bot: selectedMember.bot ?? false,
             system: false,
             flags: 0,

@@ -259,11 +259,14 @@ describe('channelStore', () => {
     expect(useChannelStore.getState().channelsById['dm1'].id).toBe('dm1');
   });
 
-  it('addChannel updates flat channels when guild is selected', () => {
-    useChannelStore.getState().selectGuild('g1');
-    const ch = makeChannel({ id: 'c1', guild_id: 'g1' });
-    useChannelStore.getState().addChannel(ch);
-    expect(useChannelStore.getState().channels).toHaveLength(1);
+  it('addChannel indexes DM creates into dmChannelsByServer for the active server', () => {
+    useServerListStore.setState({ activeServerId: 's1', servers: [] });
+    const dm = makeChannel({ id: 'dm-live', guild_id: undefined, type: 1, channel_type: 1 });
+    useChannelStore.getState().addChannel(dm);
+
+    const state = useChannelStore.getState();
+    expect(state.channelsByGuild[''].map((c) => c.id)).toContain('dm-live');
+    expect(state.dmChannelsByServer['s1'].map((c) => c.id)).toEqual(['dm-live']);
   });
 
   describe('setDmChannelsForServer', () => {

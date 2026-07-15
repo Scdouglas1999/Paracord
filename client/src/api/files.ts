@@ -11,6 +11,8 @@ import {
   hasQuicTransport,
 } from '../lib/media/transport/fileTransportManager';
 import { isTauri } from '../lib/tauriEnv';
+import { resolveResourceUrl } from '../lib/config/apiBaseUrl';
+import { ensureDownloadTicket, getDownloadTicket } from '../lib/downloadTicket';
 
 /**
  * Encode raw bytes as a base64 string. Chunked to stay well under the argument
@@ -317,8 +319,8 @@ export const fileApi = {
 
   /**
    * Resolve an attachment URL into a value suitable for `<img src>`, `<video src>`,
-   * or download links. In Tauri returns a blob object URL; in the browser returns
-   * an absolute same-origin URL.
+   * or download links. Always returns an authenticated blob object URL so
+   * cross-origin / cookie-less browser loads work (tickets or Authorization).
    */
   resolveAttachmentObjectUrl: async (url: string): Promise<string> => {
     if (isTauri()) {
@@ -343,7 +345,31 @@ export const fileApi = {
       const contentType = resp.content_type || 'application/octet-stream';
       return URL.createObjectURL(new Blob([bytes], { type: contentType }));
     }
-    return toAbsoluteAttachmentUrl(url);
+
+    // Browser: prefer authenticated axios blob fetch (cookies / Bearer).
+    const id = attachmentIdFromUrl(url);
+    if (id) {
+      try {
+        const { data } = await getApi().get(`/attachments/${id}`, {
+          responseType: 'blob',
+        });
+        return URL.createObjectURL(data);
+      } catch {
+        // Fall through to ticketed absolute URL fetch (cross-origin img path).
+      }
+    }
+
+    await ensureDownloadTicket();
+    const ticketed = resolveResourceUrl(toAbsoluteAttachmentUrl(url), getDownloadTicket());
+    const resp = await fetch(ticketed, {
+      credentials: 'include',
+      headers: authHeaders(),
+    });
+    if (!resp.ok) {
+      throw new Error(`Request failed with status code ${resp.status}`);
+    }
+    const blob = await resp.blob();
+    return URL.createObjectURL(blob);
   },
 
   /** Delete an attachment. */

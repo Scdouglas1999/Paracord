@@ -330,6 +330,37 @@ async fn ensure_identity_matches_origin_or_alias(
     }
 }
 
+/// Returns true when `origin_server` is authoritative for the namespace domain
+/// embedded in `room_id` — i.e. the room's home domain equals the origin (or a
+/// trusted alias of it). Rooms whose id is unparseable are treated as
+/// authoritative, because in that case `mapping_namespace_from_room` falls back
+/// to `origin_server` and no cross-origin namespace is reachable.
+async fn origin_authoritative_for_room_namespace(
+    state: &AppState,
+    origin_server: &str,
+    room_id: &str,
+) -> Result<bool, ApiError> {
+    let Some((_, domain)) = parse_room_parts(room_id) else {
+        return Ok(true);
+    };
+    if domain.eq_ignore_ascii_case(origin_server) {
+        return Ok(true);
+    }
+    // The origin and the room domain may be different presentations of the same
+    // trusted peer (server_name vs domain); resolve aliases as elsewhere.
+    let peers = paracord_db::federation::list_trusted_federated_servers(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let matches_alias = peers.into_iter().any(|peer| {
+        let origin_matches = peer.server_name.eq_ignore_ascii_case(origin_server)
+            || peer.domain.eq_ignore_ascii_case(origin_server);
+        let domain_matches = peer.server_name.eq_ignore_ascii_case(domain)
+            || peer.domain.eq_ignore_ascii_case(domain);
+        origin_matches && domain_matches
+    });
+    Ok(matches_alias)
+}
+
 fn parse_federation_allowed_guild_ids() -> Vec<i64> {
     std::env::var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS")
         .ok()
@@ -372,6 +403,10 @@ struct FederationTransportHeaders {
     timestamp_ms: i64,
     signature_hex: String,
     protocol_version: String,
+    /// Destination server the request was signed for (host/authority the sender
+    /// intended to reach). `None` for legacy peers that predate destination
+    /// binding; `Some` requests are bound to this server's own identity.
+    destination: Option<String>,
 }
 
 fn parse_transport_headers(headers: &HeaderMap) -> Result<FederationTransportHeaders, ApiError> {
@@ -408,12 +443,19 @@ fn parse_transport_headers(headers: &HeaderMap) -> Result<FederationTransportHea
         .filter(|v| !v.is_empty())
         .unwrap_or(paracord_federation::FEDERATION_PROTOCOL_VERSION_V1)
         .to_string();
+    let destination = headers
+        .get("x-paracord-destination")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_ascii_lowercase());
     Ok(FederationTransportHeaders {
         origin,
         key_id,
         timestamp_ms,
         signature_hex,
         protocol_version,
+        destination,
     })
 }
 
@@ -447,6 +489,19 @@ async fn verify_transport_request(
         return Err(ApiError::Unauthorized);
     }
 
+    // Destination binding: a request signed for another server must not be
+    // replayed/forwarded to us. When the sender bound a destination, require it
+    // to match one of this server's own stable identities (server_name/domain).
+    // Legacy peers that omit the header fall back to the unbound canonical form
+    // for backward compatibility.
+    if let Some(destination) = transport.destination.as_deref() {
+        let is_self = destination.eq_ignore_ascii_case(service.server_name())
+            || destination.eq_ignore_ascii_case(service.domain());
+        if !is_self {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
     let trusted =
         paracord_db::federation::is_federated_server_trusted(&state.db, &transport.origin, now_ms)
             .await
@@ -464,12 +519,23 @@ async fn verify_transport_request(
         .find(|k| k.key_id == transport.key_id && k.valid_until >= now_ms)
         .ok_or(ApiError::Forbidden)?;
 
-    let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
-        method,
-        path,
-        transport.timestamp_ms,
-        body_bytes,
-    );
+    let canonical = match transport.destination.as_deref() {
+        Some(destination) => {
+            paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+                method,
+                path,
+                transport.timestamp_ms,
+                body_bytes,
+                destination,
+            )
+        }
+        None => paracord_federation::transport::canonical_transport_bytes_with_body(
+            method,
+            path,
+            transport.timestamp_ms,
+            body_bytes,
+        ),
+    };
     service
         .verify_payload(
             &canonical,
@@ -717,6 +783,27 @@ async fn ingest_verified_payload(
         }
     }
 
+    // Bind the envelope origin to the room's namespace domain. The target local
+    // guild/channel is resolved from the DOMAIN embedded in the peer-supplied
+    // room_id (see `mapping_namespace_from_room`), so without this check a trusted
+    // peer could inject events into — or pre-create ("squat") the mapping for —
+    // another server's room namespace. A cross-origin send is only legitimate when
+    // the origin is already a recorded participant of the room, mirroring the
+    // read-path `server_participates_in_room` guard; a non-authoritative origin is
+    // never allowed to be the first to materialize a room mapping.
+    if !origin_authoritative_for_room_namespace(state, &payload.origin_server, &payload.room_id)
+        .await?
+        && !server_participates_in_room(state, &payload.origin_server, &payload.room_id).await?
+    {
+        tracing::warn!(
+            "federation: rejected event {} from origin {} targeting foreign room namespace {}",
+            payload.event_id,
+            payload.origin_server,
+            payload.room_id
+        );
+        return Err(ApiError::Forbidden);
+    }
+
     // Update last_seen_at for the envelope origin and immediate transport sender.
     let _ =
         paracord_db::federation::touch_federated_server(&state.db, &payload.origin_server).await;
@@ -755,16 +842,18 @@ async fn ingest_verified_payload(
             "m.member.leave" => {
                 dispatch_federated_member_leave(state, &payload).await;
             }
-            _ => {
-                state.event_bus.dispatch(
-                    &format!("FEDERATION_{}", payload.event_type.to_uppercase()),
-                    json!({
-                        "event_id": payload.event_id,
-                        "origin_server": payload.origin_server,
-                        "sender": payload.sender,
-                        "content": payload.content,
-                    }),
-                    None,
+            other => {
+                // Unknown/unhandled federated event types have no defined client
+                // handling. Do NOT globally fan them out: the previous behaviour
+                // dispatched `FEDERATION_<TYPE>` with peer-controlled `content` and
+                // a `None` guild target, which is a global broadcast to every
+                // connected session and lets a trusted peer push arbitrary JSON to
+                // all local clients. Drop them instead.
+                tracing::debug!(
+                    "federation: dropping unhandled event type '{}' (event_id {}, origin {})",
+                    other,
+                    payload.event_id,
+                    payload.origin_server
                 );
             }
         }
@@ -1674,6 +1763,20 @@ async fn dispatch_federated_reaction_add(state: &AppState, payload: &FederationE
     let Some(identity) = FederatedIdentity::parse(&payload.sender) else {
         return;
     };
+    // Bind the reacting sender to the envelope origin so a trusted peer cannot
+    // attribute a reaction to another server's user (identity spoofing).
+    if ensure_identity_matches_origin_or_alias(state, &identity, &payload.origin_server)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "federation: rejected m.reaction.add {} because sender {} does not belong to origin {}",
+            payload.event_id,
+            payload.sender,
+            payload.origin_server
+        );
+        return;
+    }
     let Ok(local_user_id) = ensure_remote_user_mapping(state, &identity).await else {
         return;
     };
@@ -1715,6 +1818,20 @@ async fn dispatch_federated_reaction_remove(state: &AppState, payload: &Federati
     let Some(identity) = FederatedIdentity::parse(&payload.sender) else {
         return;
     };
+    // Bind the reacting sender to the envelope origin so a trusted peer cannot
+    // attribute a reaction removal to another server's user (identity spoofing).
+    if ensure_identity_matches_origin_or_alias(state, &identity, &payload.origin_server)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "federation: rejected m.reaction.remove {} because sender {} does not belong to origin {}",
+            payload.event_id,
+            payload.sender,
+            payload.origin_server
+        );
+        return;
+    }
     let Ok(local_user_id) = ensure_remote_user_mapping(state, &identity).await else {
         return;
     };
@@ -1912,13 +2029,27 @@ pub async fn get_event(
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
-    authorize_federation_read_request(&state, &service, &headers, uri.path()).await?;
+    let auth = authorize_federation_read_request(&state, &service, &headers, uri.path()).await?;
     let event = service
         .fetch_event(&state.db, &event_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     match event {
-        Some(envelope) => Ok(Json(json!(envelope))),
+        Some(envelope) => {
+            // Read scoping: a signed peer may only fetch an event for a room it
+            // actually participates in. `get_event` takes an event_id (not a
+            // room_id), so we resolve the event's room from the fetched envelope
+            // and enforce the same participation gate as `list_events`. Deny with
+            // NotFound (rather than Forbidden) so a non-participating peer cannot
+            // confirm an event's existence by enumerating IDs. The operator read
+            // token bypasses this, matching `list_events`.
+            if let FederationReadAuth::Peer { origin } = &auth {
+                if !server_participates_in_room(&state, origin, &envelope.room_id).await? {
+                    return Err(ApiError::NotFound);
+                }
+            }
+            Ok(Json(json!(envelope)))
+        }
         None => Err(ApiError::NotFound),
     }
 }
@@ -3078,6 +3209,47 @@ pub async fn list_peer_trust_state(
     Ok(Json(json!({ "states": states })))
 }
 
+/// Maximum accepted size of a subscribed moderation-list response body.
+///
+/// The sync loop runs periodically against admin-configured (but potentially
+/// compromised or hostile) sources, so the body must be read with a hard cap
+/// rather than buffered unbounded via `response.json()`. 4 MiB comfortably
+/// holds a large blocklist while bounding memory growth on the background sync.
+const MODERATION_LIST_RESPONSE_BODY_LIMIT: usize = 4 * 1024 * 1024;
+
+/// Read a moderation-list response into JSON with a hard size cap, aborting as
+/// soon as the streamed body (or an advertised `Content-Length`) exceeds
+/// [`MODERATION_LIST_RESPONSE_BODY_LIMIT`]. Mirrors the bounded readers used by
+/// the federated-discovery and tenor fetchers.
+async fn read_moderation_list_json_response(
+    response: reqwest::Response,
+) -> Result<Value, anyhow::Error> {
+    use futures_util::TryStreamExt;
+
+    if response.content_length().is_some_and(|len| {
+        len > u64::try_from(MODERATION_LIST_RESPONSE_BODY_LIMIT).unwrap_or(u64::MAX)
+    }) {
+        return Err(anyhow::anyhow!("moderation list response body too large"));
+    }
+
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    loop {
+        let chunk = match stream.try_next().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(err) => return Err(anyhow::anyhow!("request failed: {err}")),
+        };
+        if body.len().saturating_add(chunk.len()) > MODERATION_LIST_RESPONSE_BODY_LIMIT {
+            return Err(anyhow::anyhow!("moderation list response body too large"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    serde_json::from_slice(&body)
+        .map_err(|err| anyhow::anyhow!("invalid moderation list payload: {err}"))
+}
+
 fn parse_remote_mod_entries(payload: &Value) -> Vec<ModerationListEntry> {
     let entries = payload
         .get("entries")
@@ -3104,14 +3276,6 @@ pub async fn sync_moderation_lists_once(state: &AppState) {
         return;
     }
 
-    let http = match paracord_federation::client::ssrf_checked_http_client(
-        "Paracord-Federation-Moderation/1.0",
-        Duration::from_secs(10),
-    ) {
-        Ok(client) => client,
-        Err(_) => return,
-    };
-
     for subscription in subscriptions {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let source_label = subscription
@@ -3121,14 +3285,19 @@ pub async fn sync_moderation_lists_once(state: &AppState) {
             .unwrap_or_else(|| subscription.source_url.clone());
 
         let result = async {
-            paracord_federation::client::validate_public_federation_url_with_dns(
+            // Resolve + validate the source host and pin the connection to the
+            // validated address so a low-TTL DNS rebind between validation and
+            // connect cannot redirect the fetch to private infrastructure.
+            // Revalidate at fetch time so old subscriptions created before SSRF
+            // checks cannot keep targeting private infrastructure.
+            let http = paracord_federation::client::ssrf_checked_pinned_client_for_url(
+                "Paracord-Federation-Moderation/1.0",
+                Duration::from_secs(10),
                 &subscription.source_url,
             )
             .await
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
             let response = http
-                // Revalidate at fetch time so old subscriptions created before
-                // SSRF checks cannot keep targeting private infrastructure.
                 .get(&subscription.source_url)
                 .send()
                 .await
@@ -3139,10 +3308,7 @@ pub async fn sync_moderation_lists_once(state: &AppState) {
                     response.status()
                 ));
             }
-            let payload: Value = response
-                .json()
-                .await
-                .map_err(|err| anyhow::anyhow!("invalid moderation list payload: {err}"))?;
+            let payload: Value = read_moderation_list_json_response(response).await?;
             let entries = parse_remote_mod_entries(&payload);
             // Remote subscriptions can add blocks/quarantines but must never
             // lift a locally-applied block (allow/unblock is ignored).
@@ -3450,6 +3616,24 @@ mod tests {
         std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "*");
         assert!(ensure_federation_guild_allowed(99).is_ok());
         std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
+    }
+
+    #[test]
+    fn mapping_namespace_trusts_room_domain_and_falls_back_to_origin() {
+        // L08-02: the mapping namespace is derived from the DOMAIN embedded in the
+        // peer-supplied room_id. A trusted origin can therefore name a FOREIGN
+        // namespace (e.g. origin B naming A's domain), which is precisely why the
+        // ingest guard binds origin_server to the room namespace / participation.
+        assert_eq!(
+            mapping_namespace_from_room("!42:a.example", "b.example"),
+            "a.example"
+        );
+        // Unparseable room ids fall back to the verified origin, so no cross-origin
+        // namespace is reachable in that case.
+        assert_eq!(
+            mapping_namespace_from_room("not-a-room", "b.example"),
+            "b.example"
+        );
     }
 
     #[test]

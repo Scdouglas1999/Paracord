@@ -583,7 +583,8 @@ pub async fn upload_file(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
             .ok_or(ApiError::NotFound)?;
-        let perms = paracord_core::permissions::compute_channel_permissions(
+        let perms = paracord_core::permissions::compute_channel_permissions_cached(
+            &state.permission_cache,
             &state.db,
             guild_id,
             channel_id,
@@ -722,7 +723,8 @@ pub async fn download_file(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
             .ok_or(ApiError::NotFound)?;
-        let perms = paracord_core::permissions::compute_channel_permissions(
+        let perms = paracord_core::permissions::compute_channel_permissions_cached(
+            &state.permission_cache,
             &state.db,
             guild_id,
             channel.id,
@@ -854,7 +856,8 @@ pub async fn validate_upload_permissions(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
             .ok_or(ApiError::NotFound)?;
-        let perms = paracord_core::permissions::compute_channel_permissions(
+        let perms = paracord_core::permissions::compute_channel_permissions_cached(
+            &state.permission_cache,
             &state.db,
             guild_id,
             channel_id,
@@ -1090,7 +1093,8 @@ async fn ensure_channel_read_access(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let perms = paracord_core::permissions::compute_channel_permissions(
+    let perms = paracord_core::permissions::compute_channel_permissions_cached(
+        &state.permission_cache,
         &state.db,
         guild_id,
         channel_id,
@@ -1119,7 +1123,8 @@ async fn guild_has_readable_channel(
         if channel.guild_id().is_none() {
             continue;
         }
-        let perms = paracord_core::permissions::compute_channel_permissions(
+        let perms = paracord_core::permissions::compute_channel_permissions_cached(
+            &state.permission_cache,
             &state.db,
             guild_id,
             channel.id,

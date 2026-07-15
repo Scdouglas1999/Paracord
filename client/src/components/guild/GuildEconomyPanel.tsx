@@ -5,6 +5,7 @@ import { economyApi, type EconomyLeaderboardEntry, type EconomyProgressResponse 
 import { extractApiError } from '../../api/client';
 import { useAuthStore } from '../../stores/authStore';
 import { cn } from '../../lib/utils';
+import { displayName } from '../../lib/displayName';
 
 interface GuildEconomyPanelProps {
   guildId: string;
@@ -43,9 +44,17 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
       void load();
     }, 30_000);
 
+    const onXpUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<{ guild_id?: string }>).detail;
+      if (detail?.guild_id && detail.guild_id !== guildId) return;
+      void load();
+    };
+    window.addEventListener('paracord:guild-member-xp-update', onXpUpdate);
+
     return () => {
       cancelled = true;
       window.clearInterval(interval);
+      window.removeEventListener('paracord:guild-member-xp-update', onXpUpdate);
     };
   }, [guildId]);
 
@@ -61,8 +70,8 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
   );
 
   return (
-    <aside className="hidden w-[300px] shrink-0 border-l border-border-subtle bg-bg-secondary xl:flex">
-      <div className="flex h-full w-full flex-col gap-4 p-4">
+    <div className="flex min-h-full min-w-0 w-full flex-col bg-bg-secondary">
+      <div className="flex min-w-0 flex-1 flex-col gap-4 p-4">
         <div>
           <div className="flex items-center gap-2 text-label text-text-primary">
             <TrendingUp size={16} className="text-accent-primary" />
@@ -146,7 +155,7 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 text-label text-text-primary">
                             {entry.rank === 1 && <Crown size={12} className="text-accent-warning" />}
-                            #{entry.rank} {entry.user.username}
+                            #{entry.rank} {displayName(entry.user)}
                           </div>
                           <div className="font-code text-[11px] tabular-nums text-text-muted">
                             L{entry.level} &middot; {entry.xp} XP &middot; {entry.streak_days}d streak
@@ -170,6 +179,6 @@ export function GuildEconomyPanel({ guildId }: GuildEconomyPanelProps) {
           </>
         )}
       </div>
-    </aside>
+    </div>
   );
 }

@@ -37,5 +37,13 @@ export const stageApi = {
 
   removeSpeaker: (stageId: string, userId: string) =>
     getApi().delete(`/stage-instances/${stageId}/speakers/${userId}`),
-};
 
+  requestToSpeak: (stageId: string) =>
+    getApi().post(`/stage-instances/${stageId}/speaker-requests/@me`),
+
+  cancelSpeakerRequest: (stageId: string) =>
+    getApi().delete(`/stage-instances/${stageId}/speaker-requests/@me`),
+
+  dismissSpeakerRequest: (stageId: string, userId: string) =>
+    getApi().delete(`/stage-instances/${stageId}/speaker-requests/${userId}`),
+};

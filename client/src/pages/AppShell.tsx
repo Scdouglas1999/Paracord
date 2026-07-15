@@ -10,6 +10,7 @@ import { MiniVoiceBar } from '../components/voice/MiniVoiceBar';
 import { MobileBottomNav } from '../components/layout/MobileBottomNav';
 import { useUIStore } from '../stores/uiStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useChannelStore } from '../stores/channelStore';
 import { useKeyboardNavigation } from '../hooks/useKeyboardNavigation';
 import { useSwipeGesture } from '../hooks/useSwipeGesture';
 import { useMobile } from '../hooks/useMobile';
@@ -18,6 +19,7 @@ import { GuildSettingsPage } from './GuildSettingsPage';
 import { LayoutTour } from '../components/onboarding/LayoutTour';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useRelationshipStore } from '../stores/relationshipStore';
+import { InteractionModal } from '../components/message/InteractionModal';
 
 /**
  * AppShell — the "Rooms + Unified Stream" frame (layout-spec §1, §4, §5, §6).
@@ -48,6 +50,7 @@ export function AppShell() {
   const voiceChannelId = useVoiceStore((s) => s.channelId);
   const location = useLocation();
   const { guildId, channelId } = useParams();
+  const activeChannel = useChannelStore((s) => (channelId ? s.channelsById[channelId] : undefined));
 
   const userSettingsOpen = useUIStore((s) => s.userSettingsOpen);
   const guildSettingsId = useUIStore((s) => s.guildSettingsId);
@@ -73,6 +76,25 @@ export function AppShell() {
     setSidebarCollapsed(isMobile);
   }, [isMobile, setSidebarCollapsed]);
 
+  useEffect(() => {
+    if (isMobile) setSidebarCollapsed(true);
+  }, [isMobile, location.pathname, setSidebarCollapsed]);
+
+  // Open User Settings from deep links like /app?settings=identity (import flow).
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const section = params.get('settings');
+    if (!section) return;
+    useUIStore.getState().setUserSettingsOpen(true, section);
+    params.delete('settings');
+    const next = params.toString();
+    window.history.replaceState(
+      null,
+      '',
+      `${location.pathname}${next ? `?${next}` : ''}${location.hash}`,
+    );
+  }, [location.pathname, location.search, location.hash]);
+
   // Prime relationships once per shell mount so the sidebar's Friends badge and
   // Needs-you request rows are fresh without requiring a Home/Friends visit
   // (gateway RELATIONSHIP_* events keep them live afterwards).
@@ -85,8 +107,16 @@ export function AppShell() {
   // old member-panel gesture).
   useSwipeGesture(
     {
-      onSwipeRight: () => setSidebarCollapsed(false),
-      onSwipeLeft: () => setContextPanelMode('members'),
+      // Keep mobile overlays mutually exclusive — stacking two z-[80] surfaces
+      // leaves the covered one stuck open underneath.
+      onSwipeRight: () => {
+        setContextPanelMode(null);
+        setSidebarCollapsed(false);
+      },
+      onSwipeLeft: () => {
+        setSidebarCollapsed(true);
+        setContextPanelMode('members');
+      },
     },
     isMobile,
   );
@@ -98,6 +128,23 @@ export function AppShell() {
     location.pathname === '/app/admin'
     || /^\/app\/guilds\/[^/]+\/settings$/.test(location.pathname);
 
+  const isDmConversationRoute = /^\/app\/dms\/[^/]+$/.test(location.pathname);
+  const isGroupDmContext =
+    isDmConversationRoute
+    && (activeChannel?.type === 3 || activeChannel?.channel_type === 3);
+  const contextPanelRouteValid =
+    contextPanelMode === null
+    || ((contextPanelMode === 'search' || contextPanelMode === 'pins') && Boolean(channelId))
+    || (contextPanelMode === 'threads' && Boolean(guildId && channelId))
+    || (contextPanelMode === 'economy' && Boolean(guildId))
+    || (contextPanelMode === 'members' && Boolean(guildId || isGroupDmContext));
+
+  useEffect(() => {
+    if (contextPanelMode !== null && !contextPanelRouteValid) {
+      setContextPanelMode(null);
+    }
+  }, [contextPanelMode, contextPanelRouteValid, setContextPanelMode]);
+
   // Mobile persistent call surface: the sidebar CallDock is unreachable while the
   // overlay sidebar is closed, so the mobile bottom dock stays mounted whenever
   // connected and not already on the voice channel's page (§6).
@@ -106,8 +153,17 @@ export function AppShell() {
     : false;
   const showMiniVoiceBar = isMobile && voiceConnected && !isOnVoiceChannel;
 
-  const showContextPanel = contextPanelMode !== null;
+  const showContextPanel = contextPanelMode !== null && contextPanelRouteValid;
   const showSidebarOverlay = isMobile && !sidebarCollapsed;
+
+  // When a context overlay opens on mobile, dismiss the sidebar overlay so the
+  // two z-[80] surfaces never stack (hamburger / TopBar toggles included).
+  useEffect(() => {
+    if (!isMobile) return;
+    if (showContextPanel && !sidebarCollapsed) {
+      setSidebarCollapsed(true);
+    }
+  }, [isMobile, showContextPanel, sidebarCollapsed, setSidebarCollapsed]);
 
   // Narrow-viewport overlays are modal (they cover a dimmed but present main
   // pane), so they trap focus, move focus inside on open, restore it on close,
@@ -123,7 +179,13 @@ export function AppShell() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-bg-tertiary text-text-primary">
+      {/* data-native-underlay-clear: while a stream renders on the native GL
+          underlay (Linux), this wrapper's background goes transparent so the
+          tile is a real hole down to the video (see layout.css). */}
+      <div
+        data-native-underlay-clear=""
+        className="flex h-[100dvh] w-full flex-col overflow-hidden bg-bg-tertiary text-text-primary"
+      >
         {/* Skip-to-content for keyboard/screen-reader users */}
         <a
           href="#main-content"
@@ -139,6 +201,7 @@ export function AppShell() {
 
           <main
             id="main-content"
+            data-native-underlay-clear=""
             className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary"
           >
             <div className={cn('min-h-0 w-full flex-1 overflow-hidden', isSettingsRoute && 'p-3')}>
@@ -230,6 +293,7 @@ export function AppShell() {
 
         <CommandPalette />
         <ConfirmDialog />
+        <InteractionModal />
         <LayoutTour />
 
         {/* Windowed settings overlays — spec modal enter (§4/§5): backdrop fade,
@@ -275,7 +339,7 @@ export function AppShell() {
                 ref={guildSettingsDialogRef}
                 role="dialog"
                 aria-modal="true"
-                aria-label="Server settings"
+                aria-label="Space settings"
                 tabIndex={-1}
                 initial={{ scale: 0.96, opacity: 0, y: 8 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}

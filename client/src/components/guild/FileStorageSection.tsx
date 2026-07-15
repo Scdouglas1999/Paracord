@@ -166,7 +166,7 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
       <div className="flex flex-col gap-8">
         <SectionHeader
           title="File Storage"
-          description="Track how much space this server is using and set the rules for what members can upload."
+          description="Track how much storage this space is using and set the rules for what members can upload."
         />
 
         {error && (

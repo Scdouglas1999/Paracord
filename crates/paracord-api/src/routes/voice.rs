@@ -132,6 +132,79 @@ pub fn native_media_endpoints(headers: &HeaderMap, media_port: u16) -> (String, 
     (media_endpoint, candidates)
 }
 
+/// Forcibly evict a user from every voice/media session in a guild.
+///
+/// Called from the moderation paths (kick/ban) and self-leave so that removing
+/// a member also terminates any in-progress native voice/video (or LiveKit)
+/// call they are part of. Without this, authorization for a live native-media
+/// connection is only checked at connection establishment, so a kicked/banned
+/// participant would keep receiving every other participant's audio/video and
+/// keep publishing their own until they voluntarily disconnect. It also deletes
+/// the persisted `voice_state`, which is what re-authorizes a fresh QUIC /
+/// WebTransport media connection — so a removed member cannot simply reconnect
+/// within their media token's lifetime.
+///
+/// Best-effort and idempotent: safe when native media is disabled or the user
+/// is not currently in any call.
+pub async fn evict_user_from_guild_media(state: &AppState, guild_id: i64, user_id: i64) {
+    // Snapshot the channels the user currently occupies in this guild *before*
+    // deleting their voice state, so we can evict them from the matching media
+    // rooms and refresh other clients' UIs.
+    let channels: Vec<i64> =
+        match paracord_db::voice_states::get_all_user_voice_states(&state.db, user_id).await {
+            Ok(states) => states
+                .into_iter()
+                .filter(|s| s.guild_id() == Some(guild_id))
+                .map(|s| s.channel_id)
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+    // Drop the persisted voice state so any still-valid media token cannot be
+    // re-authorized against a stale voice_state row on reconnect (fail closed).
+    let _ = paracord_db::voice_states::remove_voice_state(&state.db, user_id, Some(guild_id)).await;
+
+    // Tear down LiveKit in-memory membership for each channel (best-effort).
+    for channel_id in &channels {
+        let _ = state.voice.leave_room(*channel_id, user_id).await;
+    }
+
+    if let Some(native_media) = state.native_media.as_ref() {
+        // Remove the user from each native media room in this guild.
+        for channel_id in &channels {
+            let _ = native_media
+                .rooms
+                .leave_room(guild_id, *channel_id, user_id);
+        }
+        // Actively close the live QUIC/WebTransport media connection so the
+        // removed member immediately stops receiving and can no longer inject
+        // media, regardless of which channel it was bound to.
+        native_media.relay_forwarder.disconnect_user(user_id);
+    }
+
+    if channels.is_empty() {
+        return;
+    }
+
+    // Notify remaining members that the user left voice so their UIs update.
+    state.event_bus.dispatch(
+        "VOICE_STATE_UPDATE",
+        json!({
+            "user_id": user_id.to_string(),
+            "channel_id": null,
+            "guild_id": guild_id.to_string(),
+            "self_mute": false,
+            "self_deaf": false,
+            "self_stream": false,
+            "self_video": false,
+            "suppress": false,
+            "mute": false,
+            "deaf": false,
+        }),
+        Some(guild_id),
+    );
+}
+
 fn livekit_url_candidates(headers: &HeaderMap, fallback: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
@@ -291,6 +364,23 @@ pub async fn join_voice(
     .await?;
     paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
     paracord_core::permissions::require_permission(perms, Permissions::CONNECT)?;
+    // SPEAK gates whether the issued media credential may publish audio/video.
+    // A member with CONNECT but denied SPEAK (e.g. a listen-only / muted role)
+    // joins as a subscriber only. Applied to both the LiveKit token grant and
+    // the native-media participant below.
+    let can_speak = perms.contains(Permissions::SPEAK);
+    let is_stage = channel.channel_type == 13;
+    if is_stage {
+        paracord_db::stage_instances::get_stage_instance_by_channel(&state.db, channel_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or_else(|| ApiError::BadRequest("This stage is not live".into()))?;
+    }
+    // Stage moderators enter on stage. Everyone else enters as an audience
+    // member and receives a subscriber-only media credential until promoted.
+    let stage_moderator = is_stage && can_speak && perms.contains(Permissions::MANAGE_CHANNELS);
+    let suppress = is_stage && !stage_moderator;
+    let can_publish = can_speak && !suppress;
 
     // Enforce user_limit: count current participants; 0 means unlimited.
     if let Some(limit) = channel.user_limit {
@@ -398,6 +488,13 @@ pub async fn join_voice(
                             &remote.session_id,
                         )
                         .await;
+                        let _ = paracord_db::voice_states::update_suppress(
+                            &state.db,
+                            auth.user_id,
+                            channel.guild_id(),
+                            suppress,
+                        )
+                        .await;
                         state.event_bus.dispatch(
                             "VOICE_STATE_UPDATE",
                             json!({
@@ -409,7 +506,8 @@ pub async fn join_voice(
                                 "self_deaf": false,
                                 "self_stream": false,
                                 "self_video": false,
-                                "suppress": false,
+                                "suppress": suppress,
+                                "request_to_speak_at": Value::Null,
                                 "mute": false,
                                 "deaf": false,
                                 "username": &user.username,
@@ -440,6 +538,7 @@ pub async fn join_voice(
                             "url_candidates": url_candidates,
                             "room_name": remote.room_name,
                             "session_id": remote.session_id,
+                            "suppress": suppress,
                         })));
                     }
                     Err(err) => {
@@ -476,12 +575,21 @@ pub async fn join_voice(
         )
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        paracord_db::voice_states::update_suppress(
+            &state.db,
+            auth.user_id,
+            channel.guild_id(),
+            suppress,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
         if let Some(native_media) = state.native_media.as_ref() {
             if let Err(err) = native_media.rooms.join_room(
                 guild_id,
                 channel_id,
-                MediaParticipant::new(auth.user_id, session_id.clone()),
+                MediaParticipant::new(auth.user_id, session_id.clone())
+                    .with_can_publish(can_publish),
             ) {
                 let _ = paracord_db::voice_states::remove_voice_state_if_session(
                     &state.db,
@@ -510,7 +618,8 @@ pub async fn join_voice(
                 "self_deaf": false,
                 "self_stream": false,
                 "self_video": false,
-                "suppress": false,
+                "suppress": suppress,
+                "request_to_speak_at": Value::Null,
                 "mute": false,
                 "deaf": false,
                 "username": &user.username,
@@ -562,6 +671,7 @@ pub async fn join_voice(
             "cert_hash": cert_hash,
             "room_name": room_name,
             "session_id": session_id,
+            "suppress": suppress,
             "livekit_available": state.config.livekit_available,
         })));
     }
@@ -582,7 +692,7 @@ pub async fn join_voice(
             auth.user_id,
             &user.username,
             &session_id,
-            true, // can_speak
+            can_publish,
             paracord_media::AudioBitrate::default(),
         )
         .await
@@ -594,6 +704,13 @@ pub async fn join_voice(
         channel.guild_id(),
         channel_id,
         &session_id,
+    )
+    .await;
+    let _ = paracord_db::voice_states::update_suppress(
+        &state.db,
+        auth.user_id,
+        channel.guild_id(),
+        suppress,
     )
     .await;
 
@@ -608,7 +725,8 @@ pub async fn join_voice(
             "self_deaf": false,
             "self_stream": false,
             "self_video": false,
-            "suppress": false,
+            "suppress": suppress,
+            "request_to_speak_at": Value::Null,
             "mute": false,
             "deaf": false,
             "username": &user.username,
@@ -634,6 +752,7 @@ pub async fn join_voice(
         "url_candidates": url_candidates,
         "room_name": join_resp.room_name,
         "session_id": session_id,
+        "suppress": suppress,
     })))
 }
 

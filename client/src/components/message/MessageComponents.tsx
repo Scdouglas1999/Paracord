@@ -2,21 +2,34 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { ExternalLink, Hash, Volume2, User, Shield } from 'lucide-react';
 import { ComponentType, ButtonStyle, type Component } from '../../types/components';
 import { InteractionType } from '../../types/interactions';
+import type { Interaction } from '../../types/interactions';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
 import { guildApi } from '../../api/guilds';
 import { useChannelStore } from '../../stores/channelStore';
+import { useInteractionStore } from '../../stores/interactionStore';
 import { toast } from '../../stores/toastStore';
 import type { Member, Role, Channel } from '../../types';
-import { safeExternalUrl, safeStoredImageDataUrl } from '../../lib/security';
+import { safeExternalUrl } from '../../lib/security';
+import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { roleColorToHex } from '../../lib/colors';
 import { LoadingSpinner } from '../ui/Feedback';
 import { Button, type ButtonProps } from '../ui/Button';
+import { displayName } from '../../lib/displayName';
 
 interface MessageComponentsProps {
   components: Component[];
   messageId: string;
   channelId: string;
+  guildId?: string;
+}
+
+function resolveGuildIdForChannel(channelId: string, explicit?: string): string | undefined {
+  if (explicit) return explicit;
+  const channelsByGuild = useChannelStore.getState().channelsByGuild;
+  return Object.entries(channelsByGuild).find(([, chs]) =>
+    chs.some((c) => c.id === channelId),
+  )?.[0];
 }
 
 /** Dispatch a MessageComponent interaction to the server. */
@@ -26,17 +39,30 @@ async function dispatchComponentInteraction(
   customId: string,
   componentType: ComponentType,
   values?: string[],
+  guildId?: string,
 ): Promise<void> {
-  await getApi().post('/interactions', {
+  const resolvedGuildId = resolveGuildIdForChannel(channelId, guildId);
+  if (!resolvedGuildId) {
+    throw new Error('Could not resolve guild for this channel');
+  }
+  const { data: interaction } = await getApi().post<Interaction>('/interactions', {
     type: InteractionType.MessageComponent,
+    guild_id: resolvedGuildId,
     channel_id: channelId,
     message_id: messageId,
+    custom_id: customId,
+    component_type: componentType,
+    values,
     data: {
       custom_id: customId,
       component_type: componentType,
       values,
     },
   });
+  // Track pending so Modal (type 9) responses can stamp channel/guild/application.
+  if (interaction?.id) {
+    useInteractionStore.getState().addPendingInteraction(interaction);
+  }
 }
 
 function notifyComponentError(action: string, err: unknown): void {
@@ -63,10 +89,12 @@ function ComponentButton({
   component,
   channelId,
   messageId,
+  guildId,
 }: {
   component: Component;
   channelId: string;
   messageId: string;
+  guildId?: string;
 }) {
   const [busy, setBusy] = useState(false);
 
@@ -101,6 +129,8 @@ function ComponentButton({
         messageId,
         component.custom_id,
         ComponentType.Button,
+        undefined,
+        guildId,
       );
     } catch (err) {
       notifyComponentError('Could not run message action', err);
@@ -149,10 +179,12 @@ function StringSelectMenu({
   component,
   channelId,
   messageId,
+  guildId,
 }: {
   component: Component;
   channelId: string;
   messageId: string;
+  guildId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [selectedValues, setSelectedValues] = useState<string[]>(() => {
@@ -208,6 +240,7 @@ function StringSelectMenu({
         component.custom_id,
         ComponentType.StringSelect,
         selectedValues,
+        guildId,
       );
     } catch (err) {
       notifyComponentError('Could not submit selection', err);
@@ -231,6 +264,7 @@ function StringSelectMenu({
         component.custom_id!,
         ComponentType.StringSelect,
         [value],
+        guildId,
       ).catch((err) => notifyComponentError('Could not submit selection', err)).finally(() => setBusy(false));
     }
   };
@@ -350,6 +384,7 @@ function EntitySelectMenu({
   component,
   channelId,
   messageId,
+  guildId,
   componentType,
   loadItems,
   renderItem,
@@ -358,6 +393,7 @@ function EntitySelectMenu({
   component: Component;
   channelId: string;
   messageId: string;
+  guildId?: string;
   componentType: ComponentType;
   loadItems: () => Promise<EntityItem[]>;
   renderItem: (item: EntityItem, isSelected: boolean, isMulti: boolean) => React.ReactNode;
@@ -424,13 +460,20 @@ function EntitySelectMenu({
     if (!component.custom_id) return;
     setBusy(true);
     setOpen(false);
+    // MentionableSelect uses user:/role: prefixes for disambiguation in the UI;
+    // the API requires bare snowflake IDs.
+    const submitIds =
+      componentType === ComponentType.MentionableSelect
+        ? ids.map((id) => id.replace(/^(user|role):/, ''))
+        : ids;
     try {
       await dispatchComponentInteraction(
         channelId,
         messageId,
         component.custom_id,
         componentType,
-        ids,
+        submitIds,
+        guildId,
       );
     } catch (err) {
       notifyComponentError('Could not submit selection', err);
@@ -552,31 +595,36 @@ function UserSelectMenu({
   component,
   channelId,
   messageId,
+  guildId: guildIdProp,
 }: {
   component: Component;
   channelId: string;
   messageId: string;
+  guildId?: string;
 }) {
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
 
   // Derive guildId from the channelId
-  const guildId = Object.entries(channelsByGuild).find(([, chs]) =>
-    chs.some((c) => c.id === channelId)
-  )?.[0] ?? null;
+  const guildId =
+    guildIdProp ??
+    Object.entries(channelsByGuild).find(([, chs]) =>
+      chs.some((c) => c.id === channelId)
+    )?.[0] ??
+    null;
 
   const loadItems = useCallback(async (): Promise<EntityItem[]> => {
     if (!guildId) return [];
     const { data } = await guildApi.getMembers(guildId);
     return (data as Member[]).map((m) => ({
       id: m.user.id,
-      label: m.nick || m.user.username,
-      sublabel: m.nick ? m.user.username : undefined,
+      label: displayName(m.user, m.nick),
+      sublabel: displayName(m.user, m.nick) !== m.user.username ? m.user.username : undefined,
       avatar: m.user.avatar_hash,
     }));
   }, [guildId]);
 
   const renderItem = useCallback((item: EntityItem) => {
-    const avatarSrc = safeStoredImageDataUrl(item.avatar);
+    const avatarSrc = resolveUserAvatarUrl(item.avatar);
     return (
       <div className="flex min-w-0 items-center gap-2">
         {avatarSrc ? (
@@ -605,6 +653,7 @@ function UserSelectMenu({
       component={component}
       channelId={channelId}
       messageId={messageId}
+      guildId={guildId ?? undefined}
       componentType={ComponentType.UserSelect}
       loadItems={loadItems}
       renderItem={renderItem}
@@ -621,16 +670,21 @@ function RoleSelectMenu({
   component,
   channelId,
   messageId,
+  guildId: guildIdProp,
 }: {
   component: Component;
   channelId: string;
   messageId: string;
+  guildId?: string;
 }) {
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
 
-  const guildId = Object.entries(channelsByGuild).find(([, chs]) =>
-    chs.some((c) => c.id === channelId)
-  )?.[0] ?? null;
+  const guildId =
+    guildIdProp ??
+    Object.entries(channelsByGuild).find(([, chs]) =>
+      chs.some((c) => c.id === channelId)
+    )?.[0] ??
+    null;
 
   const loadItems = useCallback(async (): Promise<EntityItem[]> => {
     if (!guildId) return [];
@@ -667,6 +721,7 @@ function RoleSelectMenu({
       component={component}
       channelId={channelId}
       messageId={messageId}
+      guildId={guildId ?? undefined}
       componentType={ComponentType.RoleSelect}
       loadItems={loadItems}
       renderItem={renderItem}
@@ -683,16 +738,21 @@ function MentionableSelectMenu({
   component,
   channelId,
   messageId,
+  guildId: guildIdProp,
 }: {
   component: Component;
   channelId: string;
   messageId: string;
+  guildId?: string;
 }) {
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
 
-  const guildId = Object.entries(channelsByGuild).find(([, chs]) =>
-    chs.some((c) => c.id === channelId)
-  )?.[0] ?? null;
+  const guildId =
+    guildIdProp ??
+    Object.entries(channelsByGuild).find(([, chs]) =>
+      chs.some((c) => c.id === channelId)
+    )?.[0] ??
+    null;
 
   const loadItems = useCallback(async (): Promise<EntityItem[]> => {
     if (!guildId) return [];
@@ -702,7 +762,7 @@ function MentionableSelectMenu({
     ]);
     const memberItems: EntityItem[] = (membersRes.data as Member[]).map((m) => ({
       id: `user:${m.user.id}`,
-      label: m.nick || m.user.username,
+      label: displayName(m.user, m.nick),
       sublabel: 'User',
       avatar: m.user.avatar_hash,
     }));
@@ -721,7 +781,7 @@ function MentionableSelectMenu({
   const renderItem = useCallback((item: EntityItem) => {
     const isRole = item.id.startsWith('role:');
     const colorHex = item.color ? roleColorToHex(item.color) : undefined;
-    const avatarSrc = safeStoredImageDataUrl(item.avatar);
+    const avatarSrc = resolveUserAvatarUrl(item.avatar);
     return (
       <div className="flex min-w-0 items-center gap-2">
         {isRole ? (
@@ -757,7 +817,7 @@ function MentionableSelectMenu({
     );
   }, []);
 
-  // Strip the type prefix before submitting
+  // Strip the type prefix before submitting (handled in EntitySelectMenu for MentionableSelect)
   const handleLoadItems = loadItems;
 
   return (
@@ -765,6 +825,7 @@ function MentionableSelectMenu({
       component={component}
       channelId={channelId}
       messageId={messageId}
+      guildId={guildId ?? undefined}
       componentType={ComponentType.MentionableSelect}
       loadItems={handleLoadItems}
       renderItem={renderItem}
@@ -786,16 +847,21 @@ function ChannelSelectMenu({
   component,
   channelId,
   messageId,
+  guildId: guildIdProp,
 }: {
   component: Component;
   channelId: string;
   messageId: string;
+  guildId?: string;
 }) {
   const channelsByGuild = useChannelStore((s) => s.channelsByGuild);
 
-  const guildId = Object.entries(channelsByGuild).find(([, chs]) =>
-    chs.some((c) => c.id === channelId)
-  )?.[0] ?? null;
+  const guildId =
+    guildIdProp ??
+    Object.entries(channelsByGuild).find(([, chs]) =>
+      chs.some((c) => c.id === channelId)
+    )?.[0] ??
+    null;
 
   const loadItems = useCallback(async (): Promise<EntityItem[]> => {
     if (!guildId) return [];
@@ -823,6 +889,7 @@ function ChannelSelectMenu({
       component={component}
       channelId={channelId}
       messageId={messageId}
+      guildId={guildId ?? undefined}
       componentType={ComponentType.ChannelSelect}
       loadItems={loadItems}
       renderItem={renderItem}
@@ -839,10 +906,12 @@ function ActionRow({
   component,
   channelId,
   messageId,
+  guildId,
 }: {
   component: Component;
   channelId: string;
   messageId: string;
+  guildId?: string;
 }) {
   const children = component.components || [];
 
@@ -859,6 +928,7 @@ function ActionRow({
                 component={child}
                 channelId={channelId}
                 messageId={messageId}
+                guildId={guildId}
               />
             );
           case ComponentType.StringSelect:
@@ -868,6 +938,7 @@ function ActionRow({
                 component={child}
                 channelId={channelId}
                 messageId={messageId}
+                guildId={guildId}
               />
             );
           case ComponentType.UserSelect:
@@ -877,6 +948,7 @@ function ActionRow({
                 component={child}
                 channelId={channelId}
                 messageId={messageId}
+                guildId={guildId}
               />
             );
           case ComponentType.RoleSelect:
@@ -886,6 +958,7 @@ function ActionRow({
                 component={child}
                 channelId={channelId}
                 messageId={messageId}
+                guildId={guildId}
               />
             );
           case ComponentType.MentionableSelect:
@@ -895,6 +968,7 @@ function ActionRow({
                 component={child}
                 channelId={channelId}
                 messageId={messageId}
+                guildId={guildId}
               />
             );
           case ComponentType.ChannelSelect:
@@ -904,6 +978,7 @@ function ActionRow({
                 component={child}
                 channelId={channelId}
                 messageId={messageId}
+                guildId={guildId}
               />
             );
           default:
@@ -918,7 +993,7 @@ function ActionRow({
 // Top-level Message Components
 // ---------------------------------------------------------------------------
 
-export function MessageComponents({ components, messageId, channelId }: MessageComponentsProps) {
+export function MessageComponents({ components, messageId, channelId, guildId }: MessageComponentsProps) {
   if (!components || components.length === 0) return null;
 
   return (
@@ -931,6 +1006,7 @@ export function MessageComponents({ components, messageId, channelId }: MessageC
               component={row}
               channelId={channelId}
               messageId={messageId}
+              guildId={guildId}
             />
           );
         }

@@ -17,6 +17,7 @@ pub struct RelationshipWithUserRow {
     pub rel_type: i16,
     pub created_at: DateTime<Utc>,
     pub target_username: String,
+    pub target_display_name: Option<String>,
     pub target_discriminator: i16,
     pub target_avatar_hash: Option<String>,
 }
@@ -42,6 +43,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for RelationshipWithUserRow {
             rel_type: row.try_get("rel_type")?,
             created_at: datetime_from_db_text(&created_at_raw)?,
             target_username: row.try_get("target_username")?,
+            target_display_name: row.try_get("target_display_name")?,
             target_discriminator: row.try_get("target_discriminator")?,
             target_avatar_hash: row.try_get("target_avatar_hash")?,
         })
@@ -95,13 +97,13 @@ pub async fn get_relationships(
 ) -> Result<Vec<RelationshipWithUserRow>, DbError> {
     let rows = sqlx::query_as::<_, RelationshipWithUserRow>(
         "SELECT r.user_id, r.target_id, r.rel_type, r.created_at,
-                u.username AS target_username, u.discriminator AS target_discriminator, u.avatar_hash AS target_avatar_hash
+                u.username AS target_username, u.display_name AS target_display_name, u.discriminator AS target_discriminator, u.avatar_hash AS target_avatar_hash
          FROM relationships r
          INNER JOIN users u ON u.id = r.target_id
          WHERE r.user_id = $1
          UNION ALL
          SELECT r.target_id AS user_id, r.user_id AS target_id, 3 AS rel_type, r.created_at,
-                u.username AS target_username, u.discriminator AS target_discriminator, u.avatar_hash AS target_avatar_hash
+                u.username AS target_username, u.display_name AS target_display_name, u.discriminator AS target_discriminator, u.avatar_hash AS target_avatar_hash
          FROM relationships r
          INNER JOIN users u ON u.id = r.user_id
          WHERE r.target_id = $1 AND r.rel_type = 4

@@ -1,6 +1,11 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { Loader2, Plus, RotateCcw, Trash2, Search, ShieldCheck, ShieldAlert, Globe2 } from 'lucide-react';
-import { adminApi, type FederatedServer } from '../../api/admin';
+import {
+  adminApi,
+  type FederatedServer,
+  type FederationPeerTrustState,
+  type FederationModerationSubscription,
+} from '../../api/admin';
 import { extractApiError } from '../../api/client';
 import { toast } from '../../stores/toastStore';
 import { Button } from '../../components/ui/Button';
@@ -43,6 +48,25 @@ export function FederationPanel() {
   const [trusted, setTrusted] = useState(true);
   const [discover, setDiscover] = useState(true);
 
+  const [trustStates, setTrustStates] = useState<FederationPeerTrustState[]>([]);
+  const [subscriptions, setSubscriptions] = useState<FederationModerationSubscription[]>([]);
+  const [modLoading, setModLoading] = useState(true);
+  const [modRefreshing, setModRefreshing] = useState(false);
+  const [applyServer, setApplyServer] = useState('');
+  const [applyAction, setApplyAction] = useState<'block' | 'quarantine' | 'allow'>('block');
+  const [applyReason, setApplyReason] = useState('');
+  const [applyQuarantineMinutes, setApplyQuarantineMinutes] = useState('60');
+  const [applying, setApplying] = useState(false);
+  const [subUrl, setSubUrl] = useState('');
+  const [subServer, setSubServer] = useState('');
+  const [addingSub, setAddingSub] = useState(false);
+  const [deletingSubId, setDeletingSubId] = useState<string | null>(null);
+  const [importText, setImportText] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [subError, setSubError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
   const fetchServers = async (showSpinner = false) => {
     if (showSpinner) setRefreshing(true);
     try {
@@ -63,8 +87,30 @@ export function FederationPanel() {
     }
   };
 
+  const fetchModeration = async (showSpinner = false) => {
+    if (showSpinner) setModRefreshing(true);
+    try {
+      const [stateRes, subRes] = await Promise.all([
+        adminApi.listModerationState(),
+        adminApi.listModerationSubscriptions(),
+      ]);
+      setTrustStates(Array.isArray(stateRes.data.states) ? stateRes.data.states : []);
+      setSubscriptions(
+        Array.isArray(subRes.data.subscriptions) ? subRes.data.subscriptions : [],
+      );
+    } catch (err) {
+      toast.error(`Failed to load federation moderation: ${extractApiError(err)}`);
+      setTrustStates([]);
+      setSubscriptions([]);
+    } finally {
+      setModLoading(false);
+      if (showSpinner) setModRefreshing(false);
+    }
+  };
+
   useEffect(() => {
     fetchServers();
+    fetchModeration();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -87,17 +133,15 @@ export function FederationPanel() {
         trusted,
         discover,
       });
-      toast.success(`Federated server added: ${trimmedName}`);
+      toast.success('Federated server added.');
       setServerName('');
       setDomain('');
       setEndpoint('');
       setPublicKeyHex('');
       setKeyId('');
-      setTrusted(true);
-      setDiscover(true);
       await fetchServers();
     } catch (err) {
-      toast.error(`Failed to add federated server: ${extractApiError(err)}`);
+      toast.error(`Failed to add server: ${extractApiError(err)}`);
     } finally {
       setCreating(false);
     }
@@ -116,22 +160,217 @@ export function FederationPanel() {
   };
 
   const handleDelete = async (name: string) => {
-    if (!(await confirm({
-      title: 'Delete federated server?',
-      description: `Delete "${name}" from trusted federation peers?`,
-      confirmLabel: 'Delete',
+    const ok = await confirm({
+      title: 'Remove federated server?',
+      description: `Remove peer "${name}" from this server's federation directory?`,
+      confirmLabel: 'Remove',
       variant: 'danger',
-    }))) return;
+    });
+    if (!ok) return;
     setDeletingName(name);
     try {
       await adminApi.deleteFederatedServer(name);
-      toast.success(`Deleted federated server: ${name}`);
-      setServers((prev) => prev.filter((s) => s.server_name !== name));
+      toast.success('Federated server removed.');
       if (selectedServer?.server_name === name) setSelectedServer(null);
+      await fetchServers();
     } catch (err) {
       toast.error(`Failed to delete server: ${extractApiError(err)}`);
     } finally {
       setDeletingName(null);
+    }
+  };
+
+  const handleApplyModeration = async () => {
+    const name = applyServer.trim().toLowerCase();
+    setApplyError(null);
+    if (!name) {
+      setApplyError('Server name is required.');
+      toast.error('Server name is required.');
+      return;
+    }
+    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) {
+      setApplyError('Server name should look like a peer id (letters, digits, ., _, -).');
+      toast.error('Invalid server name.');
+      return;
+    }
+    let quarantineMinutes: number | undefined;
+    if (applyAction === 'quarantine') {
+      quarantineMinutes = Number.parseInt(applyQuarantineMinutes, 10);
+      if (!Number.isFinite(quarantineMinutes) || quarantineMinutes < 1) {
+        setApplyError('Quarantine minutes must be a positive integer.');
+        toast.error('Invalid quarantine duration.');
+        return;
+      }
+    }
+    setApplying(true);
+    try {
+      const { data } = await adminApi.applyModerationList({
+        source: 'admin-ui',
+        entries: [
+          {
+            server_name: name,
+            action: applyAction,
+            reason: applyReason.trim() || undefined,
+            quarantine_minutes: quarantineMinutes,
+          },
+        ],
+      });
+      toast.success(`Applied ${data.applied} moderation entr${data.applied === 1 ? 'y' : 'ies'}.`);
+      setApplyServer('');
+      setApplyReason('');
+      setApplyError(null);
+      await fetchModeration();
+    } catch (err) {
+      const message = extractApiError(err);
+      setApplyError(message);
+      toast.error(`Failed to apply moderation: ${message}`);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const handleImportList = async () => {
+    setImportError(null);
+    const lines = importText
+      .split(/[\n,]+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length === 0) {
+      setImportError('Paste one server name per line (optional: name action reason).');
+      toast.error('Nothing to import.');
+      return;
+    }
+
+    const entries: Array<{
+      server_name: string;
+      action: string;
+      reason?: string;
+      quarantine_minutes?: number;
+    }> = [];
+    const parseErrors: string[] = [];
+
+    for (const line of lines) {
+      // Formats: "peer.example", "peer.example block", "peer.example quarantine 60 reason…"
+      const parts = line.split(/\s+/);
+      const server_name = (parts[0] ?? '').toLowerCase();
+      if (!server_name) continue;
+      if (!/^[a-z0-9][a-z0-9._-]*$/i.test(server_name)) {
+        parseErrors.push(`Invalid name: ${parts[0]}`);
+        continue;
+      }
+      const actionRaw = (parts[1] ?? applyAction).toLowerCase();
+      const action =
+        actionRaw === 'allow' || actionRaw === 'unblock'
+          ? 'allow'
+          : actionRaw === 'quarantine'
+            ? 'quarantine'
+            : actionRaw === 'block' || actionRaw === 'deny'
+              ? 'block'
+              : null;
+      if (!action) {
+        parseErrors.push(`Unknown action on ${server_name}: ${parts[1]}`);
+        continue;
+      }
+      let quarantine_minutes: number | undefined;
+      let reasonStart = 2;
+      if (action === 'quarantine' && parts[2] && /^\d+$/.test(parts[2])) {
+        quarantine_minutes = Number.parseInt(parts[2], 10);
+        reasonStart = 3;
+      } else if (action === 'quarantine') {
+        quarantine_minutes = Number.parseInt(applyQuarantineMinutes, 10) || 60;
+      }
+      const reason = parts.slice(reasonStart).join(' ').trim() || undefined;
+      entries.push({ server_name, action, reason, quarantine_minutes });
+    }
+
+    if (entries.length === 0) {
+      setImportError(parseErrors[0] ?? 'No valid entries found.');
+      toast.error('No valid entries to apply.');
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const { data } = await adminApi.applyModerationList({
+        source: 'admin-ui-import',
+        entries,
+      });
+      const skipped = parseErrors.length;
+      toast.success(
+        `Imported ${data.applied} entr${data.applied === 1 ? 'y' : 'ies'}${skipped ? ` (${skipped} skipped)` : ''}.`,
+      );
+      setImportText('');
+      setImportError(skipped ? parseErrors.slice(0, 3).join(' · ') : null);
+      await fetchModeration();
+    } catch (err) {
+      const message = extractApiError(err);
+      setImportError(message);
+      toast.error(`Failed to import list: ${message}`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleAddSubscription = async () => {
+    const url = subUrl.trim();
+    setSubError(null);
+    if (!url) {
+      setSubError('Source URL is required.');
+      toast.error('Source URL is required.');
+      return;
+    }
+    try {
+      // Basic URL shape check — API still validates reachability on fetch.
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        setSubError('Source URL must be http(s).');
+        toast.error('Invalid source URL protocol.');
+        return;
+      }
+    } catch {
+      setSubError('Source URL is not a valid URL.');
+      toast.error('Invalid source URL.');
+      return;
+    }
+    setAddingSub(true);
+    try {
+      await adminApi.upsertModerationSubscription({
+        source_url: url,
+        source_server: subServer.trim() || undefined,
+        enabled: true,
+      });
+      toast.success('Moderation subscription added.');
+      setSubUrl('');
+      setSubServer('');
+      setSubError(null);
+      await fetchModeration();
+    } catch (err) {
+      const message = extractApiError(err);
+      setSubError(message);
+      toast.error(`Failed to add subscription: ${message}`);
+    } finally {
+      setAddingSub(false);
+    }
+  };
+
+  const handleDeleteSubscription = async (id: string | number) => {
+    const idStr = String(id);
+    const ok = await confirm({
+      title: 'Remove subscription?',
+      description: 'Stop syncing this remote moderation list?',
+      confirmLabel: 'Remove',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setDeletingSubId(idStr);
+    try {
+      await adminApi.deleteModerationSubscription(idStr);
+      toast.success('Subscription removed.');
+      await fetchModeration();
+    } catch (err) {
+      toast.error(`Failed to remove subscription: ${extractApiError(err)}`);
+    } finally {
+      setDeletingSubId(null);
     }
   };
 
@@ -144,7 +383,6 @@ export function FederationPanel() {
         </p>
       </header>
 
-      {/* Add peer form */}
       <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
         <h3 className="mb-5 text-section uppercase text-text-secondary">Add a federated server</h3>
         <div className="grid gap-4 md:grid-cols-2">
@@ -187,7 +425,6 @@ export function FederationPanel() {
         </div>
       </section>
 
-      {/* Known servers */}
       <section>
         <h3 className="mb-3 text-section uppercase text-text-secondary">Known servers</h3>
         {loading ? (
@@ -256,6 +493,222 @@ export function FederationPanel() {
           </dl>
         </section>
       )}
+
+      <header className="border-t border-border-subtle pt-8">
+        <h2 className="font-display text-heading text-text-primary">Federation moderation</h2>
+        <p className="mt-1 text-body text-text-secondary">
+          Block, quarantine, or allow peer servers, and subscribe to remote moderation lists.
+        </p>
+      </header>
+
+      <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-section uppercase text-text-secondary">Apply action</h3>
+          <Button variant="outline" size="sm" onClick={() => fetchModeration(true)} disabled={modRefreshing} className="gap-2">
+            {modRefreshing ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+            Refresh
+          </Button>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="Server name" htmlFor="mod-server">
+            <Input id="mod-server" aria-label="Moderation server name" type="text" value={applyServer} onChange={(e) => setApplyServer(e.target.value)} placeholder="peer.example" />
+          </Field>
+          <Field label="Action" htmlFor="mod-action">
+            <select
+              id="mod-action"
+              aria-label="Moderation action"
+              value={applyAction}
+              onChange={(e) => setApplyAction(e.target.value as 'block' | 'quarantine' | 'allow')}
+              className="h-10 w-full rounded-sm border border-border-subtle bg-bg-primary px-3 text-body text-text-primary"
+            >
+              <option value="block">Block</option>
+              <option value="quarantine">Quarantine</option>
+              <option value="allow">Allow / unblock</option>
+            </select>
+          </Field>
+          <Field label="Reason" htmlFor="mod-reason">
+            <Input id="mod-reason" aria-label="Moderation reason" type="text" value={applyReason} onChange={(e) => setApplyReason(e.target.value)} placeholder="Optional" />
+          </Field>
+          {applyAction === 'quarantine' && (
+            <Field label="Quarantine minutes" htmlFor="mod-quarantine">
+              <Input id="mod-quarantine" aria-label="Quarantine minutes" type="number" min={1} value={applyQuarantineMinutes} onChange={(e) => setApplyQuarantineMinutes(e.target.value)} />
+            </Field>
+          )}
+        </div>
+        {applyError && (
+          <p className="mt-3 text-body text-accent-danger" role="alert">
+            {applyError}
+          </p>
+        )}
+        <div className="mt-5 flex justify-end border-t border-border-subtle pt-5">
+          <Button onClick={handleApplyModeration} loading={applying} disabled={applying}>
+            {applying ? 'Applying…' : `Apply ${applyAction}`}
+          </Button>
+        </div>
+      </section>
+
+      <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
+        <h3 className="mb-2 text-section uppercase text-text-secondary">Paste / import list</h3>
+        <p className="mb-4 text-body text-text-muted">
+          One entry per line: <span className="font-code text-meta">server</span>,{' '}
+          <span className="font-code text-meta">server block</span>, or{' '}
+          <span className="font-code text-meta">server quarantine 60 reason</span>. Bare names use the
+          action selected above.
+        </p>
+        <textarea
+          id="mod-import"
+          aria-label="Import moderation list"
+          value={importText}
+          onChange={(e) => setImportText(e.target.value)}
+          rows={5}
+          placeholder={'bad.peer\nother.peer quarantine 120 spam\nallowed.peer allow'}
+          className="w-full rounded-sm border border-border-subtle bg-bg-primary px-3 py-2 font-code text-meta text-text-primary placeholder:text-text-muted"
+        />
+        {importError && (
+          <p className="mt-2 text-body text-accent-danger" role="alert">
+            {importError}
+          </p>
+        )}
+        <div className="mt-4 flex justify-end">
+          <Button onClick={handleImportList} loading={importing} disabled={importing || !importText.trim()}>
+            {importing ? 'Importing…' : 'Import list'}
+          </Button>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="mb-3 text-section uppercase text-text-secondary">
+          Peer trust state{!modLoading && trustStates.length > 0 ? ` · ${trustStates.length}` : ''}
+        </h3>
+        {modLoading ? (
+          <div className="rounded-md border border-border-subtle bg-bg-secondary px-6 py-10 shadow-sm">
+            <LoadingSpinner size="sm" label="Loading trust state…" />
+          </div>
+        ) : trustStates.length === 0 ? (
+          <div className="rounded-md border border-border-subtle bg-bg-secondary px-4 shadow-sm">
+            <EmptyState
+              icon={<ShieldCheck size={20} />}
+              title="No moderation state yet"
+              description="Apply a block or quarantine above, import a list, or wait for a subscribed list to sync."
+            />
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+            {trustStates.map((row, i) => {
+              const mode = row.mode.toLowerCase();
+              const modeBadge =
+                mode === 'block' ? (
+                  <span className="inline-flex items-center gap-1 rounded-xs bg-danger-tint px-2 py-0.5 text-meta font-semibold text-accent-danger">
+                    <ShieldAlert size={12} /> Blocked
+                  </span>
+                ) : mode === 'quarantine' ? (
+                  <span className="inline-flex items-center gap-1 rounded-xs bg-warning-tint px-2 py-0.5 text-meta font-semibold text-accent-warning">
+                    <ShieldAlert size={12} /> Quarantine
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-xs bg-success-tint px-2 py-0.5 text-meta font-semibold text-accent-success">
+                    <ShieldCheck size={12} /> {row.mode}
+                  </span>
+                );
+              return (
+                <div
+                  key={row.server_name}
+                  className={`flex flex-wrap items-start justify-between gap-3 px-5 py-4 ${i > 0 ? 'border-t border-border-subtle/60' : ''}`}
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-label font-semibold text-text-primary">{row.server_name}</p>
+                      {modeBadge}
+                    </div>
+                    {row.reason && <p className="mt-0.5 text-meta text-text-muted">{row.reason}</p>}
+                  </div>
+                  <p className="font-code text-meta text-text-muted">
+                    {row.quarantined_until_ms
+                      ? `Until ${new Date(row.quarantined_until_ms).toLocaleString()}`
+                      : `Updated ${new Date(row.updated_at_ms).toLocaleString()}`}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-md border border-border-subtle bg-bg-secondary p-6 shadow-sm">
+        <h3 className="mb-5 text-section uppercase text-text-secondary">Moderation list subscriptions</h3>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="Source URL" htmlFor="sub-url" className="md:col-span-2">
+            <Input id="sub-url" aria-label="Subscription source URL" type="url" value={subUrl} onChange={(e) => setSubUrl(e.target.value)} placeholder="https://example.com/moderation.json" />
+          </Field>
+          <Field label="Source server (optional)" htmlFor="sub-server">
+            <Input id="sub-server" aria-label="Subscription source server" type="text" value={subServer} onChange={(e) => setSubServer(e.target.value)} placeholder="list-publisher" />
+          </Field>
+        </div>
+        {subError && (
+          <p className="mt-3 text-body text-accent-danger" role="alert">
+            {subError}
+          </p>
+        )}
+        <div className="mt-5 flex justify-end border-t border-border-subtle pt-5">
+          <Button onClick={handleAddSubscription} loading={addingSub} disabled={addingSub} className="gap-2">
+            {!addingSub && <Plus size={16} />}
+            Add subscription
+          </Button>
+        </div>
+
+        <div className="mt-6">
+          {subscriptions.length === 0 ? (
+            <p className="text-body text-text-muted">No subscriptions configured.</p>
+          ) : (
+            <div className="overflow-hidden rounded-md border border-border-subtle">
+              {subscriptions.map((sub, i) => (
+                <div
+                  key={String(sub.id)}
+                  className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 ${i > 0 ? 'border-t border-border-subtle/60' : ''}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-code text-meta text-text-primary">{sub.source_url}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      {sub.enabled ? (
+                        <span className="rounded-xs bg-success-tint px-2 py-0.5 text-meta font-semibold text-accent-success">
+                          Enabled
+                        </span>
+                      ) : (
+                        <span className="rounded-xs bg-bg-mod-strong px-2 py-0.5 text-meta font-semibold text-text-muted">
+                          Disabled
+                        </span>
+                      )}
+                      {sub.source_server && (
+                        <span className="text-meta text-text-muted">{sub.source_server}</span>
+                      )}
+                      {sub.last_fetch_at_ms != null && (
+                        <span className="font-code text-meta text-text-muted">
+                          Last fetch {new Date(sub.last_fetch_at_ms).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                    {sub.last_error && (
+                      <p className="mt-1 text-meta text-accent-danger" role="status">
+                        Last error: {sub.last_error}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => handleDeleteSubscription(sub.id)}
+                    disabled={deletingSubId === String(sub.id)}
+                    className="gap-1.5"
+                  >
+                    {deletingSubId === String(sub.id) ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                    Remove
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

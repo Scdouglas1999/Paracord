@@ -307,6 +307,64 @@ async fn non_owner_cannot_assign_role_at_or_above_top_role() -> anyhow::Result<(
 }
 
 #[tokio::test]
+async fn non_owner_cannot_strip_role_at_or_above_top_role() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = ctx.create_guild("Demote Guild").await?;
+
+    // The actor holds an ADMINISTRATOR role ("AdminLow") so it satisfies the
+    // MANAGE_ROLES gate, but "High" is created afterwards so it is positioned
+    // above the actor's top role.
+    let admin_low = create_role_as_owner(
+        &ctx,
+        guild_id,
+        "AdminLow",
+        Permissions::ADMINISTRATOR.bits(),
+    )
+    .await?;
+    let admin_low_id: i64 = admin_low["id"].as_str().unwrap().parse()?;
+    let high_role = create_role_as_owner(&ctx, guild_id, "High", 0).await?;
+    let high_role_id: i64 = high_role["id"].as_str().unwrap().parse()?;
+    assert!(
+        high_role["position"].as_i64().unwrap() > admin_low["position"].as_i64().unwrap(),
+        "High must be positioned above AdminLow"
+    );
+
+    let (admin_token, admin_uid) = ctx.add_member("adminlow").await?;
+    paracord_db::members::add_member(&ctx.db, admin_uid, guild_id).await?;
+    paracord_db::roles::add_member_role(&ctx.db, admin_uid, guild_id, admin_low_id).await?;
+
+    // The target already holds the superior "High" role.
+    let (_target_token, target_uid) = ctx.add_member("target").await?;
+    paracord_db::members::add_member(&ctx.db, target_uid, guild_id).await?;
+    paracord_db::roles::add_member_role(&ctx.db, target_uid, guild_id, high_role_id).await?;
+
+    // Submitting a roles array that omits "High" would strip it. Because "High"
+    // is at/above the actor's top role, removal must be blocked (hierarchy is
+    // enforced on removal, not only on assignment).
+    let (status, payload) = ctx
+        .request(
+            Method::PATCH,
+            &format!("/api/v1/guilds/{guild_id}/members/{target_uid}"),
+            Some(json!({ "roles": [] })),
+            &admin_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "actor must not strip a role at/above their top role: {payload}"
+    );
+
+    // The superior role must survive the rejected request.
+    let roles = paracord_db::roles::get_member_roles(&ctx.db, target_uid, guild_id).await?;
+    assert!(
+        roles.iter().any(|r| r.id == high_role_id),
+        "target must retain the High role after the rejected strip"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_member_on_non_member_target_404s() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let guild_id = ctx.create_guild("NonMember Guild").await?;

@@ -26,6 +26,7 @@ mod messages;
 mod pins;
 mod polls;
 mod reactions;
+mod saved;
 mod threads;
 
 pub use forums::*;
@@ -33,6 +34,7 @@ pub use messages::*;
 pub use pins::*;
 pub use polls::*;
 pub use reactions::*;
+pub use saved::*;
 pub use threads::*;
 
 /// Fan a channel event out to the correct audience: a guild channel broadcasts
@@ -332,7 +334,8 @@ async fn ensure_channel_permissions(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
             .ok_or(ApiError::NotFound)?;
-        let perms = paracord_core::permissions::compute_channel_permissions(
+        let perms = paracord_core::permissions::compute_channel_permissions_cached(
+            &state.permission_cache,
             &state.db,
             guild_id,
             channel.id,
@@ -343,11 +346,33 @@ async fn ensure_channel_permissions(
         for req in required {
             paracord_core::permissions::require_permission(perms, *req)?;
         }
-    } else if !paracord_db::dms::is_dm_recipient(&state.db, channel.id, user_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-    {
-        return Err(ApiError::Forbidden);
+    } else {
+        if !paracord_db::dms::is_dm_recipient(&state.db, channel.id, user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        {
+            return Err(ApiError::Forbidden);
+        }
+        // Re-enforce the block-list on every 1:1 DM send. Blocks are only checked
+        // at DM-creation time, but DM channels are persistent: once A and V share a
+        // channel and V later blocks A, A must be stopped from continuing to message
+        // V. Only gate sends (not reads/typing/etc.) so an existing conversation can
+        // still be viewed by either party.
+        if channel.channel_type == 1 && required.contains(&Permissions::SEND_MESSAGES) {
+            let recipients = paracord_db::dms::get_dm_recipient_ids(&state.db, channel.id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            for other in recipients.into_iter().filter(|&r| r != user_id) {
+                let blocked = paracord_db::relationships::is_blocked_either_direction(
+                    &state.db, user_id, other,
+                )
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+                if blocked {
+                    return Err(ApiError::Forbidden);
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -359,6 +384,7 @@ fn author_json_from_row(author_id: i64, author: Option<&paracord_db::users::User
         json!({
             "id": author.id.to_string(),
             "username": author.username,
+            "display_name": author.display_name,
             "discriminator": author.discriminator,
             "avatar_hash": author.avatar_hash,
             "public_key": author.public_key,
@@ -369,6 +395,7 @@ fn author_json_from_row(author_id: i64, author: Option<&paracord_db::users::User
         json!({
             "id": author_id.to_string(),
             "username": "Unknown",
+            "display_name": null,
             "discriminator": 0,
             "avatar_hash": null,
             "public_key": null,
@@ -494,14 +521,16 @@ async fn load_message_json_batch(
         if let Some(channel_row) = batch.channels.get(&msg.channel_id) {
             if let Some(guild_id) = channel_row.guild_id() {
                 if let Ok(Some(guild)) = paracord_db::guilds::get_guild(&state.db, guild_id).await {
-                    if let Ok(perms) = paracord_core::permissions::compute_channel_permissions(
-                        &state.db,
-                        guild_id,
-                        msg.channel_id,
-                        guild.owner_id,
-                        viewer_id,
-                    )
-                    .await
+                    if let Ok(perms) =
+                        paracord_core::permissions::compute_channel_permissions_cached(
+                            &state.permission_cache,
+                            &state.db,
+                            guild_id,
+                            msg.channel_id,
+                            guild.owner_id,
+                            viewer_id,
+                        )
+                        .await
                     {
                         can_deanonymize = perms.contains(Permissions::MANAGE_MESSAGES)
                             || perms.contains(Permissions::MANAGE_GUILD);
@@ -805,6 +834,12 @@ pub async fn get_visible_channels(
         auth.user_id,
     )
     .await?;
+    paracord_core::permissions::seed_channel_permissions(
+        &state.permission_cache,
+        auth.user_id,
+        &channel_permissions,
+    )
+    .await;
 
     let onboarding_settings =
         paracord_db::onboarding::get_guild_onboarding_settings(&state.db, guild_id)
@@ -1495,29 +1530,43 @@ pub async fn add_channel_follow(
         ));
     }
 
-    ensure_channel_permissions(
-        &state,
-        &channel,
-        auth.user_id,
-        &[Permissions::MANAGE_CHANNELS],
-    )
-    .await?;
+    // Authorize the SOURCE against VIEW_CHANNEL only: the actor merely needs to be
+    // able to see the announcement channel they are subscribing to (mirrors Discord —
+    // you follow a channel you can view).
+    ensure_channel_permissions(&state, &channel, auth.user_id, &[Permissions::VIEW_CHANNEL])
+        .await?;
 
     let target_channel_id: i64 = body
         .target_channel_id
         .parse()
         .map_err(|_| ApiError::BadRequest("Invalid target_channel_id".into()))?;
-    let target_guild_id: i64 = body
-        .target_guild_id
-        .parse()
-        .map_err(|_| ApiError::BadRequest("Invalid target_guild_id".into()))?;
 
-    // Verify target channel exists
-    let _target = paracord_db::channels::get_channel(&state.db, target_channel_id)
+    // Load the TARGET channel — where crossposted content is actually delivered. It
+    // must be a guild channel; content cannot be followed into a DM/group channel.
+    let target = paracord_db::channels::get_channel(&state.db, target_channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::BadRequest("Target channel does not exist".into()))?;
 
+    let target_guild_id = target.guild_id().ok_or_else(|| {
+        ApiError::BadRequest("Target channel must be a guild channel".into())
+    })?;
+
+    // Authorize the follow against the TARGET (where messages land), NOT the
+    // attacker-controlled source. MANAGE_WEBHOOKS is the Discord gate for adding a
+    // followed channel. ensure_channel_permissions enforces guild membership plus the
+    // requested bit with channel-overwrite awareness, so an actor who has never joined
+    // the target guild (or lacks the bit) is rejected with 403.
+    ensure_channel_permissions(
+        &state,
+        &target,
+        auth.user_id,
+        &[Permissions::MANAGE_WEBHOOKS],
+    )
+    .await?;
+
+    // Derive target_guild_id from the target channel itself — never trust the body's
+    // target_guild_id, which the caller could point at an arbitrary victim guild.
     let follow = paracord_db::channel_follows::create_follow(
         &state.db,
         channel_id,

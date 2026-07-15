@@ -303,14 +303,42 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
     fetchServerEmojis();
   }, [fetchServerEmojis]);
 
-  // Listen for real-time emoji changes from the gateway
+  // Inline mode has no backdrop — dismiss on outside click / Escape. Popup mode
+  // already has a full-screen click catcher; Escape still needs a listener.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+
+    if (position) {
+      return () => document.removeEventListener('keydown', onKeyDown);
+    }
+
+    const onPointerDown = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('mousedown', onPointerDown);
+    };
+  }, [onClose, position]);
+
+  // Listen for real-time emoji changes from the gateway.
+  // Match StickerPicker: refresh when guild_id matches OR is omitted (broadcast).
   useEffect(() => {
     if (!guildId) return;
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.guild_id === guildId) {
-        fetchServerEmojis();
-      }
+      const detail = (e as CustomEvent<{ guild_id?: string }>).detail;
+      if (detail?.guild_id && detail.guild_id !== guildId) return;
+      fetchServerEmojis();
     };
     window.addEventListener('paracord:emojis-changed', handler);
     return () => window.removeEventListener('paracord:emojis-changed', handler);
@@ -406,11 +434,11 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
   const popupStyle = useMemo(() => {
     if (!position) return undefined;
 
-    const width = 352;
-    const height = 420;
     const pad = 8;
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
     const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
+    const width = Math.min(22 * 16, vw - pad * 2);
+    const height = Math.min(26.25 * 16, vh - pad * 2);
 
     let x = position.x;
     let y = position.y;
@@ -438,8 +466,8 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
   const pickerContent = (
     <div
       ref={pickerRef}
-      className="popup-enter flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
-      style={{ width: 352, maxHeight: 420, ...(popupStyle ?? {}) }}
+      className="popup-enter flex w-[min(22rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
+      style={popupStyle}
     >
       {/* ── Frequently used ── */}
       <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">
@@ -512,7 +540,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
                   : 'text-text-secondary hover:bg-bg-mod-subtle hover:text-text-primary',
               )}
             >
-              {tab === 'unicode' ? 'Unicode' : 'Server Emojis'}
+              {tab === 'unicode' ? 'Unicode' : 'Space Emojis'}
             </button>
           ))}
         </div>
@@ -524,7 +552,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
           <Search size={16} className="shrink-0 text-text-muted" />
           <input
             type="text"
-            placeholder={activeTab === 'server' ? 'Search server emojis...' : 'Search emoji...'}
+            placeholder={activeTab === 'server' ? 'Search space emojis...' : 'Search emoji...'}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="flex-1 bg-transparent text-body text-text-primary placeholder:text-text-muted outline-none"
@@ -540,7 +568,7 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
       >
         {activeTab === 'server' ? (
           loadingServerEmojis ? (
-            <div className="grid grid-cols-6 gap-1.5 p-1" aria-busy="true" aria-label="Loading server emojis">
+            <div className="grid grid-cols-6 gap-1.5 p-1" aria-busy="true" aria-label="Loading space emojis">
               {Array.from({ length: 18 }).map((_, i) => (
                 <Skeleton key={i} height={52} borderRadius="var(--radius-sm)" />
               ))}

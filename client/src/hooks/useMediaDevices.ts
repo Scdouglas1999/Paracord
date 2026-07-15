@@ -6,34 +6,52 @@ import {
   type AudioDeviceInfo,
 } from '../stores/voice/nativeMediaController';
 
+export interface ListedMediaDevice {
+  deviceId: string;
+  label: string;
+  kind: MediaDeviceKind;
+  groupId: string;
+  /** OS/browser default endpoint when the enumerator reports it. */
+  isDefault?: boolean;
+}
+
 interface MediaDeviceState {
-  audioInputDevices: MediaDeviceInfo[];
-  audioOutputDevices: MediaDeviceInfo[];
-  videoInputDevices: MediaDeviceInfo[];
+  audioInputDevices: ListedMediaDevice[];
+  audioOutputDevices: ListedMediaDevice[];
+  videoInputDevices: ListedMediaDevice[];
   selectedAudioInput: string | null;
   selectedAudioOutput: string | null;
   selectedVideoInput: string | null;
 }
 
 /**
- * Adapt a native cpal device into the browser-facing `MediaDeviceInfo` shape.
+ * Adapt a native cpal device into the picker-facing device shape.
  * The cpal host index becomes the `deviceId` so selection callbacks can hand it
  * straight back to the native switch commands, while the real OS name (which
  * the WebView often hides for `navigator.mediaDevices`) surfaces as the label.
  */
-function nativeToMediaDeviceInfo(
+function nativeToListedDevice(
   device: AudioDeviceInfo,
   kind: MediaDeviceKind
-): MediaDeviceInfo {
-  const deviceId = String(device.index);
+): ListedMediaDevice {
   return {
-    deviceId,
+    deviceId: String(device.index),
     kind,
     label: device.name,
     groupId: '',
-    toJSON() {
-      return { deviceId, kind, label: device.name, groupId: '' };
-    },
+    isDefault: Boolean(device.is_default),
+  };
+}
+
+function fromBrowserDevice(device: MediaDeviceInfo): ListedMediaDevice {
+  const idLower = device.deviceId.trim().toLowerCase();
+  return {
+    deviceId: device.deviceId,
+    kind: device.kind,
+    label: device.label,
+    groupId: device.groupId,
+    // Chromium exposes a pseudo "default" entry; treat it as the OS default.
+    isDefault: idLower === 'default' || idLower === 'communications',
   };
 }
 
@@ -58,17 +76,19 @@ export function useMediaDevices() {
         listNativeOutputDevices(),
       ]);
       if (nativeInputs.length > 0 || nativeOutputs.length > 0) {
-        let videoInputDevices: MediaDeviceInfo[] = [];
+        let videoInputDevices: ListedMediaDevice[] = [];
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
-          videoInputDevices = devices.filter((d) => d.kind === 'videoinput');
+          videoInputDevices = devices
+            .filter((d) => d.kind === 'videoinput')
+            .map(fromBrowserDevice);
         } catch {
           /* video enumeration unavailable — leave empty */
         }
         setState((s) => ({
           ...s,
-          audioInputDevices: nativeInputs.map((d) => nativeToMediaDeviceInfo(d, 'audioinput')),
-          audioOutputDevices: nativeOutputs.map((d) => nativeToMediaDeviceInfo(d, 'audiooutput')),
+          audioInputDevices: nativeInputs.map((d) => nativeToListedDevice(d, 'audioinput')),
+          audioOutputDevices: nativeOutputs.map((d) => nativeToListedDevice(d, 'audiooutput')),
           videoInputDevices,
         }));
         return;
@@ -82,8 +102,6 @@ export function useMediaDevices() {
       // and may only return "default" until mic permission is granted.
       // Request a temporary stream to trigger the permission prompt,
       // then immediately stop it before enumerating.
-      // Always request mic permission first so browsers on non-secure
-      // origins (plain HTTP) expose full device list with labels.
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         stream.getTracks().forEach((t) => t.stop());
@@ -93,9 +111,9 @@ export function useMediaDevices() {
       const devices = await navigator.mediaDevices.enumerateDevices();
       setState((s) => ({
         ...s,
-        audioInputDevices: devices.filter((d) => d.kind === 'audioinput'),
-        audioOutputDevices: devices.filter((d) => d.kind === 'audiooutput'),
-        videoInputDevices: devices.filter((d) => d.kind === 'videoinput'),
+        audioInputDevices: devices.filter((d) => d.kind === 'audioinput').map(fromBrowserDevice),
+        audioOutputDevices: devices.filter((d) => d.kind === 'audiooutput').map(fromBrowserDevice),
+        videoInputDevices: devices.filter((d) => d.kind === 'videoinput').map(fromBrowserDevice),
       }));
     } catch {
       /* permission denied or unsupported */

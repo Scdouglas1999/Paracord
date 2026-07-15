@@ -102,6 +102,36 @@ describe('DmPickerModal', () => {
     expect(screen.getByText('Grace')).toBeInTheDocument();
     expect(screen.queryByText('Blocked')).not.toBeInTheDocument();
     expect(screen.queryByText('Pending')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Direct' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('filters friends and explains an empty search result', async () => {
+    const user = userEvent.setup();
+    mockRelationshipState.relationships = [friend('u1', 'Ada'), friend('u2', 'Grace')];
+    renderPicker();
+
+    await user.type(screen.getByRole('searchbox', { name: 'Search friends' }), 'gra');
+    expect(screen.getByText('Grace')).toBeInTheDocument();
+    expect(screen.queryByText('Ada')).not.toBeInTheDocument();
+
+    await user.clear(screen.getByRole('searchbox', { name: 'Search friends' }));
+    await user.type(screen.getByRole('searchbox', { name: 'Search friends' }), 'nobody');
+    expect(screen.getByText('No friends found')).toBeInTheDocument();
+  });
+
+  it('makes group mode explicit and shows selection progress', async () => {
+    const user = userEvent.setup();
+    mockRelationshipState.relationships = [friend('u1', 'Ada'), friend('u2', 'Grace')];
+    renderPicker();
+
+    await user.click(screen.getByRole('tab', { name: 'Group' }));
+    expect(screen.getByRole('tab', { name: 'Group' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: 'Create group conversation' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /Ada/i }));
+    expect(screen.getByText('1 friend selected')).toBeInTheDocument();
+    expect(screen.getByText('2 total')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create group conversation' })).toBeEnabled();
   });
 
   it('creates a DM on selection, updates the store, fires onCreated and closes', async () => {

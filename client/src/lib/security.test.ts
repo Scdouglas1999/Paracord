@@ -92,6 +92,10 @@ describe('safeStoredImageDataUrl', () => {
     expect(safeStoredImageDataUrl('avatar-hash')).toBeNull();
     expect(safeStoredImageDataUrl(null)).toBeNull();
   });
+
+  it('allows uploaded avatar API paths', () => {
+    expect(safeStoredImageDataUrl('/api/v1/users/123/avatar')).toBe('/api/v1/users/123/avatar');
+  });
 });
 
 describe('safeExternalUrl', () => {
@@ -156,6 +160,18 @@ describe('sanitizeCustomCss', () => {
     const css = '.test { background: url(https://evil.com/track.gif); }';
     const result = sanitizeCustomCss(css);
     expect(result).not.toContain('url(');
+  });
+
+  it('blocks url() smuggled via CSS hex escapes', () => {
+    // `\75` = 'u' — the browser tokenizer decodes `\75rl(` to url() even though
+    // the literal string contains no "url(" substring.
+    const css = '.test { background: \\75rl(https://evil.com/track.gif); }';
+    const result = sanitizeCustomCss(css);
+    expect(result).not.toContain('75rl');
+    expect(result).not.toContain('background');
+    // A hex escape with a trailing whitespace terminator must also be caught.
+    const spaced = sanitizeCustomCss('.test { background: \\75 rl(https://evil.com/x); }');
+    expect(spaced).not.toContain('background');
   });
 
   it('blocks expression() values', () => {

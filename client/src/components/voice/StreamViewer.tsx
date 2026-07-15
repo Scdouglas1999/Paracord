@@ -16,6 +16,11 @@ import {
 import { RoomEvent, Track, VideoQuality } from 'livekit-client';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useAuthStore } from '../../stores/authStore';
+import {
+  StreamOverlayPortal,
+  useAnchoredOverlayCoords,
+  useOverlayDismiss,
+} from './streamOverlayPortal';
 
 interface StreamViewerProps {
   streamerId: string;
@@ -26,6 +31,20 @@ interface StreamViewerProps {
   issueMessage?: string | null;
   /** When true, skip managing screen share subscriptions (managed externally). */
   skipSubscriptionManagement?: boolean;
+}
+
+/**
+ * Underlay hole refcount: while ≥1 stream tile composites on the native GL
+ * surface BELOW the webview, `<html data-native-underlay>` makes the shell's
+ * base backgrounds transparent (see layout.css) so the tile's cleared pixels
+ * are a real hole down to the video. Refcounted because split view can show
+ * two live tiles at once.
+ */
+let underlayHoleCount = 0;
+function setUnderlayHole(open: boolean) {
+  if (typeof document === 'undefined') return;
+  underlayHoleCount = Math.max(0, underlayHoleCount + (open ? 1 : -1));
+  document.documentElement.toggleAttribute('data-native-underlay', underlayHoleCount > 0);
 }
 
 export function StreamViewer({
@@ -44,7 +63,7 @@ export function StreamViewer({
   const [activeStreamerName, setActiveStreamerName] = useState<string | null>(null);
   const [hasActiveTrack, setHasActiveTrack] = useState(false);
   const [isOwnStream, setIsOwnStream] = useState(false);
-  const [hideSelfPreview, setHideSelfPreview] = useState(false);
+  const [hideSelfPreview, setHideSelfPreview] = useState(true);
   const [quality, setQuality] = useState<
     'auto' | 'low' | 'medium' | 'high' | 'source'
   >('auto');
@@ -55,6 +74,11 @@ export function StreamViewer({
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(max-width: 640px)').matches;
   });
+  // True while the native GL surface UNDER the webview is live and visible for
+  // this tile (Linux underlay route): the tile clears its backgrounds so the
+  // video shows through, and restores its opaque backdrop when the surface
+  // hides. Driven by the engine's bubbled canvas event.
+  const [underlaySurfaceLive, setUnderlaySurfaceLive] = useState(false);
   const room = useVoiceStore((s) => s.room);
   const mediaEngine = useVoiceStore((s) => s.mediaEngine);
   const selfStream = useVoiceStore((s) => s.selfStream);
@@ -68,10 +92,64 @@ export function StreamViewer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const issueTriggerRef = useRef<HTMLButtonElement>(null);
+  const issuePanelRef = useRef<HTMLDivElement>(null);
+  const volumeAnchorRef = useRef<HTMLDivElement>(null);
+  const volumePanelRef = useRef<HTMLDivElement>(null);
+  const privacyPanelRef = useRef<HTMLDivElement>(null);
   const streamStartTime = useRef<number>(Date.now());
   const screenShareAudioRef = useRef<HTMLAudioElement | null>(null);
   const subscriptionSignatureRef = useRef<string>('__init__');
   const lastMissingAudioWarningAtRef = useRef<number>(0);
+  const nativeHasActiveTrackRef = useRef(false);
+
+  // Underlay hole-punch (Linux): the engine dispatches this bubbled event on
+  // the tile's canvas whenever the native GL surface below becomes visible or
+  // hidden (tauriMediaEngine, native-surface route).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const onSurfaceVisibility = (event: Event) => {
+      const visible = Boolean(
+        (event as CustomEvent<{ visible?: boolean }>).detail?.visible,
+      );
+      setUnderlaySurfaceLive(visible);
+    };
+    container.addEventListener('paracord:native-surface-visibility', onSurfaceVisibility);
+    return () => {
+      container.removeEventListener(
+        'paracord:native-surface-visibility',
+        onSurfaceVisibility,
+      );
+    };
+  }, []);
+
+  // Document-level hole refcount, including unmount while the surface is live.
+  useEffect(() => {
+    if (!underlaySurfaceLive) return;
+    setUnderlayHole(true);
+    return () => setUnderlayHole(false);
+  }, [underlaySurfaceLive]);
+
+  // The native tile can become visible before React has painted the transparent
+  // underlay hole. Nudge the tile after the DOM commit so it queues one more
+  // geometry/render pass without relying on the user resizing the window.
+  useEffect(() => {
+    if (!underlaySurfaceLive) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        canvasRef.current?.dispatchEvent(
+          new CustomEvent('paracord:native-underlay-hole-ready', { bubbles: true }),
+        );
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+    };
+  }, [underlaySurfaceLive]);
 
   const displayName = streamerName ?? activeStreamerName ?? 'Someone';
 
@@ -90,7 +168,10 @@ export function StreamViewer({
     if (audioEl) audioEl.volume = clampedVolume;
     const videoEl = videoRef.current;
     if (videoEl) videoEl.volume = clampedVolume;
-  }, []);
+    // Drive per-source gain on both engines (native cpal mixer / browser GainNode).
+    const engine = useVoiceStore.getState().mediaEngine;
+    engine?.setSourceVolume(streamerId, clampedVolume);
+  }, [streamerId]);
 
   // Stream audio plays on the default device. Process Loopback Exclusion
   // handles echo prevention at the OS level — no device rerouting needed.
@@ -114,15 +195,21 @@ export function StreamViewer({
     return `${m}:${String(s).padStart(2, '0')}`;
   };
 
-  // Escape key exits maximized mode
+  // Escape: close issue details first, then exit maximized mode.
   useEffect(() => {
-    if (!isMaximized) return;
+    if (!isMaximized && !showIssueDetails) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsMaximized(false);
+      if (e.key !== 'Escape') return;
+      if (showIssueDetails) {
+        setShowIssueDetails(false);
+        e.stopPropagation();
+        return;
+      }
+      if (isMaximized) setIsMaximized(false);
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [isMaximized]);
+  }, [isMaximized, showIssueDetails]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -138,6 +225,66 @@ export function StreamViewer({
       setShowIssueDetails(false);
     }
   }, [issueMessage]);
+
+  const closeIssueDetails = useCallback(() => setShowIssueDetails(false), []);
+  const issueInside = useCallback(
+    (target: Node) =>
+      Boolean(
+        issueTriggerRef.current?.contains(target) ||
+          issuePanelRef.current?.contains(target),
+      ),
+    [],
+  );
+  // Portaled panels: outside-click must check body-mounted refs, not in-tile DOM.
+  useOverlayDismiss(showIssueDetails, closeIssueDetails, issueInside, {
+    // Escape is owned by the maximize/details handler above.
+    escape: false,
+  });
+
+  const issueCoords = useAnchoredOverlayCoords(
+    showIssueDetails,
+    issueTriggerRef,
+    'below-start',
+    288,
+  );
+
+  const volumeCoords = useAnchoredOverlayCoords(
+    showVolumeSlider,
+    volumeAnchorRef,
+    'below-end',
+    176,
+  );
+
+  const [privacyCoords, setPrivacyCoords] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
+
+  const updatePrivacyPosition = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setPrivacyCoords({
+      top: rect.top + (isCompactLayout ? 56 : 64),
+      left: rect.left + 12,
+      width: Math.min(rect.width - 24, 36 * 16),
+    });
+  }, [isCompactLayout]);
+
+  useEffect(() => {
+    if (!showSystemAudioPrivacyWarning) {
+      setPrivacyCoords(null);
+      return;
+    }
+    updatePrivacyPosition();
+    window.addEventListener('resize', updatePrivacyPosition);
+    window.addEventListener('scroll', updatePrivacyPosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePrivacyPosition);
+      window.removeEventListener('scroll', updatePrivacyPosition, true);
+    };
+  }, [showSystemAudioPrivacyWarning, updatePrivacyPosition]);
 
   // Clean up screen share audio element
   const cleanupScreenShareAudio = useCallback(() => {
@@ -347,6 +494,17 @@ export function StreamViewer({
   ]);
 
   // Native media path: subscribe to the published QUIC stream via MediaEngine.
+  //
+  // The route is chosen once inside subscribeVideo (spec §2): a
+  // `webcodecs-passthrough` subscription decodes into this <canvas>'s WebGL
+  // context, while a `native-surface` subscription mounts a NativeVideoTile on
+  // this same <canvas> box — the tile mirrors the canvas geometry to a native
+  // platform surface the decode worker renders into, and the surface composites
+  // OVER the webview (spec §3.3/§3.6). Either way this component only hands over
+  // the canvas box + an onFrame signal; nothing here needs to know the route.
+  // When a native surface reports occluded/hidden it hides itself, revealing the
+  // canvas's bg-tertiary backdrop (and, before any track is live, the poster
+  // below) — the DOM poster/backdrop is what shows through (spec §3.6).
   useEffect(() => {
     if (room || !mediaEngine) return;
     const canvas = canvasRef.current;
@@ -357,15 +515,20 @@ export function StreamViewer({
       setActiveStreamerName('You');
       setIsOwnStream(true);
       setHasActiveTrack(selfStream);
-      const ctx = canvas.getContext('2d');
-      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      // No canvas clear here: the CanvasRenderer owns a WebGL context on this
+      // element, so getContext('2d') returns null (W11). The hidden preview is
+      // masked by opacity/positioning, and the renderer is torn down on unmount.
       return;
     }
 
     let sawFrame = false;
+    nativeHasActiveTrackRef.current = false;
     const onFrame = () => {
       sawFrame = true;
-      setHasActiveTrack(true);
+      if (!nativeHasActiveTrackRef.current) {
+        nativeHasActiveTrackRef.current = true;
+        setHasActiveTrack(true);
+      }
     };
 
     let unsubscribe = () => {};
@@ -383,8 +546,10 @@ export function StreamViewer({
 
     return () => {
       unsubscribe();
-      const ctx = canvas.getContext('2d');
-      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      nativeHasActiveTrackRef.current = false;
+      // unsubscribe() destroys the CanvasRenderer, which clears its own WebGL
+      // surface. A getContext('2d') clear here is dead code — the canvas is
+      // committed to WebGL and returns null for a 2D context (W11).
       if (!sawFrame) {
         setHasActiveTrack(false);
       }
@@ -473,10 +638,7 @@ export function StreamViewer({
     room.on(RoomEvent.LocalTrackPublished, attachTrack);
     room.on(RoomEvent.LocalTrackUnpublished, attachTrack);
 
-    const pollInterval = setInterval(attachTrack, 3000);
-
     return () => {
-      clearInterval(pollInterval);
       room.off(RoomEvent.TrackSubscribed, attachTrack);
       room.off(RoomEvent.TrackUnsubscribed, attachTrack);
       room.off(RoomEvent.TrackPublished, attachTrack);
@@ -507,30 +669,60 @@ export function StreamViewer({
   return (
     <div
       ref={containerRef}
+      /* Occlusion boundary for the native-surface route (§3.6): everything
+         inside this root is tile chrome (badges, hover bar, poster) and must
+         never report the native surface occluded — only foreign portals over
+         the tile do. Without it the hit-testable opacity-0 gradient bar kept
+         the surface permanently hidden (black screen, 2026-07-07).
+         Ephemeral menus/popovers MUST use StreamOverlayPortal → document.body
+         so they occlude the underlay and stay dismissible. */
+      data-native-surface-boundary=""
+      /* While the native surface below is live (underlay), this tile is a
+         transparent hole down to the GL video; otherwise it keeps its opaque
+         black backdrop. */
+      data-native-underlay-clear=""
       className={`group ${isMaximized
-          ? 'fixed inset-0 z-50 flex flex-col overflow-hidden bg-black'
-          : 'relative flex h-full w-full flex-col overflow-hidden rounded-md bg-black'
-        }`}
+          ? 'fixed inset-0 z-50 flex flex-col overflow-hidden'
+          : 'relative flex h-full w-full flex-col overflow-hidden rounded-md'
+        } ${underlaySurfaceLive ? 'bg-transparent' : 'bg-black'}`}
     >
       {issueMessage && (
-        <div className="absolute left-3 top-3 z-30">
+        <div className="absolute left-3 top-3 z-30" data-stream-issue-popover="">
           <button
+            ref={issueTriggerRef}
             onClick={() => setShowIssueDetails((prev) => !prev)}
             className="flex h-8 w-8 items-center justify-center rounded-sm border border-accent-warning/45 bg-warning-tint text-accent-warning outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-warning/25 focus-visible:shadow-[var(--focus-ring)]"
             title="Stream warning"
-            aria-label="Show stream warning"
+            aria-label={showIssueDetails ? 'Hide stream warning' : 'Show stream warning'}
+            aria-expanded={showIssueDetails}
           >
             <AlertTriangle size={14} />
           </button>
           {showIssueDetails && (
-            <div className="mt-2 w-72 rounded-md border border-border-subtle bg-bg-floating px-3 py-2 text-meta font-medium leading-relaxed text-text-primary shadow-lg">
+            <StreamOverlayPortal
+              panelRef={issuePanelRef}
+              role="status"
+              className="w-[min(18rem,calc(100vw-1rem))] rounded-md border border-border-subtle bg-bg-floating px-3 py-2 text-meta font-medium leading-relaxed text-text-primary shadow-lg"
+              style={{
+                top: issueCoords?.top ?? 48,
+                left: issueCoords?.left ?? 12,
+              }}
+            >
               {issueMessage}
-            </div>
+            </StreamOverlayPortal>
           )}
         </div>
       )}
       {showSystemAudioPrivacyWarning && (
-        <div className="absolute inset-x-3 top-14 z-30 max-w-xl rounded-md border border-accent-warning/45 bg-bg-floating p-3 shadow-lg sm:top-16">
+        <StreamOverlayPortal
+          panelRef={privacyPanelRef}
+          className="max-w-xl rounded-md border border-accent-warning/45 bg-bg-floating p-3 shadow-lg"
+          style={{
+            top: privacyCoords?.top ?? 72,
+            left: privacyCoords?.left ?? 12,
+            width: privacyCoords?.width ?? undefined,
+          }}
+        >
           <div className="flex items-start gap-2.5">
             <AlertTriangle size={16} className="mt-0.5 shrink-0 text-accent-warning" />
             <div className="flex-1">
@@ -548,7 +740,7 @@ export function StreamViewer({
               I understand
             </button>
           </div>
-        </div>
+        </StreamOverlayPortal>
       )}
       <div
         className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-between gap-2 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 group-focus-within:opacity-100"
@@ -602,6 +794,7 @@ export function StreamViewer({
           )}
 
           <div
+            ref={volumeAnchorRef}
             className="relative flex items-center"
             onMouseEnter={() => {
               if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current);
@@ -621,9 +814,22 @@ export function StreamViewer({
               {isMuted ? <VolumeX size={16} /> : volume < 0.5 ? <Volume1 size={16} /> : <Volume2 size={16} />}
             </button>
             {showVolumeSlider && (
-              <div
-                className="absolute right-0 top-full z-50 mt-2 flex min-w-44 items-center gap-2 rounded-md border border-border-subtle px-3 py-2 shadow-lg"
-                style={{ backgroundColor: 'var(--bg-floating)', backdropFilter: 'blur(12px)' }}
+              <StreamOverlayPortal
+                panelRef={volumePanelRef}
+                className="flex min-w-44 items-center gap-2 rounded-md border border-border-subtle px-3 py-2 shadow-lg"
+                style={{
+                  top: volumeCoords?.top ?? 48,
+                  left: volumeCoords?.left ?? 8,
+                  backgroundColor: 'var(--bg-floating)',
+                  backdropFilter: 'blur(12px)',
+                }}
+                onMouseEnter={() => {
+                  if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current);
+                  setShowVolumeSlider(true);
+                }}
+                onMouseLeave={() => {
+                  volumeTimerRef.current = setTimeout(() => setShowVolumeSlider(false), 300);
+                }}
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => event.stopPropagation()}
               >
@@ -645,7 +851,7 @@ export function StreamViewer({
                 <span className="w-8 text-right text-[10px] font-medium tabular-nums text-text-muted">
                   {Math.round(volume * 100)}%
                 </span>
-              </div>
+              </StreamOverlayPortal>
             )}
           </div>
 
@@ -698,7 +904,10 @@ export function StreamViewer({
         </div>
       </div>
 
-      <div className="relative flex min-h-0 h-full w-full items-center justify-center overflow-hidden">
+      <div
+        data-native-underlay-clear=""
+        className="relative flex min-h-0 h-full w-full items-center justify-center overflow-hidden"
+      >
         <video
           ref={videoRef}
           className="h-full w-full object-contain"
@@ -712,14 +921,25 @@ export function StreamViewer({
             pointerEvents: 'none',
           }}
         />
+        {/* Doubles as the WebGL target for the passthrough route and the DOM
+            host/backdrop for the native-surface route: the native surface
+            composites over this box while visible, and its bg-tertiary backdrop
+            shows through whenever the surface reports occluded/hidden (§3.6). */}
         <canvas
           ref={canvasRef}
           className="h-full w-full object-contain"
           style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            opacity: showVideo && usingNativeCanvas ? 1 : 0,
+            // Underlay route: the canvas box IS the hole — any paint here
+            // would sit over the video below it. Its WebGL context is created
+            // with alpha:false (opaque even when undrawn), so the whole
+            // element must stop painting (opacity 0) while the native surface
+            // is live; it keeps its layout box, which is what the surface
+            // geometry mirrors.
+            backgroundColor: underlaySurfaceLive ? 'transparent' : 'var(--bg-tertiary)',
+            opacity: showVideo && usingNativeCanvas && !underlaySurfaceLive ? 1 : 0,
             position: showVideo && usingNativeCanvas ? 'relative' : 'absolute',
             pointerEvents: 'none',
+            visibility: underlaySurfaceLive ? 'hidden' : 'visible',
           }}
         />
 
@@ -739,6 +959,14 @@ export function StreamViewer({
                     <div className="mt-1 text-meta text-text-muted">
                       Your stream is still live. Others can see it.
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setHideSelfPreview(false)}
+                      className="mt-4 inline-flex h-9 items-center gap-2 rounded-sm border border-border-subtle bg-bg-mod-subtle px-3 text-label text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+                    >
+                      <Eye size={15} />
+                      Show preview
+                    </button>
                   </div>
                 </>
               ) : expectingStream ? (

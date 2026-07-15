@@ -64,9 +64,15 @@ vi.mock('./pollStore', () => ({
 }));
 
 vi.mock('./channelStore', () => ({
+  refreshGuildChannelVisibility: vi.fn(),
   useChannelStore: {
     getState: () => ({
       channelsByGuild: mockChannelsByGuild.value,
+      channelsById: Object.fromEntries(
+        Object.values(mockChannelsByGuild.value)
+          .flat()
+          .map((channel) => [String(channel.id), channel]),
+      ),
       selectedChannelId: mockSelectedChannelId.value,
     }),
   },

@@ -86,6 +86,10 @@ function useServerStatus() {
   return status;
 }
 
+function hasHydratedServerSession(servers: Array<{ token?: string | null; refreshToken?: string | null }>): boolean {
+  return servers.some((server) => Boolean(server.token || server.refreshToken));
+}
+
 /** Where the crypto-auth flow should send the user, or `null` to let them in. */
 export type CryptoAuthRedirect = '/setup' | '/unlock' | '/login' | '/connect' | null;
 
@@ -117,6 +121,7 @@ export function resolveCryptoAuthRedirect(params: {
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isUnlocked = useAccountStore((s) => s.isUnlocked);
   const servers = useServerListStore((s) => s.servers);
+  const tokensHydrated = useServerListStore((s) => s.tokensHydrated);
   const token = useAuthStore((s) => s.token);
   const sessionBootstrapComplete = useAuthStore((s) => s.sessionBootstrapComplete);
   const settings = useAuthStore((s) => s.settings);
@@ -124,6 +129,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const fetchSettings = useAuthStore((s) => s.fetchSettings);
   const serverStatus = useServerStatus();
   const cryptoAuthEnabled = settings?.crypto_auth_enabled === true;
+  const hasServerSession = tokensHydrated && hasHydratedServerSession(servers);
 
   useEffect(() => {
     if (token && !hasFetchedSettings) {
@@ -131,7 +137,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     }
   }, [token, hasFetchedSettings, fetchSettings]);
 
-  if (!sessionBootstrapComplete) {
+  if (!sessionBootstrapComplete || (servers.length > 0 && !tokensHydrated)) {
     return <BrandedSplash label="Restoring session..." />;
   }
 
@@ -149,14 +155,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       hasAccount: hasAccount(),
       isUnlocked,
       hasServers: servers.length > 0,
-      hasToken: Boolean(token),
+      hasToken: Boolean(token || hasServerSession),
       serverReady: serverStatus === 'ready',
     });
     return target ? <Navigate to={target} /> : <>{children}</>;
   }
 
-  // Password mode: valid token can enter directly.
-  if (token && serverStatus === 'ready') {
+  // Password mode: a valid local token or a hydrated per-server session can enter directly.
+  if ((token || hasServerSession) && serverStatus === 'ready') {
     return <>{children}</>;
   }
 
@@ -169,10 +175,13 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export function AuthRoute({ children }: { children: React.ReactNode }) {
   const serverStatus = useServerStatus();
+  const servers = useServerListStore((s) => s.servers);
+  const tokensHydrated = useServerListStore((s) => s.tokensHydrated);
   const sessionBootstrapComplete = useAuthStore((s) => s.sessionBootstrapComplete);
   const token = useAuthStore((s) => s.token);
+  const hasServerSession = tokensHydrated && hasHydratedServerSession(servers);
 
-  if (!sessionBootstrapComplete) {
+  if (!sessionBootstrapComplete || (servers.length > 0 && !tokensHydrated)) {
     return <BrandedSplash label="Restoring session..." />;
   }
 
@@ -185,7 +194,7 @@ export function AuthRoute({ children }: { children: React.ReactNode }) {
   }
 
   // Already authenticated: don't show the login/register forms.
-  if (token && serverStatus === 'ready') {
+  if ((token || hasServerSession) && serverStatus === 'ready') {
     return <Navigate to="/app" replace />;
   }
 
@@ -248,6 +257,8 @@ export default function App() {
       <Route path="/setup" element={<AccountSetupPage />} />
       <Route path="/unlock" element={<AccountUnlockPage />} />
       <Route path="/recover" element={<AccountRecoverPage />} />
+      {/* Legacy unlock-screen link; import lives in User Settings → Identity. */}
+      <Route path="/import" element={<Navigate to="/app?settings=identity" replace />} />
 
       {/* Server connection */}
       <Route path="/connect" element={<ServerConnectPage />} />

@@ -138,6 +138,19 @@ pub async fn compute_channel_permissions_cached(
     Ok(perms)
 }
 
+/// Seed the permission cache from a batch `compute_all_channel_permissions` result.
+/// Uses the same `(user_id, channel_id)` keys and invalidation paths as
+/// `compute_channel_permissions_cached`.
+pub async fn seed_channel_permissions(
+    cache: &PermissionCache,
+    user_id: i64,
+    channel_permissions: &std::collections::HashMap<i64, Permissions>,
+) {
+    for (&channel_id, &perms) in channel_permissions {
+        cache.insert((user_id, channel_id), perms).await;
+    }
+}
+
 /// Invalidate cached permissions for a specific user in a specific channel.
 pub async fn invalidate_user_channel(cache: &PermissionCache, user_id: i64, channel_id: i64) {
     cache.invalidate_key(&(user_id, channel_id)).await;

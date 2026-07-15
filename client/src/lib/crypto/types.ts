@@ -85,6 +85,12 @@ export interface LocalPrekeyStore {
     publicKey: Uint8Array;
     privateKey: Uint8Array;
   }>;
+  /** Long-lived X3DH fallback; never deleted on use (mirrors server last_resort). */
+  lastResortPrekey: {
+    id: number;
+    publicKey: Uint8Array;
+    privateKey: Uint8Array;
+  } | null;
   nextOPKId: number;
 }
 
@@ -101,6 +107,11 @@ export interface SerializedLocalPrekeyStore {
     publicKey: string;
     privateKey: string;
   }>;
+  lastResortPrekey?: {
+    id: number;
+    publicKey: string;
+    privateKey: string;
+  } | null;
   nextOPKId: number;
 }
 

@@ -43,6 +43,7 @@ import {
 import { moderationTemplateApi } from '../../api/moderationTemplates';
 import type { ModerationTemplate } from '../../api/moderationTemplates';
 import { ErrorBanner, LoadingSpinner } from '../ui/Feedback';
+import { displayName } from '../../lib/displayName';
 import { Button } from '../ui/Button';
 
 interface GuildSettingsProps {
@@ -65,7 +66,7 @@ export function getGuildSettingsErrorMessage(err: unknown, fallback: string): st
 
 const NAV_ITEMS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: 'overview', label: 'Overview', icon: <Hash size={16} /> },
-  { id: 'server-hub', label: 'Server Hub', icon: <LayoutTemplate size={16} /> },
+  { id: 'server-hub', label: 'Space Hub', icon: <LayoutTemplate size={16} /> },
   { id: 'bot-store', label: 'Bot Store', icon: <Bot size={16} /> },
   { id: 'roles', label: 'Roles', icon: <Shield size={16} /> },
   { id: 'members', label: 'Members', icon: <Users size={16} /> },
@@ -108,8 +109,14 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   const { permissions, isAdmin } = usePermissions(guildId);
   const canManageRoles = isAdmin || hasPermission(permissions, Permissions.MANAGE_ROLES);
   const canManageRoleSettings = isAdmin || hasPermission(permissions, Permissions.MANAGE_GUILD);
+  const canManageChannels = isAdmin || hasPermission(permissions, Permissions.MANAGE_CHANNELS);
   const canManageEmojis = isAdmin || hasPermission(permissions, Permissions.MANAGE_EMOJIS);
   const canManageWebhooks = isAdmin || hasPermission(permissions, Permissions.MANAGE_WEBHOOKS);
+  const canKick = isAdmin || hasPermission(permissions, Permissions.KICK_MEMBERS);
+  const canBan = isAdmin || hasPermission(permissions, Permissions.BAN_MEMBERS);
+  const canViewAuditLog = isAdmin || hasPermission(permissions, Permissions.VIEW_AUDIT_LOG);
+  const canCreateInvite = isAdmin || hasPermission(permissions, Permissions.CREATE_INSTANT_INVITE);
+  const canModerateMembers = canKick || canBan || canManageRoles || canManageRoleSettings;
   const memberRoleId = guildId;
   const [activeSection, setActiveSection] = useState<SettingsSection>(
     isSettingsSection(initialSection) ? initialSection : 'overview'
@@ -134,6 +141,9 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   >('open');
   const [reportResolvingId, setReportResolvingId] = useState<string | null>(null);
   const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
+  const [auditLoadError, setAuditLoadError] = useState<string | null>(null);
+  const [auditActionFilter, setAuditActionFilter] = useState<string>('');
+  const [auditUserFilter, setAuditUserFilter] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState(guildName);
@@ -236,6 +246,15 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
       const modTemplatesPromise = canManageRoleSettings
         ? moderationTemplateApi.list(guildId).catch(() => ({ data: [] as ModerationTemplate[] }))
         : Promise.resolve({ data: [] as ModerationTemplate[] });
+      const bansPromise = canBan
+        ? guildApi.getBans(guildId)
+        : Promise.resolve({ data: [] as Ban[] });
+      const auditParams: Record<string, string> = {};
+      if (auditActionFilter) auditParams.action_type = auditActionFilter;
+      if (auditUserFilter) auditParams.user_id = auditUserFilter;
+      const auditPromise = canViewAuditLog
+        ? guildApi.getAuditLog(guildId, Object.keys(auditParams).length ? auditParams : undefined)
+        : Promise.resolve({ data: { audit_log_entries: [] as AuditLogEntry[] } });
       const results = await Promise.allSettled([
           guildApi.get(guildId),
           guildApi.getRoles(guildId),
@@ -247,8 +266,8 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
           botsPromise,
           ownAppsPromise,
           reportsPromise,
-          guildApi.getBans(guildId),
-          guildApi.getAuditLog(guildId),
+          bansPromise,
+          auditPromise,
           modTemplatesPromise,
         ]);
       // Guild info is essential — if it fails, show an error
@@ -287,8 +306,30 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
         });
       }
       if (results[9].status === 'fulfilled') setReports(results[9].value.data.reports || []);
-      if (results[10].status === 'fulfilled') setBans(results[10].value.data);
-      if (results[11].status === 'fulfilled') setAuditEntries(results[11].value.data.audit_log_entries || []);
+      if (results[10].status === 'fulfilled') {
+        const rawBans = results[10].value.data as Array<Ban & { user_id?: string; user?: Ban['user'] }>;
+        setBans(
+          rawBans.map((ban) => ({
+            ...ban,
+            user:
+              ban.user ??
+              ({
+                id: String(ban.user_id ?? ''),
+                username: String(ban.user_id ?? 'unknown'),
+                discriminator: 0,
+              } as Ban['user']),
+            guild_id: ban.guild_id,
+            reason: ban.reason,
+          })),
+        );
+      }
+      if (results[11].status === 'fulfilled') {
+        setAuditEntries(results[11].value.data.audit_log_entries || []);
+        setAuditLoadError(null);
+      } else if (canViewAuditLog && results[11].status === 'rejected') {
+        setAuditEntries([]);
+        setAuditLoadError(getGuildSettingsErrorMessage(results[11].reason, 'Failed to load audit log'));
+      }
       if (results[12].status === 'fulfilled') setModTemplates(results[12].value.data);
       if (!newWebhookChannelId && normalizedChannels.length > 0) {
         const firstTextChannel = normalizedChannels.find((c) => c.type === 0 || c.channel_type === 0);
@@ -305,7 +346,115 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
 
   useEffect(() => {
     void refreshAll();
-  }, [guildId, canManageWebhooks, webhookFilterChannelId, canManageRoleSettings, reportStatusFilter]);
+  }, [guildId, canManageWebhooks, webhookFilterChannelId, canManageRoleSettings, reportStatusFilter, canBan, canViewAuditLog, auditActionFilter, auditUserFilter]);
+
+  // Live-refresh roles/bans/invites when gateway events arrive while settings are open.
+  useEffect(() => {
+    const onRoles = (e: Event) => {
+      const detail = (e as CustomEvent<{ guild_id?: string }>).detail;
+      if (detail?.guild_id && detail.guild_id !== guildId) return;
+      void guildApi.getRoles(guildId).then((res) => setRoles(res.data)).catch(() => {});
+    };
+    const onBans = (e: Event) => {
+      const detail = (e as CustomEvent<{ guild_id?: string }>).detail;
+      if (detail?.guild_id && detail.guild_id !== guildId) return;
+      if (!canBan) return;
+      void guildApi.getBans(guildId).then((res) => {
+        const rawBans = res.data as Array<Ban & { user_id?: string; user?: Ban['user'] }>;
+        setBans(
+          rawBans.map((ban) => ({
+            ...ban,
+            user:
+              ban.user ??
+              ({
+                id: String(ban.user_id ?? ''),
+                username: String(ban.user_id ?? 'unknown'),
+                discriminator: 0,
+              } as Ban['user']),
+            guild_id: ban.guild_id,
+            reason: ban.reason,
+          })),
+        );
+      }).catch(() => {});
+    };
+    const onInvites = (e: Event) => {
+      const detail = (e as CustomEvent<{ guild_id?: string }>).detail;
+      if (detail?.guild_id && detail.guild_id !== guildId) return;
+      void guildApi.getInvites(guildId).then((res) => setInvites(res.data)).catch(() => {});
+    };
+    window.addEventListener('paracord:roles-changed', onRoles);
+    window.addEventListener('paracord:bans-changed', onBans);
+    window.addEventListener('paracord:invites-changed', onInvites);
+    return () => {
+      window.removeEventListener('paracord:roles-changed', onRoles);
+      window.removeEventListener('paracord:bans-changed', onBans);
+      window.removeEventListener('paracord:invites-changed', onInvites);
+    };
+  }, [guildId, canBan]);
+
+  // Live-refresh emojis when gateway events arrive while settings are open.
+  useEffect(() => {
+    const onEmojis = (e: Event) => {
+      const detail = (e as CustomEvent<{ guild_id?: string }>).detail;
+      if (detail?.guild_id && detail.guild_id !== guildId) return;
+      void emojiApi.listGuild(guildId).then((res) => setEmojis(res.data)).catch(() => {});
+    };
+    window.addEventListener('paracord:emojis-changed', onEmojis);
+    return () => window.removeEventListener('paracord:emojis-changed', onEmojis);
+  }, [guildId]);
+
+  const visibleNavItems = useMemo(() => {
+    return NAV_ITEMS.filter((item) => {
+      switch (item.id) {
+        case 'overview':
+        case 'server-hub':
+        case 'bot-store':
+        case 'bots':
+        case 'events':
+        case 'onboarding':
+        case 'economy':
+        case 'file-storage':
+        case 'mod-templates':
+        case 'reports':
+          return canManageRoleSettings;
+        case 'roles':
+          return canManageRoles || canManageRoleSettings;
+        case 'members':
+          return canModerateMembers;
+        case 'channels':
+          return canManageChannels || canManageRoleSettings;
+        case 'invites':
+          return canCreateInvite || canManageRoleSettings;
+        case 'emojis':
+          return canManageEmojis || canManageRoleSettings;
+        case 'webhooks':
+          return canManageWebhooks || canManageRoleSettings;
+        case 'bans':
+          return canBan;
+        case 'audit-log':
+          return canViewAuditLog;
+        default:
+          return canManageRoleSettings;
+      }
+    });
+  }, [
+    canManageRoleSettings,
+    canManageRoles,
+    canModerateMembers,
+    canManageChannels,
+    canCreateInvite,
+    canManageEmojis,
+    canManageWebhooks,
+    canBan,
+    canViewAuditLog,
+  ]);
+
+  useEffect(() => {
+    if (visibleNavItems.length === 0) return;
+    if (!visibleNavItems.some((item) => item.id === activeSection)) {
+      setActiveSection(visibleNavItems[0].id);
+    }
+  }, [visibleNavItems, activeSection]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -813,7 +962,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
     if (guild.owner_id !== authUser.id) return;
     if (!ownershipTargetUserId) return;
     const targetMember = members.find((member) => member.user.id === ownershipTargetUserId);
-    const targetName = targetMember?.nick || targetMember?.user.username || ownershipTargetUserId;
+    const targetName = targetMember ? displayName(targetMember.user, targetMember.nick) : ownershipTargetUserId;
     if (!(await confirm({ title: 'Transfer ownership?', description: `Transfer server ownership to ${targetName}? This cannot be undone.`, confirmLabel: 'Transfer', variant: 'danger' }))) return;
     setTransferringOwnership(true);
     try {
@@ -896,7 +1045,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
   };
 
   const handleLeaveGuild = async () => {
-    if (!(await confirm({ title: 'Leave this server?', description: 'You will need a new invite to rejoin.', confirmLabel: 'Leave', variant: 'danger' }))) return;
+    if (!(await confirm({ title: 'Leave this space?', description: 'You will need a new invite to rejoin.', confirmLabel: 'Leave', variant: 'danger' }))) return;
     await runAction(async () => {
       await leaveGuild(guildId);
       onClose();
@@ -935,8 +1084,8 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
           <button
             onClick={onClose}
             className="command-icon-btn rounded-full border border-border-strong bg-bg-secondary/75 hover:bg-bg-mod-subtle"
-            aria-label="Close server settings"
-            title="Close server settings"
+            aria-label="Close space settings"
+            title="Close space settings"
           >
             <X size={18} />
           </button>
@@ -954,14 +1103,14 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
               <button
                 onClick={onClose}
                 className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
-                aria-label="Close server settings"
-                title="Close server settings"
+                aria-label="Close space settings"
+                title="Close space settings"
               >
                 <X size={17} />
               </button>
             </div>
             <div className="flex flex-col px-2 pb-[calc(var(--safe-bottom)+1rem)]">
-              {NAV_ITEMS.map(item => (
+              {visibleNavItems.map(item => (
                 <button
                   key={item.id}
                   onClick={() => selectMobileSection(item.id)}
@@ -984,20 +1133,20 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
               <ArrowLeft size={17} />
             </button>
             <div className="flex-1 truncate text-sm font-semibold text-text-primary">
-              {NAV_ITEMS.find(i => i.id === activeSection)?.label ?? activeSection}
+              {visibleNavItems.find(i => i.id === activeSection)?.label ?? activeSection}
             </div>
             <button
               onClick={onClose}
               className="command-icon-btn h-9 w-9 rounded-full border border-border-strong bg-bg-secondary/75"
-              aria-label="Close server settings"
-              title="Close server settings"
+              aria-label="Close space settings"
+              title="Close space settings"
             >
               <X size={17} />
             </button>
           </div>
         )
       ) : (
-        <div className="relative z-10 w-72 shrink-0 overflow-y-auto border-r border-border-subtle bg-bg-secondary px-5 py-10">
+        <div className="relative z-10 w-[clamp(11rem,24vw,18rem)] shrink-0 overflow-y-auto border-r border-border-subtle bg-bg-secondary px-3 py-6 sm:px-5 sm:py-10">
           <div className="ml-auto w-full max-w-[236px]">
             <button
               onClick={onClose}
@@ -1010,7 +1159,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
               {guild?.name || guildName}
             </div>
             <div className="flex flex-col gap-1">
-              {NAV_ITEMS.map(item => {
+              {visibleNavItems.map(item => {
                 const active = activeSection === item.id;
                 return (
                   <button
@@ -1045,7 +1194,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
                 <span className="font-medium">Settings</span>
                 <span aria-hidden>/</span>
                 <span className="font-semibold text-text-secondary">
-                  {NAV_ITEMS.find(i => i.id === activeSection)?.label ?? activeSection}
+                  {visibleNavItems.find(i => i.id === activeSection)?.label ?? activeSection}
                 </span>
               </nav>
             )}
@@ -1102,6 +1251,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
               <ServerHubSettings
                 guild={guild}
                 channels={channels}
+                roles={roles}
                 onUpdate={() => refreshAll()}
                 setError={setError}
               />
@@ -1141,6 +1291,8 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
                 members={members}
                 roles={roles}
                 canManage={canManageRoleSettings || canManageRoles}
+                canKick={canKick}
+                canBan={canBan}
                 memberRoleId={memberRoleId}
                 memberSearch={memberSearch}
                 editingMemberRoleUserId={editingMemberRoleUserId}
@@ -1278,6 +1430,14 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
                 guildId={guildId}
                 canManage={canManageRoleSettings}
                 onBotSettingsChanged={() => refreshAll()}
+                onOpenSettings={(section) => {
+                  setActiveSection(section);
+                  setMobileShowNav(false);
+                }}
+                onOpenChannel={(channelId) => {
+                  onClose();
+                  navigate(`/app/guilds/${guildId}/channels/${channelId}`);
+                }}
               />
             )}
 
@@ -1333,6 +1493,11 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
                 members={members}
                 channels={channels}
                 roles={roles}
+                loadError={auditLoadError}
+                actionFilter={auditActionFilter}
+                userFilter={auditUserFilter}
+                onActionFilterChange={setAuditActionFilter}
+                onUserFilterChange={setAuditUserFilter}
               />
             )}
           </div>

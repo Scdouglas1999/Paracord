@@ -71,7 +71,6 @@ function renderUnlockPage() {
         <Route path="/unlock" element={<AccountUnlockPage />} />
         <Route path="/login" element={<div>Login page</div>} />
         <Route path="/recover" element={<div>Recover page</div>} />
-        <Route path="/import" element={<div>Import page</div>} />
         <Route path="/app" element={<div>App shell</div>} />
       </Routes>
     </MemoryRouter>,
@@ -110,7 +109,7 @@ describe('AccountUnlockPage', () => {
 
     renderUnlockPage();
     await user.click(screen.getByRole('button', { name: /Import account from file/ }));
-    expect(await screen.findByText('Import page')).toBeInTheDocument();
+    expect(await screen.findByText('App shell')).toBeInTheDocument();
   });
 
   it('locks the form after repeated failed unlock attempts', async () => {

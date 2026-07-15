@@ -23,6 +23,18 @@
 
 pub mod decoder;
 pub mod encoder;
+/// GPU-resident decoded-frame handles ([`DecodedFrameHandle`]) — the single type
+/// a native video surface consumes (spec §3.2). Additive to the CPU
+/// [`DecodedFrame`] API.
+pub mod handle;
+/// In-process libavcodec GPU codec engine (opt-in `lavc` feature). Replaces the
+/// ffmpeg *subprocess* encoders with in-process libavcodec; consumers are
+/// switched over by a later integration pass.
+#[cfg(feature = "lavc")]
+pub mod lavc;
+
+pub use decoder::DecodeOutput;
+pub use handle::DecodedFrameHandle;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -70,6 +82,8 @@ pub enum PixelFormat {
     I420,
     /// Packed RGBA (4 bytes per pixel). Convenient for desktop capture.
     Rgba,
+    /// Packed BGRA (4 bytes per pixel). Common for native desktop capture.
+    Bgra,
 }
 
 impl PixelFormat {
@@ -81,7 +95,44 @@ impl PixelFormat {
                 let uv = ((width / 2) * (height / 2)) as usize;
                 y + 2 * uv
             }
-            PixelFormat::Rgba => (width * height * 4) as usize,
+            PixelFormat::Rgba | PixelFormat::Bgra => (width * height * 4) as usize,
+        }
+    }
+}
+
+/// The YUV↔RGB conversion matrix a frame is expressed in (contract C1).
+///
+/// Project-wide the encode path targets BT.709 limited range and every encoder
+/// signals it; `Bt601` exists only to faithfully report a backend whose actual
+/// output could not be forced onto BT.709 (signaled must always match actual).
+/// A decoder must select the matching matrix when converting to RGB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ColorSpace {
+    /// ITU-R BT.601 (SDTV) coefficients.
+    Bt601,
+    /// ITU-R BT.709 (HDTV) coefficients — the project default.
+    #[default]
+    Bt709,
+}
+
+impl ColorSpace {
+    /// The colorspace tag written to the packed IPC frame header's reserved
+    /// byte (offset 19): `0` = BT.601, `1` = BT.709.
+    pub fn header_tag(self) -> u8 {
+        match self {
+            ColorSpace::Bt601 => 0,
+            ColorSpace::Bt709 => 1,
+        }
+    }
+
+    /// Parse the colorspace tag from the packed IPC frame header. Any value
+    /// other than `0` maps to BT.709 (the default), so an older peer that left
+    /// the reserved byte zeroed is read as BT.601 only when it explicitly wrote
+    /// `0`; unknown/high values fall back to the project default.
+    pub fn from_header_tag(value: u8) -> Self {
+        match value {
+            0 => ColorSpace::Bt601,
+            _ => ColorSpace::Bt709,
         }
     }
 }
@@ -229,6 +280,142 @@ impl EncoderConfig {
     }
 }
 
+// ── Simulcast ladder policy (spec §4.1) ──────────────────────────────
+
+/// Which capture surface a simulcast ladder is being built for. Screen and
+/// camera use different rungs (spec §4.1): screen favors resolution/clarity,
+/// camera favors motion smoothness at lower resolutions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SimulcastKind {
+    /// Desktop/window capture.
+    Screen,
+    /// Webcam capture.
+    Camera,
+}
+
+/// Fit `src` into a `max_w`×`max_h` box, preserving aspect ratio, never
+/// upscaling, and rounding down to even dimensions (codec requirement).
+///
+/// This is the config-level twin of the pipeline's `fit_encode_dimensions`,
+/// kept here so the ladder helper carries no client dependency.
+fn fit_within_box(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    if src_w == 0 || src_h == 0 || max_w == 0 || max_h == 0 {
+        return (src_w, src_h);
+    }
+    let (mut w, mut h) = if src_w <= max_w && src_h <= max_h {
+        (src_w, src_h)
+    } else {
+        // Whichever edge hits its cap first bounds the fit.
+        let width_limited = (max_w as u64 * src_h as u64) <= (max_h as u64 * src_w as u64);
+        if width_limited {
+            let fitted_h = ((src_h as u64 * max_w as u64) / src_w as u64) as u32;
+            (max_w, fitted_h.clamp(2, max_h))
+        } else {
+            let fitted_w = ((src_w as u64 * max_h as u64) / src_h as u64) as u32;
+            (fitted_w.clamp(2, max_w), max_h)
+        }
+    };
+    w &= !1;
+    h &= !1;
+    (w.max(2), h.max(2))
+}
+
+/// Compute the simulcast ladder for a source per spec §4.1.
+///
+/// Rungs (lowest→highest), each aspect-fitted to the source and never upscaled:
+///
+/// - **Screen**: L 640×360@30 / 800 kbps · M 1280×720@min(source,60) / 3500 kbps
+///   · H source dims @ source fps / `preset_kbps`.
+/// - **Camera**: L 480×270@15 / 350 kbps · M 640×360@30 / 900 kbps
+///   · H source dims @ source fps / `preset_kbps`.
+///
+/// The High rung is always the source dimensions at `preset_kbps`; the lower
+/// rungs cap their suggested budget at `preset_kbps` so a low preset never
+/// produces a rung richer than the top layer. A rung whose fitted dimensions,
+/// fps, and bitrate collapse onto the previous rung (a small source) is dropped
+/// so a sub-Medium capture does not triple-encode the same picture. This is a
+/// pure function (no runtime probing) so the pipeline phase can build layer
+/// configs deterministically.
+#[allow(clippy::too_many_arguments)]
+pub fn simulcast_ladder(
+    kind: SimulcastKind,
+    source_width: u32,
+    source_height: u32,
+    source_fps: u32,
+    preset_kbps: u32,
+    pixel_format: PixelFormat,
+    content_hint: VideoContentHint,
+    keyframe_interval_seconds: u32,
+) -> Vec<(SimulcastLayer, EncoderConfig)> {
+    // (layer, box_w, box_h, max_fps, suggested_kbps).
+    let source_rung = (
+        SimulcastLayer::High,
+        source_width,
+        source_height,
+        source_fps,
+        preset_kbps,
+    );
+    let rungs: [(SimulcastLayer, u32, u32, u32, u32); 3] = match kind {
+        SimulcastKind::Screen => [
+            (SimulcastLayer::Low, 640, 360, 30, 800),
+            (SimulcastLayer::Medium, 1280, 720, 60, 3_500),
+            source_rung,
+        ],
+        SimulcastKind::Camera => [
+            (SimulcastLayer::Low, 480, 270, 15, 350),
+            (SimulcastLayer::Medium, 640, 360, 30, 900),
+            source_rung,
+        ],
+    };
+
+    let mut out: Vec<(SimulcastLayer, EncoderConfig)> = Vec::with_capacity(3);
+    for (layer, box_w, box_h, max_fps, suggested_kbps) in rungs {
+        let (width, height) = fit_within_box(source_width, source_height, box_w, box_h);
+        let fps = source_fps.min(max_fps).max(1);
+        let bitrate_kbps = match layer {
+            // The top layer always rides the preset budget; lower rungs cap
+            // their suggested budget at the preset.
+            SimulcastLayer::High => preset_kbps.max(1),
+            _ => suggested_kbps.min(preset_kbps).max(1),
+        };
+        let config = EncoderConfig {
+            width,
+            height,
+            fps,
+            bitrate_kbps,
+            pixel_format,
+            keyframe_interval: fps.saturating_mul(keyframe_interval_seconds),
+            content_hint,
+        };
+        if out.last().is_some_and(|(_, prev)| {
+            prev.width == config.width
+                && prev.height == config.height
+                && prev.fps == config.fps
+                && prev.bitrate_kbps == config.bitrate_kbps
+        }) {
+            continue;
+        }
+        out.push((layer, config));
+    }
+
+    if out.is_empty() {
+        out.push((
+            SimulcastLayer::High,
+            EncoderConfig {
+                width: source_width.max(2) & !1,
+                height: source_height.max(2) & !1,
+                fps: source_fps.max(1),
+                bitrate_kbps: preset_kbps.max(1),
+                pixel_format,
+                keyframe_interval: source_fps.max(1).saturating_mul(keyframe_interval_seconds),
+                content_hint,
+            },
+        ));
+    }
+
+    out
+}
+
 // ── Decoder configuration ────────────────────────────────────────────
 
 /// Configuration for creating a video decoder instance.
@@ -265,6 +452,9 @@ pub struct EncodedFrame {
     pub width: u32,
     /// Frame height.
     pub height: u32,
+    /// Colorspace the bitstream is signaled in (contract C1). This is the
+    /// matrix the encoder actually produced, not merely the requested one.
+    pub colorspace: ColorSpace,
 }
 
 /// A decoded video frame produced by a [`VideoDecoder`].
@@ -280,6 +470,9 @@ pub struct DecodedFrame {
     pub height: u32,
     /// Presentation timestamp forwarded from the encoded frame.
     pub pts: i64,
+    /// Colorspace the source bitstream was signaled in (contract C1); selects
+    /// the YUV→RGB matrix a consumer must use to convert `data`.
+    pub colorspace: ColorSpace,
 }
 
 // ── Color-space conversion helpers ───────────────────────────────────
@@ -289,68 +482,89 @@ fn clamp_to_u8(value: i32) -> u8 {
     value.clamp(0, 255) as u8
 }
 
+// BT.709 limited-range (studio swing) coefficients in Q8 fixed point. These
+// replace the previous BT.601 set so the whole encode path is 709 (contract
+// C1); the inverse in `i420_to_rgba` uses the matching 709 dequant matrix.
 #[inline]
 fn rgb_to_y(r: i32, g: i32, b: i32) -> u8 {
-    clamp_to_u8(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16)
+    clamp_to_u8(((47 * r + 157 * g + 16 * b + 128) >> 8) + 16)
 }
 
 #[inline]
 fn rgb_to_u(r: i32, g: i32, b: i32) -> u8 {
-    clamp_to_u8(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128)
+    clamp_to_u8(((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128)
 }
 
 #[inline]
 fn rgb_to_v(r: i32, g: i32, b: i32) -> u8 {
-    clamp_to_u8(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128)
+    clamp_to_u8(((112 * r - 102 * g - 10 * b + 128) >> 8) + 128)
 }
 
-fn packed_rgb_to_i420(
+/// Packed 4-byte-per-pixel RGB → I420. This runs once per captured frame at
+/// full screen resolution, so it is written for autovectorization: channel
+/// offsets are const generics (constant-folded per format) and both passes
+/// walk fixed-size row/pixel chunks so LLVM can elide bounds checks and emit
+/// SIMD. Do not rewrite with per-pixel indexing — that form is ~an order of
+/// magnitude slower and made screen sharing CPU-bound.
+fn packed_rgb_to_i420<const R: usize, const G: usize, const B: usize>(
     data: &[u8],
     width: u32,
     height: u32,
     i420: &mut [u8],
-    r_index: usize,
-    g_index: usize,
-    b_index: usize,
 ) {
     let w = width as usize;
     let h = height as usize;
     let y_size = w * h;
     let uv_w = w / 2;
     let uv_h = h / 2;
+    let row_bytes = w * 4;
 
     let (y_plane, uv_planes) = i420.split_at_mut(y_size);
     let (u_plane, v_plane) = uv_planes.split_at_mut(uv_w * uv_h);
 
-    for row in 0..h {
-        for col in 0..w {
-            let idx = (row * w + col) * 4;
-            let r = data[idx + r_index] as i32;
-            let g = data[idx + g_index] as i32;
-            let b = data[idx + b_index] as i32;
-            y_plane[row * w + col] = rgb_to_y(r, g, b);
+    // Luma pass: one output byte per source pixel.
+    for (src_row, y_row) in data
+        .chunks_exact(row_bytes)
+        .zip(y_plane.chunks_exact_mut(w))
+        .take(h)
+    {
+        for (px, y_out) in src_row.chunks_exact(4).zip(y_row.iter_mut()) {
+            *y_out = rgb_to_y(px[R] as i32, px[G] as i32, px[B] as i32);
         }
     }
 
-    for row in 0..uv_h {
-        for col in 0..uv_w {
-            let mut r_sum = 0i32;
-            let mut g_sum = 0i32;
-            let mut b_sum = 0i32;
-            for dy in 0..2 {
-                for dx in 0..2 {
-                    let px = ((row * 2 + dy) * w + col * 2 + dx) * 4;
-                    r_sum += data[px + r_index] as i32;
-                    g_sum += data[px + g_index] as i32;
-                    b_sum += data[px + b_index] as i32;
-                }
-            }
+    // Chroma pass: average each 2x2 pixel block. Walk row pairs and 2-pixel
+    // (8-byte) chunks so all offsets are compile-time constants.
+    for ((row_pair, u_row), v_row) in data
+        .chunks_exact(row_bytes * 2)
+        .zip(u_plane.chunks_exact_mut(uv_w))
+        .zip(v_plane.chunks_exact_mut(uv_w))
+        .take(uv_h)
+    {
+        let (top, bottom) = row_pair.split_at(row_bytes);
+        for (((top_px, bottom_px), u_out), v_out) in top
+            .chunks_exact(8)
+            .zip(bottom.chunks_exact(8))
+            .zip(u_row.iter_mut())
+            .zip(v_row.iter_mut())
+        {
+            let r_sum = top_px[R] as i32
+                + top_px[4 + R] as i32
+                + bottom_px[R] as i32
+                + bottom_px[4 + R] as i32;
+            let g_sum = top_px[G] as i32
+                + top_px[4 + G] as i32
+                + bottom_px[G] as i32
+                + bottom_px[4 + G] as i32;
+            let b_sum = top_px[B] as i32
+                + top_px[4 + B] as i32
+                + bottom_px[B] as i32
+                + bottom_px[4 + B] as i32;
             let r = (r_sum + 2) >> 2;
             let g = (g_sum + 2) >> 2;
             let b = (b_sum + 2) >> 2;
-
-            u_plane[row * uv_w + col] = rgb_to_u(r, g, b);
-            v_plane[row * uv_w + col] = rgb_to_v(r, g, b);
+            *u_out = rgb_to_u(r, g, b);
+            *v_out = rgb_to_v(r, g, b);
         }
     }
 }
@@ -359,14 +573,14 @@ fn packed_rgb_to_i420(
 ///
 /// Both buffers must be pre-allocated to the correct sizes.
 pub fn rgba_to_i420(rgba: &[u8], width: u32, height: u32, i420: &mut [u8]) {
-    packed_rgb_to_i420(rgba, width, height, i420, 0, 1, 2);
+    packed_rgb_to_i420::<0, 1, 2>(rgba, width, height, i420);
 }
 
 /// Convert a BGRA frame to I420 (YUV 4:2:0) in-place.
 ///
 /// Both buffers must be pre-allocated to the correct sizes.
 pub fn bgra_to_i420(bgra: &[u8], width: u32, height: u32, i420: &mut [u8]) {
-    packed_rgb_to_i420(bgra, width, height, i420, 2, 1, 0);
+    packed_rgb_to_i420::<2, 1, 0>(bgra, width, height, i420);
 }
 
 /// Convert an I420 (YUV 4:2:0) frame to RGBA.
@@ -384,25 +598,35 @@ pub fn i420_to_rgba(i420: &[u8], width: u32, height: u32, rgba: &mut [u8]) {
     let u_plane = &i420[y_size..y_size + uv_size];
     let v_plane = &i420[y_size + uv_size..];
 
-    for row in 0..h {
-        for col in 0..w {
-            let y = y_plane[row * w + col] as i32;
-            let u = u_plane[(row / 2) * uv_w + col / 2] as i32;
-            let v = v_plane[(row / 2) * uv_w + col / 2] as i32;
+    // Row-sliced, fixed-chunk iteration (2 luma pixels share one chroma
+    // sample) keeps the inner loop free of bounds checks and index math so it
+    // vectorizes. Same arithmetic as before, byte-for-byte.
+    for (row, (y_row, out_row)) in y_plane
+        .chunks_exact(w)
+        .zip(rgba.chunks_exact_mut(w * 4))
+        .enumerate()
+        .take(h)
+    {
+        let chroma_row = (row / 2).min(uv_h.saturating_sub(1));
+        let u_row = &u_plane[chroma_row * uv_w..chroma_row * uv_w + uv_w];
+        let v_row = &v_plane[chroma_row * uv_w..chroma_row * uv_w + uv_w];
 
-            let c = (y - 16).max(0);
-            let d = u - 128;
-            let e = v - 128;
-
-            let r = clamp_to_u8((298 * c + 409 * e + 128) >> 8);
-            let g = clamp_to_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
-            let b = clamp_to_u8((298 * c + 516 * d + 128) >> 8);
-
-            let out_idx = (row * w + col) * 4;
-            rgba[out_idx] = r;
-            rgba[out_idx + 1] = g;
-            rgba[out_idx + 2] = b;
-            rgba[out_idx + 3] = 255; // full alpha
+        for (((y_pair, out_pair), &u), &v) in y_row
+            .chunks_exact(2)
+            .zip(out_row.chunks_exact_mut(8))
+            .zip(u_row.iter())
+            .zip(v_row.iter())
+        {
+            let d = u as i32 - 128;
+            let e = v as i32 - 128;
+            for (&y, out) in y_pair.iter().zip(out_pair.chunks_exact_mut(4)) {
+                let c = (y as i32 - 16).max(0);
+                // BT.709 limited-range dequant (Q8), inverse of rgb_to_{y,u,v}.
+                out[0] = clamp_to_u8((298 * c + 459 * e + 128) >> 8);
+                out[1] = clamp_to_u8((298 * c - 55 * d - 136 * e + 128) >> 8);
+                out[2] = clamp_to_u8((298 * c + 541 * d + 128) >> 8);
+                out[3] = 255; // full alpha
+            }
         }
     }
 }
@@ -422,22 +646,23 @@ fn bilinear_sample_plane(
     let x_scale = src_w as f32 / dst_w as f32;
     let y_scale = src_h as f32 / dst_h as f32;
 
-    for row in 0..dst_h {
+    for (row, dst_row) in dst.chunks_exact_mut(dst_w).enumerate().take(dst_h) {
         let src_y = ((row as f32 + 0.5) * y_scale - 0.5).clamp(0.0, (src_h - 1) as f32);
         let y0 = src_y.floor() as usize;
         let y1 = (y0 + 1).min(src_h - 1);
         let fy = src_y - y0 as f32;
+        let src_row0 = &src[y0 * src_w..y0 * src_w + src_w];
+        let src_row1 = &src[y1 * src_w..y1 * src_w + src_w];
 
-        for col in 0..dst_w {
+        for (col, out) in dst_row.iter_mut().enumerate() {
             let src_x = ((col as f32 + 0.5) * x_scale - 0.5).clamp(0.0, (src_w - 1) as f32);
             let x0 = src_x.floor() as usize;
             let x1 = (x0 + 1).min(src_w - 1);
             let fx = src_x - x0 as f32;
 
-            let top = src[y0 * src_w + x0] as f32 * (1.0 - fx) + src[y0 * src_w + x1] as f32 * fx;
-            let bottom =
-                src[y1 * src_w + x0] as f32 * (1.0 - fx) + src[y1 * src_w + x1] as f32 * fx;
-            dst[row * dst_w + col] = (top * (1.0 - fy) + bottom * fy).round() as u8;
+            let top = src_row0[x0] as f32 * (1.0 - fx) + src_row0[x1] as f32 * fx;
+            let bottom = src_row1[x0] as f32 * (1.0 - fx) + src_row1[x1] as f32 * fx;
+            *out = (top * (1.0 - fy) + bottom * fy).round() as u8;
         }
     }
 }
@@ -475,11 +700,91 @@ pub fn downscale_i420(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32
     dst
 }
 
+// ── AV1 OBU keyframe detection ───────────────────────────────────────
+//
+// Feature-independent so both the lavc engine and the Windows Media Foundation
+// AV1 encoder can classify a temporal unit without depending on `lavc`. A
+// hardware MFT that lies about `MFSampleExtension_CleanPoint` would otherwise
+// leave viewers unable to prime (permanent blank stream), so the MF path ORs a
+// real bitstream parse into its keyframe decision.
+
+const AV1_OBU_SEQUENCE_HEADER: u8 = 1;
+
+/// Whether an AV1 temporal unit contains a sequence-header OBU, which hardware
+/// encoders emit exactly on keyframes. Single source of truth for AV1 keyframe
+/// detection across every backend.
+pub fn av1_temporal_unit_is_keyframe(data: &[u8]) -> bool {
+    let mut offset = 0usize;
+    while offset < data.len() {
+        let header = data[offset];
+        // Forbidden bit set means we lost sync; stop parsing.
+        if header & 0x80 != 0 {
+            return false;
+        }
+        let obu_type = (header >> 3) & 0x0F;
+        let has_extension = header & 0x04 != 0;
+        let has_size = header & 0x02 != 0;
+        offset += 1;
+        if has_extension {
+            offset += 1;
+        }
+        if !has_size {
+            // Size-less OBU extends to the end of the temporal unit.
+            return obu_type == AV1_OBU_SEQUENCE_HEADER;
+        }
+        let Some((size, leb_len)) = read_leb128(&data[offset.min(data.len())..]) else {
+            return false;
+        };
+        offset += leb_len;
+        if obu_type == AV1_OBU_SEQUENCE_HEADER {
+            return true;
+        }
+        offset = match offset.checked_add(size as usize) {
+            Some(next) => next,
+            None => return false,
+        };
+    }
+    false
+}
+
+fn read_leb128(data: &[u8]) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    for (index, byte) in data.iter().take(8).enumerate() {
+        value |= u64::from(byte & 0x7F) << (index * 7);
+        if byte & 0x80 == 0 {
+            return Some((value, index + 1));
+        }
+    }
+    None
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_av1_keyframe_via_sequence_header() {
+        // temporal delimiter (2) + sequence header (1) + frame (6).
+        let tu = [
+            (2u8 << 3) | 0x02,
+            0, // TD, size 0
+            (1u8 << 3) | 0x02,
+            2,
+            0xAA,
+            0xBB, // seq header, size 2
+            (6u8 << 3) | 0x02,
+            2,
+            1,
+            2, // frame, size 2
+        ];
+        assert!(av1_temporal_unit_is_keyframe(&tu));
+
+        let delta = [(2u8 << 3) | 0x02, 0, (6u8 << 3) | 0x02, 2, 1, 2];
+        assert!(!av1_temporal_unit_is_keyframe(&delta));
+        assert!(!av1_temporal_unit_is_keyframe(&[]));
+    }
 
     #[test]
     fn pixel_format_frame_sizes() {
@@ -570,6 +875,177 @@ mod tests {
             );
             assert_eq!(pixel[3], 255, "Alpha must be preserved");
         }
+    }
+
+    #[test]
+    fn simulcast_ladder_screen_matches_spec() {
+        // 1920x1080@60 16:9 source, generous preset. Spec §4.1 screen rungs.
+        let ladder = simulcast_ladder(
+            SimulcastKind::Screen,
+            1920,
+            1080,
+            60,
+            12_000,
+            PixelFormat::Bgra,
+            VideoContentHint::Detail,
+            2,
+        );
+        assert_eq!(ladder.len(), 3);
+
+        let (l, low) = &ladder[0];
+        assert_eq!(*l, SimulcastLayer::Low);
+        assert_eq!(
+            (low.width, low.height, low.fps, low.bitrate_kbps),
+            (640, 360, 30, 800)
+        );
+        assert_eq!(low.pixel_format, PixelFormat::Bgra);
+        assert_eq!(low.keyframe_interval, 60); // fps * seconds
+
+        let (m, med) = &ladder[1];
+        assert_eq!(*m, SimulcastLayer::Medium);
+        assert_eq!(
+            (med.width, med.height, med.fps, med.bitrate_kbps),
+            (1280, 720, 60, 3_500)
+        );
+
+        let (h, high) = &ladder[2];
+        assert_eq!(*h, SimulcastLayer::High);
+        assert_eq!(
+            (high.width, high.height, high.fps, high.bitrate_kbps),
+            (1920, 1080, 60, 12_000)
+        );
+    }
+
+    #[test]
+    fn simulcast_ladder_camera_matches_spec() {
+        // 1920x1080@30 source. Spec §4.1 camera rungs.
+        let ladder = simulcast_ladder(
+            SimulcastKind::Camera,
+            1920,
+            1080,
+            30,
+            2_500,
+            PixelFormat::I420,
+            VideoContentHint::Motion,
+            2,
+        );
+        assert_eq!(ladder.len(), 3);
+        assert_eq!(ladder[0].0, SimulcastLayer::Low);
+        assert_eq!(
+            {
+                let c = &ladder[0].1;
+                (c.width, c.height, c.fps, c.bitrate_kbps)
+            },
+            (480, 270, 15, 350)
+        );
+        assert_eq!(ladder[1].0, SimulcastLayer::Medium);
+        assert_eq!(
+            {
+                let c = &ladder[1].1;
+                (c.width, c.height, c.fps, c.bitrate_kbps)
+            },
+            (640, 360, 30, 900)
+        );
+        assert_eq!(ladder[2].0, SimulcastLayer::High);
+        assert_eq!(
+            {
+                let c = &ladder[2].1;
+                (c.width, c.height, c.fps, c.bitrate_kbps)
+            },
+            (1920, 1080, 30, 2_500)
+        );
+    }
+
+    #[test]
+    fn simulcast_ladder_screen_m_caps_fps_at_source() {
+        // A 30 fps source must not ask the Medium screen rung for 60 fps.
+        let ladder = simulcast_ladder(
+            SimulcastKind::Screen,
+            1920,
+            1080,
+            30,
+            8_000,
+            PixelFormat::Bgra,
+            VideoContentHint::Detail,
+            0,
+        );
+        let (_, med) = ladder
+            .iter()
+            .find(|(l, _)| *l == SimulcastLayer::Medium)
+            .unwrap();
+        assert_eq!(med.fps, 30);
+        // keyframe_interval_seconds=0 → codec-default cadence (0).
+        assert_eq!(med.keyframe_interval, 0);
+    }
+
+    #[test]
+    fn simulcast_ladder_low_preset_caps_lower_rungs() {
+        // A preset below a rung's suggested budget clamps that rung's bitrate.
+        let ladder = simulcast_ladder(
+            SimulcastKind::Screen,
+            1920,
+            1080,
+            60,
+            600, // below Low's 800 and Medium's 3500
+            PixelFormat::Bgra,
+            VideoContentHint::Detail,
+            2,
+        );
+        for (_, cfg) in &ladder {
+            assert!(
+                cfg.bitrate_kbps <= 600,
+                "rung bitrate {} exceeds preset",
+                cfg.bitrate_kbps
+            );
+        }
+    }
+
+    #[test]
+    fn simulcast_ladder_small_source_collapses_and_dedupes() {
+        // A 640x360 source is at/below both lower screen boxes; rungs collapse
+        // onto the source, so the ladder de-duplicates instead of triple-
+        // encoding the same picture.
+        let ladder = simulcast_ladder(
+            SimulcastKind::Screen,
+            640,
+            360,
+            30,
+            1_000,
+            PixelFormat::I420,
+            VideoContentHint::Detail,
+            2,
+        );
+        // Every surviving rung is 640x360 (the source); duplicates are dropped
+        // (dedup keeps the first occurrence, matching the pipeline's ladder), so
+        // fewer than three rungs remain and none upscales past the source.
+        for (_, cfg) in &ladder {
+            assert_eq!((cfg.width, cfg.height), (640, 360));
+        }
+        assert!(
+            ladder.len() < 3,
+            "collapsed rungs must dedupe (got {})",
+            ladder.len()
+        );
+    }
+
+    #[test]
+    fn simulcast_ladder_non_16_9_source_aspect_fits() {
+        // 16:10 source: Low rung fits inside the 640x360 box preserving aspect,
+        // so it is not the literal 640x360 preset.
+        let ladder = simulcast_ladder(
+            SimulcastKind::Screen,
+            1920,
+            1200,
+            60,
+            10_000,
+            PixelFormat::Bgra,
+            VideoContentHint::Detail,
+            2,
+        );
+        let (_, low) = &ladder[0];
+        assert!(low.width.is_multiple_of(2) && low.height.is_multiple_of(2));
+        // Aspect preserved (16:10 → height bound): 360-tall box, width 576.
+        assert_eq!((low.width, low.height), (576, 360));
     }
 
     #[test]

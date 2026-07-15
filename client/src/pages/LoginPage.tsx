@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { useAccountStore } from '../stores/accountStore';
 import { useServerListStore } from '../stores/serverListStore';
@@ -69,6 +69,7 @@ export function LoginPage() {
   const [mfaTicket, setMfaTicket] = useState('');
   const [mfaCode, setMfaCode] = useState('');
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const serverUrl = getStoredServerUrl() || getCurrentOriginServerUrl();
   // Tracks the deferred view-switch timer so it can be cancelled on unmount,
   // preventing a setState on an unmounted component.
@@ -82,6 +83,30 @@ export function LoginPage() {
       }
     };
   }, []);
+
+  // Deep links from password-reset / email-verify emails.
+  useEffect(() => {
+    const resetToken = searchParams.get('reset_token');
+    const verifyToken = searchParams.get('verify_token') || searchParams.get('token');
+    if (resetToken) {
+      setResetToken(resetToken);
+      setView('reset-password');
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    if (verifyToken && searchParams.has('verify_token')) {
+      setVerifyEmailToken(verifyToken);
+      setView('verify-email');
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    // Bare ?token= on /login is treated as email verification when no reset_token.
+    if (verifyToken && !resetToken && searchParams.get('token')) {
+      setVerifyEmailToken(verifyToken);
+      setView('verify-email');
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,7 +170,14 @@ export function LoginPage() {
       }
     }
 
-    navigate('/app');
+    let pendingInvite: string | null = null;
+    try {
+      pendingInvite = sessionStorage.getItem('paracord:pending-invite');
+      if (pendingInvite) sessionStorage.removeItem('paracord:pending-invite');
+    } catch {
+      /* ignore */
+    }
+    navigate(pendingInvite ? `/invite/${pendingInvite}` : '/app');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

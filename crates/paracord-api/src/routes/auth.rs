@@ -45,6 +45,16 @@ const CHALLENGE_SKEW_SECONDS: i64 = 5;
 const MAX_DISPLAY_NAME_LEN: usize = 64;
 const AUTH_GUARD_TTL_SECONDS: i64 = 3600;
 const AUTH_GUARD_CLEANUP_LIMIT: i64 = 512;
+/// Prefix for the shared per-account auth-guard key. This key is scoped to the
+/// login's account hint (email/username) and is therefore shared across every
+/// source IP and device. It is counted for detection but must NEVER be able to
+/// hard-block a login on its own, otherwise an unauthenticated attacker who only
+/// knows a victim's email/username could hold the account in a locked state
+/// indefinitely (targeted account-lockout DoS).
+const AUTH_GUARD_ACCOUNT_PREFIX: &str = "acct:";
+const AUTH_GUARD_IP_PREFIX: &str = "ip:";
+const AUTH_GUARD_DEVICE_PREFIX: &str = "device:";
+const AUTH_GUARD_USER_AGENT_PREFIX: &str = "ua:";
 const MAX_LOGIN_BODY_BYTES: usize = 16 * 1024;
 
 // In-memory challenge nonce store (nonce -> timestamp).
@@ -187,46 +197,16 @@ fn constant_time_equal(a: &str, b: &str) -> bool {
     diff == 0
 }
 
-fn trust_proxy_headers() -> bool {
-    std::env::var("PARACORD_TRUST_PROXY")
-        .ok()
-        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(false)
-}
-
 fn proxy_peer_is_trusted(peer_ip: Option<&str>) -> bool {
-    if !trust_proxy_headers() {
-        return false;
-    }
-    let Some(peer_ip) = peer_ip else {
-        return false;
-    };
-    let trusted = std::env::var("PARACORD_TRUSTED_PROXY_IPS")
-        .ok()
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    !trusted.is_empty() && trusted.iter().any(|ip| ip == peer_ip)
+    paracord_util::client_ip::peer_is_trusted_from_env(peer_ip)
 }
 
 fn resolve_client_ip(headers: &HeaderMap, peer_ip: Option<&str>) -> String {
-    if proxy_peer_is_trusted(peer_ip) {
-        if let Some(ip) = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|raw| raw.split(',').next())
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-        {
-            return ip.to_string();
-        }
-    }
-    peer_ip.unwrap_or("unknown").to_string()
+    let forwarded_for = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok());
+    paracord_util::client_ip::resolve_client_ip_from_env(peer_ip, forwarded_for)
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn auth_guard_keys(
@@ -236,7 +216,12 @@ fn auth_guard_keys(
 ) -> Vec<String> {
     let mut keys = Vec::new();
     let ip = resolve_client_ip(headers, peer_ip);
-    keys.push(format!("ip:{ip}"));
+    // Collapse IPv6 sources to their /64 prefix so an attacker rotating source
+    // addresses within a routed allocation shares a single IP-scoped guard key.
+    keys.push(auth_guard_key(
+        AUTH_GUARD_IP_PREFIX,
+        &crate::normalize_ip_for_rate_limit(&ip),
+    ));
 
     if let Some(device_id) = headers
         .get("x-device-id")
@@ -244,20 +229,27 @@ fn auth_guard_keys(
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        keys.push(format!("device:{device_id}"));
+        keys.push(auth_guard_key(AUTH_GUARD_DEVICE_PREFIX, device_id));
     } else if let Some(user_agent) = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        keys.push(format!("ua:{user_agent}"));
+        keys.push(auth_guard_key(AUTH_GUARD_USER_AGENT_PREFIX, user_agent));
     }
 
     if let Some(account) = account_hint.map(str::trim).filter(|v| !v.is_empty()) {
-        keys.push(format!("acct:{}", account.to_ascii_lowercase()));
+        keys.push(auth_guard_key(
+            AUTH_GUARD_ACCOUNT_PREFIX,
+            &account.to_ascii_lowercase(),
+        ));
     }
     keys
+}
+
+fn auth_guard_key(prefix: &str, value: &str) -> String {
+    format!("{prefix}{:x}", Sha256::digest(value.as_bytes()))
 }
 
 fn challenge_bypass_enabled_and_valid(headers: &HeaderMap) -> bool {
@@ -293,6 +285,27 @@ async fn auth_guard_maybe_cleanup(state: &AppState, now: i64) {
     }
 }
 
+/// Decide whether an auth-guard state set warrants a hard block (an outright
+/// `RateLimited` rejection before the password is even checked).
+///
+/// The shared per-account key (`acct:<email/username>`) is deliberately
+/// excluded from this decision: it is scoped only to the login's account hint
+/// and is therefore shared across every source IP and device. Honoring its lock
+/// here would let an unauthenticated attacker who merely knows a victim's email
+/// or username hold that account in a permanently locked state by trickling a
+/// handful of wrong-password attempts (targeted, renewable account-lockout DoS).
+/// The account key is still counted on failure as an abuse signal, but only
+/// IP/device scoped keys — which bind the throttle to the actual misbehaving
+/// client — can hard-block a login. User-agent strings are shared by very large
+/// populations and are signal-only for the same reason.
+fn auth_guard_hard_blocked(rows: &[paracord_db::rate_limits::AuthGuardStateRow], now: i64) -> bool {
+    rows.iter().any(|row| {
+        row.locked_until > now
+            && (row.guard_key.starts_with(AUTH_GUARD_IP_PREFIX)
+                || row.guard_key.starts_with(AUTH_GUARD_DEVICE_PREFIX))
+    })
+}
+
 async fn auth_guard_enforce(
     state: &AppState,
     headers: &HeaderMap,
@@ -304,7 +317,7 @@ async fn auth_guard_enforce(
     let rows = paracord_db::rate_limits::get_auth_guard_states(&state.db, &keys)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let locked = rows.iter().any(|row| row.locked_until > now);
+    let locked = auth_guard_hard_blocked(&rows, now);
     if locked && !challenge_bypass_enabled_and_valid(headers) {
         return Err(ApiError::RateLimited(0));
     }
@@ -933,10 +946,7 @@ pub(crate) async fn dispatch_email_verification(
         );
         return;
     };
-    let verify_url = format!(
-        "{}/api/v1/auth/verify-email?token={}",
-        server_origin, verify_token
-    );
+    let verify_url = format!("{}/login?verify_token={}", server_origin, verify_token);
     let subject = "Verify your Paracord email";
     let body = format!(
         "Hi {},\n\nVerify your email by opening this link:\n{}\n\nThis link expires in {} hours.\n\nIf you did not request this change, ignore this message.",
@@ -1417,7 +1427,7 @@ pub async fn register(
             &headers,
             Some(peer_ip.as_str()),
         )
-        .map(|origin| format!("{}/api/v1/auth/verify-email?token={}", origin, verify_token));
+        .map(|origin| format!("{}/login?verify_token={}", origin, verify_token));
         match verify_url {
             None => {
                 tracing::warn!(
@@ -1491,6 +1501,30 @@ pub async fn register(
     ))
 }
 
+/// Precomputed Argon2 hash used to equalize login response timing between
+/// existing and non-existing accounts. It is derived from a fixed dummy
+/// password via `hash_password` so its parameters always match those of real
+/// stored hashes, guaranteeing a dummy verification does the same
+/// deliberately-slow work as a genuine credential check.
+static DUMMY_PASSWORD_HASH: OnceLock<String> = OnceLock::new();
+
+fn dummy_password_hash() -> &'static str {
+    DUMMY_PASSWORD_HASH
+        .get_or_init(|| {
+            paracord_core::auth::hash_password("paracord-login-timing-equalizer")
+                .expect("failed to precompute dummy password hash")
+        })
+        .as_str()
+}
+
+/// Run an Argon2 verification against a fixed dummy hash and discard the
+/// result. Called on login failure branches where no real hash is available
+/// (unknown identifier, empty stored hash) so that response latency does not
+/// leak whether the account exists (CWE-208 timing side channel).
+fn equalize_login_timing(password: &str) {
+    let _ = paracord_core::auth::verify_password(password, dummy_password_hash());
+}
+
 pub async fn login(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -1559,6 +1593,9 @@ pub async fn login(
     };
 
     let Some(user) = resolved_user else {
+        // Equalize timing with the existing-account path so a missing
+        // identifier cannot be distinguished by response latency.
+        equalize_login_timing(&body.password);
         auth_guard_record_failure(
             &state,
             &headers,
@@ -1569,6 +1606,9 @@ pub async fn login(
         return Err(ApiError::Unauthorized);
     };
     if user.password_hash.trim().is_empty() {
+        // Same as above: an account with no usable password must not respond
+        // faster than one that runs a full Argon2 verify.
+        equalize_login_timing(&body.password);
         auth_guard_record_failure(
             &state,
             &headers,
@@ -2030,81 +2070,108 @@ pub async fn forgot_password(
         return Ok(ok_response());
     };
 
-    // Invalidate any existing tokens for this user, then create a new one.
-    let _ = paracord_db::password_reset::invalidate_user_reset_tokens(&state.db, user.id).await;
+    // Perform token creation, email delivery, and audit logging in a
+    // fire-and-forget background task. This keeps the handler's response time
+    // constant regardless of whether the account exists: an inline
+    // `send_transactional_email` awaits an SMTP round-trip only for existing
+    // accounts, which would otherwise leak account existence via a timing
+    // oracle despite the uniform 200 response body (CWE-203).
+    let task_state = state.clone();
+    let task_headers = headers.clone();
+    tokio::spawn(async move {
+        let state = task_state;
+        let headers = task_headers;
 
-    let raw_token = random_token_hex(32);
-    let token_hash = sha256_hex(&raw_token);
-    let now = Utc::now();
-    let expires_at = now + Duration::minutes(RESET_TOKEN_TTL_MINUTES);
+        // Invalidate any existing tokens for this user, then create a new one.
+        let _ = paracord_db::password_reset::invalidate_user_reset_tokens(&state.db, user.id).await;
 
-    paracord_db::password_reset::create_reset_token(&state.db, &token_hash, user.id, expires_at)
+        let raw_token = random_token_hex(32);
+        let token_hash = sha256_hex(&raw_token);
+        let now = Utc::now();
+        let expires_at = now + Duration::minutes(RESET_TOKEN_TTL_MINUTES);
+
+        if let Err(err) = paracord_db::password_reset::create_reset_token(
+            &state.db,
+            &token_hash,
+            user.id,
+            expires_at,
+        )
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    // Only embed a clickable reset link when we can resolve a trusted origin;
-    // otherwise a poisoned Host header would point the link (carrying the reset
-    // token) at an attacker. The raw token is always included so the user can
-    // complete the reset manually even without a link.
-    let reset_url = resolve_outbound_link_origin(
-        state.config.public_url.as_deref(),
-        &headers,
-        Some(peer_ip.as_str()),
-    )
-    .map(|origin| format!("{}/login?reset_token={}", origin, raw_token));
-    let subject = "Paracord password reset";
-    let body = match &reset_url {
-        Some(reset_url) => format!(
-            "Hi {},\n\nA password reset was requested for your Paracord account.\n\nReset link: {}\nReset token: {}\n\nThis token expires in {} minutes. If you did not request this, ignore this message.",
-            user.username, reset_url, raw_token, RESET_TOKEN_TTL_MINUTES
-        ),
-        None => format!(
-            "Hi {},\n\nA password reset was requested for your Paracord account.\n\nReset token: {}\n\nThis token expires in {} minutes. If you did not request this, ignore this message.",
-            user.username, raw_token, RESET_TOKEN_TTL_MINUTES
-        ),
-    };
-    match send_transactional_email(&user.email, subject, &body).await {
-        Ok(true) => {
-            tracing::info!(
-                target: "paracord::password_reset",
-                user_id = user.id,
-                username = %user.username,
-                email = %user.email,
-                "Sent password reset email"
-            );
-        }
-        Ok(false) => {
-            tracing::warn!(
-                target: "paracord::password_reset",
-                user_id = user.id,
-                username = %user.username,
-                email = %user.email,
-                "SMTP not configured - password reset token generated but cannot be delivered. Configure SMTP or use admin API to reset passwords."
-            );
-        }
-        Err(err) => {
+        {
             tracing::error!(
                 target: "paracord::password_reset",
                 user_id = user.id,
                 username = %user.username,
-                email = %user.email,
                 error = %err,
-                "Failed to send password reset email"
+                "Failed to create password reset token"
             );
+            return;
         }
-    }
 
-    security::log_security_event(
-        &state,
-        "auth.password_reset.requested",
-        Some(user.id),
-        Some(user.id),
-        None,
-        Some(&headers),
-        Some(peer_ip.as_str()),
-        Some(serde_json::json!({ "ip": peer_ip })),
-    )
-    .await;
+        // Only embed a clickable reset link when we can resolve a trusted origin;
+        // otherwise a poisoned Host header would point the link (carrying the reset
+        // token) at an attacker. The raw token is always included so the user can
+        // complete the reset manually even without a link.
+        let reset_url = resolve_outbound_link_origin(
+            state.config.public_url.as_deref(),
+            &headers,
+            Some(peer_ip.as_str()),
+        )
+        .map(|origin| format!("{}/login?reset_token={}", origin, raw_token));
+        let subject = "Paracord password reset";
+        let body = match &reset_url {
+            Some(reset_url) => format!(
+                "Hi {},\n\nA password reset was requested for your Paracord account.\n\nReset link: {}\nReset token: {}\n\nThis token expires in {} minutes. If you did not request this, ignore this message.",
+                user.username, reset_url, raw_token, RESET_TOKEN_TTL_MINUTES
+            ),
+            None => format!(
+                "Hi {},\n\nA password reset was requested for your Paracord account.\n\nReset token: {}\n\nThis token expires in {} minutes. If you did not request this, ignore this message.",
+                user.username, raw_token, RESET_TOKEN_TTL_MINUTES
+            ),
+        };
+        match send_transactional_email(&user.email, subject, &body).await {
+            Ok(true) => {
+                tracing::info!(
+                    target: "paracord::password_reset",
+                    user_id = user.id,
+                    username = %user.username,
+                    email = %user.email,
+                    "Sent password reset email"
+                );
+            }
+            Ok(false) => {
+                tracing::warn!(
+                    target: "paracord::password_reset",
+                    user_id = user.id,
+                    username = %user.username,
+                    email = %user.email,
+                    "SMTP not configured - password reset token generated but cannot be delivered. Configure SMTP or use admin API to reset passwords."
+                );
+            }
+            Err(err) => {
+                tracing::error!(
+                    target: "paracord::password_reset",
+                    user_id = user.id,
+                    username = %user.username,
+                    email = %user.email,
+                    error = %err,
+                    "Failed to send password reset email"
+                );
+            }
+        }
+
+        security::log_security_event(
+            &state,
+            "auth.password_reset.requested",
+            Some(user.id),
+            Some(user.id),
+            None,
+            Some(&headers),
+            Some(peer_ip.as_str()),
+            Some(serde_json::json!({ "ip": peer_ip })),
+        )
+        .await;
+    });
 
     Ok(ok_response())
 }
@@ -2282,12 +2349,25 @@ fn decrypt_totp_secret(state: &AppState, stored: &str) -> Result<String, ApiErro
     let Some(cryptor) = state.config.totp_cryptor.as_ref() else {
         return Ok(stored.to_string());
     };
+    decrypt_totp_secret_with_cryptor(cryptor, stored)
+}
+
+fn decrypt_totp_secret_with_cryptor(
+    cryptor: &paracord_util::at_rest::FileCryptor,
+    stored: &str,
+) -> Result<String, ApiError> {
     // Try to base64-decode; if it fails, the value is likely plaintext (pre-encryption).
     use base64::Engine;
     let decoded = match base64::engine::general_purpose::STANDARD.decode(stored) {
         Ok(bytes) => bytes,
         Err(_) => return Ok(stored.to_string()),
     };
+    // Base32 TOTP values are often also syntactically valid Base64. Only treat
+    // the decoded value as ciphertext when it has Paracord's authenticated
+    // envelope marker; otherwise preserve the legacy plaintext value.
+    if !paracord_util::at_rest::FileCryptor::payload_is_encrypted(&decoded) {
+        return Ok(stored.to_string());
+    }
     let plaintext_bytes = cryptor
         .decrypt(&decoded)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("TOTP secret decryption failed: {}", e)))?;
@@ -2371,15 +2451,37 @@ pub async fn mfa_setup(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::Unauthorized)?;
 
+    // Refuse to re-run setup for an account that already has MFA enabled.
+    // Otherwise a live (possibly stolen) session could reset the pending
+    // secret and clear `enabled`, silently disabling the login second-factor
+    // requirement without ever presenting a current TOTP/backup code.
+    // Disabling MFA must go through `mfa_disable`, which requires a valid code.
+    if let Some(existing) = paracord_db::mfa::get_mfa_config(&state.db, user.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+    {
+        if existing.enabled {
+            return Err(ApiError::BadRequest(
+                "MFA is already enabled. Disable it first (requires a current code) before re-running setup.".into(),
+            ));
+        }
+    }
+
     let secret_base32 = generate_totp_secret();
 
     // Encrypt the TOTP secret before storing (plaintext only when at-rest is unset in dev).
     let stored_secret = encrypt_totp_secret(&state, &secret_base32)?;
 
-    // Store as pending (not yet enabled)
-    paracord_db::mfa::upsert_mfa_secret(&state.db, user.id, &stored_secret)
+    // Store as pending (not yet enabled). The DB layer additionally refuses to
+    // overwrite an already-enabled row; treat a refusal as a conflict.
+    let stored = paracord_db::mfa::upsert_mfa_secret(&state.db, user.id, &stored_secret)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if !stored {
+        return Err(ApiError::BadRequest(
+            "MFA is already enabled. Disable it first (requires a current code) before re-running setup.".into(),
+        ));
+    }
 
     let totp = totp_for_secret(&secret_base32, &user.email)?;
     let otpauth_url = totp.get_url();
@@ -2945,13 +3047,15 @@ pub async fn verify(
 #[cfg(test)]
 mod tests {
     use super::{
-        auth_guard_keys, build_csrf_cookie, build_refresh_cookie, get_cookie_value,
-        normalize_email_for_auth, parse_login_form_value, parse_login_json_value,
-        parse_login_request, parse_username_with_discriminator, resolve_outbound_link_origin,
-        resolve_server_origin, should_use_secure_cookie_with_public_url, synthesized_local_email,
+        auth_guard_hard_blocked, auth_guard_keys, build_csrf_cookie, build_refresh_cookie,
+        decrypt_totp_secret_with_cryptor, get_cookie_value, normalize_email_for_auth,
+        parse_login_form_value, parse_login_json_value, parse_login_request,
+        parse_username_with_discriminator, resolve_outbound_link_origin, resolve_server_origin,
+        should_use_secure_cookie_with_public_url, synthesized_local_email,
         username_login_effective, HeaderMap, LoginRequest,
     };
     use axum::http::{header, HeaderValue};
+    use paracord_db::rate_limits::AuthGuardStateRow;
     use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
@@ -2965,9 +3069,93 @@ mod tests {
         headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.4"));
         headers.insert("x-device-id", HeaderValue::from_static("device-123"));
         let keys = auth_guard_keys(&headers, Some("198.51.100.9"), Some("USER@example.com"));
-        assert!(keys.contains(&"ip:198.51.100.9".to_string()));
-        assert!(keys.contains(&"device:device-123".to_string()));
-        assert!(keys.contains(&"acct:user@example.com".to_string()));
+        assert_eq!(keys.len(), 3);
+        assert!(keys.iter().any(|key| key.starts_with("ip:")));
+        assert!(keys.iter().any(|key| key.starts_with("device:")));
+        assert!(keys.iter().any(|key| key.starts_with("acct:")));
+        assert!(keys.iter().all(|key| !key.contains("device-123")));
+        assert!(keys.iter().all(|key| !key.contains("user@example.com")));
+    }
+
+    #[test]
+    fn auth_guard_ip_key_collapses_ipv6_to_64_prefix() {
+        // Two distinct /128 addresses inside the same /64 must share one ip: key
+        // so source-address rotation within a routed allocation cannot mint a
+        // fresh guard bucket per request.
+        let headers = HeaderMap::new();
+        let a = auth_guard_keys(&headers, Some("2001:db8:abcd:1234::1"), None);
+        let b = auth_guard_keys(
+            &headers,
+            Some("2001:db8:abcd:1234:ffff:ffff:ffff:ffff"),
+            None,
+        );
+        assert_eq!(a, b);
+        // A different /64 must remain a distinct key.
+        let c = auth_guard_keys(&headers, Some("2001:db8:abcd:5678::1"), None);
+        assert_ne!(a, c);
+    }
+
+    fn guard_row(key: &str, locked_until: i64) -> AuthGuardStateRow {
+        AuthGuardStateRow {
+            guard_key: key.to_string(),
+            failures: 5,
+            locked_until,
+            last_seen: 0,
+        }
+    }
+
+    #[test]
+    fn locked_account_key_alone_never_hard_blocks() {
+        let now = 1_000;
+        // A locked shared per-account key on its own must NOT hard-block: this is
+        // the third-party account-lockout DoS vector. Only IP/device-scoped keys
+        // can hold the block.
+        let account_only = vec![guard_row("acct:victim@example.com", now + 300)];
+        assert!(!auth_guard_hard_blocked(&account_only, now));
+
+        // A locked IP key still hard-blocks (legitimate per-client throttling).
+        let with_ip = vec![
+            guard_row("acct:victim@example.com", now + 300),
+            guard_row("ip:203.0.113.4", now + 300),
+        ];
+        assert!(auth_guard_hard_blocked(&with_ip, now));
+
+        // A locked device key still hard-blocks.
+        let with_device = vec![guard_row("device:abc-123", now + 300)];
+        assert!(auth_guard_hard_blocked(&with_device, now));
+
+        // Expired locks never block.
+        let expired_ip = vec![guard_row("ip:203.0.113.4", now - 1)];
+        assert!(!auth_guard_hard_blocked(&expired_ip, now));
+
+        // A browser user-agent is shared across unrelated clients and cannot
+        // be used to lock all of them out at once.
+        let shared_user_agent = vec![guard_row("ua:shared-browser", now + 300)];
+        assert!(!auth_guard_hard_blocked(&shared_user_agent, now));
+    }
+
+    #[test]
+    fn totp_decrypt_preserves_base64_compatible_legacy_base32() {
+        let cryptor = paracord_util::at_rest::FileCryptor::from_master_key_with_context(
+            &[7_u8; 32],
+            b"totp",
+            true,
+        );
+        // A 32-character Base32 secret is also syntactically valid Base64. It
+        // must not be mistaken for a Paracord ciphertext envelope.
+        let legacy = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+        assert_eq!(
+            decrypt_totp_secret_with_cryptor(&cryptor, legacy).unwrap(),
+            legacy
+        );
+
+        use base64::Engine;
+        let encrypted = cryptor.encrypt(legacy.as_bytes()).unwrap();
+        let stored = base64::engine::general_purpose::STANDARD.encode(encrypted);
+        assert_eq!(
+            decrypt_totp_secret_with_cryptor(&cryptor, &stored).unwrap(),
+            legacy
+        );
     }
 
     #[test]
@@ -3235,5 +3423,20 @@ mod tests {
     #[test]
     fn synthesizes_local_email_for_emailless_accounts() {
         assert_eq!(synthesized_local_email(12345), "u12345@local.invalid");
+    }
+
+    #[test]
+    fn dummy_password_hash_is_a_verifiable_argon2_hash() {
+        // The timing-equalizer hash used on the no-user / empty-hash login
+        // branches must be a real, parseable Argon2 hash so that verifying a
+        // candidate password against it performs the same deliberately-slow
+        // work as a genuine credential check (closes the enumeration timing
+        // side channel). A wrong password must verify as false, not error.
+        let hash = super::dummy_password_hash();
+        let valid = paracord_core::auth::verify_password("definitely-not-the-password", hash)
+            .expect("dummy hash must be a valid Argon2 hash");
+        assert!(!valid);
+        // Stable across calls (cached in the OnceLock).
+        assert_eq!(hash, super::dummy_password_hash());
     }
 }

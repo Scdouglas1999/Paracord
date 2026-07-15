@@ -84,21 +84,19 @@ function renderOverview(
   return handlers;
 }
 
-// The dialog's confirm button and the trigger button both read "Delete Server";
-// the trigger renders first in the DOM, the dialog confirm second.
-const deleteConfirmButton = () => screen.getAllByRole('button', { name: 'Delete Server' })[1];
+const deleteConfirmButton = () => screen.getByRole('button', { name: 'Delete Server' });
 
 describe('OverviewSection danger zone', () => {
   it('hides the danger zone for non-owners', () => {
     renderOverview({ authUserId: 'user-2' });
-    expect(screen.queryByRole('button', { name: 'Delete Server' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete space' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Transfer' })).not.toBeInTheDocument();
   });
 
   it('opens the delete confirmation dialog from the trigger', async () => {
     const user = userEvent.setup();
     const handlers = renderOverview();
-    await user.click(screen.getByRole('button', { name: 'Delete Server' }));
+    await user.click(screen.getByRole('button', { name: 'Delete space' }));
     expect(handlers.onShowDeleteDialog).toHaveBeenCalledTimes(1);
     expect(handlers.onDeleteGuild).not.toHaveBeenCalled();
   });

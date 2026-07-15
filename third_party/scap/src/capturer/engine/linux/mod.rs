@@ -42,6 +42,49 @@ mod portal;
 static CAPTURER_STATE: AtomicU8 = AtomicU8::new(0);
 static STREAM_STATE_CHANGED_TO_ERROR: AtomicBool = AtomicBool::new(false);
 
+/// Master gate for DMA-BUF (zero-copy) capture negotiation (D1/D3).
+///
+/// When `true` the PipeWire stream additionally offers `SPA_DATA_DmaBuf`
+/// buffers with modifier negotiation and [`process_callback`] exports the
+/// dma-buf `(fd, stride, offset, modifier, format)` for the encoder to `hwmap`
+/// into VAAPI (see `paracord-codec`'s `video::lavc::dmabuf`). When `false` the
+/// stream offers SHM formats only and behaves exactly as before — one
+/// deterministic path, no silent fallback.
+///
+/// It is `false` because two pieces outside this engine's owned files must land
+/// first (route selection is fixed at stream start, D3):
+///   1. **Carrier.** `scap::frame::VideoFrame` has no dma-buf variant, so an
+///      exported descriptor cannot leave this engine through scap's public API.
+///   2. **Modifier fixation + buffer lifetime.** A complete offer needs the
+///      two-round DONT_FIXATE modifier handshake (re-negotiating EnumFormat with
+///      the server-chosen modifier), and the capture loop must hold a PipeWire
+///      buffer un-queued until the encode that imports its dma-buf completes.
+/// The exact offer that gets wired in once those land is specified in the note
+/// above [`pipewire_capturer`]; today the SHM offer is byte-for-byte unchanged.
+const DMABUF_NEGOTIATION_ENABLED: bool = false;
+
+/// A compositor dma-buf frame exported from a `SPA_DATA_DmaBuf` PipeWire buffer:
+/// the zero-copy hand-off the encoder imports instead of a CPU `Vec<u8>`.
+///
+/// This mirrors the descriptor `paracord-codec::video::lavc::dmabuf` consumes.
+/// It is produced by [`process_callback`] on the dma-buf route; until the scap
+/// `Frame` carrier exists it has nowhere to travel, which is why the route is
+/// gated off (see [`DMABUF_NEGOTIATION_ENABLED`]).
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct DmaBufExport {
+    pub fd: i64,
+    pub offset: u32,
+    pub stride: i32,
+    pub modifier: u64,
+    /// Negotiated `VideoFormat` as its raw SPA id (mapped to a DRM fourcc by the
+    /// import side).
+    pub spa_format: u32,
+    pub width: i32,
+    pub height: i32,
+    pub display_time: SystemTime,
+}
+
 #[derive(Clone)]
 struct ListenerUserData {
     pub tx: mpsc::Sender<Frame>,
@@ -114,6 +157,19 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
             if width == 0 || height == 0 {
                 break 'outside;
             }
+
+            // DMA-BUF detection (D1). A `SPA_DATA_DmaBuf` buffer carries its
+            // pixels behind an fd, not a mmap'd `data` pointer; the SHM copy
+            // below would read a NULL pointer and silently drop the frame. On
+            // the dma-buf route this is the zero-copy hand-off; export the
+            // descriptor instead of copying. On the SHM route we never offer
+            // dma-buf, so this is defensive: a compositor that hands dma-buf
+            // anyway is a hard, loud error, never a silent black frame.
+            let first_data_type = unsafe { (*(*buffer).datas).type_ };
+            if first_data_type == pw::spa::sys::SPA_DATA_DmaBuf {
+                handle_dmabuf_buffer(user_data, buffer, frame_size, display_time);
+                break 'outside;
+            }
             let bytes_per_pixel = match user_data.format.format() {
                 VideoFormat::RGB => 3usize,
                 _ => 4usize,
@@ -170,6 +226,18 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
                     height: frame_size.height as i32,
                     data: frame_data,
                 }))),
+                // RGBA is byte-identical to RGBx (R,G,B,then a fourth byte);
+                // screen capture is opaque so the alpha is ignored. Route it
+                // through the RGBx frame so the existing RGBx->BGRA swizzle
+                // handles it — a compositor that negotiates RGBA (which we do
+                // advertise) otherwise falls into the unsupported-format arm and
+                // yields a silent black stream.
+                VideoFormat::RGBA => user_data.tx.send(Frame::Video(VideoFrame::RGBx(RGBxFrame {
+                    display_time,
+                    width: frame_size.width as i32,
+                    height: frame_size.height as i32,
+                    data: frame_data,
+                }))),
                 VideoFormat::RGB => user_data.tx.send(Frame::Video(VideoFrame::RGB(RGBFrame {
                     display_time,
                     width: frame_size.width as i32,
@@ -203,6 +271,76 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
     unsafe { stream.queue_raw_buffer(buffer) };
 }
 
+/// Export a `SPA_DATA_DmaBuf` buffer as a [`DmaBufExport`] (D1).
+///
+/// Reads the plane's fd, offset and stride from the SPA buffer and the
+/// negotiated modifier/format from the parsed video info. On the dma-buf route
+/// this descriptor is `hwmap`ped into VAAPI by the encoder with no CPU copy.
+///
+/// Delivery is gated: `scap::frame::VideoFrame` (outside this engine's owned
+/// files) has no dma-buf variant, so there is no way to hand the descriptor to
+/// the caller through scap's public `Frame` API yet. Rather than copy garbage
+/// or drop silently, this fails loud — matching the no-silent-fallback rule and
+/// the `DMABUF_NEGOTIATION_ENABLED` gate that keeps a dma-buf buffer from ever
+/// reaching here on the SHM route.
+fn handle_dmabuf_buffer(
+    user_data: &ListenerUserData,
+    buffer: *mut pw::spa::sys::spa_buffer,
+    frame_size: pw::spa::utils::Rectangle,
+    display_time: SystemTime,
+) {
+    let export = unsafe {
+        let data = (*buffer).datas;
+        let chunk = (*data).chunk;
+        let (offset, stride) = if chunk.is_null() {
+            (0u32, 0i32)
+        } else {
+            ((*chunk).offset, (*chunk).stride)
+        };
+        DmaBufExport {
+            fd: (*data).fd,
+            offset,
+            stride,
+            modifier: user_data.format.modifier(),
+            spa_format: user_data.format.format().as_raw(),
+            width: frame_size.width as i32,
+            height: frame_size.height as i32,
+            display_time,
+        }
+    };
+
+    // No carrier for a zero-copy frame exists in scap's public API yet; refuse
+    // loudly instead of pretending. When the `VideoFrame::DmaBuf` variant and
+    // the buffer-lifetime hand-off land, this delivers `export` to the caller.
+    let _ = &export;
+    eprintln!(
+        "scap: negotiated a DMA-BUF buffer (fd {}, {}x{}, stride {}, modifier {:#018x}) but \
+         no dma-buf frame carrier is wired; dropping. This should be unreachable while \
+         DMABUF_NEGOTIATION_ENABLED is false.",
+        export.fd, export.width, export.height, export.stride, export.modifier
+    );
+}
+
+// D1 negotiation offer — remaining work (deliberately NOT hand-rolled here).
+//
+// Turning the offer on (under `DMABUF_NEGOTIATION_ENABLED`) means adding, next
+// to the SHM EnumFormat this engine already builds:
+//   * a `FormatProperties::VideoModifier`
+//     (`pw::spa::sys::SPA_FORMAT_VIDEO_modifier`, id 131074) property whose value
+//     is a `Long` `Choice::Enum` of the supported DRM modifiers (at minimum
+//     `DRM_FORMAT_MOD_LINEAR = 0`, plus the driver modifiers queried from EGL/
+//     GBM), carrying the `MANDATORY | DONT_FIXATE` property flags; and
+//   * a `SPA_PARAM_Buffers` param whose `SPA_PARAM_BUFFERS_dataType` value is the
+//     bitmask `(1 << SPA_DATA_DmaBuf) | (1 << SPA_DATA_MemFd)`.
+// The `DONT_FIXATE` flag then requires the two-round modifier handshake: on the
+// first `param_changed`, re-submit EnumFormat fixated to the server-chosen
+// `user_data.format.modifier()`. `DONT_FIXATE` is only exposed by libspa when
+// the `v0_3_33` feature is enabled (this build does not enable it), so that flag
+// + the fixation round are the concrete remainder. The property ids, the
+// `VideoInfoRaw::modifier()` readback, and the `SPA_DATA_DmaBuf` export above are
+// all in place and verified; only the offer serialization + fixation loop remain
+// — left undone rather than shipped as unverifiable pod-builder code.
+
 // TODO: Format negotiation
 fn pipewire_capturer(
     options: Options,
@@ -211,6 +349,18 @@ fn pipewire_capturer(
     stream_id: u32,
 ) -> Result<(), LinCapError> {
     pw::init();
+
+    // Route selection is fixed here, at stream start (D3): loudly name the path
+    // so a black stream is never a silent mystery. The dma-buf route is not yet
+    // reachable (see `DMABUF_NEGOTIATION_ENABLED`), so this always reports SHM.
+    eprintln!(
+        "scap: PipeWire capture route = {}",
+        if DMABUF_NEGOTIATION_ENABLED {
+            "dmabuf (zero-copy)"
+        } else {
+            "shm (compositor GPU -> CPU copy -> encoder)"
+        }
+    );
 
     let mainloop = MainLoop::new(None)?;
     let context = Context::new(&mainloop)?;
@@ -269,9 +419,10 @@ fn pipewire_capturer(
                 height: 1,
             },
             pw::spa::utils::Rectangle {
-                // Max
-                width: 4096,
-                height: 4096,
+                // Max — 8K so 5K/6K and super-ultrawide displays negotiate at
+                // their native size instead of being clamped to 4096.
+                width: 8192,
+                height: 8192,
             }
         ),
         pw::spa::pod::property!(

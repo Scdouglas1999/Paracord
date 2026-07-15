@@ -51,6 +51,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         onClose();
         return;
       }
@@ -101,11 +102,12 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[100] min-w-[13rem] rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg backdrop-blur-md outline-none"
+      className="fixed z-[100] min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] rounded-md border border-border-subtle bg-bg-floating p-1 shadow-lg outline-none"
       style={{ left: adjustedPosition.x, top: adjustedPosition.y }}
       tabIndex={-1}
       role="menu"
       aria-label="Context menu"
+      data-native-overlay-occlude=""
       aria-activedescendant={focusedIndex >= 0 ? `context-menu-item-${focusedIndex}` : undefined}
     >
       {items.map((item, i) => {

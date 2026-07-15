@@ -47,6 +47,7 @@ pub async fn kick_member(
         .await?
         .ok_or(CoreError::NotFound)?;
 
+    permissions::ensure_guild_member(pool, guild_id, actor_id).await?;
     let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
     let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
     permissions::require_permission(perms, Permissions::KICK_MEMBERS)?;
@@ -72,6 +73,7 @@ pub async fn ban_member(
         .await?
         .ok_or(CoreError::NotFound)?;
 
+    permissions::ensure_guild_member(pool, guild_id, actor_id).await?;
     let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
     let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
     permissions::require_permission(perms, Permissions::BAN_MEMBERS)?;
@@ -98,6 +100,7 @@ pub async fn timeout_member(
         .await?
         .ok_or(CoreError::NotFound)?;
 
+    permissions::ensure_guild_member(pool, guild_id, actor_id).await?;
     let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
     let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
     permissions::require_permission(perms, Permissions::MUTE_MEMBERS)?;
@@ -122,6 +125,7 @@ pub async fn unban_member(
         .await?
         .ok_or(CoreError::NotFound)?;
 
+    permissions::ensure_guild_member(pool, guild_id, actor_id).await?;
     let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
     let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
     permissions::require_permission(perms, Permissions::BAN_MEMBERS)?;

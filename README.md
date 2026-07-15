@@ -1,10 +1,24 @@
 <p align="center">
-  <img src="docs/logo-banner.svg" alt="Paracord" width="800"/>
+  <img src="docs/logo-banner.svg" alt="Paracord" width="720"/>
 </p>
 
 <p align="center">
-  <strong>Paracord 1.0</strong> — a self-hosted Discord alternative you can stand up in one command.<br/>
-  Native QUIC voice &amp; video, end-to-end encrypted DMs, federation, bots, and a redesigned desktop client — no LiveKit required.
+  <strong>Self-hosted community chat</strong> — native QUIC voice &amp; video,<br/>
+  no third-party media cloud required.
+</p>
+
+<p align="center">
+  Paracord is a <strong>source-available</strong>, self-hostable Discord-style platform:
+  guilds, channels, DMs, bots, and optional federation on your hardware.
+  Voice and video use Paracord’s own QUIC/WebTransport engine by default — LiveKit is optional.
+</p>
+
+<p align="center">
+  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Scoduglas1999/Paracord" alt="Latest release"/></a>
+  &nbsp;
+  <img src="https://img.shields.io/badge/license-Source--Available-8B7355" alt="Source-Available license"/>
+  &nbsp;
+  <img src="https://img.shields.io/badge/version-0.9.0-2D6A4F" alt="Version 0.9.0"/>
 </p>
 
 <p align="center">
@@ -12,181 +26,209 @@
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="docs/getting-started.md">Getting Started</a> &bull;
   <a href="docs/deployment.md">Deployment</a> &bull;
-  <a href="#key-features">Features</a> &bull;
+  <a href="#features">Features</a> &bull;
   <a href="#development">Development</a> &bull;
-  <a href="docs/known-limitations.md">Known Limitations</a>
+  <a href="docs/known-limitations.md">Known Limitations</a> &bull;
+  <a href="#license--contributing">License</a>
 </p>
 
 <p align="center">
-  Current release: <strong>v1.0.0</strong>
+  Current release: <strong>v0.9.0</strong> · targeting first public <strong>v1.0.0</strong>
 </p>
 
 ---
 
 ## What is Paracord?
 
-Paracord is an open-source, privacy-first chat platform you run on your own hardware. One binary (or one `docker compose up`) gives you guilds, channels, DMs, voice, screen share, roles, moderation, bots, and optional server-to-server federation — without handing your community's data to a third party.
+One binary (or one `docker compose up`) gives you spaces, text and voice channels, forums, stages, DMs, roles, moderation, bots, and optional server-to-server federation — without handing your community’s data to a third-party host.
 
-**v1.0.0** is the first public release. It focuses on what self-hosters actually need: zero-config first run, native QUIC media out of the box, a single port to forward, and a desktop client with a fresh **Emerald Commons** UI and **Rooms + Unified Stream** layout.
-
-The **first account you register becomes the server owner/admin**. Voice and video run on Paracord's own end-to-end-encrypted QUIC/WebTransport engine by default — LiveKit is fully optional.
+- **First account owns the server** — the first registered user becomes owner/admin.
+- **Native QUIC media by default** — voice, video, and screen share over QUIC (desktop) / WebTransport (browser), with LiveKit available only if you opt in.
+- **Zero-config first run** — config, JWT secret, SQLite, and (for the binary) self-signed TLS are created automatically.
 
 ---
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/readme/unified-sidebar.png" alt="Unified sidebar with Needs you, Recent, and Spaces across all servers" width="100%"/>
-      <br/><sub><strong>Unified Stream</strong> — mentions, DMs, and recent conversations from every connected server in one sidebar</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/readme/rooms-view.png" alt="Rooms view showing live voice rooms and text channels" width="100%"/>
-      <br/><sub><strong>Rooms view</strong> — presence-first home for each server: who's in voice, who's around, channels below</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/readme/text-chat.png" alt="Text chat with Emerald Commons dark theme" width="100%"/>
-      <br/><sub><strong>Text chat</strong> — threads, reactions, pins, search, markdown, and file uploads</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/readme/home.png" alt="Paracord home dashboard" width="100%"/>
-      <br/><sub><strong>Home</strong> — friends, activity, and quick navigation into your spaces</sub>
-    </td>
-  </tr>
-</table>
+![Paracord home — resume dashboard with unified sidebar](docs/images/readme/readme-home.png)
+
+*Home — pick up where you left off, with Needs you / Recent / Spaces in the unified sidebar*
+
+| Unified Stream | Rooms |
+| :---: | :---: |
+| ![Unified sidebar showing Needs you, Recent, and Spaces](docs/images/readme/readme-sidebar.png) | ![Rooms view with live room cards and text channels](docs/images/readme/readme-rooms.png) |
+| **Unified Stream** — attention across every connected server | **Rooms** — presence-first home for each space |
+
+| Messaging | Context panel |
+| :---: | :---: |
+| ![Text channel messaging in Emerald Commons dark theme](docs/images/readme/readme-messaging.png) | ![Text channel with Members context panel open](docs/images/readme/readme-members.png) |
+| **Messaging** — channels, markdown, reactions, and uploads | **Context panel** — members, threads, pins, and search on demand |
+
+| Voice lobby | Command palette |
+| :---: | :---: |
+| ![Voice channel lobby with Join voice control](docs/images/readme/readme-voice.png) | ![Command palette opened with Ctrl+K](docs/images/readme/readme-command-palette.png) |
+| **Voice lobby** — join voice from the channel (connected grid not shown) | **Command palette** — jump anywhere with Ctrl/⌘K |
+
+| DMs | Appearance |
+| :---: | :---: |
+| ![Direct messages hub](docs/images/readme/readme-dms.png) | ![User settings Appearance with Dark theme and Emerald accent](docs/images/readme/readme-settings.png) |
+| **DMs** — direct and group conversations | **Appearance** — Emerald Commons themes and accents |
+
+<details>
+<summary>More screenshots</summary>
+
+| Friends | Space settings |
+| :---: | :---: |
+| ![Friends page Online tab](docs/images/readme/readme-friends.png) | ![Guild settings Invites section](docs/images/readme/readme-guild-settings.png) |
+
+</details>
 
 ---
 
-## Key Features
+## Features
 
-### Zero-config self-hosting
+### Self-hosting
 
-No secrets to generate, no voice infrastructure to wire up, no database to provision. Start the server and it creates `config/paracord.toml`, a random JWT secret, the SQLite database, and a self-signed TLS certificate — then prints the URL to open and share. `docker compose up` needs no `.env` editing; everything persists into the data volume on first run.
+No secrets to invent, no voice stack to wire up, no database to provision for a small instance. Start the server and it creates `config/paracord.toml`, a random JWT secret, the SQLite database, and — for the binary path — a self-signed TLS certificate, then prints the URL to open. `docker compose up` needs no `.env` editing; secrets persist into the data volume on first run.
+
+PostgreSQL is recommended for sustained multi-user production. An offline migrator (`paracord-server migrate-to-postgres`) is available when you outgrow SQLite.
 
 ### Native QUIC media (default)
 
-Voice, video, and screen share run on Paracord's own QUIC/WebTransport engine with E2EE. Desktop clients speak raw QUIC; browsers use WebTransport over HTTP/3. **One port to forward** for remote access: `8443` over **both TCP and UDP** (HTTPS + gateway on TCP, native media on UDP). LiveKit remains available as an optional WebRTC SFU for legacy interop or very large rooms — not a requirement.
+Voice, video, and screen share run on Paracord’s own media stack (`paracord-transport`, `paracord-relay`, `paracord-codec`) with an E2EE media path. Desktop clients speak raw QUIC; browsers use WebTransport. **One port for remote access:** `8443` over **both TCP and UDP** (HTTPS + gateway on TCP, native media on UDP).
 
-### Emerald Commons UI
+LiveKit remains an optional WebRTC SFU (`docker compose --profile livekit`) for legacy interop or large SFU-scale rooms — not required for typical use.
 
-A mature, expressive design language: warm-neutral dark surfaces, a calibrated emerald primary accent, runtime CSS tokens, and four built-in themes (dark, light, AMOLED, high-contrast) plus custom CSS. See [docs/design-spec.md](docs/design-spec.md).
+Desktop VP9 screen share and video need **libvpx** at build time. The `vpx` feature stays enabled by default; do not disable it to work around build issues — fix the environment instead (see [Development](#development)).
 
-### Rooms + Unified Stream layout
+### Emerald Commons + Rooms
 
-The v1.0 client retires the Discord skeleton for a bolder information architecture: one attention-ranked **unified sidebar** (Needs you / Recent / Spaces across all servers), a full-width content pane, and a contextual right panel (members, threads, pins, search) that toggles on demand. Opening a server lands on its **Rooms view** — live voice rooms as occupant cards, presence, and grouped text channels. See [docs/layout-spec.md](docs/layout-spec.md).
+A mature design language: warm-neutral dark surfaces, a calibrated emerald primary accent, runtime CSS tokens, and four themes (dark, light, AMOLED, high-contrast) plus custom CSS. See [docs/design-spec.md](docs/design-spec.md).
+
+The client layout is **Rooms + Unified Stream**: one attention-ranked sidebar (Needs you / Recent / Spaces across connected servers), a full-width content pane, and a toggleable context panel. Opening a space lands on its **Rooms** home — live rooms, presence, and grouped channels. See [docs/layout-spec.md](docs/layout-spec.md).
 
 ### Bots & webhooks
 
-Full bot platform with developer dashboard, OAuth2 authorization, bot user accounts, slash commands, and webhooks for external integrations.
+Developer portal, bot accounts, slash commands, and webhooks. See [docs/bot-development.md](docs/bot-development.md).
 
-### Federation
+### Federation (MVP)
 
-Server-to-server federation via Ed25519-signed HTTP envelopes. Disabled by default; enable only after configuring trusted peers. Cross-server messaging, file proxying, and federated discovery are built in.
+Server-to-server federation via Ed25519-signed HTTP envelopes. **Disabled by default** — enable only with trusted peers, and validate every flow before public use. Protocol notes: [docs/federation-protocol.md](docs/federation-protocol.md).
 
-### End-to-end encrypted DMs
+### Privacy & crypto
 
-Optional E2EE for direct messages using X25519 key exchange and AES-GCM, alongside session-backed JWT auth and Ed25519 cryptographic identity.
+- Optional E2EE for **direct messages** (X25519 + AES-GCM)
+- E2EE for voice/video frames on the **native media** path
+- At-rest encryption (AES-256-GCM) for configured secrets/data paths — not “everything on disk is E2EE”
+- Session JWT auth and Ed25519 cryptographic identity
+
+Guild and channel messages are visible to the server operator (and anyone with access to the database). Prefer optional E2EE DMs when that boundary matters.
 
 ### Multi-server
 
-Connect to multiple Paracord servers at once. The unified sidebar merges mentions, DMs, and recent conversations from **every** connected server. Your Ed25519 identity carries across servers — one account, many communities.
+Connect to multiple Paracord hosts. The unified sidebar merges attention across them; your Ed25519 identity carries across servers.
 
-### Everything else you'd expect
+### Platform checklist
 
-Guilds, channels, threads, polls, forum channels, custom emoji, scheduled events, roles & permissions (30 flags), friends & DMs, server discovery, moderation & audit logs, file storage policies, and a Tauri v2 desktop client for Windows and Linux.
+| Capability | Status |
+|------------|--------|
+| Guilds, text / voice / stage / forum channels, threads | Yes |
+| Roles & permissions (30 flags), moderation, audit logs | Yes |
+| Friends, invites, discovery, templates, polls, events, emoji | Yes |
+| File uploads + guild storage policies | Yes |
+| Desktop client (Tauri v2) | **Windows** and **Linux** |
+| Browser client (embedded UI) | Yes |
+| macOS desktop / system audio capture | Not supported |
 
 ---
 
 ## Quick Start
 
-Paracord is zero-config. Pick a path and you have a running server in minutes.
-
 ### Path A — single executable
 
 ```bash
-# Linux (from the extracted release tarball)
-./paracord-server
+# Linux (from a release tarball or local build)
+./paracord-server init   # optional: write config + print next steps, exit
+./paracord-server        # start (-c <path> for a custom config)
 ```
 
 ```powershell
-# Windows: double-click paracord-server.exe, or:
 .\paracord-server.exe
 ```
 
-On first run the binary generates config, database, TLS certs, and prints the URL to open. Register the **first account** — it becomes the server owner.
-
-Prefer to read instructions before starting?
-
-```bash
-./paracord-server init      # writes config/paracord.toml (if missing), prints next steps, exits
-./paracord-server           # start the server (-c <path> for a custom config location)
-```
+On first run the binary generates config, database, and TLS certs, then prints the URL. Register the **first account** — it becomes the server owner.
 
 ### Path B — Docker Compose
 
 ```bash
 git clone https://github.com/Scoduglas1999/Paracord.git
 cd Paracord
-docker compose up -d        # no .env, no secrets — the server generates and persists them
+docker compose up -d
 ```
 
-The Docker stack serves the web UI over plain **HTTP on `8090`** (native media on UDP `8443`) and expects TLS at a reverse proxy for browser voice. The native desktop client speaks raw QUIC and is unaffected. See [docs/getting-started.md](docs/getting-started.md) and [docs/deployment.md](docs/deployment.md).
+Compose publishes **HTTP on `127.0.0.1:8090` only** (loopback by design) and native media on UDP `8443`. Put a TLS reverse proxy in front for browser mic/camera; the desktop client speaks raw QUIC and is unaffected. See [docs/getting-started.md](docs/getting-started.md) and [docs/docker-setup.md](docs/docker-setup.md).
+
+### Path C — build from source (embedded UI)
+
+```bash
+git clone https://github.com/Scoduglas1999/Paracord.git
+cd Paracord
+cd client && npm install && npm run build && cd ..
+cargo build --release --bin paracord-server
+./target/release/paracord-server
+```
 
 ### One port to forward
 
-For access from outside your network, forward **`8443` over both TCP and UDP** to the host running the server. TCP carries HTTPS (web UI + gateway); UDP carries native QUIC voice/video.
+For access outside your network, forward **`8443` over both TCP and UDP** to the host running the binary. TCP carries HTTPS (web UI + gateway); UDP carries native QUIC voice/video.
 
 ---
 
 ## Desktop Client
 
-Grab installers from the **[Releases page](../../releases/latest)**.
+Installers ship on the [Releases](../../releases/latest) page when published.
 
 | Platform | Format |
 |----------|--------|
-| Windows | `.exe` installer (Start Menu shortcut) or `.msi` for enterprise deployment |
-| Linux | `.deb` for Debian/Ubuntu |
-| Browser | Open `https://<server-ip>:8443` — no download needed |
+| Windows  | `.exe` / `.msi` |
+| Linux    | `.deb` (and release tarballs as published) |
+| Browser  | `https://<host>:8443` (binary TLS) or your reverse-proxy URL |
 
-The desktop app auto-trusts self-signed server certificates, runs the full native audio pipeline (Opus + RNNoise + E2EE over QUIC), and supports VP9 screen share when built with libvpx. Official signed releases can use the built-in updater when updater artifacts are published.
+The desktop app can auto-trust self-signed server certificates and uses the native Opus / RNNoise / VP9 pipeline over QUIC when built with libvpx.
 
 ---
 
 ## Architecture
 
-Paracord is a Rust server workspace plus a Tauri v2 + React 19 desktop client.
+Rust workspace (axum, SQLx SQLite/Postgres) + Tauri v2 / React 19 client. Native media: `paracord-transport` (QUIC/WebTransport), `paracord-relay`, `paracord-codec` (Opus, RNNoise, VP9). Optional LiveKit via `paracord-media`. Federation: `paracord-federation`. The web UI embeds in `paracord-server` (`embed-ui`, on by default for release builds).
 
 | Layer | Technology |
-|-------|-----------|
+|-------|------------|
 | Server | Rust (axum, tokio, SQLx) — 13 crates |
 | Client | Tauri v2 + React 19 + TypeScript + Tailwind CSS v4 |
 | Database | SQLite (default) or PostgreSQL |
-| Voice/Video | Native QUIC/WebTransport (`paracord-transport`, `paracord-relay`, `paracord-codec`) + optional LiveKit SFU |
+| Voice / video | Native QUIC/WebTransport + optional LiveKit SFU |
 | Auth | Argon2, JWT sessions, Ed25519 identity |
-| Encryption | X25519 + AES-GCM (E2EE DMs), AES-256-GCM (at-rest) |
 | State (client) | Zustand v5 |
 
 ```
 paracord/
 ├── crates/
-│   ├── paracord-server/     # Binary entry point, TLS, config
-│   ├── paracord-api/        # REST API routes
-│   ├── paracord-ws/         # WebSocket gateway
-│   ├── paracord-core/       # Business logic, permissions, event bus
-│   ├── paracord-db/         # SQLite / PostgreSQL via SQLx
-│   ├── paracord-transport/  # QUIC / WebTransport media transport
-│   ├── paracord-relay/      # Media routing, VAD, E2EE
-│   ├── paracord-codec/      # Opus, RNNoise, VP9
-│   ├── paracord-federation/ # Server-to-server federation
-│   └── paracord-media/      # File storage + optional LiveKit
-├── client/                  # Tauri + React desktop app
-└── docker-compose.yml       # Container deployment
+│   ├── paracord-server/      # Binary entry, TLS, config, embed-ui
+│   ├── paracord-api/         # REST routes
+│   ├── paracord-ws/          # WebSocket gateway
+│   ├── paracord-core/        # Business logic, permissions, event bus
+│   ├── paracord-db/          # SQLite / PostgreSQL via SQLx
+│   ├── paracord-models/      # Shared types & permission flags
+│   ├── paracord-transport/   # QUIC / WebTransport
+│   ├── paracord-relay/       # Media routing, VAD, E2EE
+│   ├── paracord-codec/       # Opus, RNNoise, VP9
+│   ├── paracord-federation/  # Server-to-server (MVP)
+│   ├── paracord-media/       # Storage + optional LiveKit
+│   └── …
+├── client/                   # Tauri + React desktop / web UI
+└── docker-compose.yml
 ```
-
-The web UI is embedded in the server binary — no separate frontend server required for production.
 
 ---
 
@@ -197,55 +239,48 @@ The web UI is embedded in the server binary — no separate frontend server requ
 - [Rust 1.88+](https://rustup.rs/)
 - [Node.js 22+](https://nodejs.org/)
 
-### Run locally
+### Run locally (two terminals)
 
 ```bash
 git clone https://github.com/Scoduglas1999/Paracord.git
 cd Paracord
 
-# Terminal 1: client dev server (Vite on :1420, proxies API/WS to server)
+# Terminal 1 — Vite client (:1420), proxies to the server
 cd client && npm install && npm run dev
 
-# Terminal 2: server
+# Terminal 2 — API/gateway without embedding UI
 cargo run --bin paracord-server --no-default-features
 ```
 
 ### Build & test
 
 ```bash
-# Fast type-check (no codegen)
 cargo check --workspace
-
-# All Rust tests
 cargo test --workspace
-
-# Client typecheck + unit tests
 cd client && npm test
+```
 
-# Vitest only (CI mode)
-cd client && npm run test:unit
-
-# Production client build
+```bash
+# Production client → client/dist/
 cd client && npm run build
 
 # Release server with embedded UI
 cargo build --release --bin paracord-server
 ```
 
-### Desktop client build
+### Desktop client build (libvpx required)
 
-The desktop client links **libvpx** for VP9 video — the `vpx` feature is on by default and required for screen share. **Do not disable it.**
+The desktop client links **libvpx** for VP9. The `vpx` feature is on by default and required for screen share / video. **Do not disable it.**
 
 ```bash
-# Linux / macOS — install libvpx first
-sudo pacman -S libvpx webkit2gtk-4.1   # Arch/CachyOS
-# sudo apt install libvpx-dev webkit2gtk-4.1-dev   # Debian/Ubuntu
-# brew install libvpx   # macOS
+# Linux — install libvpx (+ WebKitGTK for Tauri)
+sudo pacman -S libvpx webkit2gtk-4.1          # Arch / CachyOS
+# sudo apt install libvpx-dev webkit2gtk-4.1-dev   # Debian / Ubuntu
 
 cd client && npm install && npx tauri build
 ```
 
-Windows developers source `scripts/set-vpx-env.ps1` for vcpkg libvpx paths. See [CLAUDE.md](CLAUDE.md) for full build notes.
+Windows developers source `scripts/set-vpx-env.ps1` for vcpkg libvpx paths. Full notes: [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md).
 
 ### Linting
 
@@ -260,21 +295,29 @@ cargo clippy --workspace -- -D warnings
 
 | Doc | Description |
 |-----|-------------|
-| [Getting Started](docs/getting-started.md) | Step-by-step first-run walkthrough |
-| [Deployment](docs/deployment.md) | Production: reverse proxy TLS, UDP forwarding, `PUBLIC_URL`, PostgreSQL, backups |
-| [Design Spec](docs/design-spec.md) | Emerald Commons design language contract |
-| [Layout Spec](docs/layout-spec.md) | Rooms + Unified Stream information architecture |
-| [Docker Setup](docs/docker-setup.md) | Full container configuration reference |
-| [Known Limitations](docs/known-limitations.md) | Current support boundaries |
-| [RELEASE_NOTES.md](RELEASE_NOTES.md) | Full v1.0.0 changelog |
+| [Getting Started](docs/getting-started.md) | First-run walkthrough |
+| [Deployment](docs/deployment.md) | TLS, UDP forwarding, `PUBLIC_URL`, PostgreSQL, backups |
+| [Docker Setup](docs/docker-setup.md) | Compose reference |
+| [Design Spec](docs/design-spec.md) | Emerald Commons |
+| [Layout Spec](docs/layout-spec.md) | Rooms + Unified Stream |
+| [Bot Development](docs/bot-development.md) | Bots, slash commands, webhooks |
+| [Federation Protocol](docs/federation-protocol.md) | MVP federation envelopes |
+| [Known Limitations](docs/known-limitations.md) | Support boundaries — read before production |
+| [RELEASE_NOTES.md](RELEASE_NOTES.md) | Changelog |
+
+---
+
+## Known Limitations
+
+Paracord is pre-1.0 (`v0.9.0`). Before you rely on it for a public community, skim **[docs/known-limitations.md](docs/known-limitations.md)** — especially federation readiness, Linux capture/distro variance, Docker loopback HTTP, and desktop updater expectations for unsigned builds.
 
 ---
 
 ## License & Contributing
 
-Paracord is **source-available** under the [Paracord Source-Available License](LICENSE) (Copyright © 2026 Sean Douglas). You may use, study, and modify the software for personal use and share official releases. Redistribution of modified versions and derivative works requires written permission from the author.
+Paracord is **source-available** under the [Paracord Source-Available License](LICENSE) (Copyright © 2026 Sean Douglas). You may use, study, and modify it for personal use and share official releases. Redistribution of modified versions and derivative works requires written permission from the author.
 
-Issues and pull requests are welcome on GitHub. For security concerns, review [docs/](docs/) security documentation before reporting.
+Issues and pull requests are welcome on GitHub. For security concerns, review the docs under [docs/](docs/) (threat model and security checklists) before reporting.
 
 ---
 

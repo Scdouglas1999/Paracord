@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowDownUp,
@@ -16,8 +16,11 @@ import { extractApiError } from '../../api/client';
 import { channelApi } from '../../api/channels';
 import type { Channel, ForumTag, Member, Message } from '../../types';
 import { cn } from '../../lib/utils';
+import { displayName } from '../../lib/displayName';
 import { toast } from '../../stores/toastStore';
 import { useMemberStore } from '../../stores/memberStore';
+import { usePermissions } from '../../hooks/usePermissions';
+import { Permissions, hasPermission } from '../../types';
 import { EmptyState, ErrorBanner, LoadingSpinner } from '../ui/Feedback';
 import {
   Modal,
@@ -26,6 +29,11 @@ import {
   ModalHeader,
   ModalTitle,
 } from '../ui/Modal';
+import {
+  applyMarkdownToolbarAction,
+  MarkdownToolbar,
+  resolveMarkdownShortcut,
+} from '../message/MarkdownToolbar';
 
 interface ForumViewProps {
   channelId: string;
@@ -66,6 +74,8 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
   const members = useMemberStore((s) => (guildId ? s.members.get(guildId) ?? EMPTY_MEMBERS : EMPTY_MEMBERS));
   const membersLoaded = useMemberStore((s) => (guildId ? s.membersLoaded[guildId] : false));
   const fetchMembers = useMemberStore((s) => s.fetchMembers);
+  const { permissions, isAdmin } = usePermissions(guildId || null);
+  const canManageTags = isAdmin || hasPermission(permissions, Permissions.MANAGE_CHANNELS);
 
   const [posts, setPosts] = useState<Channel[]>([]);
   const [tags, setTags] = useState<ForumTag[]>([]);
@@ -84,7 +94,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
   const memberNameById = useMemo(() => {
     const map = new Map<string, string>();
     for (const member of members) {
-      map.set(member.user.id, member.nick || member.user.username);
+      map.set(member.user.id, displayName(member.user, member.nick));
     }
     return map;
   }, [members]);
@@ -158,27 +168,43 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
     }
   };
 
+  const searchGenerationRef = useRef(0);
+
   const handleSearch = useCallback(async (q: string) => {
     const trimmed = q.trim();
     if (!trimmed) {
+      searchGenerationRef.current += 1;
       setSearchResults(null);
+      setSearching(false);
       return;
     }
+    const generation = ++searchGenerationRef.current;
     setSearching(true);
     try {
       const { data } = await channelApi.searchMessages(channelId, trimmed, 50);
+      if (generation !== searchGenerationRef.current) return;
       setSearchResults(data);
     } catch (err) {
+      if (generation !== searchGenerationRef.current) return;
       toast.error(`Search failed: ${extractApiError(err)}`);
       setSearchResults(null);
     } finally {
-      setSearching(false);
+      if (generation === searchGenerationRef.current) {
+        setSearching(false);
+      }
     }
   }, [channelId]);
 
   const clearSearch = () => {
+    searchGenerationRef.current += 1;
     setSearchQuery('');
     setSearchResults(null);
+    setSearching(false);
+  };
+
+  const handleSearchResultClick = (msg: Message) => {
+    if (!guildId) return;
+    navigate(`/app/guilds/${guildId}/channels/${msg.channel_id}?message=${msg.id}`);
   };
 
   return (
@@ -262,13 +288,15 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
 
         <div className="flex-1" />
 
-        <button
-          className="flex items-center gap-1.5 rounded-sm border border-border-subtle px-3 py-2 text-label font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          onClick={() => setShowTagManager(true)}
-        >
-          <Tag size={15} />
-          Tags
-        </button>
+        {canManageTags && (
+          <button
+            className="flex items-center gap-1.5 rounded-sm border border-border-subtle px-3 py-2 text-label font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+            onClick={() => setShowTagManager(true)}
+          >
+            <Tag size={15} />
+            Tags
+          </button>
+        )}
 
         {/* New Post button — primary emerald */}
         <button
@@ -345,13 +373,15 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
           ) : (
             <div className="flex flex-col gap-2">
               {searchResults.map((msg) => (
-                <div
+                <button
                   key={msg.id}
-                  className="rounded-md bg-bg-mod-subtle/50 px-4 py-3"
+                  type="button"
+                  onClick={() => handleSearchResultClick(msg)}
+                  className="rounded-md bg-bg-mod-subtle/50 px-4 py-3 text-left outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
                 >
                   <div className="flex items-center gap-2 text-meta text-text-muted">
                     <span className="font-medium text-text-secondary">
-                      {msg.author?.username || 'Unknown'}
+                      {displayName(msg.author)}
                     </span>
                     {msg.created_at && (
                       <span className="font-code tabular-nums">
@@ -362,7 +392,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
                   <p className="mt-1 line-clamp-3 text-body text-text-primary">
                     {msg.content}
                   </p>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -443,7 +473,7 @@ export function ForumView({ channelId, channelName }: ForumViewProps) {
         />
       )}
 
-      {showTagManager && (
+      {showTagManager && canManageTags && (
         <TagManagerModal
           channelId={channelId}
           tags={tags}
@@ -718,6 +748,7 @@ function NewPostModal({
   const [content, setContent] = useState('');
   const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  const contentRef = useRef<HTMLTextAreaElement>(null);
 
   const toggleTag = (tagId: string) => {
     setSelectedTagIds((prev) => {
@@ -763,10 +794,11 @@ function NewPostModal({
       </ModalHeader>
       <ModalBody className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-section uppercase text-text-muted">
+            <label htmlFor="forum-post-title" className="mb-1.5 block text-section uppercase text-text-muted">
               Title
             </label>
             <input
+              id="forum-post-title"
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -778,17 +810,36 @@ function NewPostModal({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-section uppercase text-text-muted">
-              Content (optional)
-            </label>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              maxLength={2000}
-              rows={4}
-              placeholder="Write the first message of your post…"
-              className="w-full resize-none rounded-sm border border-border-subtle bg-bg-tertiary px-3 py-2.5 text-body leading-relaxed text-text-primary placeholder:text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus:border-accent-primary focus:shadow-[var(--focus-ring-input)]"
-            />
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <label htmlFor="forum-post-content" className="text-section uppercase text-text-muted">
+                Opening message (optional)
+              </label>
+              <span className="text-meta tabular-nums text-text-muted">{content.length}/2000</span>
+            </div>
+            <div className="overflow-hidden rounded-sm border border-border-subtle bg-bg-tertiary focus-within:border-accent-primary focus-within:shadow-[var(--focus-ring-input)]">
+              <div className="border-b border-border-subtle bg-bg-secondary px-2 py-1">
+                <MarkdownToolbar textareaRef={contentRef} onContentChange={setContent} />
+              </div>
+              <textarea
+                id="forum-post-content"
+                ref={contentRef}
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                onKeyDown={(event) => {
+                  const action = resolveMarkdownShortcut(event);
+                  if (!action || !contentRef.current) return;
+                  event.preventDefault();
+                  applyMarkdownToolbarAction(action, contentRef.current, setContent);
+                }}
+                maxLength={2000}
+                rows={5}
+                placeholder="Give people enough context to join the discussion…"
+                className="w-full resize-none bg-transparent px-3 py-2.5 text-body leading-relaxed text-text-primary placeholder:text-text-muted outline-none"
+              />
+            </div>
+            <p className="mt-1.5 text-meta text-text-muted">
+              This becomes the first message in the post. Markdown formatting is supported.
+            </p>
           </div>
 
           {tags.length > 0 && (

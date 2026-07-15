@@ -139,7 +139,7 @@ export function AccountUnlockPage() {
             </button>
             <button
               type="button"
-              onClick={() => navigate('/import')}
+              onClick={() => navigate('/app?settings=identity')}
               className="self-start font-semibold text-text-link transition-colors hover:text-accent-primary-hover"
             >
               Import account from file

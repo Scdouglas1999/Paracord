@@ -2,9 +2,25 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContextPanel } from './ContextPanel';
 import { useUIStore, type ContextPanelMode } from '../../stores/uiStore';
+import { useChannelStore } from '../../stores/channelStore';
+import type { Channel } from '../../types';
+
+const navigateMock = vi.fn();
 
 // Isolate ContextPanel from the (heavy, store/router-bound) wrapped surfaces:
 // every mode should resolve to exactly one of these stand-ins.
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => navigateMock,
+}));
+
+vi.mock('../../api/channels', () => ({
+  channelApi: {
+    getPins: vi.fn().mockResolvedValue({ data: [] }),
+    getThreads: vi.fn().mockResolvedValue({ data: [] }),
+    getArchivedThreads: vi.fn().mockResolvedValue({ data: [] }),
+  },
+}));
+
 vi.mock('./MemberList', () => ({
   MemberList: () => <div data-testid="surface-members" />,
 }));
@@ -16,17 +32,17 @@ vi.mock('../message/ThreadPanel', () => ({
   ),
 }));
 vi.mock('./overlays/PinnedMessagesOverlay', () => ({
-  PinnedMessagesOverlay: (props: { open: boolean; onClose: () => void }) =>
+  PinnedMessagesOverlay: (props: { open: boolean; onClose: () => void; presentation?: string }) =>
     props.open ? (
-      <button type="button" data-testid="surface-pins" onClick={props.onClose}>
+      <button type="button" data-testid="surface-pins" data-presentation={props.presentation} onClick={props.onClose}>
         pins
       </button>
     ) : null,
 }));
 vi.mock('./overlays/SearchOverlay', () => ({
-  SearchOverlay: (props: { open: boolean; onClose: () => void }) =>
+  SearchOverlay: (props: { open: boolean; onClose: () => void; presentation?: string }) =>
     props.open ? (
-      <button type="button" data-testid="surface-search" onClick={props.onClose}>
+      <button type="button" data-testid="surface-search" data-presentation={props.presentation} onClick={props.onClose}>
         search
       </button>
     ) : null,
@@ -57,9 +73,38 @@ const baseProps = {
   },
 };
 
+function makeChannel(overrides: Partial<Channel> = {}): Channel {
+  return {
+    id: 'chan-1',
+    type: 0,
+    channel_type: 0,
+    guild_id: 'guild-1',
+    name: 'general',
+    position: 0,
+    nsfw: false,
+    created_at: '2026-01-01T00:00:00Z',
+    thread_metadata: null,
+    required_role_ids: [],
+    owner_id: null,
+    message_count: null,
+    ...overrides,
+  };
+}
+
 describe('ContextPanel', () => {
   beforeEach(() => {
     setMode(null);
+    navigateMock.mockReset();
+    useChannelStore.setState({
+      channelsByGuild: {},
+      dmChannelsByServer: {},
+      channelsById: {},
+      channels: [],
+      guildChannelsLoaded: {},
+      selectedChannelId: null,
+      selectedGuildId: null,
+      isLoading: false,
+    });
   });
 
   afterEach(() => {
@@ -94,13 +139,13 @@ describe('ContextPanel', () => {
   it('renders the pins surface', () => {
     setMode('pins');
     render(<ContextPanel {...baseProps} />);
-    expect(screen.getByTestId('surface-pins')).toBeInTheDocument();
+    expect(screen.getByTestId('surface-pins')).toHaveAttribute('data-presentation', 'panel');
   });
 
   it('renders the search surface', () => {
     setMode('search');
     render(<ContextPanel {...baseProps} />);
-    expect(screen.getByTestId('surface-search')).toBeInTheDocument();
+    expect(screen.getByTestId('surface-search')).toHaveAttribute('data-presentation', 'panel');
   });
 
   it('renders nothing for economy without a guild', () => {
@@ -109,10 +154,36 @@ describe('ContextPanel', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders nothing for threads without an active thread', () => {
+  it('renders an empty thread list for a text channel without threads', async () => {
     setMode('threads');
-    const { container } = render(<ContextPanel {...baseProps} activeThread={null} />);
-    expect(container).toBeEmptyDOMElement();
+    useChannelStore.getState().addChannel(makeChannel());
+    render(<ContextPanel {...baseProps} activeThread={null} />);
+    expect(await screen.findByText('No threads yet')).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Threads' })).toBeInTheDocument();
+  });
+
+  it('opens a listed thread from a text channel', async () => {
+    setMode('threads');
+    useChannelStore.getState().addChannel(makeChannel());
+    useChannelStore.getState().addChannel(
+      makeChannel({
+        id: 'thread-1',
+        type: 6,
+        channel_type: 6,
+        name: 'Release plan',
+        parent_id: 'chan-1',
+        thread_metadata: {
+          archived: false,
+          auto_archive_duration: 1440,
+          locked: false,
+        },
+      }),
+    );
+    render(<ContextPanel {...baseProps} activeThread={null} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /Release plan/ }));
+    expect(useChannelStore.getState().selectedChannelId).toBe('thread-1');
+    expect(navigateMock).toHaveBeenCalledWith('/app/guilds/guild-1/channels/thread-1');
   });
 
   it('close control clears contextPanelMode (panel-chrome header)', () => {

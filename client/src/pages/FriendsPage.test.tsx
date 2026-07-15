@@ -5,6 +5,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dmApi } from '../api/dms';
 import { FriendsPage } from './FriendsPage';
 
+vi.mock('../components/user/UserProfile', () => ({
+  UserProfilePopup: ({ user, onClose }: { user: { username: string }; onClose: () => void }) => (
+    <div data-testid="friend-profile">
+      Profile for {user.username}
+      <button type="button" onClick={onClose}>Close profile</button>
+    </div>
+  ),
+}));
+
 const testData = vi.hoisted(() => ({
   friend: {
     id: 'friend-1',
@@ -147,6 +156,18 @@ describe('FriendsPage', () => {
     expect(mockChannelState.selectChannel).not.toHaveBeenCalled();
   });
 
+  it('makes the friend identity row a profile target while keeping Message visible', async () => {
+    const user = userEvent.setup();
+    renderFriendsPage();
+
+    expect(screen.getByRole('button', { name: 'Message Grace' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open profile for Grace' }));
+    expect(screen.getByTestId('friend-profile')).toHaveTextContent('Profile for Grace');
+
+    await user.click(screen.getByRole('button', { name: 'Close profile' }));
+    expect(screen.queryByTestId('friend-profile')).not.toBeInTheDocument();
+  });
+
   it('surfaces Add friend as a header primary action, not a filter tab', async () => {
     const user = userEvent.setup();
     renderFriendsPage();
@@ -188,6 +209,13 @@ describe('FriendsPage', () => {
     expect(mockRelationshipState.addFriend).toHaveBeenCalledTimes(1);
 
     resolveAddFriend();
+
+    // Simulate the store refresh that follows a successful add.
+    mockRelationshipState.relationships = [
+      ...mockRelationshipState.relationships,
+      { id: 'rel-ada', type: 4, user: testData.ada },
+    ];
+    mockRelationshipState.fetchRelationships.mockResolvedValue(undefined);
 
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Friend request sent to Ada!');

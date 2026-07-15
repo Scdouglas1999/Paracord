@@ -4,6 +4,16 @@
 #   SQLite and PostgreSQL, not MySQL.
 #   Re-verified 2026-07-02: SQLx MySQL/rsa graph still not used (Paracord targets only SQLite + PostgreSQL).
 #   Review by: 2026-09-30 (remove when upstream sqlx no longer pulls sqlx-mysql/rsa into this graph).
+# - RUSTSEC-2026-0194 and RUSTSEC-2026-0195 (quick-xml 0.37.5 via
+#   tauri-winrt-notification -> notify-rust -> tauri-plugin-notification):
+#   Re-verified 2026-07-10: this path calls only quick_xml::escape while building
+#   outbound Windows toast XML; it does not instantiate Reader or NsReader, which
+#   are the vulnerable parsing APIs. The other workspace quick-xml path was
+#   upgraded through plist 1.10.0 to quick-xml 0.41.0.
+#   Review by: 2026-08-10 (remove when Tauri notification dependencies upgrade
+#   tauri-winrt-notification or remove this exception if its use expands to XML parsing).
 ignore = [
   "RUSTSEC-2023-0071",
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
 ]

@@ -10,6 +10,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use super::aec::{ReferenceProducer, ReferenceRing};
 use super::opus::{FRAME_SIZE, SAMPLE_RATE};
 
 #[derive(Debug, Error)]
@@ -54,28 +55,52 @@ pub fn list_output_devices() -> Result<Vec<(usize, String, bool)>, PlaybackError
     Ok(devices)
 }
 
+/// Watermark band for playout-depth drift control (contract AU14). Kept small so
+/// end-to-end latency stays tight; the jitter buffer upstream absorbs network
+/// jitter, this only trims the accumulated drift between the sender's and this
+/// device's clocks. Expressed in milliseconds of device-rate audio.
+const DRIFT_LOW_WATERMARK_MS: usize = 40;
+const DRIFT_HIGH_WATERMARK_MS: usize = 60;
+
 /// Internal buffer for a single audio source.
+///
+/// Samples are stored **interleaved stereo** at the device sample rate. Mono
+/// voice sources are up-mixed to stereo by their forwarding task before they
+/// reach here, so the output callback has a single uniform layout to mix.
 struct SourceBuffer {
-    /// Ring buffer of PCM samples ready for playback (at device sample rate).
+    /// Ring buffer of interleaved-stereo PCM samples at the device sample rate.
     samples: Vec<f32>,
-    /// Read position in the ring buffer.
+    /// Read position in the ring buffer (sample index; always frame-aligned).
     read_pos: usize,
-    /// Write position in the ring buffer.
+    /// Write position in the ring buffer (sample index; always frame-aligned).
     write_pos: usize,
-    /// Total capacity.
+    /// Total capacity in samples (even: two per stereo frame).
     capacity: usize,
+    /// Per-source playback gain (contract AU4). 1.0 = unity.
+    gain: f32,
+    /// Low/high watermark in *frames* for drift control (contract AU14).
+    low_watermark_frames: usize,
+    high_watermark_frames: usize,
 }
 
 impl SourceBuffer {
-    fn new(capacity: usize) -> Self {
+    fn new(capacity: usize, device_sample_rate: u32) -> Self {
+        // Round capacity down to an even number so it holds whole stereo frames.
+        let capacity = capacity & !1;
+        let low = (device_sample_rate as usize * DRIFT_LOW_WATERMARK_MS) / 1000;
+        let high = (device_sample_rate as usize * DRIFT_HIGH_WATERMARK_MS) / 1000;
         Self {
             samples: vec![0.0; capacity],
             read_pos: 0,
             write_pos: 0,
             capacity,
+            gain: 1.0,
+            low_watermark_frames: low,
+            high_watermark_frames: high,
         }
     }
 
+    /// Available interleaved samples (two per stereo frame).
     fn available(&self) -> usize {
         if self.write_pos >= self.read_pos {
             self.write_pos - self.read_pos
@@ -84,32 +109,61 @@ impl SourceBuffer {
         }
     }
 
+    fn available_frames(&self) -> usize {
+        self.available() / 2
+    }
+
+    /// Write interleaved-stereo data into the ring, discarding oldest frames on
+    /// overflow (the 500 ms hard cap; the watermark below trims normal drift).
     fn write(&mut self, data: &[f32]) {
         for &sample in data {
             self.samples[self.write_pos] = sample;
             self.write_pos = (self.write_pos + 1) % self.capacity;
-            // If we overflow, advance read_pos (discard oldest)
+            // On overflow, discard a whole stereo frame (two samples) so the read
+            // cursor stays frame-aligned. Advancing by one would flip read_pos
+            // parity and permanently swap L/R for this source.
             if self.write_pos == self.read_pos {
-                self.read_pos = (self.read_pos + 1) % self.capacity;
+                self.read_pos = (self.read_pos + 2) % self.capacity;
             }
         }
     }
 
-    fn read(&mut self) -> f32 {
+    /// Read one interleaved-stereo frame, or `(0.0, 0.0)` on underrun.
+    fn read_frame(&mut self) -> (f32, f32) {
         if self.read_pos == self.write_pos {
-            return 0.0; // underrun: silence
+            return (0.0, 0.0); // underrun: silence
         }
-        let sample = self.samples[self.read_pos];
-        self.read_pos = (self.read_pos + 1) % self.capacity;
-        sample
+        let l = self.samples[self.read_pos];
+        let r = self.samples[(self.read_pos + 1) % self.capacity];
+        self.read_pos = (self.read_pos + 2) % self.capacity;
+        (l, r)
+    }
+
+    /// Drift correction (contract AU14): once per output block, nudge the read
+    /// pointer by a single frame to keep the buffered depth inside the watermark
+    /// band. Above the high watermark we drop one already-buffered frame; below
+    /// the low watermark (but non-empty) we rewind one frame to replay it. The
+    /// ring never zeroes read data, so the rewound frame is still valid.
+    fn apply_drift(&mut self) {
+        let avail = self.available_frames();
+        if avail > self.high_watermark_frames {
+            // Drop one frame.
+            self.read_pos = (self.read_pos + 2) % self.capacity;
+        } else if avail > 0 && avail < self.low_watermark_frames {
+            // Duplicate one frame by rewinding the read cursor.
+            self.read_pos = (self.read_pos + self.capacity - 2) % self.capacity;
+        }
     }
 }
 
 /// Shared mixer state accessed by the audio output callback and the control API.
+///
+/// Note: the output resampler is intentionally **not** here. Each source owns
+/// its own resampler on its forwarding task (contract AU7 — a single shared
+/// `FftFixedIn` is stateful and corrupts audio when more than one source feeds
+/// it), and resampling happens off the mixer lock (contract AU8).
 struct MixerState {
     sources: HashMap<u32, SourceBuffer>,
-    /// Optional resampler from 48kHz to device rate (if device is not 48kHz).
-    resampler: Option<FftFixedIn<f32>>,
 }
 
 /// Audio playback engine that mixes multiple participant streams.
@@ -129,7 +183,10 @@ unsafe impl Sync for AudioPlayback {}
 
 impl AudioPlayback {
     /// Start playback on the default output device.
-    pub fn start() -> Result<Self, PlaybackError> {
+    ///
+    /// `reference` taps the mixer's rendered (post-mix) output into the AEC
+    /// far-end ring; pass `None` to disable the tap (e.g. tests).
+    pub fn start(reference: Option<Arc<ReferenceRing>>) -> Result<Self, PlaybackError> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -137,20 +194,26 @@ impl AudioPlayback {
         let device_name = device.name().unwrap_or_else(|_| "unknown".into());
         info!(device = %device_name, "opening audio output device");
 
-        Self::start_from_device(device)
+        Self::start_from_device(device, reference)
     }
 
     /// Start playback on an output device by host index.
-    pub fn start_device(index: usize) -> Result<Self, PlaybackError> {
+    pub fn start_device(
+        index: usize,
+        reference: Option<Arc<ReferenceRing>>,
+    ) -> Result<Self, PlaybackError> {
         let host = cpal::default_host();
         let mut devices = host.output_devices()?;
         let device = devices.nth(index).ok_or(PlaybackError::NoOutputDevice)?;
         let device_name = device.name().unwrap_or_else(|_| "unknown".into());
         info!(device_index = index, device = %device_name, "opening selected audio output device");
-        Self::start_from_device(device)
+        Self::start_from_device(device, reference)
     }
 
-    pub fn start_from_device(device: Device) -> Result<Self, PlaybackError> {
+    pub fn start_from_device(
+        device: Device,
+        reference: Option<Arc<ReferenceRing>>,
+    ) -> Result<Self, PlaybackError> {
         let config = device.default_output_config()?;
         let device_sample_rate = config.sample_rate().0;
         let device_channels = config.channels() as usize;
@@ -169,35 +232,27 @@ impl AudioPlayback {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        // Set up resampler if device rate != 48 kHz
-        let resampler = if device_sample_rate != SAMPLE_RATE {
+        if device_sample_rate != SAMPLE_RATE {
             info!(
                 from = SAMPLE_RATE,
                 to = device_sample_rate,
-                "will resample output"
+                "output device is not 48kHz; sources will resample per-source"
             );
-            let r = FftFixedIn::<f32>::new(
-                SAMPLE_RATE as usize,
-                device_sample_rate as usize,
-                FRAME_SIZE,
-                1,
-                1,
-            )
-            .map_err(|e| PlaybackError::Resampler(e.to_string()))?;
-            Some(r)
-        } else {
-            None
-        };
+        }
 
         let mixer = Arc::new(Mutex::new(MixerState {
             sources: HashMap::new(),
-            resampler,
         }));
 
         let stop_flag = Arc::new(AtomicBool::new(false));
 
         let mixer_ref = mixer.clone();
         let stop = stop_flag.clone();
+
+        // Attach a far-end reference producer for this device (contract AEC4).
+        // The producer carries the device rate so the AEC consumer resamples to
+        // 48 kHz, and is epoch-gated so a prior device's callback stops writing.
+        let reference_producer = reference.map(|ring| ring.attach_producer(device_sample_rate));
 
         let error_callback = {
             let stop = stop_flag.clone();
@@ -212,19 +267,19 @@ impl AudioPlayback {
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
                 &stream_config,
-                build_output_callback::<f32>(mixer_ref, stop, device_channels),
+                build_output_callback::<f32>(mixer_ref, stop, device_channels, reference_producer),
                 error_callback,
                 None,
             )?,
             SampleFormat::I16 => device.build_output_stream(
                 &stream_config,
-                build_output_callback::<i16>(mixer_ref, stop, device_channels),
+                build_output_callback::<i16>(mixer_ref, stop, device_channels, reference_producer),
                 error_callback,
                 None,
             )?,
             _ => device.build_output_stream(
                 &stream_config,
-                build_output_callback::<f32>(mixer_ref, stop, device_channels),
+                build_output_callback::<f32>(mixer_ref, stop, device_channels, reference_producer),
                 error_callback,
                 None,
             )?,
@@ -241,61 +296,119 @@ impl AudioPlayback {
         })
     }
 
-    /// Add a new audio source (remote participant).
+    /// Add a new **mono** audio source (remote voice participant).
     ///
     /// Returns a sender that accepts 960-sample PCM f32 mono frames at 48 kHz.
     /// The source is identified by `source_id` (typically the participant's SSRC).
     pub fn add_source(&self, source_id: u32) -> mpsc::Sender<Vec<f32>> {
+        self.add_source_channels(source_id, 1)
+    }
+
+    /// Add a new **stereo** audio source (screen / system audio, contract C4).
+    ///
+    /// Returns a sender that accepts 1920-sample interleaved-stereo f32 frames
+    /// (960 frames × 2 channels) at 48 kHz.
+    pub fn add_stream_source(&self, source_id: u32) -> mpsc::Sender<Vec<f32>> {
+        self.add_source_channels(source_id, 2)
+    }
+
+    fn add_source_channels(&self, source_id: u32, in_channels: usize) -> mpsc::Sender<Vec<f32>> {
         let (tx, mut rx) = mpsc::channel::<Vec<f32>>(50);
 
-        // Buffer capacity: ~500ms at device sample rate
-        let buf_capacity = (self.device_sample_rate as usize / 2).max(FRAME_SIZE * 10);
+        // Buffer capacity: ~500ms of interleaved-stereo at device sample rate.
+        let buf_capacity = (self.device_sample_rate as usize).max(FRAME_SIZE * 2 * 10);
 
         {
             let mut mixer = self.mixer.lock().unwrap();
             mixer
                 .sources
                 .entry(source_id)
-                .or_insert_with(|| SourceBuffer::new(buf_capacity));
+                .or_insert_with(|| SourceBuffer::new(buf_capacity, self.device_sample_rate));
         }
 
         let mixer = self.mixer.clone();
         let device_rate = self.device_sample_rate;
 
-        // Spawn a task to move frames from the channel into the source buffer
+        // Per-source resampler (contract AU7): a fresh, private `FftFixedIn` so
+        // multiple sources never share one stateful resampler. Fixed 960-frame
+        // input (one 20ms frame), 2 channels — mono voice is up-mixed to stereo
+        // first so every source resamples identically. Resampling runs OFF the
+        // mixer lock (contract AU8); the lock is taken only to write the result.
         tokio::spawn(async move {
-            while let Some(frame) = rx.recv().await {
-                let mut state = match mixer.lock() {
-                    Ok(s) => s,
-                    Err(_) => break,
-                };
-
-                // Resample if needed
-                let output_samples = if device_rate != SAMPLE_RATE {
-                    if let Some(ref mut resampler) = state.resampler {
-                        let input = vec![frame];
-                        match resampler.process(&input, None) {
-                            Ok(resampled) => {
-                                if !resampled.is_empty() {
-                                    resampled.into_iter().next().unwrap()
-                                } else {
-                                    continue;
-                                }
-                            }
-                            Err(e) => {
-                                warn!("output resampler error: {e}");
-                                continue;
-                            }
-                        }
-                    } else {
-                        frame
+            let mut resampler: Option<FftFixedIn<f32>> = if device_rate != SAMPLE_RATE {
+                match FftFixedIn::<f32>::new(
+                    SAMPLE_RATE as usize,
+                    device_rate as usize,
+                    FRAME_SIZE,
+                    1,
+                    2,
+                ) {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        error!("failed to build per-source output resampler: {e}");
+                        return;
                     }
+                }
+            } else {
+                None
+            };
+            // Preallocated planar I/O so the hot path allocates nothing.
+            let mut planar_in: [Vec<f32>; 2] = [vec![0.0; FRAME_SIZE], vec![0.0; FRAME_SIZE]];
+            let mut interleaved_out: Vec<f32> = Vec::with_capacity(FRAME_SIZE * 2);
+
+            while let Some(frame) = rx.recv().await {
+                // Normalize to interleaved stereo at 48kHz.
+                let stereo_48k: Vec<f32> = if in_channels == 1 {
+                    let mut out = Vec::with_capacity(frame.len() * 2);
+                    for &s in &frame {
+                        out.push(s);
+                        out.push(s);
+                    }
+                    out
                 } else {
                     frame
                 };
 
+                // Resample (off-lock) if the device is not 48kHz.
+                let output_samples = if let Some(resampler) = resampler.as_mut() {
+                    // Deinterleave a full 20ms frame into the planar scratch.
+                    let frames = stereo_48k.len() / 2;
+                    if frames != FRAME_SIZE {
+                        // The fixed-input resampler needs exactly one 20ms frame.
+                        warn!(frames, "unexpected output frame size; dropping");
+                        continue;
+                    }
+                    for i in 0..FRAME_SIZE {
+                        planar_in[0][i] = stereo_48k[i * 2];
+                        planar_in[1][i] = stereo_48k[i * 2 + 1];
+                    }
+                    match resampler.process(&planar_in, None) {
+                        Ok(resampled) if resampled.len() == 2 => {
+                            interleaved_out.clear();
+                            interleaved_out.reserve(resampled[0].len() * 2);
+                            for (l, r) in resampled[0].iter().zip(resampled[1].iter()) {
+                                interleaved_out.push(*l);
+                                interleaved_out.push(*r);
+                            }
+                            interleaved_out.as_slice()
+                        }
+                        Ok(_) => continue,
+                        Err(e) => {
+                            warn!("output resampler error: {e}");
+                            continue;
+                        }
+                    }
+                } else {
+                    stereo_48k.as_slice()
+                };
+
+                // Brief lock: write only.
+                let mut state = match mixer.lock() {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
                 if let Some(buf) = state.sources.get_mut(&source_id) {
-                    buf.write(&output_samples);
+                    buf.write(output_samples);
                 }
             }
 
@@ -307,6 +420,16 @@ impl AudioPlayback {
         });
 
         tx
+    }
+
+    /// Set a source's playback gain (contract AU4). Values are clamped to
+    /// `0.0..=2.0` by the caller; a missing source is a no-op.
+    pub fn set_source_gain(&self, source_id: u32, gain: f32) {
+        if let Ok(mut mixer) = self.mixer.lock() {
+            if let Some(buf) = mixer.sources.get_mut(&source_id) {
+                buf.gain = gain;
+            }
+        }
     }
 
     /// Remove a source by ID.
@@ -372,7 +495,12 @@ fn build_output_callback<S: FromF32Sample>(
     mixer: Arc<Mutex<MixerState>>,
     stop_flag: Arc<AtomicBool>,
     device_channels: usize,
+    reference: Option<ReferenceProducer>,
 ) -> impl FnMut(&mut [S], &cpal::OutputCallbackInfo) + Send + 'static {
+    // Reused scratch for the mono far-end reference of one callback block. Held
+    // across calls so the hot path allocates nothing; the ring push is lock-free
+    // (contract AEC4: no locking added to the render callback).
+    let mut ref_scratch: Vec<f32> = Vec::with_capacity(2048);
     move |output: &mut [S], _info: &cpal::OutputCallbackInfo| {
         if stop_flag.load(Ordering::Relaxed) {
             // Fill with silence
@@ -394,22 +522,58 @@ fn build_output_callback<S: FromF32Sample>(
 
         let num_frames = output.len() / device_channels;
 
+        // One drift correction per source per output block (contract AU14),
+        // applied before mixing so the depth trend is nudged toward the band.
+        for source in state.sources.values_mut() {
+            source.apply_drift();
+        }
+
+        let tapping_reference = reference.is_some();
+        if tapping_reference {
+            ref_scratch.clear();
+        }
+
         for frame_idx in 0..num_frames {
-            // Mix all sources
-            let mut mixed = 0.0f32;
+            // Mix all sources in stereo, applying per-source gain.
+            let mut mixed_l = 0.0f32;
+            let mut mixed_r = 0.0f32;
             for source in state.sources.values_mut() {
-                if source.available() > 0 {
-                    mixed += source.read();
+                let (l, r) = source.read_frame();
+                mixed_l += l * source.gain;
+                mixed_r += r * source.gain;
+            }
+
+            // Apply soft clipping per channel.
+            let clipped_l = soft_clip(mixed_l);
+            let clipped_r = soft_clip(mixed_r);
+
+            // Far-end reference = exactly what the speakers emit, downmixed to
+            // mono (contract AEC4). Captured post-clip so the AEC models the true
+            // played signal.
+            if tapping_reference {
+                ref_scratch.push((clipped_l + clipped_r) * 0.5);
+            }
+
+            let base = frame_idx * device_channels;
+            match device_channels {
+                1 => {
+                    output[base] = S::from_f32_sample((clipped_l + clipped_r) * 0.5);
+                }
+                _ => {
+                    output[base] = S::from_f32_sample(clipped_l);
+                    output[base + 1] = S::from_f32_sample(clipped_r);
+                    // Any extra channels (surround) get the downmixed center.
+                    let center = (clipped_l + clipped_r) * 0.5;
+                    for ch in 2..device_channels {
+                        output[base + ch] = S::from_f32_sample(center);
+                    }
                 }
             }
+        }
 
-            // Apply soft clipping
-            let clipped = soft_clip(mixed);
-
-            // Write to all output channels (mono -> duplicate to all channels)
-            for ch in 0..device_channels {
-                output[frame_idx * device_channels + ch] = S::from_f32_sample(clipped);
-            }
+        // Publish this block's reference to the AEC ring (lock-free).
+        if let Some(producer) = &reference {
+            producer.push(&ref_scratch);
         }
     }
 }
@@ -449,24 +613,57 @@ mod tests {
 
     #[test]
     fn source_buffer_basic() {
-        let mut buf = SourceBuffer::new(1024);
+        // 48kHz device: watermarks are large so drift never fires in this test.
+        let mut buf = SourceBuffer::new(1024, 48_000);
         assert_eq!(buf.available(), 0);
-        assert_eq!(buf.read(), 0.0); // underrun
+        assert_eq!(buf.read_frame(), (0.0, 0.0)); // underrun
 
-        buf.write(&[1.0, 2.0, 3.0]);
-        assert_eq!(buf.available(), 3);
-        assert_eq!(buf.read(), 1.0);
-        assert_eq!(buf.read(), 2.0);
-        assert_eq!(buf.read(), 3.0);
+        // Interleaved L/R frames.
+        buf.write(&[1.0, -1.0, 2.0, -2.0, 3.0, -3.0]);
+        assert_eq!(buf.available(), 6);
+        assert_eq!(buf.read_frame(), (1.0, -1.0));
+        assert_eq!(buf.read_frame(), (2.0, -2.0));
+        assert_eq!(buf.read_frame(), (3.0, -3.0));
         assert_eq!(buf.available(), 0);
     }
 
     #[test]
     fn source_buffer_overflow() {
-        let mut buf = SourceBuffer::new(4);
-        // Write more than capacity: oldest samples should be dropped
-        buf.write(&[1.0, 2.0, 3.0, 4.0, 5.0]);
-        // Buffer should contain the most recent samples that fit
+        let mut buf = SourceBuffer::new(4, 48_000);
+        // Write more than capacity: oldest frames should be dropped.
+        buf.write(&[1.0, 1.0, 2.0, 2.0, 3.0, 3.0]);
         assert!(buf.available() <= 4);
+    }
+
+    #[test]
+    fn drift_drops_a_frame_above_the_high_watermark() {
+        // Low device rate makes the watermark band tiny and easy to exceed.
+        let mut buf = SourceBuffer::new(4000, 1000);
+        // 1000Hz → high watermark = 60 frames. Fill well past it.
+        let data: Vec<f32> = (0..200).flat_map(|i| [i as f32, i as f32]).collect();
+        buf.write(&data);
+        let before = buf.available_frames();
+        buf.apply_drift();
+        assert_eq!(buf.available_frames(), before - 1, "one frame dropped");
+    }
+
+    #[test]
+    fn drift_duplicates_a_frame_below_the_low_watermark() {
+        let mut buf = SourceBuffer::new(4000, 1000);
+        // Only 10 frames buffered — below the 40-frame low watermark.
+        let data: Vec<f32> = (0..10).flat_map(|i| [i as f32, i as f32]).collect();
+        buf.write(&data);
+        let before = buf.available_frames();
+        buf.apply_drift();
+        assert_eq!(buf.available_frames(), before + 1, "one frame duplicated");
+    }
+
+    #[test]
+    fn gain_scales_mixed_output() {
+        let mut buf = SourceBuffer::new(1024, 48_000);
+        buf.gain = 0.5;
+        buf.write(&[1.0, 1.0]);
+        let (l, r) = buf.read_frame();
+        assert_eq!((l * buf.gain, r * buf.gain), (0.5, 0.5));
     }
 }

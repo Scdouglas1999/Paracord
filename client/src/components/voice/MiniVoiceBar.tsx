@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Radio } from 'lucide-react';
+import { Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Radio, Video, VideoOff } from 'lucide-react';
 import { ConnectionQuality, RoomEvent } from 'livekit-client';
 import { useNavigate } from 'react-router-dom';
 import { useVoiceStore } from '../../stores/voiceStore';
@@ -25,12 +25,13 @@ export function MiniVoiceBar() {
   const guildId = useVoiceStore((s) => s.guildId);
   const selfMute = useVoiceStore((s) => s.selfMute);
   const selfDeaf = useVoiceStore((s) => s.selfDeaf);
+  const selfVideo = useVoiceStore((s) => s.selfVideo);
   const pttEngaged = useVoiceStore((s) => s.pttEngaged);
   const leaveChannel = useVoiceStore((s) => s.leaveChannel);
   const room = useVoiceStore((s) => s.room);
-  // Route mute/deaf through useVoice so the gateway broadcast lives in one place
-  // and can't diverge from VoiceControlBar.
-  const { toggleMute, toggleDeaf } = useVoice();
+  // Route mute/deaf/camera through useVoice so the gateway broadcast lives in one
+  // place and can't diverge from VoiceControlBar.
+  const { toggleMute, toggleDeaf, toggleVideo } = useVoice();
   const channels = useChannelStore((s) => s.channels);
   const rawNotifications = useAuthStore((s) => s.settings?.notifications as Record<string, unknown> | undefined);
   const isPttMode = (rawNotifications?.['voiceInputMode'] ?? 'voice_activity') === 'push_to_talk';
@@ -67,6 +68,10 @@ export function MiniVoiceBar() {
     void toggleDeaf();
   };
 
+  const handleToggleVideo = () => {
+    void toggleVideo();
+  };
+
   const ctrl =
     'flex h-8 w-8 items-center justify-center rounded-sm outline-none transition-[background-color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]';
 
@@ -75,7 +80,9 @@ export function MiniVoiceBar() {
       {/* Connection info — clickable to navigate to voice channel */}
       <button
         onClick={() => {
-          if (guildId && channelId) {
+          if (guildId === 'dm' && channelId) {
+            navigate(`/app/dms/${channelId}`);
+          } else if (guildId && channelId) {
             navigate(`/app/guilds/${guildId}/channels/${channelId}`);
           }
         }}
@@ -135,6 +142,13 @@ export function MiniVoiceBar() {
           aria-label={selfDeaf ? 'Undeafen' : 'Deafen'}
         >
           {selfDeaf ? <HeadphoneOff size={15} /> : <Headphones size={15} />}
+        </button>
+        <button
+          onClick={handleToggleVideo}
+          className={`${ctrl} ${selfVideo ? 'bg-accent-tint text-accent-primary' : 'text-interactive-normal hover:bg-bg-mod-subtle hover:text-interactive-hover'}`}
+          aria-label={selfVideo ? 'Turn off camera' : 'Turn on camera'}
+        >
+          {selfVideo ? <Video size={15} /> : <VideoOff size={15} />}
         </button>
         <button
           className={`${ctrl} text-interactive-normal hover:bg-danger-tint hover:text-accent-danger`}

@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 use crate::error::ApiError;
+use crate::middleware::AuthUser;
 
 const TENOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const TENOR_RESPONSE_BODY_LIMIT: usize = 1024 * 1024;
@@ -26,6 +27,7 @@ pub struct TenorTrendingQuery {
 
 pub async fn search(
     State(state): State<AppState>,
+    _auth: AuthUser,
     Query(params): Query<TenorSearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let api_key = state
@@ -35,7 +37,7 @@ pub async fn search(
         .filter(|k| !k.is_empty())
         .ok_or_else(|| ApiError::ServiceUnavailable("Tenor API key not configured".to_string()))?;
 
-    let limit = params.limit.unwrap_or(20).min(50);
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
 
     let client = tenor_http_client()?;
     let resp = client
@@ -65,6 +67,7 @@ pub async fn search(
 
 pub async fn trending(
     State(state): State<AppState>,
+    _auth: AuthUser,
     Query(params): Query<TenorTrendingQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let api_key = state
@@ -74,7 +77,7 @@ pub async fn trending(
         .filter(|k| !k.is_empty())
         .ok_or_else(|| ApiError::ServiceUnavailable("Tenor API key not configured".to_string()))?;
 
-    let limit = params.limit.unwrap_or(20).min(50);
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
 
     let client = tenor_http_client()?;
     let resp = client

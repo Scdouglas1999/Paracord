@@ -140,10 +140,10 @@ describe('GuildSettings destructive flows', () => {
     const onClose = vi.fn();
     renderSettings(onClose);
 
-    await user.click(await screen.findByRole('button', { name: 'Delete Server' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete space' }));
 
     const input = await screen.findByPlaceholderText('Test Guild');
-    const confirmBtn = screen.getAllByRole('button', { name: 'Delete Server' })[1];
+    const confirmBtn = screen.getByRole('button', { name: 'Delete Server' });
 
     // Wrong name keeps the confirm button disabled and blocks the API.
     await user.type(input, 'Wrong');
@@ -165,7 +165,7 @@ describe('GuildSettings destructive flows', () => {
     const user = userEvent.setup();
     renderSettings();
 
-    await user.click(await screen.findByRole('button', { name: 'Delete Server' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete space' }));
     const input = await screen.findByPlaceholderText('Test Guild');
     await user.type(input, 'Test Guild');
     await user.click(screen.getByRole('button', { name: 'Cancel' }));

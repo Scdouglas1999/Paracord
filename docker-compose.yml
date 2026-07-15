@@ -3,9 +3,13 @@ services:
     build: .
     container_name: paracord
     ports:
-      # HTTP API + WebSocket gateway (terminate TLS at a reverse proxy for
-      # browser voice; the native desktop client does not need it).
-      - "8090:8090"
+      # HTTP API + WebSocket gateway. Published to the HOST LOOPBACK ONLY
+      # (127.0.0.1) so cleartext auth tokens/cookies are never exposed to the
+      # LAN/WAN by default. Put a TLS-terminating reverse proxy (Caddy/nginx) in
+      # front and let it connect to 127.0.0.1:8090, or set
+      # PARACORD_TLS_ENABLED=true below. Only change this to "8090:8090" if you
+      # have accepted the risk of serving plaintext HTTP to the network.
+      - "127.0.0.1:8090:8090"
       # Native QUIC / WebTransport media (raw QUIC desktop + browser WebTransport).
       - "8443:8443/udp"
     volumes:
@@ -38,14 +42,16 @@ services:
 
       # LiveKit (optional fallback): these are inert while native media is on.
       # They only take effect if you enable the `livekit` profile AND set
-      # PARACORD_VOICE_NATIVE_MEDIA=false. The api_key id is not a secret; the
-      # shared secret defaults to a local dev value and is read from the same
-      # PARACORD_LIVEKIT_API_SECRET variable as the livekit service below, so the
-      # two stay in sync. Override it in .env for any internet-facing LiveKit.
+      # PARACORD_VOICE_NATIVE_MEDIA=false. The api_key id is not a secret, but
+      # the shared secret has NO built-in default: you MUST set
+      # PARACORD_LIVEKIT_API_SECRET in .env to a strong random value before
+      # enabling the fallback. The same variable is read by the livekit service
+      # below, so the two stay in sync. Leaving it unset makes the server refuse
+      # to start (it will not silently fall back to a known shipped secret).
       - PARACORD_LIVEKIT_URL=ws://livekit:7880
       - PARACORD_LIVEKIT_HTTP_URL=http://livekit:7880
       - PARACORD_LIVEKIT_API_KEY=paracordlocal
-      - PARACORD_LIVEKIT_API_SECRET=${PARACORD_LIVEKIT_API_SECRET:-paracord-local-dev-livekit-secret}
+      - PARACORD_LIVEKIT_API_SECRET=${PARACORD_LIVEKIT_API_SECRET:-}
       # - PARACORD_LIVEKIT_PUBLIC_URL=wss://chat.example.com/livekit
 
       # TLS: disabled inside Docker by default; the container serves plain HTTP
@@ -64,15 +70,25 @@ services:
     container_name: paracord-livekit
     profiles: ["livekit"]
     ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "7882:7882/udp"
+      # Published to the HOST LOOPBACK ONLY (127.0.0.1) so the media server is
+      # never exposed to the LAN/WAN by default. Front it with your TLS reverse
+      # proxy (which also serves the paracord service). Only widen these to
+      # "7880:7880" etc. once you have set a strong PARACORD_LIVEKIT_API_SECRET
+      # and accepted the risk of exposing the media server to the network.
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881"
+      - "127.0.0.1:7882:7882/udp"
     environment:
       # Same secret the paracord service reads (the key id "paracordlocal" is not
-      # a secret). Defaults to a local dev value; override PARACORD_LIVEKIT_API_SECRET
-      # in .env before exposing LiveKit to a network.
-      - "LIVEKIT_KEYS=paracordlocal: ${PARACORD_LIVEKIT_API_SECRET:-paracord-local-dev-livekit-secret}"
-    command: --dev --bind 0.0.0.0
+      # a secret). There is NO built-in default: set PARACORD_LIVEKIT_API_SECRET
+      # in .env to a strong random value before starting this profile. If it is
+      # left unset the secret is empty, LiveKit will not authenticate, and the
+      # paracord server refuses to start (see PARACORD_LIVEKIT_API_SECRET above).
+      - "LIVEKIT_KEYS=paracordlocal: ${PARACORD_LIVEKIT_API_SECRET:-}"
+    # NOTE: `--dev` is intentionally omitted. Dev mode enables LiveKit's built-in
+    # devkey/secret pair and other insecure defaults; production/self-host must
+    # authenticate only with the operator-provided PARACORD_LIVEKIT_API_SECRET.
+    command: --bind 0.0.0.0
     restart: unless-stopped
 
 volumes:

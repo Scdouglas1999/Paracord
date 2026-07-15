@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Compass, Search, Users, ArrowLeft } from 'lucide-react';
+import { ArrowLeft, CalendarDays, Compass, Globe2, Search, Server, Users } from 'lucide-react';
 import { extractApiError } from '../api/client';
 import { getApi } from '../api/activeClient';
 import { useGuildStore } from '../stores/guildStore';
 import { useChannelStore } from '../stores/channelStore';
-import { inviteApi } from '../api/invites';
 import { toast } from '../stores/toastStore';
 import { cn } from '../lib/utils';
 import { safeStoredImageDataUrl } from '../lib/security';
@@ -14,6 +13,7 @@ import { EmptyState } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Skeleton } from '../components/ui/Skeleton';
+import { Modal, ModalBody, ModalFooter, ModalHeader, ModalTitle } from '../components/ui/Modal';
 
 interface DiscoverableGuild {
   id: string;
@@ -24,6 +24,9 @@ interface DiscoverableGuild {
   online_count: number;
   tags: string[];
   created_at: string;
+  federated?: boolean;
+  origin_server?: string;
+  origin_domain?: string;
 }
 
 interface DiscoveryResponse {
@@ -53,6 +56,8 @@ export function DiscoveryPage() {
   const [search, setSearch] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [joiningId, setJoiningId] = useState<string | null>(null);
+  const [selectedGuild, setSelectedGuild] = useState<DiscoverableGuild | null>(null);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const myGuilds = useGuildStore((s) => s.guilds);
   const myGuildIds = new Set(myGuilds.map((g) => g.id));
 
@@ -63,6 +68,7 @@ export function DiscoveryPage() {
       if (searchQuery?.trim()) params.set('search', searchQuery.trim());
       if (tag) params.set('tag', tag);
       params.set('limit', '50');
+      params.set('include_federated', 'true');
       const { data } = await getApi().get<DiscoveryResponse>(
         `/discovery/guilds?${params.toString()}`
       );
@@ -72,7 +78,7 @@ export function DiscoveryPage() {
     } catch (err) {
       setGuilds([]);
       setTotal(0);
-      setLoadError(`Failed to load public servers: ${extractApiError(err)}`);
+      setLoadError(`Failed to load public spaces: ${extractApiError(err)}`);
     } finally {
       setLoading(false);
     }
@@ -101,40 +107,23 @@ export function DiscoveryPage() {
     }
 
     setJoiningId(guild.id);
+    setJoinError(null);
     try {
-      // Discovery join: the server should have a public invite or direct join API.
-      // We try creating an invite-less join via the guild endpoint first.
-      // If that fails, we look for any public invites.
-      let inviteError: unknown = null;
-      try {
-        const invitesRes = await getApi().get(`/guilds/${guild.id}/invites`);
-        const invites = invitesRes.data as Array<{ code: string }>;
-        if (invites.length > 0) {
-          const { data } = await inviteApi.accept(invites[0].code);
-          const joinedGuild = 'guild' in data ? data.guild : data;
-          useGuildStore.getState().addGuild(joinedGuild);
-          await useChannelStore.getState().fetchChannels(joinedGuild.id);
-          const channels = useChannelStore.getState().channelsByGuild[joinedGuild.id] || [];
-          const firstChannel =
-            joinedGuild.default_channel_id
-              ? channels.find((c) => c.id === joinedGuild.default_channel_id)
-              : channels.find((c) => c.type === 0) || channels.find((c) => c.type !== 4) || channels[0];
-          toast.success(`Joined ${guild.name}!`);
-          if (firstChannel) {
-            navigate(`/app/guilds/${joinedGuild.id}/channels/${firstChannel.id}`);
-          }
-          return;
-        }
-      } catch (err) {
-        inviteError = err;
-      }
-      if (inviteError) {
-        toast.error(`Failed to join server: ${extractApiError(inviteError)}`);
-      } else {
-        toast.error('No public invite available for this server.');
+      const { data: joinedGuild } = await getApi().put(`/guilds/${guild.id}/members/@me`);
+      useGuildStore.getState().addGuild(joinedGuild);
+      await useChannelStore.getState().fetchChannels(joinedGuild.id);
+      const channels = useChannelStore.getState().channelsByGuild[joinedGuild.id] || [];
+      const firstChannel =
+        joinedGuild.default_channel_id
+          ? channels.find((c) => c.id === joinedGuild.default_channel_id)
+          : channels.find((c) => c.type === 0) || channels.find((c) => c.type !== 4) || channels[0];
+      toast.success(`Joined ${guild.name}!`);
+      setSelectedGuild(null);
+      if (firstChannel) {
+        navigate(`/app/guilds/${joinedGuild.id}/channels/${firstChannel.id}`);
       }
     } catch (err) {
-      toast.error(`Failed to join server: ${extractApiError(err)}`);
+      setJoinError(`We couldn't join this space: ${extractApiError(err)}`);
     } finally {
       setJoiningId(null);
     }
@@ -163,7 +152,7 @@ export function DiscoveryPage() {
             <Compass size={19} />
           </span>
           <div className="min-w-0">
-            <h1 className="font-display text-heading text-text-primary">Discover servers</h1>
+            <h1 className="font-display text-heading text-text-primary">Discover spaces</h1>
             <p className="text-meta text-text-muted">
               {total} public {total === 1 ? 'community' : 'communities'} to explore
             </p>
@@ -173,7 +162,7 @@ export function DiscoveryPage() {
         <div className="relative mt-4">
           <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
           <label htmlFor="discovery-search" className="sr-only">
-            Search public servers
+            Search public spaces
           </label>
           <Input
             id="discovery-search"
@@ -235,11 +224,11 @@ export function DiscoveryPage() {
         ) : guilds.length === 0 ? (
           <EmptyState
             icon={<Search size={20} />}
-            title={filtersActive ? 'No servers match your filters' : 'No public servers yet'}
+            title={filtersActive ? 'No spaces match your filters' : 'No public spaces yet'}
             description={
               filtersActive
                 ? 'Nothing here matches your search and category. Widen the net by clearing filters, or try a different topic.'
-                : "There aren't any public communities listed right now. Check back soon, or spin up your own server for people to find."
+                : "There aren't any public communities listed right now. Check back soon, or spin up your own space for people to find."
             }
             action={
               filtersActive ? (
@@ -322,10 +311,17 @@ export function DiscoveryPage() {
                       <Button
                         variant={isMember ? 'secondary' : 'default'}
                         size="sm"
-                        onClick={() => void handleJoin(guild)}
+                        onClick={() => {
+                          if (isMember) {
+                            void handleJoin(guild);
+                            return;
+                          }
+                          setJoinError(null);
+                          setSelectedGuild(guild);
+                        }}
                         disabled={isJoining}
                       >
-                        {isJoining ? 'Joining...' : isMember ? 'Visit' : 'Join'}
+                        {isJoining ? 'Opening…' : isMember ? 'Visit' : 'Preview'}
                       </Button>
                     </div>
                   </div>
@@ -335,6 +331,135 @@ export function DiscoveryPage() {
           </div>
         )}
       </div>
+
+      <DiscoveryPreview
+        guild={selectedGuild}
+        joining={selectedGuild != null && joiningId === selectedGuild.id}
+        error={joinError}
+        onClose={() => {
+          if (joiningId) return;
+          setSelectedGuild(null);
+          setJoinError(null);
+        }}
+        onJoin={(guild) => { void handleJoin(guild); }}
+      />
+    </div>
+  );
+}
+
+function DiscoveryPreview({
+  guild,
+  joining,
+  error,
+  onClose,
+  onJoin,
+}: {
+  guild: DiscoverableGuild | null;
+  joining: boolean;
+  error: string | null;
+  onClose: () => void;
+  onJoin: (guild: DiscoverableGuild) => void;
+}) {
+  if (!guild) return null;
+  const iconSrc = safeStoredImageDataUrl(guild.icon_hash);
+  const bannerColor = getGuildColor(guild.id);
+  const createdLabel = Number.isNaN(Date.parse(guild.created_at))
+    ? null
+    : new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(new Date(guild.created_at));
+  const titleId = 'discovery-preview-title';
+  const descriptionId = 'discovery-preview-description';
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      labelledBy={titleId}
+      describedBy={descriptionId}
+      showCloseButton
+      closeOnBackdrop={!joining}
+      panelClassName="bg-bg-secondary"
+    >
+      <div className="h-24" style={{ backgroundColor: `color-mix(in srgb, ${bannerColor} 30%, var(--bg-tertiary))` }} />
+      <ModalHeader className="relative pb-1 pt-0">
+        <div
+          className="-mt-7 flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg text-title font-bold text-white"
+          style={{ boxShadow: '0 0 0 4px var(--bg-secondary)', backgroundColor: iconSrc ? 'transparent' : bannerColor }}
+        >
+          {iconSrc ? (
+            <img src={iconSrc} alt="" className="h-full w-full object-cover" />
+          ) : (
+            guild.name.split(' ').map((word) => word[0]).join('').slice(0, 2).toUpperCase()
+          )}
+        </div>
+        <div className="min-w-0 pt-3">
+          <ModalTitle id={titleId} className="truncate">{guild.name}</ModalTitle>
+          <div className="mt-1 inline-flex items-center gap-1.5 text-meta text-text-muted">
+            {guild.federated ? <Server size={13} /> : <Globe2 size={13} />}
+            {guild.federated ? `From ${guild.origin_server || guild.origin_domain || 'a trusted server'}` : 'Public space on this server'}
+          </div>
+        </div>
+      </ModalHeader>
+
+      <ModalBody className="space-y-5 pb-5 pt-3">
+        <p id={descriptionId} className="text-body leading-relaxed text-text-secondary">
+          {guild.description?.trim() || 'This community has not added a description yet.'}
+        </p>
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <PreviewFact icon={<Users size={15} />} label="Members" value={guild.member_count.toLocaleString()} />
+          <PreviewFact icon={<span className="h-2 w-2 rounded-full bg-status-online" />} label="Online now" value={guild.online_count.toLocaleString()} />
+          {createdLabel && <PreviewFact icon={<CalendarDays size={15} />} label="Established" value={createdLabel} className="col-span-2 sm:col-span-1" />}
+        </div>
+
+        {guild.tags.length > 0 && (
+          <div>
+            <div className="text-section uppercase text-text-muted">Topics</div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {guild.tags.map((tag) => (
+                <span key={tag} className="rounded-xs bg-bg-mod-strong px-2 py-1 text-meta font-semibold text-text-secondary">{tag}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="rounded-md border border-border-subtle bg-bg-tertiary px-3.5 py-3">
+          <div className="text-label font-semibold text-text-primary">
+            {guild.federated ? 'Remote community' : 'Ready to join?'}
+          </div>
+          <p className="mt-1 text-meta leading-relaxed text-text-secondary">
+            {guild.federated
+              ? 'This listing comes from a trusted federated server. Cross-server joining is not available from Discovery yet.'
+              : 'Joining adds this space to your sidebar and makes your member profile visible to the community. You can leave later.'}
+          </p>
+        </div>
+
+        {error && (
+          <div role="alert" className="rounded-md border border-accent-danger/35 bg-danger-tint px-3.5 py-2.5 text-label text-accent-danger">
+            {error}
+          </div>
+        )}
+      </ModalBody>
+
+      <ModalFooter className="border-t border-border-subtle">
+        <Button variant="secondary" disabled={joining} onClick={onClose}>
+          {guild.federated ? 'Close' : 'Not now'}
+        </Button>
+        {!guild.federated && (
+          <Button loading={joining} disabled={joining} onClick={() => onJoin(guild)}>
+            {joining ? 'Joining space…' : `Join ${guild.name}`}
+          </Button>
+        )}
+      </ModalFooter>
+    </Modal>
+  );
+}
+
+function PreviewFact({ icon, label, value, className }: { icon: ReactNode; label: string; value: string; className?: string }) {
+  return (
+    <div className={cn('rounded-md border border-border-subtle bg-bg-tertiary px-3 py-2.5', className)}>
+      <div className="flex items-center gap-1.5 text-meta text-text-muted">{icon}{label}</div>
+      <div className="mt-1 text-label font-semibold tabular-nums text-text-primary">{value}</div>
     </div>
   );
 }

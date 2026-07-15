@@ -134,7 +134,8 @@ pub async fn start_voice_session(
     audio_pipeline::spawn_audio_send_task(&mut session);
     audio_pipeline::spawn_screen_audio_send_task(&mut session);
     audio_pipeline::spawn_datagram_recv_task(&mut session, app.clone());
-    audio_pipeline::spawn_playout_task(&mut session, app.clone());
+    audio_pipeline::spawn_uni_stream_recv_task(&mut session, app.clone());
+    audio_pipeline::spawn_playout_task(&mut session);
     events::spawn_control_recv_task(&mut session, app.clone());
     events::spawn_connection_monitor(&mut session, app.clone());
 
@@ -154,8 +155,15 @@ pub async fn start_voice_session(
         })
         .await?;
 
-    // Store the session
+    // Store the session, disconnecting any session already in the slot first.
+    // Overwriting it in place would leak its spawned tasks, QUIC connection, and
+    // audio thread — `Option::replace` drops the old value only after the new one
+    // is in place and does not run our async teardown. Take it out and shut it
+    // down deterministically before installing the replacement.
     let mut guard = state.session.lock().await;
+    if let Some(mut previous) = guard.take() {
+        previous.disconnect().await;
+    }
     *guard = Some(session);
 
     Ok(VoiceSessionInfo {
@@ -167,6 +175,9 @@ pub async fn start_voice_session(
 #[tauri::command]
 pub async fn stop_voice_session(state: State<'_, MediaState>) -> Result<(), String> {
     super::screen_capture::stop_capture(state.inner()).await?;
+    // Camera capture lives in MediaState (not the session), so it must be torn
+    // down here too or the nokhwa worker keeps running against a dead session.
+    super::camera_capture::stop_capture(state.inner()).await?;
     let mut guard = state.session.lock().await;
     if let Some(mut session) = guard.take() {
         let _ = session
@@ -177,6 +188,9 @@ pub async fn stop_voice_session(state: State<'_, MediaState>) -> Result<(), Stri
             .await;
         session.disconnect().await;
     }
+    // Belt-and-suspenders: drop any process-wide remote-video state even if no
+    // session was present (disconnect already clears it when one was).
+    super::video_pipeline::clear_all_stream_video_state();
     Ok(())
 }
 
@@ -251,6 +265,55 @@ pub async fn voice_set_deaf(deafened: bool, state: State<'_, MediaState>) -> Res
     Ok(())
 }
 
+/// Set the playback gain for a remote audio source (contract AU4).
+///
+/// Identify the source by `user_id` (applies to both that participant's voice
+/// and screen-audio tracks) or by raw `ssrc`. Gain is clamped to `0.0..=2.0`.
+#[tauri::command]
+pub async fn voice_set_source_volume(
+    user_id: Option<String>,
+    ssrc: Option<u32>,
+    gain: f32,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
+    use super::session::NativeMediaSession;
+
+    let gain = gain.clamp(0.0, 2.0);
+    let guard = state.session.lock().await;
+    let session = guard.as_ref().ok_or("no active session")?;
+
+    if let Some(ssrc) = ssrc {
+        session.audio_actor.set_source_gain(ssrc, gain);
+    }
+    if let Some(user_id) = user_id {
+        let uid: i64 = user_id.parse().map_err(|_| "invalid user id".to_string())?;
+        // A participant contributes a voice SSRC and a screen-audio SSRC; the
+        // volume control targets both.
+        session
+            .audio_actor
+            .set_source_gain(NativeMediaSession::derive_track_ssrc(uid, "audio"), gain);
+        session.audio_actor.set_source_gain(
+            NativeMediaSession::derive_track_ssrc(uid, "screen:audio"),
+            gain,
+        );
+    }
+    Ok(())
+}
+
+/// Toggle microphone noise suppression at runtime (contract AU13; default on).
+#[tauri::command]
+pub async fn voice_set_noise_suppression(
+    enabled: bool,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
+    let guard = state.session.lock().await;
+    let session = guard.as_ref().ok_or("no active session")?;
+    session
+        .noise_suppression_enabled
+        .store(enabled, Ordering::SeqCst);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn voice_switch_input_device(
     device_id: String,
@@ -286,20 +349,36 @@ pub async fn voice_switch_output_device(
     // output device. The actor builds the replacement device before tearing
     // down the current one and falls back to the system default on a stale
     // index, so a failed switch never leaves the user with no audio output.
-    let ssrcs: Vec<u32> = {
+    // Both voice (mono) and screen-audio (stereo) sources must be rebuilt, else
+    // stream audio would go permanently silent after an output switch (C4/AU4).
+    let voice_ssrcs: Vec<u32> = {
         let remote = session.remote_audio.lock().await;
         remote.keys().copied().collect()
     };
-    let mut new_senders = session
+    let stream_ssrcs: Vec<u32> = {
+        let stream = session.stream_remote_audio.lock().await;
+        stream.keys().copied().collect()
+    };
+    let switched = session
         .audio_actor
-        .switch_output_device(index, ssrcs)
+        .switch_output_device(index, voice_ssrcs, stream_ssrcs)
         .await?;
 
+    let mut voice_senders = switched.voice;
+    let mut stream_senders = switched.stream;
     {
         let mut remote = session.remote_audio.lock().await;
         for (ssrc, remote_state) in remote.iter_mut() {
-            if let Some(tx) = new_senders.remove(ssrc) {
+            if let Some(tx) = voice_senders.remove(ssrc) {
                 remote_state.playback_tx = tx;
+            }
+        }
+    }
+    {
+        let mut stream = session.stream_remote_audio.lock().await;
+        for (ssrc, stream_state) in stream.iter_mut() {
+            if let Some(tx) = stream_senders.remove(ssrc) {
+                stream_state.playback_tx = tx;
             }
         }
     }
@@ -310,26 +389,34 @@ pub async fn voice_switch_output_device(
 
 // ── Video commands ──────────────────────────────────────────────────────────
 
+/// Enable/disable the local camera. Enabling starts native capture (nokhwa) +
+/// the camera encode pipeline; disabling stops capture and unpublishes the
+/// track. There is no JS getUserMedia / raw-frame path anymore (contract CAM4):
+/// device selection is native (`camera_list_devices`).
 #[tauri::command]
-pub async fn voice_enable_video(enabled: bool, state: State<'_, MediaState>) -> Result<(), String> {
-    let mut guard = state.session.lock().await;
-    let session = guard.as_mut().ok_or("no active session")?;
-    super::video_pipeline::set_video_enabled(session, enabled).await
+pub async fn voice_enable_video(
+    enabled: bool,
+    device_id: Option<String>,
+    quality: Option<String>,
+    state: State<'_, MediaState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    if enabled {
+        let request =
+            super::camera_capture::StartCameraRequest::from_quality(device_id, quality.as_deref());
+        super::camera_capture::start_capture(state.inner(), app, request).await
+    } else {
+        super::camera_capture::stop_capture(state.inner()).await
+    }
 }
 
+/// Enumerate available capture cameras for native device selection (CAM1).
 #[tauri::command]
-pub async fn voice_start_screen_share(state: State<'_, MediaState>) -> Result<(), String> {
-    let mut guard = state.session.lock().await;
-    let session = guard.as_mut().ok_or("no active session")?;
-    super::video_pipeline::start_screen_share(
-        session,
-        1280,
-        720,
-        30,
-        None,
-        Some("motion"),
-        Some("vp9"),
-    )
+pub async fn camera_list_devices(
+    app: tauri::AppHandle,
+) -> Result<Vec<super::camera_capture::CameraDevice>, String> {
+    super::camera_capture::ensure_camera_consent(&app).await?;
+    super::camera_capture::list_devices()
 }
 
 #[tauri::command]
@@ -343,14 +430,18 @@ pub async fn voice_stop_screen_share(state: State<'_, MediaState>) -> Result<(),
 
 #[tauri::command]
 pub async fn screen_share_list_sources(
+    app: tauri::AppHandle,
 ) -> Result<Vec<super::screen_capture::ScreenShareSource>, String> {
+    super::screen_capture::ensure_screen_capture_consent(&app).await?;
     Ok(super::screen_capture::list_sources())
 }
 
 #[tauri::command]
 pub async fn screen_share_source_thumbnail(
     source_id: String,
+    app: tauri::AppHandle,
 ) -> Result<Option<super::screen_capture::ScreenShareThumbnail>, String> {
+    super::screen_capture::ensure_screen_capture_consent(&app).await?;
     super::screen_capture::capture_source_thumbnail(&source_id)
 }
 
@@ -382,66 +473,46 @@ pub async fn screen_share_stop(state: State<'_, MediaState>) -> Result<(), Strin
     super::screen_capture::stop_capture(state.inner()).await
 }
 
-/// Parse a binary frame payload: `[width:u32 LE][height:u32 LE][RGBA bytes…]`
-fn parse_frame_payload<'a>(
-    request: &'a tauri::ipc::Request<'a>,
-) -> Result<(u32, u32, &'a [u8]), String> {
-    let body = match request.body() {
-        tauri::ipc::InvokeBody::Raw(bytes) => bytes.as_slice(),
-        tauri::ipc::InvokeBody::Json(_) => return Err("expected binary frame data".into()),
-    };
-    if body.len() < 8 {
-        return Err("frame payload too short".into());
-    }
-    let width = u32::from_le_bytes(body[0..4].try_into().unwrap());
-    let height = u32::from_le_bytes(body[4..8].try_into().unwrap());
-    Ok((width, height, &body[8..]))
-}
-
-#[tauri::command]
-pub async fn voice_push_video_frame(
-    request: tauri::ipc::Request<'_>,
-    state: State<'_, MediaState>,
-) -> Result<(), String> {
-    let (width, height, rgba) = parse_frame_payload(&request)?;
-    let mut guard = state.session.lock().await;
-    let session = guard.as_mut().ok_or("no active session")?;
-    super::video_pipeline::encode_and_send_video_frame(
-        session, width, height, rgba, false, false, None,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn voice_push_screen_frame(
-    request: tauri::ipc::Request<'_>,
-    state: State<'_, MediaState>,
-) -> Result<(), String> {
-    let (width, height, rgba) = parse_frame_payload(&request)?;
-    let mut guard = state.session.lock().await;
-    let session = guard.as_mut().ok_or("no active session")?;
-    super::video_pipeline::encode_and_send_video_frame(
-        session, width, height, rgba, true, false, None,
-    )
-    .await
-}
-
 #[tauri::command]
 pub async fn voice_set_screen_audio_enabled(
     enabled: bool,
     state: State<'_, MediaState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let should_announce = {
+    let (should_announce, screen_audio_tx) = {
         let mut guard = state.session.lock().await;
         let session = guard.as_mut().ok_or("no active session")?;
         session
             .screen_audio_enabled
             .store(enabled, Ordering::SeqCst);
-        enabled
+        let announce = enabled
             && session.published_screen_track.is_some()
-            && session.published_screen_audio_track.is_none()
+            && session.published_screen_audio_track.is_none();
+        (announce, session.screen_audio_tx.clone())
     };
+
+    // Contract C4/AU3: on loopback-capture platforms (Windows/Linux) the native
+    // system-audio capture feeds the session's screen_audio_tx directly — no JS
+    // round-trip. macOS captures integrated audio inside the screen-capture path
+    // instead, so it is not started here. Fail loudly if capture cannot start
+    // (e.g. consent denied, no echo-free routing) rather than silently streaming
+    // no audio. Run off the async executor and OUTSIDE the session lock: capture
+    // start blocks on a native consent dialog.
+    #[cfg(not(target_os = "macos"))]
+    {
+        if enabled {
+            tokio::task::spawn_blocking(move || {
+                crate::audio_capture::start_system_audio_capture_into(screen_audio_tx)
+            })
+            .await
+            .map_err(|e| format!("system audio capture start task failed: {e}"))??;
+        } else {
+            let _ = crate::audio_capture::stop_system_audio_capture();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    let _ = screen_audio_tx;
+
     if should_announce {
         super::screen_capture::announce_screen_audio_track_public(&state, &app).await?;
     } else if !enabled {
@@ -468,37 +539,51 @@ pub async fn voice_set_screen_audio_enabled(
 }
 
 #[tauri::command]
-pub async fn voice_push_screen_audio_frame(
-    samples: Vec<f32>,
-    state: State<'_, MediaState>,
-) -> Result<(), String> {
-    if samples.is_empty() {
-        return Ok(());
-    }
-
-    let mut guard = state.session.lock().await;
-    let session = guard.as_mut().ok_or("no active session")?;
-    if !session.screen_audio_enabled.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-
-    let _ = session.screen_audio_tx.try_send(samples);
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn media_register_stream_video_subscription(
     stream_id: String,
     track_id: String,
     ssrc: u32,
+    prefer_encoded: Option<bool>,
+    channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
+    super::video_pipeline::native_diag(
+        Some(&app),
+        &format!(
+            "register video push subscription: track={stream_id}:{track_id} ssrc={ssrc} \
+             prefer_encoded={prefer_encoded:?} channel={}",
+            channel.id()
+        ),
+    );
     #[cfg(feature = "vpx")]
-    super::video_pipeline::register_stream_video_subscription(&stream_id, &track_id, ssrc)?;
+    super::video_pipeline::register_stream_video_subscription(
+        &stream_id,
+        &track_id,
+        ssrc,
+        prefer_encoded.unwrap_or(false),
+        channel,
+    )?;
 
     #[cfg(not(feature = "vpx"))]
-    let _ = (stream_id, track_id, ssrc);
+    let _ = (stream_id, track_id, ssrc, prefer_encoded, channel);
 
     Ok(())
+}
+
+/// Encode one real keyframe with the local encoder for `codec` (binary IPC
+/// response) so the webview can functionally verify its WebCodecs decoder.
+/// Empty body = no local encoder for that codec, i.e. the claim cannot be
+/// verified here.
+#[tauri::command]
+pub async fn media_generate_decode_probe(codec: String) -> Result<tauri::ipc::Response, String> {
+    // ffmpeg-backed probes spawn a subprocess (~100-300ms); keep them off the
+    // async worker threads.
+    let bytes = tokio::task::spawn_blocking(move || {
+        super::capabilities::generate_decode_probe_frame(&codec)
+    })
+    .await
+    .map_err(|err| format!("decode probe task failed: {err}"))?;
+    Ok(tauri::ipc::Response::new(bytes.unwrap_or_default()))
 }
 
 #[tauri::command]
@@ -515,29 +600,72 @@ pub async fn media_unregister_stream_video_subscription(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn media_pull_stream_video_frame(
+/// Route a keyframe request for `stream_id`:`track_id` (contract C2 / N3). If the
+/// track is one of our own published tracks, flip the matching encoder's
+/// force-keyframe flag directly; otherwise ask the publisher via the relay.
+async fn route_keyframe_request(
+    session: &super::session::NativeMediaSession,
     stream_id: String,
     track_id: String,
-    after_sequence: Option<u64>,
-) -> Result<Option<super::video_pipeline::PulledVideoFrameResponse>, String> {
-    #[cfg(feature = "vpx")]
-    {
-        return Ok(
-            super::video_pipeline::pull_latest_remote_stream_video_frame(
-                &stream_id,
-                &track_id,
-                after_sequence,
-            )
-            .map(super::video_pipeline::encode_pulled_video_frame_response),
-        );
+) -> Result<(), String> {
+    let local = match track_id.as_str() {
+        "screen" => session
+            .published_screen_track
+            .as_ref()
+            .is_some_and(|track| track.stream_id.0 == stream_id),
+        "camera" => session
+            .published_video_track
+            .as_ref()
+            .is_some_and(|track| track.stream_id.0 == stream_id),
+        _ => false,
+    };
+    if local {
+        match track_id.as_str() {
+            "screen" => session.screen_force_keyframe.store(true, Ordering::SeqCst),
+            "camera" => session.video_force_keyframe.store(true, Ordering::SeqCst),
+            _ => {}
+        }
+        return Ok(());
     }
+    session
+        .send_control_message(&ControlMessage::RequestKeyframe {
+            stream_id: StreamId::new(stream_id),
+            track_id: TrackId::new(track_id),
+            layer_id: None,
+        })
+        .await
+}
 
-    #[cfg(not(feature = "vpx"))]
-    {
-        let _ = (stream_id, track_id, after_sequence);
-        Ok(None)
+#[tauri::command]
+pub async fn media_request_keyframe(
+    stream_id: String,
+    track_id: String,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
+    let guard = state.session.lock().await;
+    let session = guard.as_ref().ok_or("no active session")?;
+    route_keyframe_request(session, stream_id, track_id).await
+}
+
+#[tauri::command]
+pub async fn media_set_stream_visibility(
+    stream_id: String,
+    track_id: String,
+    visible: bool,
+    state: State<'_, MediaState>,
+) -> Result<(), String> {
+    // Toggle native visibility first (no session lock needed — it touches the
+    // process-wide dispatch state), then request a keyframe if the resume found
+    // the stored frame stale/delta/missing.
+    let need_keyframe =
+        super::video_pipeline::set_stream_video_visibility(&stream_id, &track_id, visible);
+    if need_keyframe {
+        let guard = state.session.lock().await;
+        if let Some(session) = guard.as_ref() {
+            route_keyframe_request(session, stream_id, track_id).await?;
+        }
     }
+    Ok(())
 }
 
 #[tauri::command]
@@ -796,6 +924,14 @@ pub async fn media_register_track_subscription(
         active_layer: request.active_layer,
         viewport: viewport.clone(),
     };
+    // Record the viewport for the native-decode downscale (N6): raw I420 frames
+    // are shrunk to this tile size before crossing IPC.
+    super::video_pipeline::set_stream_video_viewport(
+        &stream_id.0,
+        &track_id.0,
+        request.viewport_width.unwrap_or(0),
+        request.viewport_height.unwrap_or(0),
+    );
     let estimated_bitrate_kbps = {
         let registry = session.stream_registry.lock().await;
         registry

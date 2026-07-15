@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use paracord_codec::crypto::{FrameDecryptor, KEY_SIZE};
@@ -72,6 +73,10 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: tauri::App
 
         let mut tick = interval(Duration::from_millis(100));
         let mut hysteresis: HashMap<u32, SpeakerHysteresis> = HashMap::new();
+        // Last emitted speaker set (SSRC ids only). Levels still ride along in
+        // the payload, but we only emit when membership changes so a steady
+        // talker does not spam the webview at 10 Hz.
+        let mut last_speaker_ids: Vec<String> = Vec::new();
 
         loop {
             tokio::select! {
@@ -79,18 +84,13 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: tauri::App
                 _ = tick.tick() => {
                     let remote = remote_audio.lock().await;
                     let mut speakers: HashMap<String, f64> = HashMap::new();
-                    let mut changed = false;
                     let now = Instant::now();
 
                     for (&ssrc, state) in remote.iter() {
                         let entry = hysteresis
                             .entry(ssrc)
                             .or_insert_with(|| SpeakerHysteresis::new(now));
-                        let was_speaking = entry.speaking;
                         let is_speaking = entry.update(state.audio_level, now);
-                        if is_speaking != was_speaking {
-                            changed = true;
-                        }
 
                         if is_speaking {
                             let level =
@@ -103,7 +103,10 @@ pub fn spawn_speaking_detector(session: &mut NativeMediaSession, app: tauri::App
                     // state does not linger for the life of the session.
                     hysteresis.retain(|ssrc, _| remote.contains_key(ssrc));
 
-                    if changed || !speakers.is_empty() {
+                    let membership_changed = speakers.len() != last_speaker_ids.len()
+                        || speakers.keys().any(|id| !last_speaker_ids.iter().any(|prev| prev == id));
+                    if membership_changed {
+                        last_speaker_ids = speakers.keys().cloned().collect();
                         let _ = app.emit("media_speaking_change", &speakers);
                     }
                 }
@@ -169,6 +172,93 @@ pub fn emit_media_request_keyframe(
     );
 }
 
+/// Emit a user-visible native-surface render failure (spec §3.7). Surface
+/// creation failure, interop init failure past the tier decision, or a
+/// present() error streak tears the subscription down and fires this so the UI
+/// can surface the error — there is NO fallback to raw IPC (that path no longer
+/// exists) and the surface is never silently blanked.
+pub fn emit_media_native_render_failed(
+    app: &tauri::AppHandle,
+    stream_id: &str,
+    track_id: &str,
+    reason: &str,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "media_native_render_failed",
+        serde_json::json!({
+            "streamId": stream_id,
+            "trackId": track_id,
+            "reason": reason,
+        }),
+    );
+}
+
+/// Emit the one-time first-presented-frame signal for a native surface. The
+/// webview receives no frames on the native-surface route, so this event is its
+/// only "the stream is live" edge — the media engine maps it to the
+/// subscription's onFrame callback (poster teardown, active-track state).
+pub fn emit_media_native_render_first_frame(
+    app: &tauri::AppHandle,
+    stream_id: &str,
+    track_id: &str,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "media_native_render_first_frame",
+        serde_json::json!({
+            "streamId": stream_id,
+            "trackId": track_id,
+        }),
+    );
+}
+
+/// Per-SSRC consecutive decrypt-failure counters for E2EE diagnostics (N11).
+#[allow(dead_code)]
+fn decrypt_failure_counters() -> &'static Mutex<HashMap<u32, u32>> {
+    static COUNTERS: OnceLock<Mutex<HashMap<u32, u32>>> = OnceLock::new();
+    COUNTERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Number of consecutive per-SSRC decrypt failures that trips the alert.
+#[allow(dead_code)]
+const DECRYPT_FAILURE_ALERT_THRESHOLD: u32 = 50;
+
+/// Record the outcome of one media-datagram decrypt attempt for `ssrc`, emitting
+/// `media_decrypt_failing` once a run of [`DECRYPT_FAILURE_ALERT_THRESHOLD`]
+/// consecutive failures is reached. Without this an undelivered/rotated E2EE key
+/// manifests only as silently-missing audio/video — this makes the failure loud.
+///
+/// CROSS-AGENT NOTE: the datagram decrypt site lives in
+/// `native_media/audio_pipeline.rs` (owned by the audio agent). That agent MUST
+/// call `events::note_decrypt_result(app, header.ssrc, decrypt_ok)` on every
+/// decrypt attempt (both audio and the video datagram path that reuses the same
+/// decryptor) for this diagnostic to fire.
+#[allow(dead_code)]
+pub fn note_decrypt_result(app: &tauri::AppHandle, ssrc: u32, success: bool) {
+    let mut counters = decrypt_failure_counters()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if success {
+        counters.remove(&ssrc);
+        return;
+    }
+    let count = counters.entry(ssrc).or_insert(0);
+    *count += 1;
+    // Emit exactly once at the threshold crossing so a persistently-failing SSRC
+    // does not spam an event every datagram.
+    if *count == DECRYPT_FAILURE_ALERT_THRESHOLD {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "media_decrypt_failing",
+            serde_json::json!({
+                "ssrc": ssrc,
+                "consecutiveFailures": *count,
+            }),
+        );
+    }
+}
+
 /// Spawn a task that watches the QUIC connection and notifies the UI on loss.
 pub fn spawn_connection_monitor(session: &mut NativeMediaSession, app: tauri::AppHandle) {
     let shutdown = session.shutdown.clone();
@@ -202,6 +292,9 @@ pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: tauri::App
     let current_key_epoch = session.current_key_epoch.clone();
     let local_user_id = session.local_user_id;
     let local_ssrc = session.local_ssrc;
+    let video_force_keyframe = session.video_force_keyframe.clone();
+    let screen_force_keyframe = session.screen_force_keyframe.clone();
+    let screen_bitrate_feedback_kbps = session.screen_bitrate_feedback_kbps.clone();
 
     let handle = tokio::spawn(async move {
         loop {
@@ -250,6 +343,9 @@ pub fn spawn_control_recv_task(session: &mut NativeMediaSession, app: tauri::App
                         &current_key_epoch,
                         local_user_id,
                         local_ssrc,
+                        &video_force_keyframe,
+                        &screen_force_keyframe,
+                        &screen_bitrate_feedback_kbps,
                         &app,
                     )
                     .await;
@@ -281,6 +377,9 @@ async fn handle_control_message(
     current_key_epoch: &std::sync::Arc<AtomicU8>,
     local_user_id: i64,
     local_ssrc: u32,
+    video_force_keyframe: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    screen_force_keyframe: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    screen_bitrate_feedback_kbps: &std::sync::Arc<std::sync::atomic::AtomicU32>,
     app: &tauri::AppHandle,
 ) {
     match message {
@@ -521,6 +620,19 @@ async fn handle_control_message(
             track_id,
             layer_id,
         } => {
+            // The relay only routes keyframe requests to the publisher, so a
+            // request arriving here targets one of our own tracks. Flip the
+            // matching encoder's force-keyframe flag directly — the frontend
+            // does not participate in native encoding.
+            match track_id.0.as_str() {
+                "screen" => {
+                    screen_force_keyframe.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                "camera" => {
+                    video_force_keyframe.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                _ => {}
+            }
             emit_media_request_keyframe(app, &stream_id.0, &track_id.0, layer_id);
         }
         ControlMessage::StreamKeyAnnounce {
@@ -629,6 +741,11 @@ async fn handle_control_message(
             );
         }
         ControlMessage::BandwidthFeedback { available_kbps } => {
+            // The native screen encoder reads this per frame to retarget its
+            // bitrate; the event additionally lets the frontend adjust its
+            // simulcast layer selection.
+            screen_bitrate_feedback_kbps
+                .store(available_kbps, std::sync::atomic::Ordering::Relaxed);
             use tauri::Emitter;
             let _ = app.emit(
                 "media_bandwidth_feedback",

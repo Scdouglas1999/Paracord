@@ -1,13 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ChannelType, type Channel, type Member, type VoiceState } from '../types';
 import { GuildHomePage } from './GuildHomePage';
 
 // ---- store mocks ----------------------------------------------------------
 
 const mockState = vi.hoisted(() => ({
-  guilds: [] as Array<{ id: string; name: string; owner_id: string; server_url?: string }>,
+  guilds: [] as Array<{
+    id: string;
+    name: string;
+    owner_id: string;
+    server_url?: string;
+    hub_settings?: {
+      welcome_text?: string;
+      description?: string;
+      banner_hash?: string;
+      pinned_channels?: string[];
+    };
+  }>,
   channelsByGuild: {} as Record<string, Channel[]>,
   channelParticipants: new Map<string, VoiceState[]>(),
   speakingUsers: new Set<string>(),
@@ -174,9 +185,14 @@ function member(id: string, name: string): Member {
   } as Member;
 }
 
+function LocationProbe() {
+  return <div data-testid="pathname">{useLocation().pathname}</div>;
+}
+
 function renderHome() {
   return render(
     <MemoryRouter initialEntries={['/app/guilds/guild-1']}>
+      <LocationProbe />
       <Routes>
         <Route path="/app/guilds/:guildId" element={<GuildHomePage />} />
       </Routes>
@@ -277,18 +293,70 @@ describe('GuildHomePage (Rooms view)', () => {
     expect(within(list).queryByText('Voice')).not.toBeInTheDocument();
   });
 
-  it('hides the settings gear without MANAGE_GUILD', () => {
-    mockState.channelsByGuild = { 'guild-1': [chan({ id: 't-1', name: 'general' })] };
+  it('surfaces configured Space Hub content after live rooms and links featured rooms', () => {
+    mockState.guilds = [
+      {
+        id: 'guild-1',
+        name: 'Emerald HQ',
+        owner_id: 'owner-1',
+        hub_settings: {
+          welcome_text: 'Build in good company.',
+          description: 'Share progress, ask for a second set of eyes, and leave things clearer.',
+          pinned_channels: ['t-rules', 'missing', 'v-voice', 't-general'],
+        },
+      },
+    ];
+    mockState.channelsByGuild = {
+      'guild-1': [
+        chan({ id: 't-rules', name: 'read-me', topic: 'How we work together.' }),
+        chan({ id: 't-general', name: 'general' }),
+        chan({ id: 'v-voice', name: 'Voice', type: ChannelType.Voice }),
+      ],
+    };
+
     renderHome();
-    expect(screen.queryByRole('button', { name: 'Server settings' })).not.toBeInTheDocument();
+
+    const rooms = screen.getByRole('region', { name: 'Rooms' });
+    const briefing = screen.getByRole('region', { name: 'Start here' });
+    expect(rooms.compareDocumentPosition(briefing) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(briefing).getByText('Build in good company.')).toBeInTheDocument();
+    expect(within(briefing).getByText(/Share progress/)).toBeInTheDocument();
+    expect(within(briefing).getByText('How we work together.')).toBeInTheDocument();
+    expect(within(briefing).queryByText('Voice')).not.toBeInTheDocument();
+    expect(within(briefing).getAllByRole('button')).toHaveLength(2);
+
+    fireEvent.click(within(briefing).getByRole('button', { name: 'Open read-me' }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent(
+      '/app/guilds/guild-1/channels/t-rules',
+    );
   });
 
-  it('shows the MANAGE_GUILD-gated gear and opens guild settings', () => {
+  it('does not add an empty Start here section when Hub settings are not configured', () => {
+    renderHome();
+    expect(screen.queryByRole('region', { name: 'Start here' })).not.toBeInTheDocument();
+  });
+
+  it('hides the settings gear without management permissions', () => {
     mockState.channelsByGuild = { 'guild-1': [chan({ id: 't-1', name: 'general' })] };
+    renderHome();
+    expect(screen.queryByRole('button', { name: 'Space settings' })).not.toBeInTheDocument();
+  });
+
+  it('shows economy access from guild home', () => {
+    mockState.channelsByGuild = { 'guild-1': [chan({ id: 't-1', name: 'general' })] };
+    renderHome();
+    fireEvent.click(screen.getByRole('button', { name: 'Space economy' }));
+    expect(mockState.contextPanelMode).toBe('economy');
+  });
+
+  it('shows the settings gear for owners and opens guild settings', () => {
+    mockState.channelsByGuild = { 'guild-1': [chan({ id: 't-1', name: 'general' })] };
+    // usePermissions treats owners as isAdmin; the settings gate keys off that.
     mockState.isOwner = true;
+    mockState.isAdmin = true;
     renderHome();
 
-    const gear = screen.getByRole('button', { name: 'Server settings' });
+    const gear = screen.getByRole('button', { name: 'Space settings' });
     fireEvent.click(gear);
     expect(mockState.guildSettingsId).toBe('guild-1');
   });

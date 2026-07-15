@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dmApi } from '../../api/dms';
 import { useAuthStore } from '../../stores/authStore';
@@ -14,6 +15,10 @@ vi.mock('../../api/dms', () => ({
     removeRecipient: vi.fn(),
     listRecipients: vi.fn(),
   },
+}));
+
+vi.mock('../../stores/confirmStore', () => ({
+  confirm: vi.fn(async () => true),
 }));
 
 const currentUser = {
@@ -62,7 +67,11 @@ function groupDm(recipients = [currentUser, bob]): Channel {
 }
 
 function renderPanel() {
-  return render(<GroupDmMembersPanel channelId="dm-1" onClose={() => {}} />);
+  return render(
+    <MemoryRouter>
+      <GroupDmMembersPanel channelId="dm-1" onClose={() => {}} />
+    </MemoryRouter>,
+  );
 }
 
 describe('GroupDmMembersPanel — recipient management', () => {

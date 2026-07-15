@@ -213,16 +213,18 @@ pub async fn get_member_roles(
             ON mr.role_id = r.id
             AND mr.user_id = $1
          WHERE r.space_id = $2
+           -- A user only holds roles while they are actually a member of the
+           -- guild. This gates BOTH the explicit-assignment branch and the
+           -- @everyone branch so a non-member (kicked/left/banned) resolves to
+           -- zero roles even if stray member_roles rows survive.
+           AND EXISTS (
+                SELECT 1 FROM members m
+                WHERE m.user_id = $1
+                  AND m.guild_id = $2
+           )
            AND (
                 mr.user_id IS NOT NULL
-                OR (
-                    r.id = $2
-                    AND EXISTS (
-                        SELECT 1 FROM members m
-                        WHERE m.user_id = $1
-                          AND m.guild_id = $2
-                    )
-                )
+                OR r.id = $2
            )
          ORDER BY r.position"
     )
@@ -231,6 +233,56 @@ pub async fn get_member_roles(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Batch-load every guild member's roles in one query (same membership +
+/// @everyone semantics as [`get_member_roles`]). Returns `user_id -> roles`
+/// ordered by role position within each user.
+pub async fn get_member_roles_for_guild(
+    pool: &DbPool,
+    space_id: i64,
+) -> Result<std::collections::HashMap<i64, Vec<RoleRow>>, DbError> {
+    #[derive(Debug)]
+    struct MemberRoleRow {
+        user_id: i64,
+        role: RoleRow,
+    }
+
+    impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MemberRoleRow {
+        fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+            Ok(Self {
+                user_id: row.try_get("user_id")?,
+                role: <RoleRow as sqlx::FromRow<'_, _>>::from_row(row)?,
+            })
+        }
+    }
+
+    let rows = sqlx::query_as::<_, MemberRoleRow>(
+        "SELECT DISTINCT
+            m.user_id,
+            r.id, r.space_id, r.name, r.color, CASE WHEN r.hoist THEN 1 ELSE 0 END AS hoist, r.position, r.permissions, CASE WHEN r.managed THEN 1 ELSE 0 END AS managed, CASE WHEN r.mentionable THEN 1 ELSE 0 END AS mentionable, CASE WHEN r.server_wide THEN 1 ELSE 0 END AS server_wide, r.created_at
+         FROM members m
+         INNER JOIN roles r ON r.space_id = m.guild_id
+         LEFT JOIN member_roles mr
+            ON mr.role_id = r.id
+            AND mr.user_id = m.user_id
+         WHERE m.guild_id = $1
+           AND (
+                mr.user_id IS NOT NULL
+                OR r.id = $1
+           )
+         ORDER BY m.user_id, r.position",
+    )
+    .bind(space_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut by_user: std::collections::HashMap<i64, Vec<RoleRow>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        by_user.entry(row.user_id).or_default().push(row.role);
+    }
+    Ok(by_user)
 }
 
 pub async fn get_user_all_roles(pool: &DbPool, user_id: i64) -> Result<Vec<RoleRow>, DbError> {
@@ -410,6 +462,51 @@ mod tests {
         let roles = get_member_roles(&pool, user_id, guild_id).await.unwrap();
         let role_ids: Vec<i64> = roles.iter().map(|r| r.id).collect();
         assert!(role_ids.contains(&510));
+    }
+
+    #[tokio::test]
+    async fn test_removed_member_loses_all_roles() {
+        // Regression for L02-01: a kicked/left/banned member must not retain
+        // guild privileges. Removing the member strips their member_roles rows,
+        // and get_member_roles gates on actual membership, so a non-member
+        // resolves to zero roles even if stray assignments survive.
+        let pool = test_pool().await;
+        let (_owner_id, guild_id) = setup_guild(&pool).await;
+        let member_id = 2;
+        crate::users::create_user(&pool, member_id, "mod", 2, "m@example.com", "hash")
+            .await
+            .unwrap();
+        crate::members::add_member(&pool, member_id, guild_id)
+            .await
+            .unwrap();
+        create_role(&pool, 530, guild_id, "Moderator", 0x0D)
+            .await
+            .unwrap();
+        add_member_role(&pool, member_id, guild_id, 530)
+            .await
+            .unwrap();
+
+        // While a member, the assigned role and @everyone resolve.
+        let before = get_member_roles(&pool, member_id, guild_id).await.unwrap();
+        assert!(before.iter().any(|r| r.id == 530));
+
+        // Kick / leave / ban: remove the member.
+        crate::members::remove_member(&pool, member_id, guild_id)
+            .await
+            .unwrap();
+
+        // The explicit assignment must be gone from the table entirely...
+        let stray = get_user_all_roles(&pool, member_id).await.unwrap();
+        assert!(
+            !stray.iter().any(|r| r.id == 530),
+            "member_roles rows must be stripped on removal"
+        );
+        // ...and get_member_roles must return zero roles for a non-member.
+        let after = get_member_roles(&pool, member_id, guild_id).await.unwrap();
+        assert!(
+            after.is_empty(),
+            "a removed member must hold no roles (including @everyone)"
+        );
     }
 
     #[tokio::test]

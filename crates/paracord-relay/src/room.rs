@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -65,6 +66,11 @@ pub enum RoomError {
 /// Thread-safe manager for media rooms.
 pub struct MediaRoomManager {
     rooms: DashMap<String, MediaRoom>,
+    /// Monotonic counter bumped on every mutation that can change relay
+    /// routing (membership, publish/subscribe, layer, session metadata). The
+    /// relay uses it to invalidate its per-`(sender, ssrc)` recipient snapshot
+    /// cache without recomputing on every forwarded datagram.
+    generation: AtomicU64,
 }
 
 impl MediaRoomManager {
@@ -75,7 +81,20 @@ impl MediaRoomManager {
     pub fn new() -> Self {
         Self {
             rooms: DashMap::new(),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    /// Current routing generation. Changes whenever room state that affects
+    /// fan-out is mutated. Cheap (one relaxed atomic load) so the relay hot
+    /// path can gate its recipient cache on it.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// Bump the routing generation after a mutation.
+    fn bump_generation(&self) {
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     /// Get or create a room for the given guild/channel combination.
@@ -128,7 +147,10 @@ impl MediaRoomManager {
             }
         }
 
-        Ok(room.participants.values().cloned().collect())
+        let participants = room.participants.values().cloned().collect();
+        drop(room);
+        self.bump_generation();
+        Ok(participants)
     }
 
     /// Remove a participant from a room.
@@ -163,6 +185,7 @@ impl MediaRoomManager {
             tracing::info!(room_id = %room_id, "room destroyed (last participant left)");
         }
 
+        self.bump_generation();
         result
     }
 
@@ -187,6 +210,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.publish_track(track);
+        self.bump_generation();
         Ok(())
     }
 
@@ -248,6 +272,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.unpublish_track(stream_id, track_id);
+        self.bump_generation();
         Ok(())
     }
 
@@ -269,6 +294,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.subscribe(target_user_id);
+        self.bump_generation();
         Ok(())
     }
 
@@ -288,6 +314,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.unsubscribe(target_user_id);
+        self.bump_generation();
         Ok(())
     }
 
@@ -318,6 +345,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.subscribe_track(subscription);
+        self.bump_generation();
         Ok(())
     }
 
@@ -338,6 +366,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.unsubscribe_track(stream_id, track_id);
+        self.bump_generation();
         Ok(())
     }
 
@@ -377,16 +406,72 @@ impl MediaRoomManager {
             .participants
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
-        Ok(
-            participant.update_track_subscription(stream_id, track_id, |subscription| {
-                subscription.viewport = viewport.clone();
-                if active_layer.is_some() {
-                    subscription.active_layer = active_layer;
-                } else if resolved_active_layer.is_some() {
-                    subscription.active_layer = resolved_active_layer;
-                }
-            }),
-        )
+        let updated = participant.update_track_subscription(stream_id, track_id, |subscription| {
+            subscription.viewport = viewport.clone();
+            if active_layer.is_some() {
+                subscription.active_layer = active_layer;
+            } else if resolved_active_layer.is_some() {
+                subscription.active_layer = resolved_active_layer;
+            }
+        });
+        self.bump_generation();
+        Ok(updated)
+    }
+
+    /// Update ONLY a viewer's viewport hint for a track, leaving the relay-owned
+    /// `active_layer` untouched (spec §4.2: the relay's per-viewer selection owns
+    /// the forwarded layer; a viewport update just re-caps future selections).
+    /// Returns whether the subscription existed. Bumps the routing generation so
+    /// the viewport-derived cap is picked up on the next selection pass.
+    pub fn update_subscription_viewport(
+        &self,
+        room_id: &str,
+        user_id: i64,
+        stream_id: &StreamId,
+        track_id: &TrackId,
+        viewport: Option<paracord_transport::stream::ViewportHint>,
+    ) -> Result<bool, RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(room_id)
+            .ok_or_else(|| RoomError::NotFound(room_id.to_string()))?;
+        let participant = room
+            .participants
+            .get_mut(&user_id)
+            .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
+        let updated = participant.update_track_subscription(stream_id, track_id, |subscription| {
+            subscription.viewport = viewport.clone();
+        });
+        self.bump_generation();
+        Ok(updated)
+    }
+
+    /// Commit a relay-driven layer switch by setting ONLY a viewer's forwarded
+    /// (`active_layer`) layer for a track (spec §4.2). Called at the target
+    /// layer's keyframe boundary so the datagram/uni-stream fan-out flips
+    /// atomically. Returns whether the subscription existed. Bumps the routing
+    /// generation so the recipient-snapshot cache rebuilds against the new layer.
+    pub fn set_subscription_active_layer(
+        &self,
+        room_id: &str,
+        user_id: i64,
+        stream_id: &StreamId,
+        track_id: &TrackId,
+        active_layer: u8,
+    ) -> Result<bool, RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(room_id)
+            .ok_or_else(|| RoomError::NotFound(room_id.to_string()))?;
+        let participant = room
+            .participants
+            .get_mut(&user_id)
+            .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
+        let updated = participant.update_track_subscription(stream_id, track_id, |subscription| {
+            subscription.active_layer = Some(active_layer);
+        });
+        self.bump_generation();
+        Ok(updated)
     }
 
     pub fn update_participant_session_metadata(
@@ -406,6 +491,31 @@ impl MediaRoomManager {
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.session_id = session_id;
         participant.set_video_capabilities(video_capabilities);
+        self.bump_generation();
+        Ok(())
+    }
+
+    /// Change whether a participant may announce and publish media tracks.
+    /// Stage promotion/demotion uses this to enforce the role at the relay,
+    /// rather than relying on a client-side muted state.
+    pub fn update_participant_publish_permission(
+        &self,
+        guild_id: i64,
+        channel_id: i64,
+        user_id: i64,
+        can_publish: bool,
+    ) -> Result<(), RoomError> {
+        let room_id = Self::make_room_id(guild_id, channel_id);
+        let mut room = self
+            .rooms
+            .get_mut(&room_id)
+            .ok_or_else(|| RoomError::NotFound(room_id.clone()))?;
+        let participant = room
+            .participants
+            .get_mut(&user_id)
+            .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id))?;
+        participant.can_publish = can_publish;
+        self.bump_generation();
         Ok(())
     }
 
@@ -753,7 +863,8 @@ mod tests {
                 codec: VideoCodec::H264,
                 encode: true,
                 decode: true,
-                hardware_accelerated: true,
+                encode_hardware: true,
+                decode_hardware: true,
             }],
         )
         .unwrap();
@@ -763,6 +874,6 @@ mod tests {
         assert_eq!(participant.session_id, "native-1b");
         assert_eq!(participant.video_capabilities.len(), 1);
         assert_eq!(participant.video_capabilities[0].codec, VideoCodec::H264);
-        assert!(participant.video_capabilities[0].hardware_accelerated);
+        assert!(participant.video_capabilities[0].encode_hardware);
     }
 }

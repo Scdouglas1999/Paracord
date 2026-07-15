@@ -77,6 +77,13 @@ export const authApi = {
   },
   getMe: () => getApi().get<User>('/users/@me'),
   updateMe: (data: Partial<User>) => getApi().patch<User>('/users/@me', data),
+  uploadAvatar: (file: File) => {
+    const form = new FormData();
+    form.append('avatar', file);
+    return getApi().post<User>('/users/@me/avatar', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
   getSettings: () => getApi().get<UserSettings>('/users/@me/settings'),
   updateSettings: (data: Partial<UserSettings>) => getApi().patch<UserSettings>('/users/@me/settings', data),
   getReadStates: () => getApi().get<ReadState[]>('/users/@me/read-states'),

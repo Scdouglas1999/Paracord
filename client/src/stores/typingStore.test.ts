@@ -20,6 +20,20 @@ describe('typingStore', () => {
     expect(useTypingStore.getState().typingByChannel['chan-1']).toEqual([]);
   });
 
+  it('refreshes the expiry without rewriting state when the user is already typing', () => {
+    useTypingStore.getState().addTyping('chan-1', 'user-1');
+    const before = useTypingStore.getState().typingByChannel;
+
+    useTypingStore.getState().addTyping('chan-1', 'user-1');
+    expect(useTypingStore.getState().typingByChannel).toBe(before);
+
+    // Timer was refreshed: advancing just under 8s from the second call keeps them.
+    vi.advanceTimersByTime(7999);
+    expect(useTypingStore.getState().typingByChannel['chan-1']).toEqual(['user-1']);
+    vi.advanceTimersByTime(1);
+    expect(useTypingStore.getState().typingByChannel['chan-1']).toEqual([]);
+  });
+
   it('clearChannel cancels pending per-user expiry timers', () => {
     useTypingStore.getState().addTyping('chan-1', 'user-1');
     useTypingStore.getState().addTyping('chan-1', 'user-2');

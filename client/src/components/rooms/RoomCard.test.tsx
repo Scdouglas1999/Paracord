@@ -53,6 +53,23 @@ describe('RoomCard', () => {
     expect(screen.getByText('Empty — start the room')).toBeTruthy();
   });
 
+  it('joins when the empty room row is clicked anywhere', () => {
+    const joinChannel = vi.fn().mockResolvedValue(undefined);
+    useVoiceStore.setState({ joinChannel });
+
+    renderCard(
+      <RoomCard
+        channel={voiceChannel()}
+        participants={[]}
+        speakingUsers={new Set()}
+        guildId="guild-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Join Voice Lounge' }));
+    expect(joinChannel).toHaveBeenCalledWith('voice-1', 'guild-1');
+  });
+
   it('renders the live branch with an occupant stack when occupied', () => {
     renderCard(
       <RoomCard

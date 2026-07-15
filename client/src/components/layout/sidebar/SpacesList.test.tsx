@@ -2,14 +2,22 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpacesList } from './SpacesList';
 import { useServerListStore } from '../../../stores/serverListStore';
+import { useAuthStore } from '../../../stores/authStore';
+import { useGuildStore } from '../../../stores/guildStore';
+import { useUIStore } from '../../../stores/uiStore';
 import type { GuildSummary } from '../../../hooks/useUnifiedConversations';
 
 const navigate = vi.fn();
+const canAccessSync = vi.hoisted(() => vi.fn<(guildId: string) => boolean>(() => false));
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
   return { ...actual, useNavigate: () => navigate };
 });
+
+vi.mock('../../../lib/guildSettingsAccess', () => ({
+  canAccessGuildSettingsSync: (guildId: string) => canAccessSync(guildId),
+}));
 
 function space(over: Partial<GuildSummary> & { id: string; name: string }): GuildSummary {
   return { icon: null, serverId: 'srv-a', ...over };
@@ -17,8 +25,18 @@ function space(over: Partial<GuildSummary> & { id: string; name: string }): Guil
 
 beforeEach(() => {
   navigate.mockReset();
+  canAccessSync.mockReset();
+  canAccessSync.mockReturnValue(false);
   // Two connected servers — Spaces MERGES guilds across them (layout-spec §1).
   useServerListStore.setState({ activeServerId: 'srv-a' });
+  useAuthStore.setState({ user: { id: 'user-1' } as never });
+  useGuildStore.setState({
+    guilds: [
+      { id: 'g1', name: 'Emerald HQ', owner_id: 'user-1' },
+      { id: 'g2', name: 'Weekend Crew', owner_id: 'other' },
+    ] as never,
+  });
+  useUIStore.setState({ guildSettingsId: null });
 });
 
 describe('SpacesList', () => {
@@ -41,6 +59,16 @@ describe('SpacesList', () => {
     expect(screen.getByText('WC')).toBeInTheDocument();
   });
 
+  it('renders a space icon image when icon data is present', () => {
+    const icon = 'data:image/png;base64,iVBORw0KGgo=';
+    render(
+      <SpacesList spaces={[space({ id: 'g1', name: 'Emerald HQ', icon })]} />,
+    );
+    const img = screen.getByRole('option', { name: /Emerald HQ/ }).querySelector('img');
+    expect(img).toHaveAttribute('src', icon);
+    expect(screen.queryByText('EH')).not.toBeInTheDocument();
+  });
+
   it('marks the active guild row and leaves the others unselected', () => {
     const spaces = [
       space({ id: 'g1', name: 'Emerald HQ' }),
@@ -52,6 +80,22 @@ describe('SpacesList', () => {
     expect(options[0]).toHaveAttribute('aria-selected', 'false');
     expect(options[1]).toHaveAttribute('aria-selected', 'true');
     expect(options[1]).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('shows attention dots in the expanded list but not on the active space', () => {
+    const spaces = [
+      space({ id: 'g1', name: 'Emerald HQ' }),
+      space({ id: 'g2', name: 'Weekend Crew' }),
+    ];
+    render(
+      <SpacesList
+        spaces={spaces}
+        activeGuildId="g2"
+        attentionGuildIds={new Set(['g1', 'g2'])}
+      />,
+    );
+
+    expect(screen.getAllByTestId('expanded-space-attention-dot')).toHaveLength(1);
   });
 
   it('opens the guild home on click without switching servers when already active', () => {
@@ -93,5 +137,22 @@ describe('SpacesList', () => {
     expect(addRow).toBeInTheDocument();
     fireEvent.click(addRow);
     expect(onAddSpace).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits Space settings from the context menu without manage access', () => {
+    canAccessSync.mockReturnValue(false);
+    render(<SpacesList spaces={[space({ id: 'g1', name: 'Emerald HQ' })]} />);
+
+    fireEvent.contextMenu(screen.getByRole('option', { name: /Emerald HQ/ }));
+    expect(screen.queryByRole('menuitem', { name: 'Space settings' })).not.toBeInTheDocument();
+  });
+
+  it('offers Space settings in the context menu when the viewer can manage the space', () => {
+    canAccessSync.mockImplementation((id: string) => id === 'g1');
+    render(<SpacesList spaces={[space({ id: 'g1', name: 'Emerald HQ' })]} />);
+
+    fireEvent.contextMenu(screen.getByRole('option', { name: /Emerald HQ/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Space settings' }));
+    expect(useUIStore.getState().guildSettingsId).toBe('g1');
   });
 });

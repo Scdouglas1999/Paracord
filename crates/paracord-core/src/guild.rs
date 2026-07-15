@@ -67,6 +67,7 @@ pub async fn delete_guild(pool: &DbPool, guild_id: i64, user_id: i64) -> Result<
 }
 
 /// Update guild fields, requires MANAGE_GUILD permission.
+#[allow(clippy::too_many_arguments)]
 pub async fn update_guild(
     pool: &DbPool,
     guild_id: i64,
@@ -78,6 +79,7 @@ pub async fn update_guild(
     bot_settings: Option<&str>,
     visibility: Option<&str>,
     discovery_tags: Option<&str>,
+    allowed_roles: Option<&str>,
 ) -> Result<paracord_db::guilds::GuildRow, CoreError> {
     let guild = paracord_db::guilds::get_guild(pool, guild_id)
         .await?
@@ -97,14 +99,27 @@ pub async fn update_guild(
         bot_settings,
     )
     .await?;
-    if visibility.is_some() || discovery_tags.is_some() {
+    if visibility.is_some() || discovery_tags.is_some() || allowed_roles.is_some() {
         let next_visibility = visibility.unwrap_or(&updated.visibility);
         let next_discovery_tags = discovery_tags.unwrap_or(&updated.discovery_tags);
+        // Non-role visibility must not retain stale role gates.
+        let next_allowed_roles = if next_visibility != "roles" {
+            Some("[]")
+        } else {
+            let effective = allowed_roles.unwrap_or(&updated.allowed_roles);
+            if paracord_db::guilds::parse_allowed_role_ids(effective).is_empty() {
+                return Err(CoreError::BadRequest(
+                    "visibility \"roles\" requires at least one allowed role".into(),
+                ));
+            }
+            Some(effective)
+        };
         updated = paracord_db::guilds::update_space_visibility(
             pool,
             guild_id.into(),
             next_visibility,
             next_discovery_tags,
+            next_allowed_roles,
         )
         .await?;
     }

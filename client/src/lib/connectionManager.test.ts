@@ -27,7 +27,7 @@ function makeConnection(overrides: Partial<ServerConnection> = {}): ServerConnec
     allowReconnect: true,
     connected: true,
     connecting: false,
-    lastHeartbeatSent: 0,
+    lastHeartbeatSentAtMs: 0,
     missedAcks: 0,
     connectionLatency: 0,
     pendingMessages: [],
@@ -50,10 +50,27 @@ type ManagerInternals = {
 const manager = connectionManager as unknown as ManagerInternals;
 
 /** Register a connection for the duration of a test, then clean up. */
-function withConnection(conn: ServerConnection, fn: () => void): void {
+function withConnection<T>(conn: ServerConnection, fn: () => T): T {
   manager.connections.set(conn.serverId, conn);
   try {
-    fn();
+    return fn();
+  } finally {
+    if (conn.reconnectTimer) {
+      clearTimeout(conn.reconnectTimer);
+      conn.reconnectTimer = null;
+    }
+    manager.connections.delete(conn.serverId);
+  }
+}
+
+/** Like withConnection, but awaits an async body before cleanup. */
+async function withConnectionAsync(
+  conn: ServerConnection,
+  fn: () => Promise<void>,
+): Promise<void> {
+  manager.connections.set(conn.serverId, conn);
+  try {
+    await fn();
   } finally {
     if (conn.reconnectTimer) {
       clearTimeout(conn.reconnectTimer);
@@ -323,6 +340,56 @@ describe('connectionManager malformed frame diagnostics', () => {
   });
 });
 
+describe('connectionManager healthy-connection skip', () => {
+  type Internals = {
+    connectServerInternal: (id: string) => Promise<void>;
+    isConnectionHealthy: (c: ServerConnection) => boolean;
+    connectRealtime: (c: ServerConnection) => void;
+  };
+  const internals = manager as unknown as Internals;
+
+  it('treats a live SSE connection as healthy and skips reconnect', async () => {
+    const connectSpy = vi.spyOn(internals, 'connectRealtime').mockImplementation(() => {});
+    const conn = makeConnection({
+      serverId: 'healthy',
+      connected: true,
+      connecting: false,
+      eventSource: { close() {} } as unknown as EventSource,
+    });
+
+    try {
+      await withConnectionAsync(conn, async () => {
+        expect(internals.isConnectionHealthy(conn)).toBe(true);
+        await internals.connectServerInternal('healthy');
+      });
+      expect(connectSpy).not.toHaveBeenCalled();
+    } finally {
+      connectSpy.mockRestore();
+    }
+  });
+
+  it('reconnects when an existing connection is stale', async () => {
+    const connectSpy = vi.spyOn(internals, 'connectRealtime').mockImplementation(() => {});
+    const conn = makeConnection({
+      serverId: 'stale',
+      connected: false,
+      connecting: false,
+      eventSource: null,
+      ws: null,
+    });
+
+    try {
+      await withConnectionAsync(conn, async () => {
+        expect(internals.isConnectionHealthy(conn)).toBe(false);
+        await internals.connectServerInternal('stale');
+      });
+      expect(connectSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      connectSpy.mockRestore();
+    }
+  });
+});
+
 describe('connectionManager SSE watchdog', () => {
   let reconnectSpy: ReturnType<typeof vi.spyOn>;
 
@@ -342,7 +409,7 @@ describe('connectionManager SSE watchdog', () => {
   it('marks the stream stale and reconnects after the no-frame timeout', () => {
     const close = vi.fn();
     const es = { close } as unknown as EventSource;
-    const conn = makeConnection({ eventSource: es, connected: true });
+    const conn = makeConnection({ eventSource: es, connected: true, connectionLatency: 42 });
 
     withConnection(conn, () => {
       manager.startSseWatchdog(conn, es);
@@ -355,7 +422,7 @@ describe('connectionManager SSE watchdog', () => {
       expect(close).toHaveBeenCalledTimes(1);
       expect(conn.eventSource).toBeNull();
       expect(conn.connected).toBe(false);
-      expect(conn.connectionLatency).toBeGreaterThan(0);
+      expect(conn.connectionLatency).toBe(42);
       expect(conn.sseWatchdogTimer).toBeNull();
     });
   });

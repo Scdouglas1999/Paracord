@@ -169,4 +169,31 @@ describe('BotStoreSection', () => {
       );
     });
   });
+
+  it('routes already-included tools to their real setup surfaces instead of showing coming-soon cards', async () => {
+    const user = userEvent.setup();
+    const onOpenSettings = vi.fn();
+    const onOpenChannel = vi.fn();
+
+    render(
+      <BotStoreSection
+        guildId="guild-1"
+        canManage
+        onOpenSettings={onOpenSettings}
+        onOpenChannel={onOpenChannel}
+      />,
+    );
+
+    expect(screen.queryByText('Coming Soon')).toBeNull();
+    expect(screen.getAllByText('Available now')).toHaveLength(3);
+
+    await user.click(screen.getByRole('button', { name: 'Open Onboarding' }));
+    expect(onOpenSettings).toHaveBeenCalledWith('onboarding');
+
+    await user.click(screen.getByRole('button', { name: 'Open Economy' }));
+    expect(onOpenSettings).toHaveBeenCalledWith('economy');
+
+    await user.click(screen.getByRole('button', { name: 'Open a channel' }));
+    expect(onOpenChannel).toHaveBeenCalledWith('channel-1');
+  });
 });

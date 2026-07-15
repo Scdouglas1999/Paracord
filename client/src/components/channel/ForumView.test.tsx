@@ -46,6 +46,15 @@ vi.mock('../../stores/memberStore', () => ({
     }),
 }));
 
+vi.mock('../../hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    permissions: 1n << 4n, // MANAGE_CHANNELS
+    isAdmin: false,
+    isOwner: false,
+    isLoading: false,
+  }),
+}));
+
 vi.mock('../../stores/toastStore', () => ({
   toast: {
     success: vi.fn(),
@@ -108,6 +117,78 @@ describe('ForumView tag accessibility', () => {
     });
   });
 
+  it('navigates to the matching post when a search result is clicked', async () => {
+    const user = userEvent.setup();
+    mocks.searchMessages.mockResolvedValueOnce({
+      data: [
+        {
+          id: 'msg-9',
+          channel_id: 'post-thread-1',
+          content: 'Ship the release notes',
+          created_at: '2026-07-01T12:00:00.000Z',
+          author: { id: 'u1', username: 'Sam' },
+        },
+      ],
+    });
+
+    render(<ForumView channelId="channel-1" channelName="forum" />);
+
+    const search = await screen.findByPlaceholderText('Search posts…');
+    await user.type(search, 'release{Enter}');
+
+    await user.click(await screen.findByRole('button', { name: /Ship the release notes/i }));
+
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      '/app/guilds/guild-1/channels/post-thread-1?message=msg-9',
+    );
+  });
+
+  it('ignores stale search responses when a newer query finishes first', async () => {
+    const user = userEvent.setup();
+    let resolveSlow: ((value: { data: unknown[] }) => void) | undefined;
+    mocks.searchMessages
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSlow = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 'msg-fast',
+            channel_id: 'post-2',
+            content: 'fast hit',
+            author: { id: 'u1', username: 'Sam' },
+          },
+        ],
+      });
+
+    render(<ForumView channelId="channel-1" channelName="forum" />);
+    const search = await screen.findByPlaceholderText('Search posts…');
+
+    await user.type(search, 'slow{Enter}');
+    await user.clear(search);
+    await user.type(search, 'fast{Enter}');
+
+    await screen.findByRole('button', { name: /fast hit/i });
+    resolveSlow?.({
+      data: [
+        {
+          id: 'msg-slow',
+          channel_id: 'post-1',
+          content: 'slow hit',
+          author: { id: 'u1', username: 'Sam' },
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /fast hit/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /slow hit/i })).not.toBeInTheDocument();
+  });
+
   it('preserves create-post error details in feedback', async () => {
     const user = userEvent.setup();
     mocks.createForumPost.mockRejectedValueOnce(new Error('Title contains blocked markup'));
@@ -123,5 +204,20 @@ describe('ForumView tag accessibility', () => {
         'Failed to create post: Title contains blocked markup',
       );
     });
+  });
+
+  it('gives the opening message the shared markdown formatting controls', async () => {
+    const user = userEvent.setup();
+    render(<ForumView channelId="channel-1" channelName="forum" />);
+
+    await user.click(await screen.findByRole('button', { name: 'New Post' }));
+    const content = screen.getByRole('textbox', { name: 'Opening message (optional)' });
+    await user.type(content, 'Launch notes');
+    (content as HTMLTextAreaElement).setSelectionRange(0, 'Launch notes'.length);
+    await user.click(screen.getByRole('button', { name: /Bold/i }));
+
+    expect(content).toHaveValue('**Launch notes**');
+    expect(screen.getByText('16/2000')).toBeInTheDocument();
+    expect(screen.getByText(/Markdown formatting is supported/i)).toBeInTheDocument();
   });
 });

@@ -190,6 +190,7 @@ pub async fn get_leaderboard(
             "user": {
                 "id": user.id.to_string(),
                 "username": user.username,
+                "display_name": user.display_name,
                 "discriminator": user.discriminator,
                 "avatar": user.avatar_hash,
             },

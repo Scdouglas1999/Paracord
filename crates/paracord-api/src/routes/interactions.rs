@@ -4,14 +4,20 @@ use axum::{
     Json,
 };
 use paracord_core::AppState;
+use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use url::Url;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 
 const MAX_COMPONENT_URL_LEN: usize = 2_000;
+const MAX_COMPONENT_CUSTOM_ID_LEN: usize = 100;
+const MAX_SELECT_VALUES: usize = 25;
+const MAX_MODAL_INPUTS: usize = 5;
+const MAX_MODAL_VALUE_LEN: usize = 4_000;
 
 fn contains_dangerous_markup(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
@@ -79,6 +85,346 @@ fn validate_message_components(components: &Value) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn collect_custom_id_matches(value: &Value, custom_id: &str, matches: &mut Vec<Value>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_custom_id_matches(item, custom_id, matches);
+            }
+        }
+        Value::Object(map) => {
+            if map.get("custom_id").and_then(Value::as_str) == Some(custom_id) {
+                matches.push(value.clone());
+            }
+            if let Some(children) = map.get("components") {
+                collect_custom_id_matches(children, custom_id, matches);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Bind a component submission to the exact enabled component persisted on the
+/// message. This prevents clients from inventing a bot action `custom_id` or
+/// supplying values that the rendered control could never produce.
+fn validate_component_submission(
+    stored_components: Option<&str>,
+    custom_id: &str,
+    submitted_type: Option<i16>,
+    submitted_values: Option<Vec<String>>,
+) -> Result<(i16, Vec<String>), ApiError> {
+    if custom_id.is_empty() || custom_id.len() > MAX_COMPONENT_CUSTOM_ID_LEN {
+        return Err(ApiError::BadRequest(
+            "component custom_id is invalid".into(),
+        ));
+    }
+    let submitted_type =
+        submitted_type.ok_or_else(|| ApiError::BadRequest("component_type is required".into()))?;
+    let stored: Value = serde_json::from_str(
+        stored_components
+            .ok_or_else(|| ApiError::BadRequest("message has no components".into()))?,
+    )
+    .map_err(|_| ApiError::BadRequest("message components are invalid".into()))?;
+
+    let mut matches = Vec::new();
+    collect_custom_id_matches(&stored, custom_id, &mut matches);
+    if matches.len() != 1 {
+        return Err(ApiError::BadRequest(
+            "component does not exist uniquely on this message".into(),
+        ));
+    }
+    let component = matches
+        .pop()
+        .and_then(|value| value.as_object().cloned())
+        .ok_or_else(|| ApiError::BadRequest("stored component is invalid".into()))?;
+    if component.get("disabled").and_then(Value::as_bool) == Some(true) {
+        return Err(ApiError::BadRequest("component is disabled".into()));
+    }
+    let stored_type = component
+        .get("type")
+        .and_then(Value::as_i64)
+        .and_then(|value| i16::try_from(value).ok())
+        .ok_or_else(|| ApiError::BadRequest("stored component type is invalid".into()))?;
+    if stored_type != submitted_type || !matches!(stored_type, 2 | 3 | 5 | 6 | 7 | 8) {
+        return Err(ApiError::BadRequest(
+            "component_type does not match the message".into(),
+        ));
+    }
+
+    let values = submitted_values.unwrap_or_default();
+    if stored_type == 2 {
+        if component.get("style").and_then(Value::as_i64) == Some(5) {
+            return Err(ApiError::BadRequest(
+                "link buttons cannot be invoked".into(),
+            ));
+        }
+        if !values.is_empty() {
+            return Err(ApiError::BadRequest("buttons do not accept values".into()));
+        }
+        return Ok((stored_type, values));
+    }
+
+    let min_values = component
+        .get("min_values")
+        .and_then(Value::as_u64)
+        .unwrap_or(1) as usize;
+    let max_values = component
+        .get("max_values")
+        .and_then(Value::as_u64)
+        .unwrap_or(1) as usize;
+    if min_values > max_values
+        || max_values > MAX_SELECT_VALUES
+        || values.len() < min_values
+        || values.len() > max_values
+    {
+        return Err(ApiError::BadRequest("invalid select value count".into()));
+    }
+    let mut unique = HashSet::new();
+    if values.iter().any(|value| !unique.insert(value.as_str())) {
+        return Err(ApiError::BadRequest(
+            "duplicate select values are not allowed".into(),
+        ));
+    }
+
+    if stored_type == 3 {
+        let allowed: HashSet<&str> = component
+            .get("options")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|option| option.get("value").and_then(Value::as_str))
+            .collect();
+        if values.iter().any(|value| !allowed.contains(value.as_str())) {
+            return Err(ApiError::BadRequest(
+                "select value is not present in the message component".into(),
+            ));
+        }
+    } else if values.iter().any(|value| value.parse::<i64>().is_err()) {
+        return Err(ApiError::BadRequest(
+            "entity select values must be snowflake IDs".into(),
+        ));
+    }
+
+    Ok((stored_type, values))
+}
+
+async fn validate_entity_select_values(
+    state: &AppState,
+    guild_id: i64,
+    user_id: i64,
+    component_type: i16,
+    values: &[String],
+) -> Result<(), ApiError> {
+    for raw in values {
+        let id = raw
+            .parse::<i64>()
+            .map_err(|_| ApiError::BadRequest("invalid entity select value".into()))?;
+        let valid = match component_type {
+            5 => paracord_db::members::get_member(&state.db, id, guild_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                .is_some(),
+            6 => paracord_db::roles::get_role(&state.db, id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                .is_some_and(|role| role.space_id == guild_id),
+            7 => {
+                let member = paracord_db::members::get_member(&state.db, id, guild_id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                    .is_some();
+                let role = paracord_db::roles::get_role(&state.db, id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                    .is_some_and(|role| role.space_id == guild_id);
+                member || role
+            }
+            8 => {
+                let Some(channel) = paracord_db::channels::get_channel(&state.db, id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                else {
+                    return Err(ApiError::BadRequest(
+                        "selected channel does not exist".into(),
+                    ));
+                };
+                if channel.guild_id() != Some(guild_id) {
+                    false
+                } else {
+                    ensure_channel_access(state, guild_id, id, user_id, Permissions::VIEW_CHANNEL)
+                        .await
+                        .is_ok()
+                }
+            }
+            _ => true,
+        };
+        if !valid {
+            return Err(ApiError::BadRequest(
+                "selected entity is not available in this guild".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone)]
+struct ModalInputDefinition {
+    custom_id: String,
+    required: bool,
+    min_length: usize,
+    max_length: usize,
+}
+
+fn modal_input_definitions(data: &Value) -> Result<Vec<ModalInputDefinition>, ApiError> {
+    let title = data
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let custom_id = data
+        .get("custom_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if title.is_empty() || title.chars().count() > 45 {
+        return Err(ApiError::BadRequest("modal title is invalid".into()));
+    }
+    if custom_id.is_empty() || custom_id.len() > MAX_COMPONENT_CUSTOM_ID_LEN {
+        return Err(ApiError::BadRequest("modal custom_id is invalid".into()));
+    }
+    let rows = data
+        .get("components")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::BadRequest("modal components must be an array".into()))?;
+    if rows.is_empty() || rows.len() > MAX_MODAL_INPUTS {
+        return Err(ApiError::BadRequest(
+            "modal must contain 1 to 5 inputs".into(),
+        ));
+    }
+
+    let mut definitions = Vec::with_capacity(rows.len());
+    let mut ids = HashSet::new();
+    for row in rows {
+        if row.get("type").and_then(Value::as_i64) != Some(1) {
+            return Err(ApiError::BadRequest(
+                "modal inputs must be in action rows".into(),
+            ));
+        }
+        let children = row
+            .get("components")
+            .and_then(Value::as_array)
+            .ok_or_else(|| ApiError::BadRequest("modal action row is invalid".into()))?;
+        if children.len() != 1 || children[0].get("type").and_then(Value::as_i64) != Some(4) {
+            return Err(ApiError::BadRequest(
+                "each modal row must contain one text input".into(),
+            ));
+        }
+        let input = &children[0];
+        let id = input
+            .get("custom_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let label = input
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if id.is_empty()
+            || id.len() > MAX_COMPONENT_CUSTOM_ID_LEN
+            || label.is_empty()
+            || label.chars().count() > 45
+            || !ids.insert(id.to_owned())
+        {
+            return Err(ApiError::BadRequest("modal text input is invalid".into()));
+        }
+        let min_length = input.get("min_length").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let max_length = input
+            .get("max_length")
+            .and_then(Value::as_u64)
+            .unwrap_or(MAX_MODAL_VALUE_LEN as u64) as usize;
+        if min_length > max_length || max_length > MAX_MODAL_VALUE_LEN {
+            return Err(ApiError::BadRequest(
+                "modal input length limits are invalid".into(),
+            ));
+        }
+        definitions.push(ModalInputDefinition {
+            custom_id: id.to_owned(),
+            required: input
+                .get("required")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            min_length,
+            max_length,
+        });
+    }
+    Ok(definitions)
+}
+
+fn collect_submitted_modal_values(
+    components: &[Value],
+) -> Result<HashMap<String, String>, ApiError> {
+    if components.len() > MAX_MODAL_INPUTS {
+        return Err(ApiError::BadRequest("too many modal inputs".into()));
+    }
+    let mut values = HashMap::new();
+    for row in components {
+        if row.get("type").and_then(Value::as_i64) != Some(1) {
+            return Err(ApiError::BadRequest("invalid modal submission row".into()));
+        }
+        let children = row
+            .get("components")
+            .and_then(Value::as_array)
+            .ok_or_else(|| ApiError::BadRequest("invalid modal submission row".into()))?;
+        if children.len() != 1 || children[0].get("type").and_then(Value::as_i64) != Some(4) {
+            return Err(ApiError::BadRequest(
+                "invalid modal submission input".into(),
+            ));
+        }
+        let id = children[0]
+            .get("custom_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiError::BadRequest("modal input custom_id is required".into()))?;
+        let value = children[0]
+            .get("value")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if values.insert(id.to_owned(), value.to_owned()).is_some() {
+            return Err(ApiError::BadRequest("duplicate modal input".into()));
+        }
+    }
+    Ok(values)
+}
+
+fn normalize_modal_submission(
+    issued_data: &Value,
+    submitted: &[Value],
+) -> Result<Vec<Value>, ApiError> {
+    let definitions = modal_input_definitions(issued_data)?;
+    let mut values = collect_submitted_modal_values(submitted)?;
+    let mut normalized = Vec::with_capacity(definitions.len());
+    for definition in definitions {
+        let value = values.remove(&definition.custom_id).unwrap_or_default();
+        let length = value.chars().count();
+        if (definition.required && value.is_empty())
+            || length < definition.min_length
+            || length > definition.max_length
+        {
+            return Err(ApiError::BadRequest("modal input value is invalid".into()));
+        }
+        normalized.push(json!({
+            "type": 1,
+            "components": [{
+                "type": 4,
+                "custom_id": definition.custom_id,
+                "value": value,
+            }],
+        }));
+    }
+    if !values.is_empty() {
+        return Err(ApiError::BadRequest(
+            "modal contains an unknown input".into(),
+        ));
+    }
+    Ok(normalized)
+}
+
 // ── Request bodies ──────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -88,15 +434,24 @@ pub struct InvokeInteractionRequest {
     pub channel_id: String,
     #[serde(default)]
     pub options: Vec<Value>,
-    /// Interaction type: 2 = ApplicationCommand (default), 3 = MessageComponent
+    /// Interaction type: 2 = ApplicationCommand (default), 3 = MessageComponent,
+    /// 4 = ApplicationCommandAutocomplete, 5 = ModalSubmit
     #[serde(rename = "type", default = "default_interaction_type")]
     pub interaction_type: i16,
     /// For MessageComponent interactions: the message ID containing the component
     pub message_id: Option<String>,
-    /// For MessageComponent interactions
+    /// For MessageComponent / ModalSubmit interactions
     pub custom_id: Option<String>,
     pub component_type: Option<i16>,
     pub values: Option<Vec<String>>,
+    /// Nested payload used by some clients (custom_id / component_type / values / components).
+    pub data: Option<Value>,
+    /// ModalSubmit text-input rows (also accepted via `data.components`).
+    pub components: Option<Vec<Value>>,
+    /// Bot application that opened the modal (ModalSubmit).
+    pub application_id: Option<String>,
+    /// Original interaction for which the bot issued this modal (ModalSubmit).
+    pub source_interaction_id: Option<String>,
 }
 
 fn default_interaction_type() -> i16 {
@@ -193,6 +548,54 @@ async fn validate_webhook_token(
     Ok(row)
 }
 
+/// Ensure `channel_id` is a real channel that belongs to `guild_id` and that
+/// the invoking `user_id` actually holds `required` permissions on it.
+///
+/// L04-05: interaction invocation previously trusted the client-supplied
+/// `guild_id`/`channel_id`/`message_id` after only a guild-membership check,
+/// letting a member forge component clicks against messages in channels they
+/// cannot see and steer the bot's response into an arbitrary channel. This
+/// binds the channel to the claimed guild and enforces the caller's own
+/// channel-level permissions before an interaction is created.
+async fn ensure_channel_access(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: i64,
+    user_id: i64,
+    required: Permissions,
+) -> Result<(), ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    // The channel must actually live in the guild the caller claims.
+    if channel.guild_id() != Some(guild_id) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await
+    .map_err(ApiError::from)?;
+
+    if !perms.contains(required) {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(())
+}
+
 // ── Endpoints ───────────────────────────────────────────────────────────────
 
 /// POST /api/v1/interactions
@@ -220,6 +623,18 @@ pub async fn invoke_interaction(
     match body.interaction_type {
         // ApplicationCommand (2)
         2 => {
+            // L04-05: the channel must belong to the claimed guild and the
+            // caller must be able to view it before we let them run a command
+            // there (and steer the bot's response into it).
+            ensure_channel_access(
+                &state,
+                guild_id,
+                channel_id,
+                auth.user_id,
+                Permissions::VIEW_CHANNEL,
+            )
+            .await?;
+
             let command_name = body.command_name.as_deref().ok_or_else(|| {
                 ApiError::BadRequest("command_name required for slash commands".into())
             })?;
@@ -269,15 +684,52 @@ pub async fn invoke_interaction(
             let message_id = message_id_str
                 .parse::<i64>()
                 .map_err(|_| ApiError::BadRequest("Invalid message_id".into()))?;
-            let custom_id = body.custom_id.as_deref().ok_or_else(|| {
-                ApiError::BadRequest("custom_id required for component interactions".into())
-            })?;
+            let nested = body.data.as_ref();
+            let custom_id = body
+                .custom_id
+                .as_deref()
+                .or_else(|| nested.and_then(|d| d.get("custom_id").and_then(|v| v.as_str())))
+                .ok_or_else(|| {
+                    ApiError::BadRequest("custom_id required for component interactions".into())
+                })?;
+            let component_type = body.component_type.or_else(|| {
+                nested
+                    .and_then(|d| d.get("component_type"))
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n as i16)
+            });
+            let values = body.values.clone().or_else(|| {
+                nested.and_then(|d| {
+                    d.get("values").and_then(|v| v.as_array()).map(|arr| {
+                        arr.iter()
+                            .filter_map(|item| item.as_str().map(str::to_owned))
+                            .collect::<Vec<_>>()
+                    })
+                })
+            });
 
             // Look up the message to find the bot author
             let msg = paracord_db::messages::get_message(&state.db, message_id)
                 .await
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
                 .ok_or(ApiError::NotFound)?;
+
+            // L04-05: bind the interaction to the message's real channel and
+            // require the caller to actually be able to see that message.
+            // Without this a guild member could forge a component click against
+            // any message id (including admin-only control panels in channels
+            // they cannot access) and redirect the bot's response elsewhere.
+            if msg.channel_id != channel_id {
+                return Err(ApiError::Forbidden);
+            }
+            ensure_channel_access(
+                &state,
+                guild_id,
+                channel_id,
+                auth.user_id,
+                Permissions::VIEW_CHANNEL | Permissions::READ_MESSAGE_HISTORY,
+            )
+            .await?;
 
             // Find the bot application by bot_user_id (the message author)
             let bot_app = paracord_db::bot_applications::get_bot_application_by_user_id(
@@ -288,10 +740,27 @@ pub async fn invoke_interaction(
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
             .ok_or_else(|| ApiError::BadRequest("message was not sent by a bot".into()))?;
 
+            let (component_type, values) = validate_component_submission(
+                msg.components.as_deref(),
+                custom_id,
+                component_type,
+                values,
+            )?;
+            if matches!(component_type, 5..=8) {
+                validate_entity_select_values(
+                    &state,
+                    guild_id,
+                    auth.user_id,
+                    component_type,
+                    &values,
+                )
+                .await?;
+            }
+
             let interaction_data = json!({
                 "custom_id": custom_id,
-                "component_type": body.component_type.unwrap_or(2),
-                "values": body.values,
+                "component_type": component_type,
+                "values": values,
                 "message": {
                     "id": msg.id.to_string(),
                     "channel_id": msg.channel_id.to_string(),
@@ -306,6 +775,183 @@ pub async fn invoke_interaction(
                 channel_id,
                 auth.user_id,
                 3, // MessageComponent
+                interaction_data,
+            )
+            .await
+            .map_err(ApiError::from)?;
+
+            Ok((StatusCode::CREATED, Json(interaction)))
+        }
+        // ApplicationCommandAutocomplete (4)
+        4 => {
+            ensure_channel_access(
+                &state,
+                guild_id,
+                channel_id,
+                auth.user_id,
+                Permissions::VIEW_CHANNEL,
+            )
+            .await?;
+
+            let command_name = body.command_name.as_deref().ok_or_else(|| {
+                ApiError::BadRequest("command_name required for autocomplete".into())
+            })?;
+
+            let cmd =
+                paracord_core::interactions::resolve_slash_command(&state, command_name, guild_id)
+                    .await
+                    .map_err(ApiError::from)?
+                    .ok_or(ApiError::NotFound)?;
+
+            let bot_app =
+                paracord_db::bot_applications::get_bot_application(&state.db, cmd.application_id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                    .ok_or(ApiError::NotFound)?;
+
+            let interaction_data = json!({
+                "id": cmd.id.to_string(),
+                "name": cmd.name,
+                "type": cmd.cmd_type,
+                "options": body.options,
+            });
+
+            let (interaction, _token) = paracord_core::interactions::create_interaction(
+                &state,
+                cmd.application_id,
+                bot_app.bot_user_id,
+                Some(guild_id),
+                channel_id,
+                auth.user_id,
+                4, // ApplicationCommandAutocomplete
+                interaction_data,
+            )
+            .await
+            .map_err(ApiError::from)?;
+
+            Ok((StatusCode::CREATED, Json(interaction)))
+        }
+        // ModalSubmit (5)
+        5 => {
+            ensure_channel_access(
+                &state,
+                guild_id,
+                channel_id,
+                auth.user_id,
+                Permissions::VIEW_CHANNEL,
+            )
+            .await?;
+
+            let nested = body.data.as_ref();
+            let custom_id = body
+                .custom_id
+                .as_deref()
+                .or_else(|| nested.and_then(|d| d.get("custom_id").and_then(|v| v.as_str())))
+                .ok_or_else(|| {
+                    ApiError::BadRequest("custom_id required for modal submit".into())
+                })?;
+
+            let components = body
+                .components
+                .clone()
+                .or_else(|| {
+                    nested
+                        .and_then(|d| d.get("components"))
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                })
+                .unwrap_or_default();
+
+            let source_interaction_id = body
+                .source_interaction_id
+                .as_deref()
+                .ok_or_else(|| {
+                    ApiError::BadRequest("source_interaction_id required for modal submit".into())
+                })?
+                .parse::<i64>()
+                .map_err(|_| ApiError::BadRequest("Invalid source_interaction_id".into()))?;
+
+            let source = paracord_db::interaction_tokens::get_interaction_token(
+                &state.db,
+                source_interaction_id,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?;
+            if source.user_id != auth.user_id
+                || source.guild_id != Some(guild_id)
+                || source.channel_id != channel_id
+                || source.expires_at <= chrono::Utc::now()
+                || source.modal_issued_at.is_none()
+                || source.modal_consumed_at.is_some()
+            {
+                return Err(ApiError::Forbidden);
+            }
+            let issued_data: Value = serde_json::from_str(
+                source
+                    .modal_data
+                    .as_deref()
+                    .ok_or_else(|| ApiError::BadRequest("modal was not issued".into()))?,
+            )
+            .map_err(|_| ApiError::BadRequest("issued modal is invalid".into()))?;
+            if issued_data.get("custom_id").and_then(Value::as_str) != Some(custom_id) {
+                return Err(ApiError::Forbidden);
+            }
+            let components = normalize_modal_submission(&issued_data, &components)?;
+
+            let application_id = body
+                .application_id
+                .as_deref()
+                .ok_or_else(|| {
+                    ApiError::BadRequest("application_id required for modal submit".into())
+                })?
+                .parse::<i64>()
+                .map_err(|_| ApiError::BadRequest("Invalid application_id".into()))?;
+            if application_id != source.application_id {
+                return Err(ApiError::Forbidden);
+            }
+
+            let bot_app =
+                paracord_db::bot_applications::get_bot_application(&state.db, application_id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                    .ok_or(ApiError::NotFound)?;
+
+            // Ensure the bot is still installed in this guild.
+            let is_installed =
+                paracord_db::bot_applications::is_bot_in_guild(&state.db, application_id, guild_id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            if !is_installed {
+                return Err(ApiError::Forbidden);
+            }
+
+            let consumed = paracord_db::interaction_tokens::consume_modal(
+                &state.db,
+                source_interaction_id,
+                chrono::Utc::now(),
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            if !consumed {
+                return Err(ApiError::BadRequest(
+                    "modal has expired or was already submitted".into(),
+                ));
+            }
+
+            let interaction_data = json!({
+                "custom_id": custom_id,
+                "components": components,
+            });
+
+            let (interaction, _token) = paracord_core::interactions::create_interaction(
+                &state,
+                bot_app.id,
+                bot_app.bot_user_id,
+                Some(guild_id),
+                channel_id,
+                auth.user_id,
+                5, // ModalSubmit
                 interaction_data,
             )
             .await
@@ -341,6 +987,9 @@ pub async fn interaction_callback(
         }
         if let Some(components) = data.get("components") {
             validate_message_components(components)?;
+        }
+        if body.callback_type == 9 {
+            modal_input_definitions(data)?;
         }
     }
 

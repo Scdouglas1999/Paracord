@@ -98,6 +98,19 @@ describe('ChannelManager', () => {
     vi.mocked(channelApi.getFollowers).mockResolvedValue({ data: [] } as never);
     vi.mocked(channelApi.addFollower).mockResolvedValue({ data: {} } as never);
     vi.mocked(channelApi.removeFollower).mockResolvedValue({ data: {} } as never);
+    vi.mocked(channelApi.getFeatureSettings).mockResolvedValue({
+      data: {
+        channel_id: 'channel-1',
+        disappearing_seconds: 0,
+        anonymous_posting_enabled: false,
+        slowmode_exempt_role_ids: [],
+        adaptive_slowmode_enabled: false,
+        adaptive_slowmode_window_seconds: 60,
+        adaptive_slowmode_threshold: 5,
+        adaptive_slowmode_step_seconds: 5,
+        thread_rate_limit_per_user: 0,
+      },
+    } as never);
   });
 
   it('shows concrete API details when channel creation fails', async () => {
@@ -145,5 +158,18 @@ describe('ChannelManager', () => {
         'Failed to follow announcement channel: Manage Webhooks permission is required.',
       );
     });
+  });
+
+  it('makes advanced channel features explicit and explains their scope', async () => {
+    const user = userEvent.setup();
+    renderChannelManager();
+
+    const features = screen.getByRole('button', { name: 'Show advanced features for general' });
+    expect(features).toHaveTextContent('Features');
+    await user.click(features);
+
+    expect(await screen.findByText('Channel features')).toBeInTheDocument();
+    expect(screen.getByText('Automation and privacy controls that apply only to #general.')).toBeInTheDocument();
+    expect(channelApi.getFeatureSettings).toHaveBeenCalledWith('channel-1');
   });
 });

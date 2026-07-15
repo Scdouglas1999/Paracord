@@ -3,6 +3,7 @@ import { MessageList } from '../../components/message/MessageList';
 import { MessageInput } from '../../components/message/MessageInput';
 import { useUIStore } from '../../stores/uiStore';
 import type { Channel, Message } from '../../types';
+import { displayName } from '../../lib/displayName';
 
 interface TextChannelViewProps {
   guildId: string | undefined;
@@ -74,7 +75,7 @@ export function TextChannelView({
           onReply={(msg: Message) =>
             setReplyingTo({
               id: msg.id,
-              author: msg.author.username,
+              author: displayName(msg.author),
               content: msg.content || '',
             })
           }

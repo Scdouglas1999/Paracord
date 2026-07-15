@@ -37,6 +37,13 @@ export function InvitePage() {
 
   const handleAccept = async () => {
     if (!token) {
+      if (code) {
+        try {
+          sessionStorage.setItem('paracord:pending-invite', code);
+        } catch {
+          /* ignore quota / private mode */
+        }
+      }
       navigate('/login');
       return;
     }
@@ -97,7 +104,7 @@ export function InvitePage() {
             </div>
             <div className="min-w-0">
               <h1 className="truncate font-display text-title text-text-primary">
-                {loadingPreview ? 'Loading invite…' : guild?.name ?? 'Join this server'}
+                {loadingPreview ? 'Loading invite…' : guild?.name ?? 'Join this space'}
               </h1>
               <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-text-muted">
                 {memberCount !== null && (
@@ -146,11 +153,11 @@ export function InvitePage() {
                   onChange={(e) => setVerificationAck(e.target.checked)}
                   className="mt-0.5 h-4 w-4 accent-[var(--accent-primary)]"
                 />
-                I acknowledge this server’s rules and verification requirements.
+                I acknowledge this space’s rules and verification requirements.
               </label>
               <textarea
                 className="input-field mt-3 min-h-[72px] resize-y text-body"
-                placeholder="Verification answers (one per line, if this server requires them)"
+                placeholder="Verification answers (one per line, if this space requires them)"
                 value={verificationAnswers}
                 onChange={(e) => setVerificationAnswers(e.target.value)}
               />

@@ -6,6 +6,7 @@ import type {
   MessageE2eePayload,
   PaginationParams,
   SendMessageRequest,
+  User,
 } from '../types';
 import { channelApi } from '../api/channels';
 import { extractApiError } from '../api/client';
@@ -14,7 +15,7 @@ import { encryptDmMessageV2 } from '../lib/dmE2ee';
 import { decryptDmMessageOffthread } from '../lib/dmE2eeWorker';
 import { hasUnlockedPrivateKey, withUnlockedPrivateKey } from '../lib/accountSession';
 import { decryptGroupDmMessage, encryptGroupDmMessage } from '../lib/groupDmE2ee';
-import { useChannelStore } from './channelStore';
+import { refreshGuildChannelVisibility, useChannelStore } from './channelStore';
 import { toast } from './toastStore';
 import { usePollStore } from './pollStore';
 import { getVersionedJson, setVersionedJson } from '../lib/versionedStorage';
@@ -538,6 +539,7 @@ interface MessageState {
   updateMessage: (channelId: string, message: Partial<Message> & Pick<Message, 'id'>) => void;
   removeMessage: (channelId: string, messageId: string) => void;
   removeMessages: (channelId: string, messageIds: string[]) => void;
+  updateUserIdentity: (user: User) => void;
 }
 
 export const useMessageStore = create<MessageState>()((set, get) => ({
@@ -600,11 +602,19 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
           }
           touchChannel(channelId);
           set((state) => {
-            const existing = params?.before ? state.messages[channelId] || [] : [];
             // API returns newest first (ORDER BY id DESC); reverse to
             // chronological order (oldest at top, newest at bottom).
             const sorted = [...decrypted].reverse();
-            const merged = params?.before ? [...sorted, ...existing] : sorted;
+            let merged: typeof sorted;
+            if (params?.before) {
+              const existing = state.messages[channelId] || [];
+              merged = [...sorted, ...existing];
+            } else if (params?.around) {
+              // Replace the window with the around-anchor slice so jump-to works.
+              merged = sorted;
+            } else {
+              merged = sorted;
+            }
             const nextMessages = {
               ...state.messages,
               [channelId]: capChannelMessages(merged, !!params?.before),
@@ -613,7 +623,10 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
               messages: nextMessages,
               hasMore: {
                 ...state.hasMore,
-                [channelId]: decrypted.length >= DEFAULT_MESSAGE_FETCH_LIMIT,
+                // around fetches are mid-history; keep hasMore true so older loads still work.
+                [channelId]: params?.around
+                  ? true
+                  : decrypted.length >= DEFAULT_MESSAGE_FETCH_LIMIT,
               },
               messageErrors: { ...state.messageErrors, [channelId]: null },
             });
@@ -662,6 +675,10 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
           messages: { ...state.messages, [channelId]: capChannelMessages([...existing, decrypted]) },
         });
       });
+      // Progressive channel unlock is message-count gated — refresh the visible
+      // list so newly unlocked channels appear without remounting the guild.
+      const guildId = useChannelStore.getState().channelsById[channelId]?.guild_id;
+      refreshGuildChannelVisibility(guildId);
     } catch (err) {
       const networkQueueable = shouldQueueMessageError(err);
       const hasAttachments = (attachmentIds?.length ?? 0) > 0;
@@ -1161,6 +1178,35 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
           ...state.messages,
           [channelId]: existing.filter((m) => !idSet.has(m.id)),
         },
+      };
+    }),
+
+  updateUserIdentity: (user) =>
+    set((state) => {
+      const patchAuthor = (message: Message): Message =>
+        message.author.id === user.id
+          ? {
+              ...message,
+              author: {
+                ...message.author,
+                ...user,
+                discriminator: String(user.discriminator),
+              },
+            }
+          : message;
+      return {
+        messages: Object.fromEntries(
+          Object.entries(state.messages).map(([channelId, messages]) => [
+            channelId,
+            messages.map(patchAuthor),
+          ]),
+        ),
+        pins: Object.fromEntries(
+          Object.entries(state.pins).map(([channelId, messages]) => [
+            channelId,
+            messages.map(patchAuthor),
+          ]),
+        ),
       };
     }),
 }));

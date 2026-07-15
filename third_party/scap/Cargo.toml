@@ -96,13 +96,15 @@ version = "0.2.7"
 version = "0.15.3"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "0.58"
+version = "0.61"
 features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Performance",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi_Common",
 ]
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-capture]

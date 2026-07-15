@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Track, RoomEvent } from 'livekit-client';
+import { useAuthStore } from '../stores/authStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { displayName } from '../lib/displayName';
 
 export interface WebcamTile {
   participantId: string;
@@ -12,22 +14,27 @@ export interface WebcamTile {
  * Returns the list of participants with active camera tracks.
  * Extracted from VideoGrid's recompute logic so multiple components
  * (VideoGrid, SplitPaneSourcePicker) can share the same data.
+ *
+ * Supports both LiveKit (`room`) and native/browser MediaEngine paths.
  */
 export function useWebcamTiles(): WebcamTile[] {
   const room = useVoiceStore((s) => s.room);
+  const mediaEngine = useVoiceStore((s) => s.mediaEngine);
   const connected = useVoiceStore((s) => s.connected);
+  const selfVideo = useVoiceStore((s) => s.selfVideo);
+  const participants = useVoiceStore((s) => s.participants);
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const [tiles, setTiles] = useState<WebcamTile[]>([]);
 
+  // LiveKit path
   useEffect(() => {
     if (!room || !connected) {
-      setTiles([]);
       return;
     }
 
     const recompute = () => {
       const next: WebcamTile[] = [];
 
-      // Local participant
       for (const pub of room.localParticipant.videoTrackPublications.values()) {
         if (
           pub.source === Track.Source.Camera &&
@@ -44,7 +51,6 @@ export function useWebcamTiles(): WebcamTile[] {
         }
       }
 
-      // Remote participants
       for (const participant of room.remoteParticipants.values()) {
         for (const pub of participant.videoTrackPublications.values()) {
           if (pub.source === Track.Source.Camera) {
@@ -79,10 +85,7 @@ export function useWebcamTiles(): WebcamTile[] {
     room.on(RoomEvent.LocalTrackPublished, recompute);
     room.on(RoomEvent.LocalTrackUnpublished, recompute);
 
-    const pollInterval = setInterval(recompute, 2000);
-
     return () => {
-      clearInterval(pollInterval);
       room.off(RoomEvent.TrackSubscribed, recompute);
       room.off(RoomEvent.TrackUnsubscribed, recompute);
       room.off(RoomEvent.TrackPublished, recompute);
@@ -95,6 +98,80 @@ export function useWebcamTiles(): WebcamTile[] {
       room.off(RoomEvent.LocalTrackUnpublished, recompute);
     };
   }, [room, connected]);
+
+  // Native / browser MediaEngine path — derive camera tiles from voice state
+  // plus published camera tracks when available.
+  useEffect(() => {
+    if (room || !mediaEngine || !connected) {
+      if (!room && !mediaEngine) {
+        setTiles([]);
+      }
+      return;
+    }
+
+    let cancelled = false;
+
+    const recompute = async () => {
+      const next: WebcamTile[] = [];
+      const seen = new Set<string>();
+
+      if (selfVideo && currentUserId) {
+        next.push({
+          participantId: currentUserId,
+          username: 'You',
+          isLocal: true,
+        });
+        seen.add(currentUserId);
+      }
+
+      for (const [userId, vs] of participants) {
+        if (!vs.self_video || seen.has(userId)) continue;
+        if (currentUserId != null && userId === currentUserId) continue;
+        next.push({
+          participantId: userId,
+          username: displayName(vs) || `User ${userId.slice(0, 6)}`,
+          isLocal: false,
+        });
+        seen.add(userId);
+      }
+
+      // Supplement with published camera tracks (covers peers whose gateway
+      // self_video flag is briefly stale after a track_publish).
+      try {
+        const tracks = await mediaEngine.listPublishedTracks();
+        if (cancelled) return;
+        for (const track of tracks) {
+          if (track.kind !== 'video' || track.trackId !== 'camera') continue;
+          const userId = String(track.publisherUserId);
+          if (seen.has(userId)) continue;
+          if (currentUserId != null && userId === currentUserId) continue;
+          const vs = participants.get(userId);
+          next.push({
+            participantId: userId,
+            username: (vs ? displayName(vs) : null) || `User ${userId.slice(0, 6)}`,
+            isLocal: false,
+          });
+          seen.add(userId);
+        }
+      } catch {
+        // listPublishedTracks can fail during reconnect; voice-state tiles still work.
+      }
+
+      if (!cancelled) {
+        setTiles(next);
+      }
+    };
+
+    void recompute();
+    const interval = setInterval(() => {
+      void recompute();
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [room, mediaEngine, connected, selfVideo, participants, currentUserId]);
 
   return tiles;
 }

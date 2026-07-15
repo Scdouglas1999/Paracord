@@ -30,8 +30,26 @@ vi.mock('../../api/relationships', () => ({
   relationshipApi: {
     addFriend: vi.fn(),
     block: vi.fn(),
+    accept: vi.fn(),
+    remove: vi.fn(),
+    list: vi.fn(() => Promise.resolve({ data: [] })),
   },
 }));
+
+vi.mock('../../stores/relationshipStore', () => {
+  const state = {
+    relationships: [] as Array<{ id: string; type: number; user: { id: string; username: string } }>,
+    fetchRelationships: vi.fn(async () => undefined),
+    addFriend: vi.fn(async () => undefined),
+    acceptFriend: vi.fn(async () => undefined),
+    removeFriend: vi.fn(async () => undefined),
+  };
+  const useRelationshipStore = Object.assign(
+    (selector: (s: typeof state) => unknown) => selector(state),
+    { getState: () => state },
+  );
+  return { useRelationshipStore };
+});
 
 vi.mock('../../api/keys', () => ({
   keysApi: {
@@ -130,6 +148,14 @@ describe('UserProfilePopup action feedback', () => {
     vi.mocked(guildApi.createReport).mockResolvedValue({ data: {} } as never);
   });
 
+  it('keeps the profile surface within the viewport', () => {
+    const { container } = renderProfile();
+
+    expect(container.querySelector('.popup-enter')).toHaveClass(
+      'w-[min(21.5rem,calc(100vw-1rem))]',
+    );
+  });
+
   it('shows API detail when starting a DM fails', async () => {
     const user = userEvent.setup();
     vi.mocked(dmApi.create).mockRejectedValue(apiError('Direct messages are disabled.'));
@@ -145,7 +171,10 @@ describe('UserProfilePopup action feedback', () => {
 
   it('shows API detail when sending a friend request fails', async () => {
     const user = userEvent.setup();
-    vi.mocked(relationshipApi.addFriend).mockRejectedValue(apiError('Friend requests are blocked.'));
+    const { useRelationshipStore } = await import('../../stores/relationshipStore');
+    vi.mocked(useRelationshipStore.getState().addFriend).mockRejectedValue(
+      apiError('Friend requests are blocked.'),
+    );
 
     renderProfile();
 

@@ -7,6 +7,7 @@ pub struct DmChannelWithRecipientRow {
     pub last_message_id: Option<i64>,
     pub recipient_id: i64,
     pub recipient_username: String,
+    pub recipient_display_name: Option<String>,
     pub recipient_discriminator: i16,
     pub recipient_avatar_hash: Option<String>,
     pub recipient_public_key: Option<String>,
@@ -88,6 +89,7 @@ pub async fn list_user_dm_channels(
         "SELECT c.id, c.channel_type, c.last_message_id,
                 u.id AS recipient_id,
                 u.username AS recipient_username,
+                u.display_name AS recipient_display_name,
                 u.discriminator AS recipient_discriminator,
                 u.avatar_hash AS recipient_avatar_hash,
                 u.public_key AS recipient_public_key
@@ -225,6 +227,7 @@ pub async fn remove_group_dm_recipient(
 pub struct GroupDmRecipient {
     pub user_id: i64,
     pub username: String,
+    pub display_name: Option<String>,
     pub discriminator: i16,
     pub avatar_hash: Option<String>,
     pub public_key: Option<String>,
@@ -236,7 +239,7 @@ pub async fn list_group_dm_recipients(
     channel_id: i64,
 ) -> Result<Vec<GroupDmRecipient>, DbError> {
     let rows = sqlx::query_as::<_, GroupDmRecipient>(
-        "SELECT u.id AS user_id, u.username, u.discriminator, u.avatar_hash, u.public_key
+        "SELECT u.id AS user_id, u.username, u.display_name, u.discriminator, u.avatar_hash, u.public_key
          FROM dm_recipients r INNER JOIN users u ON u.id = r.user_id
          WHERE r.channel_id = $1
          ORDER BY u.username ASC",
@@ -245,6 +248,59 @@ pub async fn list_group_dm_recipients(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Batch-load recipients for many group DM channels in one query.
+/// Recipients within each channel are ordered by username (same as
+/// [`list_group_dm_recipients`]).
+pub async fn list_group_dm_recipients_for_channels(
+    pool: &DbPool,
+    channel_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, Vec<GroupDmRecipient>>, DbError> {
+    if channel_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    #[derive(Debug, Clone, sqlx::FromRow)]
+    struct GroupDmRecipientChannelRow {
+        channel_id: i64,
+        user_id: i64,
+        username: String,
+        display_name: Option<String>,
+        discriminator: i16,
+        avatar_hash: Option<String>,
+        public_key: Option<String>,
+    }
+
+    let placeholders = crate::messages::build_placeholders(1, channel_ids.len());
+    let sql = format!(
+        "SELECT r.channel_id, u.id AS user_id, u.username, u.display_name, u.discriminator, u.avatar_hash, u.public_key
+         FROM dm_recipients r INNER JOIN users u ON u.id = r.user_id
+         WHERE r.channel_id IN ({placeholders})
+         ORDER BY r.channel_id, u.username ASC"
+    );
+    let mut query = sqlx::query_as::<_, GroupDmRecipientChannelRow>(&sql);
+    for id in channel_ids {
+        query = query.bind(*id);
+    }
+    let rows = query.fetch_all(pool).await?;
+
+    let mut by_channel: std::collections::HashMap<i64, Vec<GroupDmRecipient>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        by_channel
+            .entry(row.channel_id)
+            .or_default()
+            .push(GroupDmRecipient {
+                user_id: row.user_id,
+                username: row.username,
+                display_name: row.display_name,
+                discriminator: row.discriminator,
+                avatar_hash: row.avatar_hash,
+                public_key: row.public_key,
+            });
+    }
+    Ok(by_channel)
 }
 
 /// List all group DM channels the user is a member of (channel_type = 3).

@@ -65,12 +65,33 @@ fn allows_query_download_ticket(parts: &Parts) -> bool {
     if parts.method == Method::GET && path.starts_with("/api/v1/federated-files/") {
         return true;
     }
+    // Attachment GETs only — never mutate/list via ticket auth.
+    if parts.method == Method::GET {
+        let rest = path.strip_prefix("/api/v1/attachments/");
+        if let Some(id) = rest {
+            // Single path segment: attachment id (no nested routes).
+            if !id.is_empty() && !id.contains('/') {
+                return true;
+            }
+        }
+    }
     if parts.method == Method::GET
         && path.starts_with("/api/v1/guilds/")
         && path.ends_with("/image")
         && (path.contains("/emojis/") || path.contains("/stickers/"))
     {
         return true;
+    }
+    // User avatar GETs — same ticket auth as emoji/sticker images for <img> tags.
+    if parts.method == Method::GET {
+        let rest = path.strip_prefix("/api/v1/users/");
+        if let Some(rest) = rest {
+            if let Some((id, "avatar")) = rest.split_once('/') {
+                if !id.is_empty() && !id.contains('/') {
+                    return true;
+                }
+            }
+        }
     }
     false
 }
@@ -201,7 +222,7 @@ impl FromRequestParts<AppState> for AuthUser {
 
         if allows_query_download_ticket(parts) {
             if let Some(ticket) = get_query_download_ticket(&parts.uri) {
-                if let Some(user_id) = validate_download_ticket(&ticket) {
+                if let Some(user_id) = validate_download_ticket(state, &ticket).await {
                     return Ok(AuthUser {
                         user_id,
                         session_id: None,
@@ -261,14 +282,30 @@ mod tests {
     }
 
     #[test]
-    fn rejects_query_download_ticket_for_attachment_downloads() {
+    fn allows_query_download_ticket_for_attachment_downloads_only() {
         let get_request = Request::builder()
             .method("GET")
             .uri("/api/v1/attachments/123?ticket=abc")
             .body(())
             .expect("request");
         let (get_parts, _) = get_request.into_parts();
-        assert!(!allows_query_download_ticket(&get_parts));
+        assert!(allows_query_download_ticket(&get_parts));
+
+        let delete_request = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/attachments/123?ticket=abc")
+            .body(())
+            .expect("request");
+        let (delete_parts, _) = delete_request.into_parts();
+        assert!(!allows_query_download_ticket(&delete_parts));
+
+        let nested = Request::builder()
+            .method("GET")
+            .uri("/api/v1/attachments/123/meta?ticket=abc")
+            .body(())
+            .expect("request");
+        let (nested_parts, _) = nested.into_parts();
+        assert!(!allows_query_download_ticket(&nested_parts));
     }
 
     #[test]

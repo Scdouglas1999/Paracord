@@ -37,7 +37,8 @@ pub async fn create_stage_instance(
     let row = sqlx::query_as::<_, StageInstanceRow>(
         "INSERT INTO stage_instances (id, channel_id, guild_id, topic, privacy_level)
          VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, channel_id, guild_id, topic, privacy_level, created_at",
+         RETURNING id, channel_id, guild_id, topic, privacy_level,
+                   CAST(created_at AS TEXT) AS created_at",
     )
     .bind(id)
     .bind(channel_id)
@@ -54,7 +55,8 @@ pub async fn get_stage_instance_by_channel(
     channel_id: i64,
 ) -> Result<Option<StageInstanceRow>, DbError> {
     let row = sqlx::query_as::<_, StageInstanceRow>(
-        "SELECT id, channel_id, guild_id, topic, privacy_level, created_at
+        "SELECT id, channel_id, guild_id, topic, privacy_level,
+                CAST(created_at AS TEXT) AS created_at
          FROM stage_instances WHERE channel_id = $1",
     )
     .bind(channel_id)
@@ -68,7 +70,8 @@ pub async fn get_stage_instance(
     id: i64,
 ) -> Result<Option<StageInstanceRow>, DbError> {
     let row = sqlx::query_as::<_, StageInstanceRow>(
-        "SELECT id, channel_id, guild_id, topic, privacy_level, created_at
+        "SELECT id, channel_id, guild_id, topic, privacy_level,
+                CAST(created_at AS TEXT) AS created_at
          FROM stage_instances WHERE id = $1",
     )
     .bind(id)
@@ -88,7 +91,8 @@ pub async fn update_stage_instance(
          SET topic = COALESCE($2, topic),
              privacy_level = COALESCE($3, privacy_level)
          WHERE id = $1
-         RETURNING id, channel_id, guild_id, topic, privacy_level, created_at",
+         RETURNING id, channel_id, guild_id, topic, privacy_level,
+                   CAST(created_at AS TEXT) AS created_at",
     )
     .bind(id)
     .bind(topic)

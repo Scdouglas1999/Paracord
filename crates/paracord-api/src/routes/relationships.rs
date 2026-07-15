@@ -39,6 +39,7 @@ pub async fn list_relationships(
                 "user": {
                     "id": r.target_id.to_string(),
                     "username": r.target_username,
+                    "display_name": r.target_display_name,
                     "discriminator": r.target_discriminator,
                     "avatar_hash": r.target_avatar_hash,
                 }
@@ -158,6 +159,7 @@ pub async fn add_friend(
                         "user": {
                             "id": tu.id.to_string(),
                             "username": tu.username,
+                            "display_name": tu.display_name,
                             "discriminator": tu.discriminator,
                             "avatar_hash": tu.avatar_hash,
                         }
@@ -173,6 +175,7 @@ pub async fn add_friend(
                         "user": {
                             "id": su.id.to_string(),
                             "username": su.username,
+                            "display_name": su.display_name,
                             "discriminator": su.discriminator,
                             "avatar_hash": su.avatar_hash,
                         }
@@ -203,6 +206,7 @@ pub async fn add_friend(
                 "user": {
                     "id": su.id.to_string(),
                     "username": su.username,
+                    "display_name": su.display_name,
                     "discriminator": su.discriminator,
                     "avatar_hash": su.avatar_hash,
                 }
@@ -260,6 +264,7 @@ pub async fn accept_friend(
                 "user": {
                     "id": tu.id.to_string(),
                     "username": tu.username,
+                    "display_name": tu.display_name,
                     "discriminator": tu.discriminator,
                     "avatar_hash": tu.avatar_hash,
                 }
@@ -275,6 +280,7 @@ pub async fn accept_friend(
                 "user": {
                     "id": su.id.to_string(),
                     "username": su.username,
+                    "display_name": su.display_name,
                     "discriminator": su.discriminator,
                     "avatar_hash": su.avatar_hash,
                 }
@@ -291,20 +297,37 @@ pub async fn remove_relationship(
     auth: AuthUser,
     Path(target_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    // Delete both directions so the relationship is fully cleaned up
+    // Always clear our own row toward the target. This covers unfriend,
+    // cancel-outgoing-request, and unblock-our-own-block.
     paracord_db::relationships::delete_relationship(&state.db, auth.user_id, target_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    paracord_db::relationships::delete_relationship(&state.db, target_id, auth.user_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    // Notify both users
-    state.event_bus.dispatch_to_users(
-        "RELATIONSHIP_REMOVE",
-        json!({ "user_id": auth.user_id.to_string() }),
-        vec![target_id],
-    );
+    // The reverse row (target -> us) may only be cleared when it is a mutual
+    // friendship (type=1) or a pending request (type=4) — the housekeeping half
+    // of a mutual unfriend / decline / cancel. A block the target placed on us
+    // (type=2) must be preserved: a blocked user must not be able to clear the
+    // blocker's block by "removing" the relationship.
+    let reverse =
+        paracord_db::relationships::get_relationship(&state.db, target_id, auth.user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let reverse_removed = matches!(reverse.as_ref().map(|r| r.rel_type), Some(1) | Some(4));
+    if reverse_removed {
+        paracord_db::relationships::delete_relationship(&state.db, target_id, auth.user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    }
+
+    // Notify the target only if their own relationship state actually changed.
+    if reverse_removed {
+        state.event_bus.dispatch_to_users(
+            "RELATIONSHIP_REMOVE",
+            json!({ "user_id": auth.user_id.to_string() }),
+            vec![target_id],
+        );
+    }
+    // Our own row was deleted, so always notify us.
     state.event_bus.dispatch_to_users(
         "RELATIONSHIP_REMOVE",
         json!({ "user_id": target_id.to_string() }),

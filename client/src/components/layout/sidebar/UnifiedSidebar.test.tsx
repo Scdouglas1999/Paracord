@@ -60,6 +60,7 @@ function request(over: Partial<FriendRequestEntry> & { userId: string }): Friend
 function conversations(over: Partial<UnifiedConversations> = {}): UnifiedConversations {
   return {
     needsYou: [entry({ key: 'srv:1', title: 'urgent-channel', mentionCount: 3 })],
+    needsYouOverflowCount: 0,
     pinned: [entry({ key: 'srv:2', title: 'pinned-channel', pinned: true })],
     recent: [entry({ key: 'srv:3', title: 'lounge-channel' })],
     spaces: [
@@ -99,6 +100,10 @@ describe('UnifiedSidebar', () => {
   it('renders the search entry and every conversation section from the unified hook', () => {
     renderSidebar();
 
+    expect(screen.getByRole('complementary', { name: 'Navigation' })).toHaveClass(
+      'w-[88vw]',
+      'md:w-[min(var(--preferred-sidebar-width),32vw)]',
+    );
     expect(screen.getByRole('button', { name: /open command palette/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Needs you' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Pinned' })).toBeInTheDocument();
@@ -164,8 +169,8 @@ describe('UnifiedSidebar', () => {
 
   it('renders UserPanel in the footer', () => {
     renderSidebar();
-    // UserPanel exposes the username-copy button + settings control.
-    expect(screen.getByRole('button', { name: /copy username wren/i })).toBeInTheDocument();
+    // UserPanel exposes the status/menu control + settings control.
+    expect(screen.getByRole('button', { name: /change status/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /open user settings/i })).toBeInTheDocument();
   });
 
@@ -193,6 +198,21 @@ describe('UnifiedSidebar', () => {
     const indices = rows.map((r) => r.getAttribute('data-nav-index'));
     // 3 anchors + 1 needsYou + 1 pinned + 1 recent + 2 spaces + 1 add-a-space, contiguous.
     expect(indices).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8']);
+  });
+
+  it('caps Recent at five rows by default and expands the list in place', () => {
+    const recent = Array.from({ length: 11 }, (_, i) =>
+      entry({ key: `srv:r${i}`, title: `recent-${i}` }),
+    );
+    mockedHook.mockReturnValue(conversations({ recent }));
+    renderSidebar();
+
+    expect(screen.getAllByRole('option', { name: /recent-/ })).toHaveLength(5);
+    expect(screen.getByRole('heading', { name: 'Spaces' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 6 more' }));
+    expect(screen.getAllByRole('option', { name: /recent-/ })).toHaveLength(11);
+    expect(screen.getByRole('button', { name: 'Show fewer' })).toBeInTheDocument();
   });
 
   it('collapses to the 64px icon rail with anchors, space avatars and a mini CallDock', () => {

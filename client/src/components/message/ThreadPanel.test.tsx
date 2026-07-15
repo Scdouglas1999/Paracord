@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelApi } from '../../api/channels';
@@ -7,6 +8,7 @@ import { confirm } from '../../stores/confirmStore';
 import { ThreadPanel } from './ThreadPanel';
 
 const mockState = vi.hoisted(() => ({
+  permissions: 1n << 4n,
   channelsByGuild: {
     'guild-1': [
       {
@@ -16,16 +18,34 @@ const mockState = vi.hoisted(() => ({
       },
     ],
   },
+  channelsById: {
+    'thread-1': {
+      id: 'thread-1',
+      parent_id: 'parent-1',
+      owner_id: 'viewer',
+      thread_metadata: { archived: true },
+    },
+  } as Record<
+    string,
+    {
+      id: string;
+      parent_id: string;
+      owner_id: string;
+      thread_metadata: { archived: boolean };
+    }
+  >,
   updateChannel: vi.fn(),
   removeChannel: vi.fn(),
+  selectChannel: vi.fn(),
 }));
 
 vi.mock('../../stores/channelStore', () => {
-  const useChannelStore = (selector: (state: { channelsByGuild: typeof mockState.channelsByGuild }) => unknown) =>
-    selector({ channelsByGuild: mockState.channelsByGuild });
+  const useChannelStore = (selector: (state: typeof mockState) => unknown) =>
+    selector(mockState);
   useChannelStore.getState = () => ({
     updateChannel: mockState.updateChannel,
     removeChannel: mockState.removeChannel,
+    selectChannel: mockState.selectChannel,
   });
   return { useChannelStore };
 });
@@ -35,6 +55,15 @@ vi.mock('../../api/channels', () => ({
     deleteThread: vi.fn(),
     updateThread: vi.fn(),
   },
+}));
+
+vi.mock('../../stores/authStore', () => ({
+  useAuthStore: (selector: (state: { user: { id: string } }) => unknown) =>
+    selector({ user: { id: 'viewer' } }),
+}));
+
+vi.mock('../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ permissions: mockState.permissions, isAdmin: false }),
 }));
 
 vi.mock('../../api/client', () => ({
@@ -54,16 +83,53 @@ vi.mock('../../stores/confirmStore', () => ({
 }));
 
 vi.mock('./MessageList', () => ({
-  MessageList: () => <div>Message history</div>,
+  MessageList: ({
+    onReply,
+  }: {
+    onReply?: (msg: {
+      id: string;
+      author: { id: string; username: string };
+      content: string;
+    }) => void;
+  }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onReply?.({
+          id: 'msg-1',
+          author: { id: 'u1', username: 'Alice' },
+          content: 'Original thread message',
+        })
+      }
+    >
+      Reply in thread
+    </button>
+  ),
 }));
 
 vi.mock('./MessageInput', () => ({
-  MessageInput: () => <div>Message composer</div>,
+  MessageInput: ({
+    replyingTo,
+    onCancelReply,
+  }: {
+    replyingTo?: { id: string; author: string; content: string } | null;
+    onCancelReply?: () => void;
+  }) => (
+    <div>
+      <div>{replyingTo ? `Replying to ${replyingTo.author}` : 'Message composer'}</div>
+      {replyingTo && (
+        <button type="button" onClick={() => onCancelReply?.()}>
+          Cancel reply
+        </button>
+      )}
+    </div>
+  ),
 }));
 
 describe('ThreadPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockState.permissions = 1n << 4n;
     mockState.channelsByGuild = {
       'guild-1': [
         {
@@ -73,6 +139,14 @@ describe('ThreadPanel', () => {
         },
       ],
     };
+    mockState.channelsById = {
+      'thread-1': {
+        id: 'thread-1',
+        parent_id: 'parent-1',
+        owner_id: 'viewer',
+        thread_metadata: { archived: true },
+      },
+    };
   });
 
   it('shows API details when restoring an archived thread fails', async () => {
@@ -81,7 +155,7 @@ describe('ThreadPanel', () => {
       response: { data: { message: 'Thread archive lock is still active.' } },
     });
 
-    render(
+    renderThreadPanel(
       <ThreadPanel
         guildId="guild-1"
         threadChannelId="thread-1"
@@ -107,7 +181,7 @@ describe('ThreadPanel', () => {
       response: { data: { message: 'Thread has retained audit evidence.' } },
     });
 
-    render(
+    renderThreadPanel(
       <ThreadPanel
         guildId="guild-1"
         threadChannelId="thread-1"
@@ -125,4 +199,100 @@ describe('ThreadPanel', () => {
       );
     });
   });
+
+  it('hides destructive controls from a thread owner without channel-management access', () => {
+    mockState.permissions = 0n;
+
+    renderThreadPanel(
+      <ThreadPanel
+        guildId="guild-1"
+        threadChannelId="thread-1"
+        threadName="Release thread"
+        parentChannelName="general"
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+  });
+
+  it('uses the parent breadcrumb to return to the parent conversation', async () => {
+    const user = userEvent.setup();
+    renderThreadPanel(
+      <ThreadPanel
+        guildId="guild-1"
+        threadChannelId="thread-1"
+        threadName="Release thread"
+        parentChannelName="general"
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Open parent channel general' }));
+
+    expect(mockState.selectChannel).toHaveBeenCalledWith('parent-1');
+    expect(screen.getByTestId('location')).toHaveTextContent('/app/guilds/guild-1/channels/parent-1');
+  });
+
+  it('clears the reply bar when switching to another thread', async () => {
+    const user = userEvent.setup();
+    mockState.channelsById = {
+      'thread-1': {
+        id: 'thread-1',
+        parent_id: 'parent-1',
+        owner_id: 'viewer',
+        thread_metadata: { archived: false },
+      },
+      'thread-2': {
+        id: 'thread-2',
+        parent_id: 'parent-1',
+        owner_id: 'viewer',
+        thread_metadata: { archived: false },
+      },
+    };
+
+    const { rerender } = renderThreadPanel(
+      <ThreadPanel
+        guildId="guild-1"
+        threadChannelId="thread-1"
+        threadName="Release thread"
+        parentChannelName="general"
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Reply in thread' }));
+    expect(screen.getByText('Replying to Alice')).toBeInTheDocument();
+
+    rerender(
+      <MemoryRouter>
+        <ThreadPanel
+          guildId="guild-1"
+          threadChannelId="thread-2"
+          threadName="Other thread"
+          parentChannelName="general"
+          onClose={vi.fn()}
+        />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Message composer')).toBeInTheDocument();
+    expect(screen.queryByText('Replying to Alice')).not.toBeInTheDocument();
+  });
 });
+
+function renderThreadPanel(panel: React.ReactNode) {
+  return render(
+    <MemoryRouter initialEntries={['/app/guilds/guild-1/channels/thread-1']}>
+      {panel}
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{location.pathname}</output>;
+}

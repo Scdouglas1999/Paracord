@@ -25,6 +25,15 @@ const HELLO_MSG_SUFFIX: &str = r#"}}"#;
 const SESSION_CACHE_MAX_ENTRIES_DEFAULT: usize = 20_000;
 const WS_MAX_GLOBAL_CONNECTIONS_DEFAULT: usize = 2_000;
 const WS_MAX_CONNECTIONS_PER_USER_DEFAULT: usize = 5;
+// Separate, much smaller budget for sockets that have not yet authenticated
+// (sent IDENTIFY/RESUME). Kept well below the authenticated global cap so a flood
+// of unauthenticated/stalling sockets can never starve authenticated users out of
+// the global connection pool.
+const WS_MAX_PREAUTH_CONNECTIONS_DEFAULT: usize = 512;
+// Concurrent in-flight handshakes permitted from a single client IP. A normal
+// handshake releases its slot within milliseconds (right after IDENTIFY), so this
+// is generous for legitimate NAT'd clients while still bounding a single source.
+const WS_MAX_PREAUTH_PER_IP_DEFAULT: usize = 32;
 const WS_MAX_MESSAGES_PER_MINUTE_DEFAULT: u32 = 240;
 const WS_MAX_PRESENCE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
 const WS_MAX_TYPING_EVENTS_PER_MINUTE_DEFAULT: u32 = 120;
@@ -33,14 +42,16 @@ const WS_MAX_VOICE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
 #[derive(Clone)]
 struct CachedSession {
     user_id: i64,
-    guild_ids: Vec<i64>,
-    guild_owner_ids: HashMap<i64, i64>,
     sequence: u64,
 }
 
 static SESSION_CACHE: OnceLock<moka::future::Cache<String, CachedSession>> = OnceLock::new();
 static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 static USER_CONNECTIONS: OnceLock<dashmap::DashMap<i64, usize>> = OnceLock::new();
+/// Sockets that have upgraded but not yet authenticated (sent IDENTIFY/RESUME).
+static PREAUTH_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+/// Concurrent in-flight (unauthenticated) handshakes per client IP.
+static PREAUTH_IP_CONNECTIONS: OnceLock<dashmap::DashMap<String, usize>> = OnceLock::new();
 
 struct BufferedEvent {
     sequence: u64,
@@ -102,6 +113,8 @@ const MAX_ACTIVITY_TEXT_LEN: usize = 256;
 struct WsLimits {
     max_global_connections: usize,
     max_connections_per_user: usize,
+    max_preauth_connections: usize,
+    max_preauth_per_ip: usize,
     max_messages_per_minute: u32,
     max_presence_updates_per_minute: u32,
     max_typing_events_per_minute: u32,
@@ -136,6 +149,14 @@ fn ws_limits() -> WsLimits {
         max_connections_per_user: env_usize(
             "PARACORD_WS_MAX_CONNECTIONS_PER_USER",
             WS_MAX_CONNECTIONS_PER_USER_DEFAULT,
+        ),
+        max_preauth_connections: env_usize(
+            "PARACORD_WS_MAX_PREAUTH_CONNECTIONS",
+            WS_MAX_PREAUTH_CONNECTIONS_DEFAULT,
+        ),
+        max_preauth_per_ip: env_usize(
+            "PARACORD_WS_MAX_PREAUTH_PER_IP",
+            WS_MAX_PREAUTH_PER_IP_DEFAULT,
         ),
         max_messages_per_minute: env_u32(
             "PARACORD_WS_MAX_MESSAGES_PER_MINUTE",
@@ -295,6 +316,8 @@ async fn send_ws_close_logged(
 struct ConnectionGuard {
     user_id: Option<i64>,
     global_acquired: bool,
+    preauth_acquired: bool,
+    preauth_ip: Option<String>,
 }
 
 impl ConnectionGuard {
@@ -302,12 +325,27 @@ impl ConnectionGuard {
         Self {
             user_id: None,
             global_acquired: false,
+            preauth_acquired: false,
+            preauth_ip: None,
+        }
+    }
+
+    /// Release any held pre-authentication handshake slot (global + per-IP). Called
+    /// on promotion to a real global slot and, defensively, again from `Drop`.
+    fn release_preauth(&mut self) {
+        if let Some(ip) = self.preauth_ip.take() {
+            release_preauth_ip(&ip);
+        }
+        if self.preauth_acquired {
+            self.preauth_acquired = false;
+            PREAUTH_CONNECTIONS.fetch_sub(1, AtomicOrdering::SeqCst);
         }
     }
 }
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
+        self.release_preauth();
         if let Some(user_id) = self.user_id.take() {
             if let Some(mut count) = user_connections().get_mut(&user_id) {
                 if *count <= 1 {
@@ -340,6 +378,61 @@ fn try_acquire_global_connection_slot() -> bool {
         ) {
             Ok(_) => return true,
             Err(observed) => current = observed,
+        }
+    }
+}
+
+fn preauth_ip_connections() -> &'static dashmap::DashMap<String, usize> {
+    PREAUTH_IP_CONNECTIONS.get_or_init(dashmap::DashMap::new)
+}
+
+/// Reserve a pre-authentication handshake slot for a freshly upgraded socket.
+///
+/// This is deliberately decoupled from `try_acquire_global_connection_slot`: an
+/// unauthenticated socket only ever holds a pre-auth slot (bounded globally and
+/// per-IP) and is promoted to a real global slot after IDENTIFY/RESUME succeeds.
+/// That means a flood of sockets that never authenticate — or that stall for the
+/// full identify timeout — cannot consume the authenticated global connection
+/// pool. Returns `false` (and takes nothing) when either budget is exhausted.
+fn try_acquire_preauth_slot(peer_ip: Option<&str>) -> bool {
+    let limits = ws_limits();
+    // Per-IP concurrent-handshake cap first, so a rejected acquisition never
+    // touches the global counter.
+    if let Some(ip) = peer_ip {
+        let mut entry = preauth_ip_connections().entry(ip.to_string()).or_insert(0);
+        if *entry >= limits.max_preauth_per_ip {
+            return false;
+        }
+        *entry += 1;
+    }
+    let mut current = PREAUTH_CONNECTIONS.load(AtomicOrdering::SeqCst);
+    loop {
+        if current >= limits.max_preauth_connections {
+            // Roll back the per-IP reservation we just took above.
+            if let Some(ip) = peer_ip {
+                release_preauth_ip(ip);
+            }
+            return false;
+        }
+        match PREAUTH_CONNECTIONS.compare_exchange(
+            current,
+            current + 1,
+            AtomicOrdering::SeqCst,
+            AtomicOrdering::SeqCst,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn release_preauth_ip(ip: &str) {
+    if let Some(mut count) = preauth_ip_connections().get_mut(ip) {
+        if *count <= 1 {
+            drop(count);
+            preauth_ip_connections().remove(ip);
+        } else {
+            *count -= 1;
         }
     }
 }
@@ -574,6 +667,17 @@ fn extract_channel_id_from_event(event_type: &str, payload: &Value) -> Option<i6
         }
     }
 
+    // Voice-leave events carry a null `channel_id` (the user is no longer in any
+    // channel) but retain `prior_channel_id`, the channel they departed, so the
+    // per-channel VIEW_CHANNEL filter can still gate delivery. Without this,
+    // leaves would fan out guild-wide, leaking presence in hidden voice channels
+    // even though the matching join was correctly filtered.
+    if let Some(raw) = payload.get("prior_channel_id").and_then(|v| v.as_str()) {
+        if let Ok(channel_id) = raw.parse::<i64>() {
+            return Some(channel_id);
+        }
+    }
+
     if matches!(
         event_type,
         "CHANNEL_CREATE"
@@ -642,6 +746,7 @@ pub async fn handle_connection(
     state: AppState,
     compress: bool,
     stream_context: bool,
+    peer_ip: Option<String>,
 ) {
     let compressor = if stream_context {
         WsCompressor::streaming()
@@ -649,7 +754,10 @@ pub async fn handle_connection(
         WsCompressor::new(compress)
     };
     let mut connection_guard = ConnectionGuard::new();
-    if !try_acquire_global_connection_slot() {
+    // Unauthenticated sockets only consume the small pre-auth budget (bounded
+    // globally and per-IP). The authenticated global slot is taken later, once
+    // IDENTIFY/RESUME succeeds, so anonymous floods can't exhaust it.
+    if !try_acquire_preauth_slot(peer_ip.as_deref()) {
         let (mut sender, _) = socket.split();
         let _ = send_ws_close_logged(
             &mut sender,
@@ -662,8 +770,8 @@ pub async fn handle_connection(
         .await;
         return;
     }
-    connection_guard.global_acquired = true;
-    observability::ws_connection_open();
+    connection_guard.preauth_acquired = true;
+    connection_guard.preauth_ip = peer_ip;
 
     if compress {
         tracing::debug!(stream_context, "Client requested zlib-stream compression");
@@ -718,6 +826,24 @@ pub async fn handle_connection(
             return;
         }
     };
+
+    // Client authenticated: promote from the pre-auth handshake budget to a real
+    // authenticated global slot, then drop the pre-auth reservation.
+    if !try_acquire_global_connection_slot() {
+        let _ = send_ws_close_logged(
+            &mut sender,
+            1013,
+            "Gateway is at connection capacity",
+            Some(session.user_id),
+            Some(session.session_id.as_str()),
+            "capacity_close",
+        )
+        .await;
+        return;
+    }
+    connection_guard.global_acquired = true;
+    observability::ws_connection_open();
+    connection_guard.release_preauth();
 
     if !try_acquire_user_connection_slot(session.user_id) {
         let _ = send_ws_close_logged(
@@ -871,6 +997,7 @@ pub async fn handle_connection(
 
         // Fetch guild data for READY with bounded concurrency.
         let sem = Arc::new(Semaphore::new(10));
+        let ready_user_id = session.user_id;
         let guild_futures: Vec<_> = session
             .guild_ids
             .iter()
@@ -898,9 +1025,42 @@ pub async fn handle_connection(
                     let voice_states = voice_states.unwrap_or_default();
                     let member_ids = member_ids.unwrap_or_default();
 
+                    // Only expose the voice roster of channels this user can view.
+                    // The live voice-join path filters via can_receive_channel_event;
+                    // apply the same VIEW_CHANNEL gate to the READY snapshot so a
+                    // hidden voice channel's participant list is not leaked. Compute
+                    // permissions once per distinct channel to bound extra queries.
+                    let mut channel_visibility: std::collections::HashMap<i64, bool> =
+                        std::collections::HashMap::new();
+                    for vs in &voice_states {
+                        if let std::collections::hash_map::Entry::Vacant(e) =
+                            channel_visibility.entry(vs.channel_id)
+                        {
+                            let visible =
+                                paracord_core::permissions::compute_channel_permissions_cached(
+                                    &state.permission_cache,
+                                    &state.db,
+                                    gid,
+                                    vs.channel_id,
+                                    g.owner_id,
+                                    ready_user_id,
+                                )
+                                .await
+                                .map(|perms| perms.contains(Permissions::VIEW_CHANNEL))
+                                .unwrap_or(false);
+                            e.insert(visible);
+                        }
+                    }
+
                     // Build voice_states JSON
                     let voice_states_json: Vec<Value> = voice_states
                         .iter()
+                        .filter(|vs| {
+                            channel_visibility
+                                .get(&vs.channel_id)
+                                .copied()
+                                .unwrap_or(false)
+                        })
                         .map(|vs| {
                             json!({
                                 "user_id": vs.user_id.to_string(),
@@ -1103,6 +1263,7 @@ pub async fn handle_connection(
                         json!({
                             "user_id": session_user_id.to_string(),
                             "channel_id": Value::Null,
+                            "prior_channel_id": voice_state.channel_id.to_string(),
                             "guild_id": voice_state.guild_id().map(|id| id.to_string()),
                             "self_mute": false,
                             "self_deaf": false,
@@ -1249,10 +1410,26 @@ pub async fn wait_for_identify_or_resume(
                                     }
 
                                     if can_replay {
+                                        // Re-derive guild membership from current DB state rather
+                                        // than trusting the cached snapshot: a user kicked/banned
+                                        // while disconnected never processed remove_guild(), so the
+                                        // cache would otherwise re-grant them the guild event
+                                        // stream for the remainder of the session TTL. Only
+                                        // session_id/sequence are kept from the cache (for replay
+                                        // continuity).
+                                        let guilds = paracord_db::guilds::get_user_guilds(
+                                            &state.db,
+                                            claims.sub.into(),
+                                        )
+                                        .await
+                                        .unwrap_or_default();
+                                        let guild_ids = guilds.iter().map(|g| g.id).collect();
+                                        let guild_owner_ids =
+                                            guilds.iter().map(|g| (g.id, g.owner_id)).collect();
                                         let mut resumed = Session::new(
                                             cached.user_id,
-                                            cached.guild_ids.clone(),
-                                            cached.guild_owner_ids.clone(),
+                                            guild_ids,
+                                            guild_owner_ids,
                                         );
                                         resumed.session_id = requested_session_id;
                                         resumed.auth_session_id = session_id.to_string();
@@ -1584,8 +1761,6 @@ pub async fn run_session(
             session.session_id.clone(),
             CachedSession {
                 user_id: session.user_id,
-                guild_ids: session.guild_ids.clone(),
-                guild_owner_ids: session.guild_owner_ids.clone(),
                 sequence: session.sequence,
             },
         )
@@ -1789,6 +1964,7 @@ async fn handle_client_message(
                             json!({
                                 "user_id": session.user_id.to_string(),
                                 "channel_id": Value::Null,
+                                "prior_channel_id": existing_state.channel_id.to_string(),
                                 "guild_id": existing_state.guild_id().map(|id| id.to_string()),
                                 "self_mute": self_mute,
                                 "self_deaf": self_deaf,
@@ -2287,20 +2463,12 @@ async fn handle_client_message(
 pub async fn test_insert_cached_session(
     session_id: String,
     user_id: i64,
-    guild_ids: Vec<i64>,
-    guild_owner_ids: HashMap<i64, i64>,
+    _guild_ids: Vec<i64>,
+    _guild_owner_ids: HashMap<i64, i64>,
     sequence: u64,
 ) {
     session_cache()
-        .insert(
-            session_id,
-            CachedSession {
-                user_id,
-                guild_ids,
-                guild_owner_ids,
-                sequence,
-            },
-        )
+        .insert(session_id, CachedSession { user_id, sequence })
         .await;
 }
 
@@ -2330,4 +2498,68 @@ pub fn test_acquire_user_connection_slot(user_id: i64) -> bool {
 #[doc(hidden)]
 pub fn test_max_connections_per_user() -> usize {
     ws_limits().max_connections_per_user
+}
+
+/// Exercise the pre-auth handshake budget (global + per-IP) from integration
+/// tests. Tests must pass a unique `peer_ip` string so their per-IP bucket is
+/// isolated, and release every granted slot. Not part of the supported public API.
+#[doc(hidden)]
+pub fn test_acquire_preauth_slot(peer_ip: &str) -> bool {
+    try_acquire_preauth_slot(Some(peer_ip))
+}
+
+#[doc(hidden)]
+pub fn test_release_preauth_slot(peer_ip: &str) {
+    release_preauth_ip(peer_ip);
+    PREAUTH_CONNECTIONS.fetch_sub(1, AtomicOrdering::SeqCst);
+}
+
+/// The configured per-IP pre-auth handshake cap.
+#[doc(hidden)]
+pub fn test_max_preauth_per_ip() -> usize {
+    ws_limits().max_preauth_per_ip
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn voice_join_channel_id_is_extracted_for_filtering() {
+        let payload = json!({
+            "user_id": "1",
+            "channel_id": "42",
+            "guild_id": "7",
+        });
+        assert_eq!(
+            extract_channel_id_from_event(EVENT_VOICE_STATE_UPDATE, &payload),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn voice_leave_resolves_prior_channel_id_for_view_filter() {
+        // A leave carries a null `channel_id` but retains `prior_channel_id`.
+        // The per-channel VIEW_CHANNEL filter must still resolve a channel so
+        // leaves from hidden voice channels are not fanned out guild-wide.
+        let payload = json!({
+            "user_id": "1",
+            "channel_id": Value::Null,
+            "prior_channel_id": "42",
+            "guild_id": "7",
+        });
+        assert_eq!(
+            extract_channel_id_from_event(EVENT_VOICE_STATE_UPDATE, &payload),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn non_voice_event_without_channel_ids_is_unfiltered() {
+        let payload = json!({ "user_id": "1", "guild_id": "7" });
+        assert_eq!(
+            extract_channel_id_from_event("PRESENCE_UPDATE", &payload),
+            None
+        );
+    }
 }

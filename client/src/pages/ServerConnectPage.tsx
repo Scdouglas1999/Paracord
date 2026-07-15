@@ -5,7 +5,6 @@ import { useServerListStore, resolveDefaultServerTarget } from '../stores/server
 import { gateway } from '../gateway/manager';
 import { setStoredServerUrl, normalizeConnectInput } from '../lib/config/apiBaseUrl';
 import { isPortableLink, decodePortableLink } from '../lib/portableLinks';
-import { confirm } from '../stores/confirmStore';
 import { OnboardingWizard, hasCompletedOnboarding } from '../components/onboarding/OnboardingWizard';
 import { ErrorBanner } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
@@ -200,17 +199,10 @@ export function ServerConnectPage() {
     try {
       const { serverUrl, inviteCode } = parseInput(input);
       const parsedUrl = new URL(serverUrl);
-      if (parsedUrl.protocol === 'http:' && !isLocalhostHost(parsedUrl.hostname)) {
-        const proceed = await confirm({
-          title: 'Insecure connection',
-          description: 'This server uses unencrypted HTTP. Credentials and tokens can be intercepted. Continue anyway?',
-          confirmLabel: 'Continue',
-          variant: 'danger',
-        });
-        if (!proceed) {
-          setLoading(false);
-          return;
-        }
+      if (parsedUrl.protocol !== 'https:' && !(parsedUrl.protocol === 'http:' && isLocalhostHost(parsedUrl.hostname))) {
+        throw new Error(
+          'Remote Paracord servers must use HTTPS. Plain HTTP is allowed only for localhost development servers.',
+        );
       }
 
       // Ask Rust to verify/trust the host so WebView2 allows self-signed certs during probe.

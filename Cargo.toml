@@ -114,9 +114,16 @@ futures-util = "0.3"
 
 # Audio/Video codecs
 audiopus = "0.3.0-rc.0"
-nnnoiseless = "0.5"
+# The server consumes the RNNoise library API only. Disable nnnoiseless's
+# default CLI feature so it does not pull unused clap/atty binaries.
+nnnoiseless = { version = "0.5", default-features = false }
 cpal = "0.15"
 rubato = "0.15"
+# In-process libavcodec FFI (feature-gated `lavc` in paracord-codec). Version
+# tracks the system FFmpeg ABI (8.1). Bindings are regenerated from the
+# installed headers via bindgen 0.72, which is libclang >= 19 safe (older
+# bindgen emits opaque structs — see the env-libvpx-sys note above).
+ffmpeg-sys-next = "8.1.0"
 
 # Workspace crates
 paracord-api = { path = "crates/paracord-api" }
@@ -131,6 +138,28 @@ paracord-transport = { path = "crates/paracord-transport" }
 paracord-relay = { path = "crates/paracord-relay" }
 paracord-codec = { path = "crates/paracord-codec" }
 
+# Real-time media (pixel conversion, VP9 encode, datagram fan-out) is unusably
+# slow at opt-level 0 — seconds per frame at screen resolutions. Keep debug
+# builds debuggable but compile the hot media crates and all dependencies with
+# full optimization so `tauri dev` streams at real-time rates.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.paracord-codec]
+opt-level = 3
+
+[profile.dev.package.paracord-transport]
+opt-level = 3
+
+[profile.dev.package.paracord-relay]
+opt-level = 3
+
+[profile.dev.package.paracord-desktop]
+opt-level = 2
+
 [patch.crates-io]
 scap = { path = "third_party/scap" }
 # Vendored with bindgen bumped 0.68.1 -> 0.72: the pinned 0.68.1 silently emits
@@ -142,3 +171,6 @@ env-libvpx-sys = { path = "vendor/env-libvpx-sys" }
 # but scap is written against the 0.8 API.
 libspa-sys = { path = "vendor/libspa-sys" }
 pipewire-sys = { path = "vendor/pipewire-sys" }
+# Walk the GTK parent chain to GtkWindow in undecorated resize handlers so
+# Paracord's Linux native-render Overlay/Fixed reparent does not panic on click.
+tauri-runtime-wry = { path = "vendor/tauri-runtime-wry" }

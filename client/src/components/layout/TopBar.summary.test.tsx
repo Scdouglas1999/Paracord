@@ -27,8 +27,16 @@ const mockUIState = vi.hoisted(() => ({
   sidebarCollapsed: false,
   toggleSidebarCollapsed: vi.fn(),
   setCommandPaletteOpen: vi.fn(),
+  setGuildSettingsId: vi.fn(),
   connectionStatus: 'connected',
   connectionLatency: 42,
+}));
+
+const mockPermissions = vi.hoisted(() => ({
+  permissions: 0n,
+  isAdmin: false,
+  isOwner: false,
+  isLoading: false,
 }));
 
 const mockVoiceState = vi.hoisted(() => ({
@@ -39,9 +47,13 @@ vi.mock('../../stores/uiStore', () => ({
   useUIStore: (selector: (state: typeof mockUIState) => unknown) => selector(mockUIState),
 }));
 
+vi.mock('../../hooks/usePermissions', () => ({
+  usePermissions: () => mockPermissions,
+}));
+
 vi.mock('../../stores/channelStore', () => ({
-  useChannelStore: (selector: (state: { channelsByGuild: Record<string, unknown[]> }) => unknown) =>
-    selector({ channelsByGuild: {} }),
+  useChannelStore: (selector: (state: { channelsByGuild: Record<string, unknown[]>; channelsById: Record<string, unknown> }) => unknown) =>
+    selector({ channelsByGuild: {}, channelsById: {} }),
 }));
 
 vi.mock('../../stores/voiceStore', () => ({
@@ -96,6 +108,7 @@ function renderChannelTopBar() {
 describe('TopBar channel summary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUIState.contextPanelMode = null;
     vi.mocked(channelApi.summarizeChannel).mockResolvedValue({
       data: {
         summary: 'Nothing to summarize.',
@@ -115,5 +128,15 @@ describe('TopBar channel summary', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to summarize channel: AI provider is not configured.',
     );
+  });
+
+  it('replaces an open ContextPanel instead of stacking the summary over it', async () => {
+    mockUIState.contextPanelMode = 'members';
+    renderChannelTopBar();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Summarize Channel' }));
+
+    expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('members');
+    expect(await screen.findByText('Nothing to summarize.')).toBeInTheDocument();
   });
 });

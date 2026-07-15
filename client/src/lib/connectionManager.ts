@@ -38,6 +38,10 @@ export function warnMalformedFrame(transport: 'sse' | 'ws', rawPreview: string):
   );
 }
 
+function monotonicNowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
 type RealtimeEventSource = {
   readyState: number;
   onopen: ((evt: Event) => void) | null;
@@ -161,7 +165,7 @@ export interface ServerConnection {
   allowReconnect: boolean;
   connected: boolean;
   connecting: boolean;
-  lastHeartbeatSent: number;
+  lastHeartbeatSentAtMs: number;
   missedAcks: number;
   connectionLatency: number;
   pendingMessages: unknown[];
@@ -196,6 +200,9 @@ class ConnectionManager {
       });
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
+          // Avoid tearing down healthy sockets on every tab focus; only
+          // reconcile when something is missing or unhealthy.
+          if (this.allExpectedConnectionsHealthy()) return;
           void this.connectAll();
         }
       });
@@ -204,6 +211,69 @@ class ConnectionManager {
 
   private isCurrentConnection(conn: ServerConnection): boolean {
     return this.connections.get(conn.serverId) === conn;
+  }
+
+  /** True when a connection already has a live transport (or is mid-connect). */
+  private isConnectionHealthy(conn: ServerConnection): boolean {
+    if (conn.connecting || conn.reconnectTimer !== null) return true;
+    if (!conn.connected) return false;
+    if (this.useRealtimeV2) {
+      if (conn.eventSource !== null) return true;
+      // Duplicate-URL cover: another connection owns the live SSE stream.
+      const normalizedUrl = conn.serverUrl.replace(/\/+$/, '');
+      for (const other of this.connections.values()) {
+        if (
+          other !== conn &&
+          other.connected &&
+          other.eventSource !== null &&
+          other.serverUrl.replace(/\/+$/, '') === normalizedUrl
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+    return (
+      conn.ws !== null &&
+      (conn.ws.readyState === WebSocket.OPEN || conn.ws.readyState === WebSocket.CONNECTING)
+    );
+  }
+
+  /**
+   * Visibility-focus fast path: skip connectAll when every expected server
+   * already has a healthy connection. Still reconnects when the store is
+   * unhydrated, offline, or any expected connection is missing/stale.
+   */
+  private allExpectedConnectionsHealthy(): boolean {
+    if (this.offline) return false;
+    const serverState = useServerListStore.getState();
+    if (!serverState.hydrated || !serverState.tokensHydrated) return false;
+
+    const servers = serverState.servers;
+    const localToken = useAuthStore.getState().token;
+    if (servers.length === 0 && !localToken) return false;
+
+    for (const server of servers) {
+      const conn = this.connections.get(server.id);
+      if (!conn || !this.isConnectionHealthy(conn)) return false;
+    }
+
+    if (localToken) {
+      const localUrl = this.resolveLocalServerUrl().replace(/\/+$/, '');
+      const localAlreadyCovered = servers.some((s) => {
+        const latest = useServerListStore.getState().getServer(s.id);
+        return (
+          this.sameServerUrl(s.url, localUrl) ||
+          (!!localToken && latest?.token === localToken)
+        );
+      });
+      if (!localAlreadyCovered) {
+        const local = this.connections.get(LOCAL_SERVER_ID);
+        if (!local || !this.isConnectionHealthy(local)) return false;
+      }
+    }
+
+    return true;
   }
 
   /** Keep the global status bar aligned with aggregate per-server socket state. */
@@ -461,7 +531,11 @@ class ConnectionManager {
     const existing = this.connections.get(LOCAL_SERVER_ID);
     if (existing) {
       existing.allowReconnect = true;
-      this.connectRealtime(existing);
+      // Do not tear down a healthy SSE/WS on redundant connectAll() calls
+      // (e.g. tab focus). Only reconnect when the transport is missing/stale.
+      if (!this.isConnectionHealthy(existing)) {
+        this.connectRealtime(existing);
+      }
       return;
     }
 
@@ -503,7 +577,7 @@ class ConnectionManager {
       allowReconnect: true,
       connected: false,
       connecting: false,
-      lastHeartbeatSent: 0,
+      lastHeartbeatSentAtMs: 0,
       missedAcks: 0,
       connectionLatency: 0,
       pendingMessages: [],
@@ -516,7 +590,11 @@ class ConnectionManager {
     const existing = this.connections.get(serverId);
     if (existing) {
       existing.allowReconnect = true;
-      this.connectRealtime(existing);
+      // Do not tear down a healthy SSE/WS on redundant connectAll() calls
+      // (e.g. tab focus). Only reconnect when the transport is missing/stale.
+      if (!this.isConnectionHealthy(existing)) {
+        this.connectRealtime(existing);
+      }
       return;
     }
 
@@ -647,7 +725,7 @@ class ConnectionManager {
       allowReconnect: true,
       connected: false,
       connecting: false,
-      lastHeartbeatSent: 0,
+      lastHeartbeatSentAtMs: 0,
       missedAcks: 0,
       connectionLatency: 0,
       pendingMessages: [],
@@ -1037,8 +1115,12 @@ class ConnectionManager {
         break;
       }
       case 11: // HEARTBEAT_ACK
-        if (conn.lastHeartbeatSent > 0) {
-          conn.connectionLatency = Date.now() - conn.lastHeartbeatSent;
+        if (conn.lastHeartbeatSentAtMs > 0) {
+          conn.connectionLatency = Math.max(
+            0,
+            Math.round(monotonicNowMs() - conn.lastHeartbeatSentAtMs),
+          );
+          conn.lastHeartbeatSentAtMs = 0;
           useUIStore.getState().setConnectionLatency(conn.connectionLatency);
         }
         conn.missedAcks = 0;
@@ -1098,7 +1180,7 @@ class ConnectionManager {
         conn.ws?.close();
         return;
       }
-      conn.lastHeartbeatSent = Date.now();
+      conn.lastHeartbeatSentAtMs = monotonicNowMs();
       conn.missedAcks++;
       this.send(conn, { op: 1, d: conn.sequence });
     }, conn.heartbeatInterval!);
@@ -1122,9 +1204,8 @@ class ConnectionManager {
       conn.missedAcks++;
       if (conn.missedAcks < ConnectionManager.MAX_MISSED_ACKS) return;
 
-      // Stream is stale — record latency like the WS ack path and tear it down.
-      conn.connectionLatency = Date.now() - conn.lastFrameTs;
-      useUIStore.getState().setConnectionLatency(conn.connectionLatency);
+      // Stream is stale. Reconnect it, but do not publish "time since last
+      // frame" as latency; that can be tens of seconds and is not an RTT.
       this.clearSseWatchdog(conn);
       conn.connected = false;
       conn.connecting = false;
@@ -1317,6 +1398,7 @@ class ConnectionManager {
       clearInterval(conn.heartbeatTimer);
       conn.heartbeatTimer = null;
     }
+    conn.lastHeartbeatSentAtMs = 0;
     this.clearSseWatchdog(conn);
   }
 
@@ -1449,4 +1531,3 @@ class ConnectionManager {
 }
 
 export const connectionManager = new ConnectionManager();
-

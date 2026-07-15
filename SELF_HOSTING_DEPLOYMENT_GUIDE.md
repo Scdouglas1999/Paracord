@@ -125,7 +125,8 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8090;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Do not retain a client-supplied X-Forwarded-For prefix at the edge.
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
@@ -243,3 +244,4 @@ intentionally rely on AWS-managed credentials.
 3. Restrict `PARACORD_TRUSTED_PROXY_IPS` to exact proxy CIDRs.
 4. Rotate JWT/federation/secrets periodically.
 5. Enable malware scanning for uploads (`PARACORD_MALWARE_SCAN_BIN`) in untrusted communities.
+6. Leave `PARACORD_AUTH_LOGIN_LEGACY_PARSER` and `PARACORD_AUTH_CHALLENGE_TOKEN` unset. These are development/testing escape hatches that MUST NOT be set in production: the first broadens login body parsing, and the second bypasses the auth-guard hard-block. Both weaken authentication and must never be present on an internet-facing server.

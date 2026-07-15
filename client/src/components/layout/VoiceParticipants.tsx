@@ -2,10 +2,12 @@ import { MicOff, HeadphoneOff, Video } from 'lucide-react';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { cn } from '../../lib/utils';
 import type { Channel } from '../../types/index';
+import { displayName } from '../../lib/displayName';
 
 interface VoiceState {
   user_id: string;
   username?: string;
+  display_name?: string | null;
   self_mute?: boolean;
   self_deaf?: boolean;
   self_video?: boolean;
@@ -44,10 +46,10 @@ export function VoiceParticipants({
                   'ring-2 ring-accent-primary shadow-[0_0_8px_rgba(var(--accent-primary-rgb),0.55)]',
               )}
             >
-              {(vs.username || vs.user_id).charAt(0).toUpperCase()}
+              {displayName(vs).charAt(0).toUpperCase()}
             </div>
             <span className="truncate text-label text-text-secondary">
-              {vs.username || `User ${vs.user_id.slice(0, 6)}`}
+              {displayName(vs) || `User ${vs.user_id.slice(0, 6)}`}
             </span>
             <div className="ml-auto flex items-center gap-1.5">
               {vs.self_video && <Video size={14} className="text-accent-primary" />}
@@ -63,8 +65,8 @@ export function VoiceParticipants({
                     }
                   }}
                   className="inline-flex items-center rounded-xs bg-danger-tint px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-wide text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger/20 focus-visible:shadow-[var(--focus-ring)]"
-                  title={`Watch ${vs.username || 'user'}'s stream`}
-                  aria-label={`Watch ${vs.username || 'user'}'s stream`}
+                  title={`Watch ${displayName(vs)}'s stream`}
+                  aria-label={`Watch ${displayName(vs)}'s stream`}
                 >
                   Live
                 </button>

@@ -533,6 +533,150 @@ async fn federation_message_ingest_materializes_missing_space_and_channel() -> a
     Ok(())
 }
 
+/// L08-03: the transport signature must bind the intended destination server so
+/// a request signed for one server cannot be replayed/forwarded to another
+/// server that trusts the same origin key. A signature bound to a foreign
+/// destination is rejected; the same request bound to our own identity is
+/// accepted.
+#[tokio::test]
+async fn federation_transport_binds_destination_server() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    std::env::set_var("PARACORD_SERVER_NAME", "local.example");
+    std::env::set_var("PARACORD_FEDERATION_DOMAIN", "local.example");
+
+    let harness = TestHarness::new(true).await?;
+    let origin_server = "remote.example";
+    let key_id = "ed25519:test";
+    let (signing_key, public_key_hex) = paracord_federation::signing::generate_keypair();
+
+    paracord_db::federation::upsert_federated_server(
+        &harness.db,
+        9401,
+        origin_server,
+        origin_server,
+        "https://remote.example/_paracord/federation/v1",
+        Some(&public_key_hex),
+        Some(key_id),
+        true,
+    )
+    .await?;
+
+    let service =
+        paracord_federation::FederationService::new(paracord_federation::FederationConfig {
+            enabled: true,
+            server_name: "local.example".to_string(),
+            domain: "local.example".to_string(),
+            key_id: "ed25519:local".to_string(),
+            signing_key: None,
+            allow_discovery: false,
+        });
+    service
+        .upsert_server_key(
+            &harness.db,
+            &paracord_federation::FederationServerKey {
+                server_name: origin_server.to_string(),
+                key_id: key_id.to_string(),
+                public_key: public_key_hex.to_string(),
+                valid_until: chrono::Utc::now().timestamp_millis() + 600_000,
+            },
+        )
+        .await?;
+
+    let build_envelope = |event_id: &str, message_id: &str| {
+        let mut envelope = paracord_federation::FederationEventEnvelope {
+            event_id: event_id.to_string(),
+            room_id: "!7410:remote.example".to_string(),
+            event_type: "m.message".to_string(),
+            sender: "@alice:remote.example".to_string(),
+            origin_server: origin_server.to_string(),
+            origin_ts: chrono::Utc::now().timestamp_millis(),
+            content: json!({
+                "body": "hello from remote",
+                "msgtype": "m.text",
+                "guild_id": "7410",
+                "guild_name": "Remote Guild",
+                "channel_id": "7420",
+                "channel_name": "general",
+                "channel_type": 0,
+                "message_id": message_id,
+            }),
+            depth: chrono::Utc::now().timestamp_millis(),
+            state_key: None,
+            signatures: json!({}),
+        };
+        let payload_sig = paracord_federation::signing::sign(
+            &signing_key,
+            &paracord_federation::canonical_envelope_bytes(&envelope),
+        );
+        envelope.signatures = json!({ origin_server: { key_id: payload_sig } });
+        envelope
+    };
+
+    // Sign a request bound to a DIFFERENT destination (as if captured from a
+    // request originally destined for another server) and replay it to us.
+    let evil_envelope = build_envelope("$evil:remote.example", "94011");
+    let evil_bytes = serde_json::to_vec(&evil_envelope)?;
+    let ts_evil = chrono::Utc::now().timestamp_millis();
+    let evil_canonical =
+        paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+            "POST",
+            "/_paracord/federation/v1/event",
+            ts_evil,
+            &evil_bytes,
+            "attacker-target.example",
+        );
+    let evil_sig = paracord_federation::signing::sign(&signing_key, &evil_canonical);
+    let evil_request = Request::builder()
+        .method("POST")
+        .uri("/_paracord/federation/v1/event")
+        .header("content-type", "application/json")
+        .header("x-paracord-origin", origin_server)
+        .header("x-paracord-key-id", key_id)
+        .header("x-paracord-timestamp", ts_evil.to_string())
+        .header("x-paracord-signature", evil_sig)
+        .header("x-paracord-destination", "attacker-target.example")
+        .body(Body::from(evil_bytes))?;
+    let (status, _) = harness.request(evil_request).await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "request bound to a foreign destination must be rejected"
+    );
+
+    // The same request, correctly bound to our own identity, is accepted.
+    let good_envelope = build_envelope("$good:remote.example", "94012");
+    let good_bytes = serde_json::to_vec(&good_envelope)?;
+    let ts_good = chrono::Utc::now().timestamp_millis();
+    let good_canonical =
+        paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+            "POST",
+            "/_paracord/federation/v1/event",
+            ts_good,
+            &good_bytes,
+            "local.example",
+        );
+    let good_sig = paracord_federation::signing::sign(&signing_key, &good_canonical);
+    let good_request = Request::builder()
+        .method("POST")
+        .uri("/_paracord/federation/v1/event")
+        .header("content-type", "application/json")
+        .header("x-paracord-origin", origin_server)
+        .header("x-paracord-key-id", key_id)
+        .header("x-paracord-timestamp", ts_good.to_string())
+        .header("x-paracord-signature", good_sig)
+        .header("x-paracord-destination", "local.example")
+        .body(Body::from(good_bytes))?;
+    let (status, body) = harness.request(good_request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(body.get("inserted").and_then(|v| v.as_bool()), Some(true));
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_SERVER_NAME");
+    std::env::remove_var("PARACORD_FEDERATION_DOMAIN");
+    Ok(())
+}
+
 #[tokio::test]
 async fn federation_transport_rejects_unsupported_protocol_version() -> anyhow::Result<()> {
     let _guard = env_lock().lock().await;
@@ -1151,7 +1295,10 @@ async fn federation_cross_origin_edit_and_delete_are_rejected() -> anyhow::Resul
     };
     let request = signed_event_request(&mut attacker_edit, &attacker_key, attacker_server, key_id)?;
     let (status, _) = harness.request(request).await?;
-    assert_eq!(status, StatusCode::ACCEPTED);
+    // The attacker's origin (attacker.example) is neither authoritative for nor a
+    // participant of the victim.example room namespace, so ingest rejects it
+    // outright rather than accepting-and-dropping it during dispatch.
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
     let after_edit = paracord_db::messages::get_message(&harness.db, local_msg_id)
         .await?
@@ -1180,12 +1327,289 @@ async fn federation_cross_origin_edit_and_delete_are_rejected() -> anyhow::Resul
     let request =
         signed_event_request(&mut attacker_delete, &attacker_key, attacker_server, key_id)?;
     let (status, _) = harness.request(request).await?;
-    assert_eq!(status, StatusCode::ACCEPTED);
+    // Same as the edit above: rejected at ingest as a foreign-namespace event.
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
     let after_delete = paracord_db::messages::get_message(&harness.db, local_msg_id).await?;
     assert!(
         after_delete.is_some(),
         "cross-origin delete must not remove another server's message"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+/// A trusted peer must not be able to attribute a reaction to a user that belongs
+/// to a different server. The ingest namespace guard only binds the ROOM to the
+/// origin, not the sender identity, so a peer authoritative for its own room can
+/// still smuggle a reaction whose `sender` names another server's user. Both
+/// reaction handlers must reject such cross-origin senders (identity spoofing).
+#[tokio::test]
+async fn federation_cross_origin_reaction_sender_is_rejected() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+
+    let harness = TestHarness::new(true).await?;
+    let attacker_server = "attacker.example";
+    let victim_server = "victim.example";
+    let key_id = "ed25519:test";
+    let attacker_key = register_signed_peer(&harness, 9601, attacker_server, key_id).await?;
+    let _victim_key = register_signed_peer(&harness, 9602, victim_server, key_id).await?;
+
+    // The attacker legitimately posts a message in a room it is authoritative for.
+    let target_event_id = "$xmsg:attacker.example";
+    let mut attacker_msg = paracord_federation::FederationEventEnvelope {
+        event_id: target_event_id.to_string(),
+        room_id: "!7110:attacker.example".to_string(),
+        event_type: "m.message".to_string(),
+        sender: "@carol:attacker.example".to_string(),
+        origin_server: attacker_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "body": "attacker room message",
+            "msgtype": "m.text",
+            "guild_id": "7110",
+            "guild_name": "Attacker Guild",
+            "channel_id": "7120",
+            "channel_name": "general",
+            "channel_type": 0,
+            "message_id": "97001",
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut attacker_msg, &attacker_key, attacker_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let local_msg_id = paracord_db::federation::get_local_message_id_by_remote(
+        &harness.db,
+        attacker_server,
+        "97001",
+    )
+    .await?
+    .expect("attacker message should be stored");
+
+    // Attacker reacts to its own message but attributes the reaction to a user
+    // that belongs to victim.example. The event stays inside the attacker's room
+    // namespace, so ingest accepts it; the reaction handler must drop it.
+    let mut spoofed_reaction = paracord_federation::FederationEventEnvelope {
+        event_id: "$xreact:attacker.example".to_string(),
+        room_id: "!7110:attacker.example".to_string(),
+        event_type: "m.reaction.add".to_string(),
+        sender: "@victim:victim.example".to_string(),
+        origin_server: attacker_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "emoji": "👍",
+            "target_event_id": target_event_id,
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request =
+        signed_event_request(&mut spoofed_reaction, &attacker_key, attacker_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    // Ingest accepts (the room namespace belongs to the attacker); the spoof must
+    // be blocked at dispatch, so no reaction and no victim user mapping appear.
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let reactions = paracord_db::reactions::get_message_reactions(&harness.db, local_msg_id).await?;
+    assert!(
+        reactions.is_empty(),
+        "reaction with cross-origin sender must not be applied"
+    );
+    let victim_mapping =
+        paracord_db::federation::get_remote_user_mapping(&harness.db, "@victim:victim.example")
+            .await?;
+    assert!(
+        victim_mapping.is_none(),
+        "spoofed reaction must not materialize a mapping for the impersonated user"
+    );
+
+    // Positive control: a reaction whose sender matches the origin is applied.
+    let mut legit_reaction = paracord_federation::FederationEventEnvelope {
+        event_id: "$xreact2:attacker.example".to_string(),
+        room_id: "!7110:attacker.example".to_string(),
+        event_type: "m.reaction.add".to_string(),
+        sender: "@carol:attacker.example".to_string(),
+        origin_server: attacker_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "emoji": "🎉",
+            "target_event_id": target_event_id,
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut legit_reaction, &attacker_key, attacker_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let reactions = paracord_db::reactions::get_message_reactions(&harness.db, local_msg_id).await?;
+    assert!(
+        !reactions.is_empty(),
+        "same-origin reaction should be applied normally"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+/// Unknown/unhandled federated event types must NOT be globally fanned out to
+/// every connected client. The old default match arm dispatched `FEDERATION_*`
+/// with peer-controlled content and a `None` guild target (a global broadcast),
+/// letting a trusted peer push arbitrary JSON to all local sessions. They must be
+/// dropped instead.
+#[tokio::test]
+async fn federation_unknown_event_type_is_not_globally_broadcast() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+
+    let harness = TestHarness::new(true).await?;
+    let origin_server = "attacker.example";
+    let key_id = "ed25519:test";
+    let peer_key = register_signed_peer(&harness, 9631, origin_server, key_id).await?;
+
+    // Observe every event published to the bus (publish() always forwards to the
+    // system sender regardless of scope), so a global fan-out would be visible.
+    let mut system_rx = harness._test_app.event_bus.subscribe_system();
+
+    // An unknown event type, in a room the origin is authoritative for so ingest
+    // accepts it.
+    let mut unknown = paracord_federation::FederationEventEnvelope {
+        event_id: "$unknown:attacker.example".to_string(),
+        room_id: "!7130:attacker.example".to_string(),
+        event_type: "m.custom.evil".to_string(),
+        sender: "@carol:attacker.example".to_string(),
+        origin_server: origin_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({ "arbitrary": "attacker-controlled payload" }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut unknown, &peer_key, origin_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    // The unknown type must not have produced any FEDERATION_* broadcast.
+    let mut seen = Vec::new();
+    while let Ok(ev) = system_rx.try_recv() {
+        seen.push(ev.event_type);
+    }
+    assert!(
+        !seen.iter().any(|t| t.starts_with("FEDERATION_")),
+        "unknown federated event type must not be broadcast to clients, saw: {seen:?}"
+    );
+
+    // Liveness control: a known message event IS delivered on the same channel,
+    // proving the assertion above is meaningful (the bus is not simply dead).
+    let mut message = paracord_federation::FederationEventEnvelope {
+        event_id: "$known:attacker.example".to_string(),
+        room_id: "!7130:attacker.example".to_string(),
+        event_type: "m.message".to_string(),
+        sender: "@carol:attacker.example".to_string(),
+        origin_server: origin_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "body": "hello",
+            "msgtype": "m.text",
+            "guild_id": "7130",
+            "guild_name": "Attacker Guild",
+            "channel_id": "7140",
+            "channel_name": "general",
+            "channel_type": 0,
+            "message_id": "97131",
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut message, &peer_key, origin_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let mut delivered = Vec::new();
+    while let Ok(ev) = system_rx.try_recv() {
+        delivered.push(ev.event_type);
+    }
+    assert!(
+        delivered.iter().any(|t| t == "MESSAGE_CREATE"),
+        "known message event should be delivered on the bus, saw: {delivered:?}"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+/// A trusted peer must not be able to inject events into — or pre-create
+/// ("squat") the room/space mapping for — another server's namespace. The target
+/// namespace is derived from the DOMAIN in the peer-supplied room_id, so an
+/// origin that is neither authoritative for nor a participant of that room must
+/// be rejected before any mapping is materialized.
+#[tokio::test]
+async fn federation_foreign_namespace_injection_is_rejected() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+
+    let harness = TestHarness::new(true).await?;
+    let attacker_server = "attacker.example";
+    let key_id = "ed25519:test";
+    let attacker_key = register_signed_peer(&harness, 9701, attacker_server, key_id).await?;
+
+    // Attacker signs a well-formed message whose room_id claims the victim's
+    // namespace (which has never been federated on this server yet).
+    let mut envelope = paracord_federation::FederationEventEnvelope {
+        event_id: "$squat:attacker.example".to_string(),
+        room_id: "!7010:victim.example".to_string(),
+        event_type: "m.message".to_string(),
+        // Sender belongs to the attacker's own server, so the sender/origin
+        // binding passes — only the namespace-authority check should catch this.
+        sender: "@mallory:attacker.example".to_string(),
+        origin_server: attacker_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "body": "namespace squat attempt",
+            "msgtype": "m.text",
+            "guild_id": "7010",
+            "guild_name": "Squatted Guild",
+            "channel_id": "7020",
+            "channel_name": "general",
+            "channel_type": 0,
+            "message_id": "97001",
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut envelope, &attacker_key, attacker_server, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "event targeting a foreign room namespace must be rejected at ingest"
+    );
+
+    // No mapping may be created under the victim's namespace domain.
+    let squatted =
+        paracord_db::federation::get_space_mapping_by_remote(&harness.db, "victim.example", "7010")
+            .await?;
+    assert!(
+        squatted.is_none(),
+        "attacker must not pre-create a space mapping under the victim namespace"
+    );
+    // ...nor under the attacker's own namespace (the event never persisted).
+    let attacker_ns =
+        paracord_db::federation::get_space_mapping_by_remote(&harness.db, attacker_server, "7010")
+            .await?;
+    assert!(
+        attacker_ns.is_none(),
+        "rejected event must not materialize any space mapping"
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
@@ -1396,6 +1820,133 @@ async fn federation_list_events_enforces_room_membership() -> anyhow::Result<()>
     Ok(())
 }
 
+// `get_event` must enforce the same per-room participation gate as `list_events`:
+// a signed peer with no member in the room must not be able to pull an event's
+// body by enumerating event IDs (cross-server read IDOR). Non-participants get
+// NotFound (not Forbidden) so they cannot even confirm the event exists.
+#[tokio::test]
+async fn federation_get_event_enforces_room_membership() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    std::env::remove_var("PARACORD_FEDERATION_READ_TOKEN");
+
+    let harness = TestHarness::new(true).await?;
+    let member_server = "member.example";
+    let outsider_server = "outsider.example";
+    let key_id = "ed25519:test";
+    let member_key = register_signed_peer(&harness, 9711, member_server, key_id).await?;
+    let outsider_key = register_signed_peer(&harness, 9712, outsider_server, key_id).await?;
+
+    // A room with a single event and one participating member from member.example.
+    let room_id = "!8310:local.example";
+    let owner_id = 8390;
+    paracord_db::users::create_user(
+        &harness.db,
+        owner_id,
+        "guild_owner2",
+        1,
+        "owner8390@example.com",
+        "hash",
+    )
+    .await?;
+    paracord_db::guilds::create_guild(&harness.db, 8310, "Guild2", owner_id, None).await?;
+    paracord_db::users::create_user(
+        &harness.db,
+        8399,
+        "member_user2",
+        1,
+        "member2@example.com",
+        "hash",
+    )
+    .await?;
+    paracord_db::federation::upsert_room_membership(
+        &harness.db,
+        room_id,
+        "@bob:member.example",
+        8399,
+        8310,
+    )
+    .await?;
+
+    let event_id = "$getevt:member.example";
+    let mut room_event = paracord_federation::FederationEventEnvelope {
+        event_id: event_id.to_string(),
+        room_id: room_id.to_string(),
+        event_type: "m.message".to_string(),
+        sender: "@bob:member.example".to_string(),
+        origin_server: member_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({ "body": "secret history", "msgtype": "m.text" }),
+        depth: 5,
+        state_key: None,
+        signatures: json!({}),
+    };
+    let payload_sig = paracord_federation::signing::sign(
+        &member_key,
+        &paracord_federation::canonical_envelope_bytes(&room_event),
+    );
+    room_event.signatures = json!({ member_server: { key_id: payload_sig } });
+    let service =
+        paracord_federation::FederationService::new(paracord_federation::FederationConfig {
+            enabled: true,
+            server_name: "local.example".to_string(),
+            domain: "local.example".to_string(),
+            key_id: "ed25519:local".to_string(),
+            signing_key: None,
+            allow_discovery: false,
+        });
+    service.persist_event(&harness.db, &room_event).await?;
+
+    let sign_get =
+        |origin: &str, key: &ed25519_dalek::SigningKey| -> anyhow::Result<Request<Body>> {
+            let path = format!("/_paracord/federation/v1/event/{event_id}");
+            let timestamp_ms = chrono::Utc::now().timestamp_millis();
+            let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
+                "GET",
+                &path,
+                timestamp_ms,
+                &[],
+            );
+            let sig = paracord_federation::signing::sign(key, &canonical);
+            Ok(Request::builder()
+                .method("GET")
+                .uri(path)
+                .header("x-paracord-origin", origin)
+                .header("x-paracord-key-id", key_id)
+                .header("x-paracord-timestamp", timestamp_ms.to_string())
+                .header("x-paracord-signature", sig)
+                .body(Body::empty())?)
+        };
+
+    // Outsider (not a member of the room) is denied and cannot confirm existence.
+    let (status, _) = harness
+        .request(sign_get(outsider_server, &outsider_key)?)
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "non-participant peer must not read an event by id"
+    );
+
+    // Participating member can fetch the event.
+    let (status, body) = harness
+        .request(sign_get(member_server, &member_key)?)
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "participating peer should fetch the event"
+    );
+    assert_eq!(
+        body.get("event_id").and_then(|v| v.as_str()),
+        Some(event_id),
+        "participating peer should receive the requested event"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
 #[tokio::test]
 async fn federation_room_namespace_mapping_is_used_even_when_sender_differs() -> anyhow::Result<()>
 {
@@ -1450,6 +2001,19 @@ async fn federation_room_namespace_mapping_is_used_even_when_sender_differs() ->
         "remote.example",
         "7020",
         local_channel_id,
+        local_guild_id,
+    )
+    .await?;
+
+    // The sending server differs from the room's home domain, so it may only
+    // inject into this namespace as a recorded participant of the room (see the
+    // cross-origin guard in `ingest_verified_payload`). Record that membership so
+    // the test exercises namespace-mapping resolution rather than the reject path.
+    paracord_db::federation::upsert_room_membership(
+        &harness.db,
+        "!7010:remote.example",
+        "@bob:relay.example",
+        owner_id,
         local_guild_id,
     )
     .await?;

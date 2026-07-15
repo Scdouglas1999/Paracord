@@ -15,11 +15,18 @@ import { toast } from './stores/toastStore';
 // assets in WebView2 storage that override the exe's embedded files, preventing
 // updates from taking effect. Unregister it immediately.
 if (isTauri() && 'serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then((registrations) => {
-    for (const reg of registrations) {
-      reg.unregister();
-    }
-  });
+  void navigator.serviceWorker
+    .getRegistrations()
+    .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+    .catch((reason: unknown) => {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      // The desktop WebView deliberately rejects service-worker access. This is
+      // the expected secure configuration, not an application failure.
+      if (message === 'PWA service workers are disabled in Paracord desktop') {
+        return;
+      }
+      throw reason;
+    });
 }
 
 // Desktop-only: ask Rust to verify and sync trusted server hosts on startup and whenever the list changes

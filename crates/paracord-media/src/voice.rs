@@ -325,6 +325,26 @@ impl VoiceManager {
         Ok(())
     }
 
+    /// Grant or revoke media publishing without changing a participant's
+    /// self-mute state. Stage channels use this when moving someone between
+    /// the audience and the stage.
+    pub async fn set_participant_can_publish(
+        &self,
+        channel_id: i64,
+        user_id: i64,
+        can_publish: bool,
+    ) -> Result<(), anyhow::Error> {
+        let room_name = self
+            .rooms
+            .get(&channel_id)
+            .map(|room| format!("guild_{}_channel_{}", room.guild_id, channel_id))
+            .ok_or_else(|| anyhow::anyhow!("Voice room not found for channel {}", channel_id))?;
+
+        self.livekit
+            .update_participant(&room_name, &user_id.to_string(), Some(can_publish), None)
+            .await
+    }
+
     /// Server-side deafen a user via LiveKit API.
     /// Sets `server_deaf` locally and revokes subscribe permission on the LiveKit side.
     pub async fn server_deafen_user(

@@ -78,28 +78,30 @@ async fn fetch_federated_discoverable_guilds(
         return Vec::new();
     }
 
-    let http = match paracord_federation::client::ssrf_checked_http_client(
-        "Paracord-Discovery/1.0",
-        Duration::from_secs(4),
-    ) {
-        Ok(client) => client,
-        Err(_) => return Vec::new(),
-    };
-
     let mut results = Vec::new();
     for peer in peers {
         let url = discovery_base_from_federation_endpoint(&peer.federation_endpoint);
-        if paracord_federation::client::validate_public_federation_url_with_dns(&url)
-            .await
-            .is_err()
+        // Resolve + validate the peer host and pin the connection to the
+        // validated address. Building the client per peer (rather than once,
+        // unpinned) closes the DNS-rebinding TOCTOU: reqwest connects only to
+        // the exact IP that passed the SSRF check.
+        let http = match paracord_federation::client::ssrf_checked_pinned_client_for_url(
+            "Paracord-Discovery/1.0",
+            Duration::from_secs(4),
+            &url,
+        )
+        .await
         {
-            tracing::warn!(
-                server = %peer.server_name,
-                endpoint = %peer.federation_endpoint,
-                "skipping federated discovery for unsafe peer endpoint"
-            );
-            continue;
-        }
+            Ok(client) => client,
+            Err(_) => {
+                tracing::warn!(
+                    server = %peer.server_name,
+                    endpoint = %peer.federation_endpoint,
+                    "skipping federated discovery for unsafe peer endpoint"
+                );
+                continue;
+            }
+        };
         let mut request = http
             .get(url)
             .query(&[("limit", limit.to_string()), ("offset", "0".to_string())]);
@@ -155,7 +157,7 @@ pub async fn list_discoverable_guilds(
     State(state): State<AppState>,
     Query(params): Query<DiscoveryQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let limit = params.limit.unwrap_or(20).min(50);
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
     let offset = params.offset.unwrap_or(0).max(0);
     let include_federated = bool_query_enabled(
         params

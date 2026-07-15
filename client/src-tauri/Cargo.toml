@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+libc = "0.2"
 tauri-plugin-os = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
@@ -17,6 +18,7 @@ tauri-plugin-updater = "2"
 # already-running instance on Linux and Windows (their OS passes the URL as a
 # second-process argv, which the single-instance handler forwards).
 tauri-plugin-deep-link = "2"
+tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -45,6 +47,9 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 scap = "0.1.0-beta.1"
 
 [target.'cfg(windows)'.dependencies]
+# Native camera capture (Media Foundation). Compile-gated arm — unverified on
+# the Linux toolchain used here.
+nokhwa = { version = "0.10", features = ["input-msmf"] }
 wasapi = "0.22"
 webview2-com = "0.38"
 windows-core = "0.61"
@@ -60,10 +65,35 @@ windows = { version = "0.61", features = [
     "Win32_System_Variant",
 ] }
 
+# In-process libavcodec GPU codec engine (hardware H.264/AV1 encode + native
+# H.264/AV1 decode). Enabled only on Linux/BSD (not macOS, not Windows), which
+# keeps those builds — and every server crate, none of which depend on
+# paracord-codec — free of the FFmpeg link.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+paracord-codec = { workspace = true, features = ["lavc"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"
 libpulse-binding = "2"
 libpulse-simple-binding = "2"
+# Native surface rendering (spec §3.3): the webview is reparented into a
+# gtk::Overlay and each native-decoded track renders into a gtk::GLArea overlay
+# child. These match the versions tao/wry already resolve (gtk 0.18 = GTK3), so
+# no new transitive graph is introduced. GL/EGL/CUDA symbols are loaded at
+# runtime via libloading (no GL-loader crate exists in the tree).
+gtk = "0.18"
+gdk = "0.18"
+glib = "0.18"
+libloading = "0.8"
+# Native camera capture (V4L2). The `decoding` default feature pulls in the
+# MJPEG decoder used by `camera_capture.rs`; `input-v4l` is the pure-Rust ioctl
+# backend (no bindgen, unlike the vpx path).
+nokhwa = { version = "0.10", features = ["input-v4l"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Native camera capture (AVFoundation). Compile-gated arm — unverified on the
+# Linux toolchain used here.
+nokhwa = { version = "0.10", features = ["input-avfoundation"] }
 
 [features]
 default = ["custom-protocol", "vpx"]

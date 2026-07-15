@@ -24,6 +24,7 @@ pub struct MemberWithUserRow {
     pub mute: bool,
     pub communication_disabled_until: Option<DateTime<Utc>>,
     pub username: String,
+    pub user_display_name: Option<String>,
     pub discriminator: i16,
     pub user_avatar_hash: Option<String>,
     pub user_flags: i32,
@@ -64,6 +65,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for MemberWithUserRow {
                 .map(datetime_from_db_text)
                 .transpose()?,
             username: row.try_get("username")?,
+            user_display_name: row.try_get("user_display_name")?,
             discriminator: row.try_get("discriminator")?,
             user_avatar_hash: row.try_get("user_avatar_hash")?,
             user_flags: row.try_get("user_flags")?,
@@ -153,7 +155,7 @@ pub async fn get_guild_members_typed(
     let rows = if let Some(after_id) = after {
         sqlx::query_as::<_, MemberWithUserRow>(
             "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
-                    u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
+                    u.username, u.display_name AS user_display_name, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
              FROM members m
              INNER JOIN users u ON u.id = m.user_id
              WHERE m.guild_id = $3
@@ -169,7 +171,7 @@ pub async fn get_guild_members_typed(
     } else {
         sqlx::query_as::<_, MemberWithUserRow>(
             "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
-                    u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
+                    u.username, u.display_name AS user_display_name, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
              FROM members m
              INNER JOIN users u ON u.id = m.user_id
              WHERE m.guild_id = $2
@@ -202,11 +204,11 @@ pub async fn get_server_members(
     let rows = if let Some(after_id) = after {
         sqlx::query_as::<_, MemberWithUserRow>(
             "SELECT m.user_id, m.nick, m.avatar_hash, MIN(m.joined_at) AS joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
-                    u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
+                    u.username, u.display_name AS user_display_name, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
              FROM members m
              INNER JOIN users u ON u.id = m.user_id
              WHERE m.user_id > $2
-             GROUP BY m.user_id, m.nick, m.avatar_hash, m.deaf, m.mute, m.communication_disabled_until, u.username, u.discriminator, u.avatar_hash, u.flags
+             GROUP BY m.user_id, m.nick, m.avatar_hash, m.deaf, m.mute, m.communication_disabled_until, u.username, u.display_name, u.discriminator, u.avatar_hash, u.flags
              ORDER BY m.user_id
              LIMIT $1"
         )
@@ -217,10 +219,10 @@ pub async fn get_server_members(
     } else {
         sqlx::query_as::<_, MemberWithUserRow>(
             "SELECT m.user_id, m.nick, m.avatar_hash, MIN(m.joined_at) AS joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
-                    u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
+                    u.username, u.display_name AS user_display_name, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
              FROM members m
              INNER JOIN users u ON u.id = m.user_id
-             GROUP BY m.user_id, m.nick, m.avatar_hash, m.deaf, m.mute, m.communication_disabled_until, u.username, u.discriminator, u.avatar_hash, u.flags
+             GROUP BY m.user_id, m.nick, m.avatar_hash, m.deaf, m.mute, m.communication_disabled_until, u.username, u.display_name, u.discriminator, u.avatar_hash, u.flags
              ORDER BY m.joined_at
              LIMIT $1"
         )
@@ -281,6 +283,21 @@ pub async fn remove_member_typed(
     user_id: UserId,
     guild_id: GuildId,
 ) -> Result<(), DbError> {
+    // Strip the user's explicit role assignments for this guild's roles.
+    // member_roles has no FK/cascade tied to the members row, so leaving these
+    // rows behind would let a kicked/left/banned user retain guild privileges
+    // (and instantly regain every role on re-join). Delete them in the same
+    // removal operation.
+    sqlx::query(
+        "DELETE FROM member_roles
+         WHERE user_id = $1
+           AND role_id IN (SELECT id FROM roles WHERE space_id = $2)",
+    )
+    .bind(user_id)
+    .bind(guild_id)
+    .execute(pool)
+    .await?;
+
     sqlx::query("DELETE FROM members WHERE user_id = $1 AND guild_id = $2")
         .bind(user_id)
         .bind(guild_id)
@@ -364,11 +381,11 @@ pub async fn search_guild_members_typed(
         crate::DatabaseEngine::Postgres => {
             sqlx::query_as::<_, MemberWithUserRow>(
                 "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
-                        u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
+                        u.username, u.display_name AS user_display_name, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
                  FROM members m
                  INNER JOIN users u ON u.id = m.user_id
                  WHERE m.guild_id = $1
-                   AND (LOWER(u.username) LIKE LOWER($2) OR LOWER(COALESCE(m.nick, '')) LIKE LOWER($2))
+                   AND (LOWER(u.username) LIKE LOWER($2) OR LOWER(COALESCE(u.display_name, '')) LIKE LOWER($2) OR LOWER(COALESCE(m.nick, '')) LIKE LOWER($2))
                  ORDER BY u.username
                  LIMIT $3",
             )
@@ -381,11 +398,11 @@ pub async fn search_guild_members_typed(
         crate::DatabaseEngine::Sqlite => {
             sqlx::query_as::<_, MemberWithUserRow>(
                 "SELECT m.user_id, m.nick, m.avatar_hash, m.joined_at, CASE WHEN m.deaf THEN 1 ELSE 0 END AS deaf, CASE WHEN m.mute THEN 1 ELSE 0 END AS mute, m.communication_disabled_until,
-                        u.username, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
+                        u.username, u.display_name AS user_display_name, u.discriminator, u.avatar_hash AS user_avatar_hash, u.flags AS user_flags
                  FROM members m
                  INNER JOIN users u ON u.id = m.user_id
                  WHERE m.guild_id = $1
-                   AND (u.username LIKE $2 COLLATE NOCASE OR COALESCE(m.nick, '') LIKE $2 COLLATE NOCASE)
+                   AND (u.username LIKE $2 COLLATE NOCASE OR COALESCE(u.display_name, '') LIKE $2 COLLATE NOCASE OR COALESCE(m.nick, '') LIKE $2 COLLATE NOCASE)
                  ORDER BY u.username
                  LIMIT $3",
             )

@@ -27,7 +27,7 @@ Clear `localStorage` keys `paracord:layout-tour:*` before shell/guild-home tour 
 
 ## Demo seed prerequisites
 
-Use a single "showcase" server with rich content. Suggested minimum:
+Use a single “showcase” server with rich content. Suggested minimum:
 
 | Requirement | Why |
 |---|---|
@@ -45,9 +45,9 @@ Use a single "showcase" server with rich content. Suggested minimum:
 
 **Quick paths**
 
-- User settings overlay: `Ctrl+,` or UserPanel → Settings; mobile: bottom-nav Settings tab  
-- Guild settings overlay: Guild Home header gear or `Ctrl+Shift+,`  
-- Command palette: `Ctrl+K` / `⌘K` or SidebarSearch field  
+- User settings overlay: `Ctrl+,` or UserPanel → Settings; mobile: bottom-nav Settings tab
+- Guild settings overlay: Guild Home header gear or `Ctrl+Shift+,`
+- Command palette: `Ctrl+K` / `⌘K` or SidebarSearch field
 - Context panel: TopBar icon cluster (members / threads / pins / search / economy)
 
 ---
@@ -57,7 +57,7 @@ Use a single "showcase" server with rich content. Suggested minimum:
 | Priority | Route | Filename | What to show | Setup |
 |---|---|---|---|---|
 | **Must-have** | `/connect` | `server-connect.png` | Server URL connect card on auth canvas; optional demo-server hint visible | Logged out; clear stored server URL or use fresh profile |
-| **Must-have** | `/login` | `login.png` | "Welcome back" login form with email/username + password fields | Logged out; server connected (`/health` OK) |
+| **Must-have** | `/login` | `login.png` | “Welcome back” login form with email/username + password fields | Logged out; server connected (`/health` OK) |
 | **Must-have** | `/register` | `register.png` | Registration form (username, display name, password, terms checkbox) | Logged out; server connected |
 | Nice-to-have | `/setup` | `account-setup.png` | Device crypto identity setup (create + recovery phrase step) | `crypto_auth_enabled` flow or navigate directly; logged out |
 | Nice-to-have | `/unlock` | `account-unlock.png` | Device key unlock prompt | Crypto-auth account exists, locked |
@@ -73,7 +73,7 @@ Use a single "showcase" server with rich content. Suggested minimum:
 | Priority | Route / action | Filename | What to show | Setup |
 |---|---|---|---|---|
 | **Must-have** | `/app` | `home.png` | App Home: greeting, live DM calls section (or empty state), friends-around strip, recent DMs, quick actions (Create server, Discovery) | Logged in; DM + friend data seeded |
-| **Must-have** | `/app` (sidebar expanded) | `unified-sidebar.png` | Full UnifiedSidebar: SidebarSearch, NeedsYou (with ≥1 attention row), PinnedRail (optional), RecentList, SpacesList, UserPanel footer | Unreads/mentions on at least one row; sidebar not collapsed |
+| **Must-have** | `/app` (sidebar expanded) | `sidebar-unified.png` | Full UnifiedSidebar: SidebarSearch, NeedsYou (with ≥1 attention row), PinnedRail (optional), RecentList, SpacesList, UserPanel footer | Unreads/mentions on at least one row; sidebar not collapsed |
 | Nice-to-have | `/app` (`Ctrl+B` collapse) | `sidebar-collapsed.png` | 64px icon rail: space avatars, mini CallDock if in call, user avatar | Desktop width; collapse sidebar |
 | Nice-to-have | `/app` (first visit) | `layout-tour-shell.png` | LayoutTour coach-mark on sidebar or ⌘K search anchor | Clear `paracord:layout-tour:shell` storage key |
 
@@ -86,7 +86,7 @@ Use a single "showcase" server with rich content. Suggested minimum:
 | **Must-have** | `/app/friends` | `friends-online.png` | Friends page, **Online** tab with friend rows + presence dots | ≥1 online friend |
 | Nice-to-have | `/app/friends` (tab) | `friends-requests.png` | **Pending** tab with incoming request actions | Pending inbound request |
 | Nice-to-have | `/app/friends` (tab) | `friends-all.png` | **All** tab | Several friends |
-| **Must-have** | `/app/dms` | `dms-empty.png` | DM hub empty/landing state with "Start a conversation" CTA | No DM selected (`/app/dms` without `:channelId`) |
+| **Must-have** | `/app/dms` | `dms-empty.png` | DM hub empty/landing state with “Start a conversation” CTA | No DM selected (`/app/dms` without `:channelId`) |
 | **Must-have** | `/app/dms/:channelId` | `dm-chat.png` | 1:1 DM ChatView: TopBar (avatar + name), MessageList with grouped messages, MessageInput | Active DM with message history |
 | Nice-to-have | `/app/dms/:groupChannelId` | `group-dm-chat.png` | Group DM chat with multiple authors | Group DM channel |
 | Nice-to-have | DM TopBar → members toggle | `context-panel-group-members.png` | ContextPanel **members** mode for group DM | Group DM open; toggle members |
@@ -97,11 +97,11 @@ Use a single "showcase" server with rich content. Suggested minimum:
 
 | Priority | Route | Filename | What to show | Setup |
 |---|---|---|---|---|
-| **Must-have** | `/app/guilds/:guildId` | `rooms-view.png` | RoomsView: GuildHomeHeader (Fraunces guild name, who's-around summary), LiveRoomsGrid with ≥1 **live** RoomCard (OccupantStack + speaking ring), AroundNowStrip, TextChannelList with categories/unread dots | Voice channel occupied; guild selected |
-| Nice-to-have | `/app/guilds/:guildId` | `guild-rooms-quiet.png` | Quiet/empty voice room compact row ("Empty — start the room") | Voice channel with 0 occupants |
+| **Must-have** | `/app/guilds/:guildId` | `guild-rooms.png` | RoomsView: GuildHomeHeader (Fraunces guild name, who’s-around summary), LiveRoomsGrid with ≥1 **live** RoomCard (OccupantStack + speaking ring), AroundNowStrip, TextChannelList with categories/unread dots | Voice channel occupied; guild selected |
+| Nice-to-have | `/app/guilds/:guildId` | `guild-rooms-quiet.png` | Quiet/empty voice room compact row (“Empty — start the room”) | Voice channel with 0 occupants |
 | Nice-to-have | `/app/guilds/:guildId` | `guild-rooms-stream.png` | RoomCard **stream** state with Watch affordance | User streaming in voice channel |
 | Nice-to-have | `/app/guilds/:guildId` (first visit) | `layout-tour-guild-home.png` | LayoutTour coach-mark on live-rooms region | Clear `paracord:layout-tour:guild` key |
-| Nice-to-have | Guild Home → Create guild modal | `create-guild-modal.png` | CreateGuildModal over Rooms/home | Click "Create server" from Home or SpacesList |
+| Nice-to-have | Guild Home → Create guild modal | `create-guild-modal.png` | CreateGuildModal over Rooms/home | Click “Create server” from Home or SpacesList |
 
 ---
 
@@ -109,11 +109,11 @@ Use a single "showcase" server with rich content. Suggested minimum:
 
 | Priority | Route | Filename | What to show | Setup |
 |---|---|---|---|---|
-| **Must-have** | `/app/guilds/:guildId/channels/:textChannelId` | `text-chat.png` | Text channel ChatView: TopBar breadcrumb (`Guild / #channel`), message feed with author grouping, mention styling, MessageInput + markdown toolbar visible on hover/focus | `#general` or similar with 10+ messages, 1 @mention |
+| **Must-have** | `/app/guilds/:guildId/channels/:textChannelId` | `guild-text-channel.png` | Text channel ChatView: TopBar breadcrumb (`Guild / #channel`), message feed with author grouping, mention styling, MessageInput + markdown toolbar visible on hover/focus | `#general` or similar with 10+ messages, 1 @mention |
 | Nice-to-have | Same route | `guild-text-channel-hover-toolbar.png` | Message hover action toolbar (react, reply, pin, …) | Hover a message row |
 | Nice-to-have | Same route | `message-lightbox.png` | Image lightbox over chat (zoom/pan chrome) | Message with image attachment; click to open (`AppProviders` ImageLightbox) |
 | **Must-have** | `/app/guilds/:guildId/channels/:forumChannelId` | `guild-forum.png` | ForumView: tag filters, grid/list layout toggle, thread cards | Forum channel (type 7) with ≥2 posts |
-| Nice-to-have | Forum → new post modal | `forum-create-post.png` | Create-thread modal in forum | Click "New post" |
+| Nice-to-have | Forum → new post modal | `forum-create-post.png` | Create-thread modal in forum | Click “New post” |
 
 ---
 
@@ -158,7 +158,7 @@ Toggle from TopBar while in a guild text channel unless noted.
 
 | Priority | Action | Filename | What to show | Setup |
 |---|---|---|---|---|
-| **Must-have** | `Ctrl+K` / `⌘K` | `command-palette.png` | Command palette open with placeholder "Jump to a channel, space, or setting…" and categorized results (channels, spaces, navigation) | Any authenticated shell view; type partial query e.g. `gen` |
+| **Must-have** | `Ctrl+K` / `⌘K` | `command-palette.png` | Command palette open with placeholder “Jump to a channel, space, or setting…” and categorized results (channels, spaces, navigation) | Any authenticated shell view; type partial query e.g. `gen` |
 
 ---
 
@@ -216,7 +216,7 @@ Opened via Guild Home gear, `Ctrl+Shift+,`, or route `/app/guilds/:guildId/setti
 | Nice-to-have | `/app/admin` (tab) | `admin-guilds.png` | Guilds panel | Admin access |
 | Nice-to-have | `/app/admin` (tab) | `admin-security.png` | Security panel | Admin access |
 
-> Skip admin captures if demo user is not a server administrator — the page shows "Access denied".
+> Skip admin captures if demo user is not a server administrator — the page shows “Access denied”.
 
 ---
 
@@ -251,9 +251,40 @@ Re-capture key must-haves at mobile viewport. Bottom nav: Home / DMs / Server / 
 
 ### Must-have (25 captures)
 
-`server-connect`, `login`, `register`, `home`, `unified-sidebar`, `friends-online`, `dms-empty`, `dm-chat`, `rooms-view`, `text-chat`, `guild-forum`, `voice-lobby`, `stage-channel`, `context-panel-members`, `context-panel-threads`, `context-panel-pins`, `inbox`, `command-palette`, `user-settings-account`, `user-settings-appearance`, `guild-settings-overview`, `guild-settings-channels`, `mobile-home`, `mobile-sidebar-overlay`, `mobile-chat`
+`server-connect`, `login`, `register`, `home`, `sidebar-unified`, `friends-online`, `dms-empty`, `dm-chat`, `guild-rooms`, `guild-text-channel`, `guild-forum`, `voice-lobby`, `stage-channel`, `context-panel-members`, `context-panel-threads`, `context-panel-pins`, `inbox`, `command-palette`, `user-settings-account`, `user-settings-appearance`, `guild-settings-overview`, `guild-settings-channels`, `mobile-home`, `mobile-sidebar-overlay`, `mobile-chat`
 
 ### Nice-to-have (everything else in tables above)
+
+---
+
+## Complete route table (from `client/src/App.tsx`)
+
+| Path | Element | Screenshot section |
+|---|---|---|
+| `/setup` | `AccountSetupPage` | §1 |
+| `/unlock` | `AccountUnlockPage` | §1 |
+| `/recover` | `AccountRecoverPage` | §1 |
+| `/connect` | `ServerConnectPage` | §1 |
+| `/login` | `LoginPage` | §1 |
+| `/register` | `RegisterPage` | §1 |
+| `/invite/:code` | `InvitePage` | §1 |
+| `/terms` | `TermsPage` | §1 |
+| `/privacy` | `PrivacyPage` | §1 |
+| `/app` | `HomePage` | §2 |
+| `/app/guilds/:guildId` | `GuildHomePage` → `RoomsView` | §4 |
+| `/app/guilds/:guildId/settings` | `GuildSettingsPage` | §11 |
+| `/app/guilds/:guildId/channels/:channelId` | `GuildPage` (text / forum / voice / stage) | §5–6 |
+| `/app/dms` | `DMPage` | §3 |
+| `/app/dms/:channelId` | `DMPage` | §3 |
+| `/app/friends` | `FriendsPage` | §3 |
+| `/app/admin` | `AdminPage` | §13 |
+| `/app/discovery` | `DiscoveryPage` | §12 |
+| `/app/templates` | `TemplateGalleryPage` | §12 |
+| `/app/oauth2/authorize` | `BotAuthorizePage` | §12 |
+| `/app/developers` | `DeveloperPage` | §12 |
+| `/media-test` | `MediaTest` (dev only) | Out of scope |
+
+**Shell overlays (not routes):** CommandPalette (§9), ContextPanel modes (§7), UserSettings overlay (§10), GuildSettings overlay (§11), TopBar popovers (§8), LayoutTour (§2/§4), MobileBottomNav + MiniVoiceBar (§14).
 
 ---
 
@@ -261,17 +292,8 @@ Re-capture key must-haves at mobile viewport. Bottom nav: Home / DMs / Server / 
 
 - All paths relative to repo root: `assets/readme/<filename>.png`
 - Lowercase, hyphen-separated, feature-first
-- PNG, 2× retina export optional (README can scale down)
+- PNG; 2× retina export optional (README can scale down)
 - No tokens/secrets visible (bot tokens, recovery phrases, MFA codes)
-
-**README-embedded must-haves** (already referenced in `README.md`):
-
-| Filename | README section |
-|---|---|
-| `home.png` | Home dashboard |
-| `unified-sidebar.png` | Unified sidebar |
-| `rooms-view.png` | Rooms view |
-| `text-chat.png` | Text chat |
 
 ---
 
@@ -288,15 +310,11 @@ Re-capture key must-haves at mobile viewport. Bottom nav: Home / DMs / Server / 
 
 ## Suggested capture order
 
-1. Auth flow (`/connect` → `/register` or seed account → `/login`)  
-2. Shell + Home + sidebar  
-3. Guild Rooms → text channel → context panels → inbox → command palette  
-4. Forum, voice lobby, stage  
-5. Friends + DMs  
-6. Settings overlays (user, guild)  
-7. Mobile variants of steps 2–4  
+1. Auth flow (`/connect` → `/register` or seed account → `/login`)
+2. Shell + Home + sidebar
+3. Guild Rooms → text channel → context panels → inbox → command palette
+4. Forum, voice lobby, stage
+5. Friends + DMs
+6. Settings overlays (user, guild)
+7. Mobile variants of steps 2–4
 8. Admin / developer / discovery (if demo server supports)
-
----
-
-**Route inventory (58 surfaces):** 11 public/auth routes, 12 in-shell routes, 5 context-panel modes, 4 TopBar overlays, 2 settings overlays (multi-section), command palette, mobile variants, and ephemeral modals — all derived from `client/src/App.tsx` and `docs/layout-spec.md` §4.

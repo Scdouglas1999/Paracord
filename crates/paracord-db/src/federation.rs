@@ -789,6 +789,16 @@ pub async fn list_room_member_servers(
     .fetch_all(pool)
     .await?;
 
+    // Participation is defined strictly by ACTUAL room members: a server counts
+    // only when it has at least one user (`@local:server`) recorded in
+    // `federation_room_memberships` for this room. We deliberately do NOT union
+    // in `federation_delivery_attempts` (servers we merely gossiped membership
+    // events to). Membership events are broadcast to every trusted peer, so that
+    // signal makes almost any peer look like a "participant" and defeats the
+    // read-authorization gate in `server_participates_in_room` (cross-server read
+    // IDOR). Every legitimate participant is recorded here at join time (see
+    // `upsert_room_membership` callers: the federation `join` endpoint and the
+    // inbound `m.member.join` handler), so this branch alone is sufficient.
     let mut servers = Vec::new();
     for (remote_user_id,) in member_rows {
         if let Some((_, server)) = remote_user_id.rsplit_once(':') {
@@ -796,24 +806,6 @@ pub async fn list_room_member_servers(
             if !trimmed.is_empty() {
                 servers.push(trimmed.to_string());
             }
-        }
-    }
-
-    let synced_peer_rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT da.destination_server
-         FROM federation_delivery_attempts da
-         JOIN federation_events fe ON fe.event_id = da.event_id
-         WHERE fe.room_id = $1
-           AND fe.event_type IN ('m.member.join', 'm.member.leave')
-           AND da.success = TRUE",
-    )
-    .bind(room_id)
-    .fetch_all(pool)
-    .await?;
-    for (server_name,) in synced_peer_rows {
-        let trimmed = server_name.trim();
-        if !trimmed.is_empty() {
-            servers.push(trimmed.to_string());
         }
     }
 
@@ -1053,7 +1045,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_room_member_servers_includes_peers_that_accepted_membership_events() {
+    async fn list_room_member_servers_counts_only_actual_members_not_delivery_targets() {
+        // Participation for read authorization means "has a real member in the
+        // room". A server we merely delivered membership events to (a gossip
+        // target, recorded in `federation_delivery_attempts`) must NOT be
+        // reported as a participant, otherwise the read-auth gate in
+        // `server_participates_in_room` is porous (cross-server read IDOR).
         let pool = test_pool().await;
         let room_id = "!guild:node-a.test";
         let event_id = "$join-1:node-a.test";
@@ -1071,6 +1068,7 @@ mod tests {
         crate::guilds::create_guild(&pool, 2001, "Remote Guild", 1001, None)
             .await
             .unwrap();
+        // node-a.test has an ACTUAL member in the room.
         upsert_room_membership(&pool, room_id, "@guest_one:node-a.test", 1001, 2001)
             .await
             .unwrap();
@@ -1084,6 +1082,8 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // node-c.test only received a delivery attempt (we gossiped the join to
+        // it); it has NO membership row for this room.
         record_delivery_attempt(
             &pool,
             "node-c.test",
@@ -1098,6 +1098,11 @@ mod tests {
         .unwrap();
 
         let servers = list_room_member_servers(&pool, room_id).await.unwrap();
-        assert_eq!(servers, vec!["node-a.test", "node-c.test"]);
+        // Only the server with an actual membership row is a participant.
+        assert_eq!(servers, vec!["node-a.test"]);
+        assert!(
+            !servers.iter().any(|s| s == "node-c.test"),
+            "a delivery-only peer must not be treated as a room participant"
+        );
     }
 }

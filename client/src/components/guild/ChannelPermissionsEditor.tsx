@@ -9,6 +9,7 @@ import { useMemberStore } from '../../stores/memberStore';
 import { LoadingSpinner, ErrorBanner } from '../ui/Feedback';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { displayName } from '../../lib/displayName';
 
 interface ChannelPermissionsEditorProps {
   channelId: string;
@@ -86,6 +87,15 @@ function permsToWire(value: bigint): number {
   return Number(value);
 }
 
+const ALL_DEFINED_PERMISSIONS = Object.values(Permissions).reduce(
+  (all, permission) => all | permission,
+  0n,
+);
+
+function applyOverwrite(base: bigint, allow: bigint, deny: bigint): bigint {
+  return (base & ~deny) | allow;
+}
+
 interface EditingOverwrite {
   targetId: string;
   targetType: number;
@@ -132,14 +142,14 @@ export function ChannelPermissionsEditor({
       .filter(
         (m) =>
           m.user.username.toLowerCase().includes(q) ||
-          (m.nick && m.nick.toLowerCase().includes(q))
+          displayName(m.user, m.nick).toLowerCase().includes(q)
       )
       .slice(0, 20);
   }, [guildMembers, memberSearch]);
 
   const getMemberName = (userId: string) => {
     const member = guildMembers.find((m) => m.user.id === userId);
-    if (member) return member.nick || member.user.username;
+    if (member) return displayName(member.user, member.nick);
     return `User ${userId.slice(0, 6)}`;
   };
 
@@ -201,6 +211,87 @@ export function ChannelPermissionsEditor({
   };
 
   const hasOverrides = editing ? editing.allow !== 0n || editing.deny !== 0n : false;
+
+  const effectivePreview = useMemo(() => {
+    if (!editing) return null;
+    const everyonePermissions = everyoneRole ? permsToBigInt(everyoneRole.permissions) : 0n;
+    const targetRoleIds = editing.targetType === 0
+      ? (editing.targetId === guildId ? [] : [editing.targetId])
+      : guildMembers.find((member) => member.user.id === editing.targetId)?.roles ?? [];
+    let base = everyonePermissions;
+    for (const roleId of targetRoleIds) {
+      const role = roles.find((candidate) => candidate.id === roleId);
+      if (role) base |= permsToBigInt(role.permissions);
+    }
+
+    const administrator = (base & Permissions.ADMINISTRATOR) === Permissions.ADMINISTRATOR;
+    if (administrator) {
+      return {
+        permissions: ALL_DEFINED_PERMISSIONS,
+        administrator: true,
+        missingMemberRoles: false,
+      };
+    }
+
+    const overwriteBits = (overwrite: ChannelOverwrite) =>
+      overwrite.target_id === editing.targetId
+        ? { allow: editing.allow, deny: editing.deny }
+        : {
+            allow: permsToBigInt(overwrite.allow_perms),
+            deny: permsToBigInt(overwrite.deny_perms),
+          };
+    const everyoneOverwrite = overwrites.find(
+      (overwrite) => overwrite.target_type === 0 && overwrite.target_id === guildId,
+    );
+    if (everyoneOverwrite) {
+      const bits = overwriteBits(everyoneOverwrite);
+      base = applyOverwrite(base, bits.allow, bits.deny);
+    }
+
+    if (editing.targetType === 0 && editing.targetId !== guildId) {
+      const roleOverwrite = overwrites.find(
+        (overwrite) => overwrite.target_type === 0 && overwrite.target_id === editing.targetId,
+      );
+      if (roleOverwrite) {
+        const bits = overwriteBits(roleOverwrite);
+        base = applyOverwrite(base, bits.allow, bits.deny);
+      }
+    }
+
+    if (editing.targetType === 1) {
+      let roleAllow = 0n;
+      let roleDeny = 0n;
+      for (const overwrite of overwrites) {
+        if (overwrite.target_type !== 0 || !targetRoleIds.includes(overwrite.target_id)) continue;
+        const bits = overwriteBits(overwrite);
+        roleAllow |= bits.allow;
+        roleDeny |= bits.deny;
+      }
+      base = applyOverwrite(base, roleAllow, roleDeny);
+      const memberOverwrite = overwrites.find(
+        (overwrite) => overwrite.target_type === 1 && overwrite.target_id === editing.targetId,
+      );
+      if (memberOverwrite) {
+        const bits = overwriteBits(memberOverwrite);
+        base = applyOverwrite(base, bits.allow, bits.deny);
+      }
+    }
+
+    return {
+      permissions: base,
+      administrator: false,
+      missingMemberRoles:
+        editing.targetType === 1
+        && !guildMembers.some((member) => member.user.id === editing.targetId),
+    };
+  }, [editing, everyoneRole, guildId, guildMembers, overwrites, roles]);
+
+  const previewAllowedCount = effectivePreview
+    ? PERMISSION_GROUPS.flatMap((group) => group.perms).filter(
+        ({ key }) => (effectivePreview.permissions & Permissions[key]) === Permissions[key],
+      ).length
+    : 0;
+  const previewPermissionCount = PERMISSION_GROUPS.reduce((count, group) => count + group.perms.length, 0);
 
   const handleSave = async () => {
     if (!editing) return;
@@ -295,7 +386,7 @@ export function ChannelPermissionsEditor({
       open
       onClose={onClose}
       labelledBy="channel-permissions-title"
-      panelClassName="w-full max-w-2xl"
+      panelClassName="w-full max-w-3xl"
     >
       <div>
         {/* Header */}
@@ -312,9 +403,9 @@ export function ChannelPermissionsEditor({
           <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
         </div>
 
-        <div className="flex max-h-[70vh] min-h-[20rem]">
+        <div className="flex max-h-[78vh] min-h-[20rem] flex-col sm:max-h-[70vh] sm:flex-row">
           {/* Left panel: list of overwrites */}
-          <div className="flex w-52 shrink-0 flex-col border-r border-border-subtle bg-bg-secondary/40">
+          <div className="flex max-h-[42vh] w-full shrink-0 flex-col border-b border-border-subtle bg-bg-secondary/40 sm:max-h-none sm:w-52 sm:border-b-0 sm:border-r">
             <div className="px-3 pb-2 pt-3">
               <div className="mb-1.5 px-1 text-section uppercase text-text-muted">Overrides</div>
               {loading ? (
@@ -419,7 +510,7 @@ export function ChannelPermissionsEditor({
                           disabled={saving}
                         >
                           <User size={13} className="shrink-0 text-text-muted" />
-                          <span className="truncate">{m.nick || m.user.username}</span>
+                          <span className="truncate">{displayName(m.user, m.nick)}</span>
                         </button>
                       ))
                     )}
@@ -460,6 +551,28 @@ export function ChannelPermissionsEditor({
                   </button>
                 </div>
 
+                {effectivePreview && (
+                  <div className="border-b border-border-subtle bg-bg-tertiary/70 px-5 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-section uppercase text-text-muted">Effective access preview</span>
+                      <span className="text-meta font-semibold tabular-nums text-text-secondary">
+                        {previewAllowedCount} allowed · {previewPermissionCount - previewAllowedCount} denied
+                      </span>
+                    </div>
+                    <p className="mt-1 text-meta leading-relaxed text-text-secondary">
+                      {effectivePreview.administrator
+                        ? 'Administrator access bypasses channel overrides, so every permission remains allowed.'
+                        : effectivePreview.missingMemberRoles
+                          ? 'This member is not in the loaded member list, so the preview uses @everyone plus the direct member override.'
+                          : editing.targetType === 1
+                            ? 'Combines @everyone, all assigned roles, role overrides, then this member override.'
+                            : editing.targetId === guildId
+                              ? 'Combines the @everyone base role with this channel override.'
+                              : 'Shows a member with @everyone plus this role, then applies channel overrides.'}
+                    </p>
+                  </div>
+                )}
+
                 <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
                   {PERMISSION_GROUPS.map(({ group, perms }) => (
                     <div key={group}>
@@ -468,9 +581,20 @@ export function ChannelPermissionsEditor({
                         {perms.map(({ key, label }) => {
                           const flag = Permissions[key];
                           const state = computePermState(flag, editing.allow, editing.deny);
+                          const effectivelyAllowed = effectivePreview
+                            ? (effectivePreview.permissions & flag) === flag
+                            : false;
                           return (
-                            <div key={key} className="flex items-center justify-between gap-3 py-2">
-                              <span className="min-w-0 truncate text-label text-text-secondary">{label}</span>
+                            <div key={key} data-testid={`permission-row-${key}`} className="flex items-center justify-between gap-3 py-2">
+                              <span className="min-w-0">
+                                <span className="block truncate text-label text-text-secondary">{label}</span>
+                                <span className={cn(
+                                  'block text-meta',
+                                  effectivelyAllowed ? 'text-accent-success' : 'text-text-muted',
+                                )}>
+                                  {state === 'inherit' ? 'Inherited' : 'Effective'} → {effectivelyAllowed ? 'allowed' : 'denied'}
+                                </span>
+                              </span>
                               <div className="flex shrink-0 items-center rounded-sm border border-border-subtle bg-bg-tertiary p-0.5">
                                 {PERM_STATES.map(({ value, label: stateLabel }) => {
                                   const active = state === value;

@@ -4,6 +4,7 @@ import { useVoice } from '../../hooks/useVoice';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { ChannelType, type Channel, type VoiceState } from '../../types';
 import { OccupantStack } from './OccupantStack';
+import { displayName } from '../../lib/displayName';
 
 interface RoomCardProps {
   channel: Channel;
@@ -105,34 +106,36 @@ export function RoomCard({
   if (occupantCount === 0 || compact) {
     if (occupantCount === 0) {
       return (
-        <div className="flex items-center gap-3 rounded-md px-3 py-2 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
-          <Volume2 size={18} className="shrink-0 text-channel-icon" />
+        <button
+          type="button"
+          onClick={handleJoin}
+          aria-label={`Join ${name}`}
+          className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+        >
+          <Volume2 size={18} className="shrink-0 text-channel-icon" aria-hidden />
           <span className="truncate text-label text-text-secondary">{name}</span>
           <span className="truncate text-meta text-text-muted">Empty — start the room</span>
-          <button
-            type="button"
-            onClick={handleJoin}
-            className="ml-auto shrink-0 rounded-sm border border-border-subtle px-3 py-1 text-meta font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-          >
+          <span className="ml-auto shrink-0 rounded-sm border border-border-subtle px-3 py-1 text-meta font-semibold text-text-secondary">
             Join
-          </button>
-        </div>
+          </span>
+        </button>
       );
     }
     // Occupied but forced-compact: single line with a small occupant stack.
     return (
-      <div className="flex items-center gap-3 rounded-md px-3 py-2 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
-        <Hash size={18} className="shrink-0 text-channel-icon" />
+      <button
+        type="button"
+        onClick={handleJoin}
+        aria-label={`Join ${name}`}
+        className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+      >
+        <Hash size={18} className="shrink-0 text-channel-icon" aria-hidden />
         <span className="truncate text-label text-text-primary">{name}</span>
         <OccupantStack participants={participants} speakingUsers={speakingUsers} max={3} />
-        <button
-          type="button"
-          onClick={handleJoin}
-          className="ml-auto shrink-0 rounded-sm bg-accent-primary px-3 py-1 text-meta font-semibold text-text-on-accent shadow-sm outline-none transition-[background-color,transform] duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:scale-[0.97] focus-visible:shadow-[var(--focus-ring)]"
-        >
+        <span className="ml-auto shrink-0 rounded-sm bg-accent-primary px-3 py-1 text-meta font-semibold text-text-on-accent shadow-sm">
           Join
-        </button>
-      </div>
+        </span>
+      </button>
     );
   }
 
@@ -162,7 +165,7 @@ export function RoomCard({
           <button
             type="button"
             onClick={handleWatch}
-            aria-label={`Watch ${streamer.username || 'stream'}`}
+            aria-label={`Watch ${displayName(streamer)}`}
             className="inline-flex h-9 items-center gap-1.5 rounded-sm border border-border-subtle px-3 text-label font-semibold text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
           >
             <Play size={14} className="text-status-streaming" />

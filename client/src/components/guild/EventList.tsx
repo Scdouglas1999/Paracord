@@ -12,6 +12,7 @@ import { FieldLabel } from './SettingsPrimitives';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
 import { confirm } from '../../stores/confirmStore';
+import { safeClientResourceUrl } from '../../lib/security';
 
 interface ScheduledEvent {
   id: string;
@@ -582,6 +583,7 @@ function EventCard({
   onDeleteEvent,
 }: EventCardProps) {
   const isPast = event.status === 3 || event.status === 4;
+  const imageUrl = safeClientResourceUrl(event.image_url ?? '');
 
   return (
     <article
@@ -591,9 +593,9 @@ function EventCard({
       )}
     >
       {/* Cover image — framed intentionally, not a full-bleed hero */}
-      {event.image_url && (
+      {imageUrl && (
         <img
-          src={event.image_url}
+          src={imageUrl}
           alt=""
           className="h-32 w-full border-b border-border-subtle object-cover"
         />

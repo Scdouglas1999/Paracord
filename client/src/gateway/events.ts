@@ -73,8 +73,22 @@ export const GatewayEvents = {
   // Emoji events
   GUILD_EMOJIS_UPDATE: 'GUILD_EMOJIS_UPDATE',
 
+  // Sticker events
+  GUILD_STICKERS_UPDATE: 'GUILD_STICKERS_UPDATE',
+
+  // Stage instance events
+  STAGE_INSTANCE_CREATE: 'STAGE_INSTANCE_CREATE',
+  STAGE_INSTANCE_UPDATE: 'STAGE_INSTANCE_UPDATE',
+  STAGE_INSTANCE_DELETE: 'STAGE_INSTANCE_DELETE',
+
+  // Interaction events (bot → invoking user: modals, autocomplete)
+  INTERACTION_CREATE: 'INTERACTION_CREATE',
+
   // Server events
   SERVER_RESTART: 'SERVER_RESTART',
+
+  // Economy
+  GUILD_MEMBER_XP_UPDATE: 'GUILD_MEMBER_XP_UPDATE',
 } as const;
 
 export type GatewayEvent = (typeof GatewayEvents)[keyof typeof GatewayEvents];

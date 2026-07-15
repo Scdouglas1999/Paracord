@@ -733,6 +733,7 @@ function synthesizeVoiceStateFromParticipant(
     self_stream: hasScreenShare,
     self_video: hasCamera,
     suppress: existing?.suppress || false,
+    request_to_speak_at: existing?.request_to_speak_at ?? null,
     username: existing?.username || participant.name || undefined,
     avatar_hash: existing?.avatar_hash,
   };
@@ -1314,7 +1315,9 @@ function buildLocalVoiceState(
   selfMute: boolean,
   selfDeaf: boolean,
   selfStream: boolean,
-  selfVideo: boolean
+  selfVideo: boolean,
+  suppress = false,
+  requestToSpeakAt: string | null = null,
 ): VoiceState | null {
   const authUser = useAuthStore.getState().user;
   if (!authUser) return null;
@@ -1329,7 +1332,8 @@ function buildLocalVoiceState(
     self_mute: selfMute,
     self_stream: selfStream,
     self_video: selfVideo,
-    suppress: false,
+    suppress,
+    request_to_speak_at: requestToSpeakAt,
     username: authUser.username,
     avatar_hash: authUser.avatar_hash,
   };
@@ -1934,7 +1938,10 @@ interface VoiceStoreState {
   toggleDeaf: () => Promise<void>;
   startStream: (qualityPreset?: string, sourceId?: string) => Promise<void>;
   stopStream: () => void;
-  toggleVideo: () => void;
+  toggleVideo: () => Promise<void>;
+  /** Enumerate native capture cameras for device selection (native path only;
+   *  returns [] on the LiveKit/browser path). Contract CAM1. */
+  listCameraDevices: () => Promise<Array<{ id: string; label: string }>>;
   /** Applies the audio input device; resolves to false when the switch failed. */
   applyAudioInputDevice: (deviceId: string | null) => Promise<boolean>;
   /** Applies the audio output device; resolves to false when the switch failed. */
@@ -2231,10 +2238,16 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           });
 
           engine.onSpeakingChange((speakers) => {
-            set({ speakingUsers: new Set(speakers.keys()) });
+            get().setSpeakingUsers(Array.from(speakers.keys()));
           });
           engine.onTransportLost((reason) => {
             void get().handleMediaTransportLost(reason);
+          });
+          engine.onCameraFailure?.((error) => {
+            const message = error instanceof Error ? error.message : 'Camera capture failed';
+            logVoiceDiagnostic('[voice] native camera failure', { error: message });
+            set({ selfVideo: false });
+            useToastStore.getState().addToast('error', `Camera stopped: ${message}`);
           });
 
           // Try each candidate endpoint in order (LAN first, then public).
@@ -2289,10 +2302,16 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
                 set({ participants: currentParticipants, channelParticipants: currentChannelParticipants });
               });
               engine.onSpeakingChange((speakers) => {
-                set({ speakingUsers: new Set(speakers.keys()) });
+                get().setSpeakingUsers(Array.from(speakers.keys()));
               });
               engine.onTransportLost((reason) => {
                 void get().handleMediaTransportLost(reason);
+              });
+              engine.onCameraFailure?.((error) => {
+                const message = error instanceof Error ? error.message : 'Camera capture failed';
+                logVoiceDiagnostic('[voice] native camera failure', { error: message });
+                set({ selfVideo: false });
+                useToastStore.getState().addToast('error', `Camera stopped: ${message}`);
               });
             }
           }
@@ -2301,7 +2320,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
           }
 
           // Apply initial mute/deaf state
-          if (shouldMuteOnJoin) {
+          const stageListenOnly = data.suppress === true;
+          if (shouldMuteOnJoin || stageListenOnly) {
             engine.setMute(true);
           }
           if (previousSelfDeaf) {
@@ -2321,10 +2341,11 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
             channelId,
             guildId || null,
             data.session_id ?? '',
-            shouldMuteOnJoin,
+            shouldMuteOnJoin || stageListenOnly,
             previousSelfDeaf,
             false,
             false,
+            stageListenOnly,
           );
           set((prev) => {
             const channelParticipants = new Map(prev.channelParticipants);
@@ -2687,9 +2708,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       logVoiceDiagnostic(`[voice] +${elapsed()} audio output configured`);
 
       // Enable/disable microphone based on previous mute/deafen state.
+      const stageListenOnly = data.suppress === true;
       const microphoneEnabled = await setMicrophoneEnabledWithFallback(
         room,
-        !shouldMuteOnJoin,
+        !shouldMuteOnJoin && !stageListenOnly,
         savedInputId
       );
       voiceTimingLog(`[voice] +${elapsed()} mic setup done enabled=${microphoneEnabled}`);
@@ -2709,7 +2731,8 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         shouldMuteOnJoin || !microphoneEnabled,
         previousSelfDeaf,
         false,
-        false
+        false,
+        stageListenOnly,
       );
       if (activeJoinAttempt !== joinAttempt) {
         inFlightJoinRoom = null;
@@ -3040,11 +3063,16 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       try {
         // Use the same quality presets as the LiveKit path so resolution,
         // framerate, and bitrate targets match what the user selected.
+        // Bitrates are sized so frames stay compact on the wire: each frame is
+        // fragmented into ~1200-byte datagrams and reassembly is
+        // all-or-nothing, so oversized bitrates increase whole-frame loss
+        // without visible quality gain for screen content. The "Movie" presets
+        // are explicitly labeled with their bitrate and kept as advertised.
         const nativePresetMap: Record<string, ScreenCapturePreset> = {
-          '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 8_000_000, hint: 'detail' },
-          '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 25_000_000, hint: 'detail' },
-          '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 35_000_000, hint: 'detail' },
-          '4k60': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'motion' },
+          '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 5_000_000, hint: 'detail' },
+          '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 12_000_000, hint: 'detail' },
+          '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 18_000_000, hint: 'detail' },
+          '4k60': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 28_000_000, hint: 'motion' },
           'movie-50': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'film' },
           'movie-100': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 100_000_000, hint: 'film' },
         };
@@ -3137,10 +3165,10 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       //    encoder targets). Without explicit encoding params LiveKit falls
       //    back to very conservative defaults causing blocky, low-fps streams.
       const presetMap: Record<string, ScreenCapturePreset> = {
-        '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 8_000_000, hint: 'detail' },
-        '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 25_000_000, hint: 'detail' },
-        '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 35_000_000, hint: 'detail' },
-        '4k60': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'motion' },
+        '720p30': { width: 1280, height: 720, frameRate: 30, maxBitrate: 5_000_000, hint: 'detail' },
+        '1080p60': { width: 1920, height: 1080, frameRate: 60, maxBitrate: 12_000_000, hint: 'detail' },
+        '1440p60': { width: 2560, height: 1440, frameRate: 60, maxBitrate: 18_000_000, hint: 'detail' },
+        '4k60': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 28_000_000, hint: 'motion' },
         'movie-50': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 50_000_000, hint: 'film' },
         'movie-100': { width: 3840, height: 2160, frameRate: 60, maxBitrate: 100_000_000, hint: 'film' },
       };
@@ -3478,32 +3506,60 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     });
   },
 
-  toggleVideo: () => {
+  toggleVideo: async () => {
     const state = get();
     const nextSelfVideo = !state.selfVideo;
+    const localUserId = useAuthStore.getState().user?.id;
+
+    const setLocalSelfVideo = (enabled: boolean) => {
+      set((prev) => {
+        const participants = new Map(prev.participants);
+        if (localUserId) {
+          const existing = participants.get(localUserId);
+          if (existing) {
+            participants.set(localUserId, { ...existing, self_video: enabled });
+          }
+        }
+        // Keep channelParticipants in sync so lobby / LIVE-adjacent UI sees camera state.
+        const channelParticipants = new Map(prev.channelParticipants);
+        if (prev.channelId && localUserId) {
+          const members = (channelParticipants.get(prev.channelId) || []).map((m) =>
+            m.user_id === localUserId ? { ...m, self_video: enabled } : m,
+          );
+          channelParticipants.set(prev.channelId, members);
+        }
+        return { selfVideo: enabled, participants, channelParticipants };
+      });
+    };
+
     // Native media path
     if (state.mediaEngine) {
       if (nextSelfVideo) {
-        void state.mediaEngine.enableVideo(true)
-          .then(() => set({ selfVideo: true }))
-          .catch((err) => {
-            const message = err instanceof Error ? err.message : 'Failed to enable camera';
-            console.warn('[voice] Failed to enable camera:', message);
-            useToastStore.getState().addToast('error', message);
-            set({ selfVideo: false });
-          });
+        try {
+          await state.mediaEngine.enableVideo(true);
+          setLocalSelfVideo(true);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Failed to enable camera';
+          console.warn('[voice] Failed to enable camera:', message);
+          useToastStore.getState().addToast('error', message);
+          setLocalSelfVideo(false);
+        }
       } else {
-        void state.mediaEngine.enableVideo(false);
-        set({ selfVideo: false });
+        try {
+          await state.mediaEngine.enableVideo(false);
+        } catch (err) {
+          console.warn('[voice] Failed to disable camera:', err);
+        }
+        setLocalSelfVideo(false);
       }
       return;
     }
     if (!state.room) {
-      set({ selfVideo: nextSelfVideo });
+      setLocalSelfVideo(nextSelfVideo);
       return;
     }
     const room = state.room;
-    set({ selfVideo: nextSelfVideo });
+    setLocalSelfVideo(nextSelfVideo);
 
     if (nextSelfVideo) {
       // Enable camera
@@ -3518,49 +3574,39 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
       if (videoDeviceId) {
         captureOpts.deviceId = videoDeviceId;
       }
-      void room.localParticipant
-        .setCameraEnabled(true, captureOpts)
-        .then(() => {
-          // Update local participant's voice state
-          const localUserId = useAuthStore.getState().user?.id;
-          if (localUserId) {
-            set((prev) => {
-              const participants = new Map(prev.participants);
-              const existing = participants.get(localUserId);
-              if (existing) {
-                participants.set(localUserId, { ...existing, self_video: true });
-              }
-              return { participants };
-            });
-          }
-          syncLivekitRoomPresence(room);
-        })
-        .catch((err) => {
-          console.warn('[voice] Failed to enable camera:', err);
-          set({ selfVideo: false });
-        });
+      try {
+        await room.localParticipant.setCameraEnabled(true, captureOpts);
+        syncLivekitRoomPresence(room);
+      } catch (err) {
+        console.warn('[voice] Failed to enable camera:', err);
+        setLocalSelfVideo(false);
+      }
     } else {
-      // Disable camera
-      void room.localParticipant
-        .setCameraEnabled(false)
-        .then(() => {
-          const localUserId = useAuthStore.getState().user?.id;
-          if (localUserId) {
-            set((prev) => {
-              const participants = new Map(prev.participants);
-              const existing = participants.get(localUserId);
-              if (existing) {
-                participants.set(localUserId, { ...existing, self_video: false });
-              }
-              return { participants };
-            });
-          }
-          syncLivekitRoomPresence(room);
-        })
-        .catch((err) => {
-          console.warn('[voice] Failed to disable camera:', err);
-        });
+      try {
+        await room.localParticipant.setCameraEnabled(false);
+        syncLivekitRoomPresence(room);
+      } catch (err) {
+        console.warn('[voice] Failed to disable camera:', err);
+      }
     }
+  },
+  listCameraDevices: async () => {
+    const state = get();
+    // Native device enumeration is exposed by TauriMediaEngine (not on the
+    // MediaEngine interface, since the browser/LiveKit path enumerates cameras
+    // through the DOM MediaDevices API instead).
+    const engine = state.mediaEngine as
+      | (MediaEngine & { listCameraDevices?: () => Promise<Array<{ id: string; label: string }>> })
+      | null;
+    if (isTauri() && engine?.listCameraDevices) {
+      try {
+        return await engine.listCameraDevices();
+      } catch (err) {
+        console.warn('[voice] Failed to list native cameras:', err);
+        return [];
+      }
+    }
+    return [];
   },
   applyAudioInputDevice: async (deviceId) => {
     const state = get();
@@ -3850,9 +3896,17 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
     }),
 
   setSpeakingUsers: (userIds) =>
-    set(() => ({
-      speakingUsers: new Set(userIds),
-    })),
+    set((state) => {
+      // ActiveSpeakers / native speaking ticks can repeat the same membership;
+      // skip allocating a new Set (and notifying subscribers) when unchanged.
+      if (
+        state.speakingUsers.size === userIds.length &&
+        userIds.every((id) => state.speakingUsers.has(id))
+      ) {
+        return state;
+      }
+      return { speakingUsers: new Set(userIds) };
+    }),
 
   setWatchedStreamer: (userId) =>
     set({

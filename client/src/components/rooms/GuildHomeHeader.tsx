@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Radio, Settings, UserPlus, Users } from 'lucide-react';
+import { Coins, Radio, Settings, UserPlus, Users } from 'lucide-react';
 import { useGuildStore } from '../../stores/guildStore';
 import { useUIStore } from '../../stores/uiStore';
 import { usePermissions } from '../../hooks/usePermissions';
-import { hasPermission, Permissions } from '../../types';
+import { canAccessGuildSettings } from '../../lib/guildSettingsAccess';
+import { guildInitials, resolveGuildIconUrl } from '../../lib/guildIcon';
 import { InviteModal } from '../guild/InviteModal';
 
 interface GuildHomeHeaderProps {
@@ -18,9 +19,8 @@ interface GuildHomeHeaderProps {
 
 /**
  * Guild-home header — a solid raised surface (never a gradient hero, kill-list #1).
- * Fraunces guild name, a presence-first "who's around now" summary, an invite
- * affordance, and a MANAGE_GUILD-gated settings entry that replaces the old
- * channel-column dropdown by opening the guild-settings overlay.
+ * Fraunces space name, a presence-first "who's around now" summary, an invite
+ * affordance, economy panel access, and a permission-gated settings entry.
  */
 export function GuildHomeHeader({
   guildId,
@@ -30,14 +30,15 @@ export function GuildHomeHeader({
 }: GuildHomeHeaderProps) {
   const guild = useGuildStore((s) => s.guilds.find((g) => g.id === guildId));
   const setGuildSettingsId = useUIStore((s) => s.setGuildSettingsId);
-  const { permissions, isAdmin, isOwner } = usePermissions(guildId);
+  const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
+  const { permissions, isAdmin } = usePermissions(guildId);
   const [showInvite, setShowInvite] = useState(false);
 
   if (!guild) return null;
 
-  const canManage =
-    isOwner || isAdmin || hasPermission(permissions, Permissions.MANAGE_GUILD);
-  const guildInitial = guild.name.trim().charAt(0).toUpperCase() || '#';
+  const canManage = canAccessGuildSettings(permissions, isAdmin);
+  const iconSrc = resolveGuildIconUrl(guild);
+  const initials = guildInitials(guild.name, 1);
 
   const summary =
     onlineCount === 0 && liveRoomCount === 0
@@ -48,10 +49,14 @@ export function GuildHomeHeader({
     <header className="shrink-0 border-b border-border-subtle bg-bg-secondary shadow-sm">
       <div className="flex items-center gap-4 px-6 py-5 sm:px-8">
         <div
-          className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-md bg-accent-tint text-2xl font-bold text-accent-primary shadow-sm sm:flex"
+          className="hidden h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md bg-accent-tint text-2xl font-bold text-accent-primary shadow-sm sm:flex"
           aria-hidden="true"
         >
-          {guildInitial}
+          {iconSrc ? (
+            <img src={iconSrc} alt="" className="h-full w-full object-cover" />
+          ) : (
+            initials
+          )}
         </div>
 
         <div className="min-w-0 flex-1">
@@ -86,18 +91,31 @@ export function GuildHomeHeader({
             <button
               type="button"
               onClick={() => setShowInvite(true)}
+              aria-label="Invite people"
+              title="Invite people"
               className="inline-flex h-9 items-center gap-1.5 rounded-sm bg-accent-primary px-3.5 text-label font-semibold text-text-on-accent shadow-sm outline-none transition-[background-color,transform] duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-primary-hover active:scale-[0.97] focus-visible:shadow-[var(--focus-ring)]"
             >
-              <UserPlus size={16} />
-              <span className="hidden sm:inline">Invite</span>
+              <UserPlus size={16} aria-hidden />
+              <span className="hidden sm:inline" aria-hidden>
+                Invite
+              </span>
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => setContextPanelMode('economy')}
+            aria-label="Space economy"
+            title="Space economy"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
+          >
+            <Coins size={18} />
+          </button>
           {canManage && (
             <button
               type="button"
               onClick={() => setGuildSettingsId(guildId)}
-              aria-label="Server settings"
-              title="Server settings"
+              aria-label="Space settings"
+              title="Space settings"
               className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-interactive-hover focus-visible:shadow-[var(--focus-ring)]"
             >
               <Settings size={18} />

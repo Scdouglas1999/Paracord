@@ -28,10 +28,14 @@ vi.mock('../../stores/messageStore', () => ({
 vi.mock('../../stores/channelStore', () => ({
   useChannelStore: Object.assign(
     (selector: (s: unknown) => unknown) =>
-      selector({ channelsByGuild: { g1: [{ id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 }] } }),
+      selector({
+        channelsByGuild: { g1: [{ id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 }] },
+        channelsById: { ch1: { id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 } },
+      }),
     {
       getState: () => ({
         channelsByGuild: { g1: [{ id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 }] },
+        channelsById: { ch1: { id: 'ch1', type: 0, channel_type: 0, guild_id: 'g1', name: 'general', position: 0 } },
       }),
     },
   ),
@@ -44,6 +48,15 @@ vi.mock('../../stores/pollStore', () => ({
       upsertPoll: vi.fn(),
     }),
   },
+}));
+
+vi.mock('../../stores/memberStore', () => ({
+  useMemberStore: (selector: (s: { members: Map<string, unknown[]> }) => unknown) =>
+    selector({ members: new Map() }),
+}));
+
+vi.mock('../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ permissions: BigInt('0x7FFFFFFFFFFFFFFF'), isAdmin: true }),
 }));
 
 vi.mock('../../stores/toastStore', () => ({
@@ -67,6 +80,7 @@ vi.mock('../../api/channels', () => ({
   channelApi: {
     createPoll: vi.fn(),
     getFeatureSettings: vi.fn(() => new Promise(() => {})),
+    getOverwrites: vi.fn(() => Promise.resolve({ data: [] })),
   },
 }));
 
@@ -182,6 +196,52 @@ describe('MessageInput', () => {
     await user.keyboard('{Enter}');
 
     expect(textarea).toHaveValue('');
+  });
+
+  it('does not double-submit when Enter is pressed while a send is in flight', async () => {
+    const user = userEvent.setup();
+    let resolveSend: (() => void) | undefined;
+    mockSendMessage.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSend = resolve;
+        }),
+    );
+
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
+    const textarea = screen.getByPlaceholderText('Message #general');
+    await user.type(textarea, 'once');
+    await user.keyboard('{Enter}');
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => expect(mockSendMessage).toHaveBeenCalledTimes(1));
+    resolveSend?.();
+    await waitFor(() => expect(textarea).toHaveValue(''));
+  });
+
+  it('clears staged attachments when switching channels', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <MessageInput channelId="ch1" guildId="g1" channelName="general" />,
+    );
+    const file = new File(['png'], 'leak.png', { type: 'image/png' });
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await user.upload(input, file);
+    expect(screen.getByAltText('leak.png')).toBeInTheDocument();
+
+    rerender(<MessageInput channelId="ch2" guildId="g1" channelName="random" />);
+    expect(screen.queryByAltText('leak.png')).not.toBeInTheDocument();
+  });
+
+  it('restores draft text when disabling the poll composer', async () => {
+    const user = userEvent.setup();
+    render(<MessageInput channelId="ch1" guildId="g1" channelName="general" />);
+    const textarea = screen.getByPlaceholderText('Message #general');
+    await user.type(textarea, 'Should we ship?');
+    await user.click(screen.getByRole('button', { name: 'Create a poll' }));
+    expect(textarea).toHaveValue('');
+    await user.click(screen.getByRole('button', { name: 'Poll composer enabled' }));
+    expect(textarea).toHaveValue('Should we ship?');
   });
 
   it('shows reply indicator when replyingTo is provided', () => {

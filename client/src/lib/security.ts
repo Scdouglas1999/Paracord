@@ -46,6 +46,48 @@ const BLOCKED_VALUE_PATTERNS = [
   /-moz-binding/i,
 ];
 
+const HEX_DIGIT_RE = /[0-9a-fA-F]/;
+
+// Canonicalize CSS escape sequences the same way the browser tokenizer does,
+// so escaped spellings such as `\75rl(` (\75 = 'u') or `@\69mport` normalize to
+// their literal form (`url(`, `@import`) before pattern matching. Without this,
+// the substring/regex guards below match only the literal ASCII spelling and are
+// trivially bypassed with hex/character escapes.
+function decodeCssEscapes(value: string): string {
+  let result = '';
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch !== '\\') {
+      result += ch;
+      continue;
+    }
+    const next = value[i + 1];
+    if (next === undefined) break; // trailing backslash
+    if (HEX_DIGIT_RE.test(next)) {
+      let hex = '';
+      let j = i + 1;
+      while (j < value.length && hex.length < 6 && HEX_DIGIT_RE.test(value[j])) {
+        hex += value[j];
+        j++;
+      }
+      // A single trailing whitespace is consumed as part of the escape.
+      if (j < value.length && /\s/.test(value[j])) j++;
+      const cp = parseInt(hex, 16);
+      result +=
+        !Number.isFinite(cp) || cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)
+          ? '�'
+          : String.fromCodePoint(cp);
+      i = j - 1;
+    } else if (next === '\n' || next === '\r' || next === '\f') {
+      i += 1; // line continuation: drop backslash + newline
+    } else {
+      result += next; // literal escape: the character stands for itself
+      i += 1;
+    }
+  }
+  return result;
+}
+
 function sanitizeDeclarations(block: string): string {
   const safe: string[] = [];
   const declarations = block.split(';');
@@ -56,7 +98,15 @@ function sanitizeDeclarations(block: string): string {
     const value = declaration.slice(idx + 1).trim();
     if (!prop || !value) continue;
     if (!ALLOWED_CSS_PROPERTIES.has(prop) && !prop.startsWith('--')) continue;
-    if (BLOCKED_VALUE_PATTERNS.some((pattern) => pattern.test(value))) continue;
+    // Match blocked patterns against both the raw value and its escape-decoded
+    // form so escaped spellings (e.g. `\75rl(`) cannot smuggle url()/etc.
+    const decodedValue = decodeCssEscapes(value);
+    if (
+      BLOCKED_VALUE_PATTERNS.some(
+        (pattern) => pattern.test(value) || pattern.test(decodedValue),
+      )
+    )
+      continue;
     safe.push(`${prop}: ${value}`);
   }
   return safe.join('; ');
@@ -78,8 +128,12 @@ export function isSafeImageDataUrl(value: string): boolean {
 }
 
 export function safeStoredImageDataUrl(value: string | null | undefined): string | null {
-  if (!value?.startsWith('data:')) return null;
-  return isSafeImageDataUrl(value) ? value : null;
+  if (!value) return null;
+  if (value.startsWith('data:')) {
+    return isSafeImageDataUrl(value) ? value : null;
+  }
+  // Uploaded avatars/icons are stored as API paths (e.g. /api/v1/users/{id}/avatar).
+  return safeClientResourceUrl(value);
 }
 
 export function safeExternalUrl(rawUrl: string): string | null {

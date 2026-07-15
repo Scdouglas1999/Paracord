@@ -1,7 +1,7 @@
 import { renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { useUnreadCounts } from './useUnreadCounts';
+import { computeGuildUnread, isMessageUnread, useUnreadCounts } from './useUnreadCounts';
 import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
 import { useReadStateStore } from '../stores/readStateStore';
@@ -82,6 +82,47 @@ beforeEach(() => {
 });
 
 describe('useUnreadCounts — per-server read-state resolution', () => {
+  it('treats a read cursor ahead of stale channel metadata as read', () => {
+    const channels = [
+      chan({
+        id: 'stale-channel',
+        type: ChannelType.Text,
+        last_message_id: '332154312534790144',
+      }),
+    ];
+    const readStates = new Map([
+      [
+        'stale-channel',
+        rs('stale-channel', '332154400000000000', 0),
+      ],
+    ]);
+
+    expect(computeGuildUnread(channels, readStates)).toBeNull();
+    expect(isMessageUnread('332154312534790144', '332154400000000000')).toBe(false);
+  });
+
+  it('still reports unread when the channel latest snowflake is newer than the read cursor', () => {
+    const channels = [
+      chan({
+        id: 'newer-channel',
+        type: ChannelType.Text,
+        last_message_id: '332154400000000000',
+      }),
+    ];
+    const readStates = new Map([
+      [
+        'newer-channel',
+        rs('newer-channel', '332154312534790144', 0),
+      ],
+    ]);
+
+    expect(computeGuildUnread(channels, readStates)).toEqual({
+      unreadCount: 1,
+      mentionCount: 0,
+    });
+    expect(isMessageUnread('332154400000000000', '332154312534790144')).toBe(true);
+  });
+
   it("reads a guild's counts from its OWNING server's bucket, not the active server", () => {
     const { result } = renderHook(() => useUnreadCounts([]));
 

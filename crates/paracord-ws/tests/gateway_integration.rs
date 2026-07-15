@@ -28,8 +28,9 @@ use tokio::sync::{Notify, RwLock};
 use tokio::time::{timeout, Duration};
 
 use paracord_ws::{
-    run_session, test_acquire_user_connection_slot, test_insert_cached_session,
-    test_is_origin_allowed, test_max_connections_per_user, test_push_buffered_event,
+    run_session, test_acquire_preauth_slot, test_acquire_user_connection_slot,
+    test_insert_cached_session, test_is_origin_allowed, test_max_connections_per_user,
+    test_max_preauth_per_ip, test_push_buffered_event, test_release_preauth_slot,
     wait_for_identify_or_resume, Session, WsCompressor,
 };
 
@@ -338,6 +339,60 @@ async fn resume_within_buffer_window_replays() {
 }
 
 #[tokio::test]
+async fn resume_drops_guilds_the_user_was_removed_from_while_disconnected() {
+    // Regression for L09-01: RESUME must re-derive membership from the DB, not
+    // trust the cached snapshot. A user kicked/banned while disconnected never
+    // processed remove_guild(), so a cache-trusting resume would re-grant them
+    // the guild event stream for the remainder of the session TTL.
+    let env = build_env().await;
+    let (user_id, token) = make_user_token(&env).await;
+    let guild_id = make_guild(&env, user_id).await;
+
+    let gw_session = format!("gw-{}", uuid::Uuid::new_v4().simple());
+    // Session was cached (at disconnect) while the user was still a member.
+    let mut cached_owners = std::collections::HashMap::new();
+    cached_owners.insert(guild_id, user_id);
+    test_insert_cached_session(
+        gw_session.clone(),
+        user_id,
+        vec![guild_id],
+        cached_owners,
+        5,
+    )
+    .await;
+    test_push_buffered_event(&gw_session, 4, "MESSAGE_CREATE", json!({"content": "a"}));
+    test_push_buffered_event(&gw_session, 5, "MESSAGE_CREATE", json!({"content": "b"}));
+
+    // Removed from the guild during the disconnect gap.
+    paracord_db::members::remove_member(&env.db, user_id, guild_id)
+        .await
+        .expect("remove member");
+
+    let (mut client, tx, _srv, _srv_rx) = duplex();
+    tx.send(resume_frame(&token, &gw_session, 3)).unwrap();
+
+    let (session, resumed, _requested_seq) = wait_for_identify_or_resume(&mut client, &env.state)
+        .await
+        .expect("resume accepted");
+    assert!(
+        resumed,
+        "an intact buffer still resumes (replay continuity)"
+    );
+    assert_eq!(
+        session.session_id, gw_session,
+        "keeps the cached session id"
+    );
+    assert!(
+        !session.guild_ids.contains(&guild_id),
+        "resumed session must not carry a guild the user was removed from"
+    );
+    assert!(
+        !session.guild_owner_ids.contains_key(&guild_id),
+        "stale guild ownership must not survive the resume"
+    );
+}
+
+#[tokio::test]
 async fn resume_with_sequence_gap_falls_back_to_fresh() {
     let env = build_env().await;
     let (user_id, token) = make_user_token(&env).await;
@@ -426,6 +481,39 @@ async fn per_user_capacity_guard_rejects_over_limit() {
         !test_acquire_user_connection_slot(user_id),
         "the connection over the per-user limit must be rejected"
     );
+}
+
+#[tokio::test]
+async fn preauth_per_ip_capacity_guard_rejects_over_limit() {
+    // Unique per-IP bucket key so this test is isolated from any concurrent test.
+    let ip = format!("test-preauth-{}", sid());
+    let limit = test_max_preauth_per_ip();
+    assert!(limit >= 1);
+
+    for i in 0..limit {
+        assert!(
+            test_acquire_preauth_slot(&ip),
+            "pre-auth handshake slot {i} within the per-IP limit must be granted"
+        );
+    }
+    // A single IP cannot exceed its concurrent-handshake budget, so an
+    // unauthenticated flood from one source can't monopolize the pre-auth pool.
+    assert!(
+        !test_acquire_preauth_slot(&ip),
+        "the pre-auth connection over the per-IP limit must be rejected"
+    );
+
+    // Release everything we acquired so the shared global pre-auth counter stays
+    // clean for other tests in this binary.
+    for _ in 0..limit {
+        test_release_preauth_slot(&ip);
+    }
+    // After releasing, the IP can acquire again.
+    assert!(
+        test_acquire_preauth_slot(&ip),
+        "slot must be grantable again once prior handshakes are released"
+    );
+    test_release_preauth_slot(&ip);
 }
 
 // ── run_session: dynamic scope subscribe/unsubscribe ────────────────────────

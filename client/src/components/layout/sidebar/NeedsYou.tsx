@@ -1,11 +1,12 @@
 import { CheckCheck, UserPlus } from 'lucide-react';
 import { ConversationRow } from './ConversationRow';
+import { VoiceChannelOccupants } from './VoiceChannelOccupants';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
 import type { FriendRequestEntry } from '../../../hooks/useUnifiedConversations';
 import { cn } from '../../../lib/utils';
 
 /**
- * "Needs you" section (layout-spec §1, §7.6). Attention-ranked entries — already
+ * "Needs you" section (layout-spec §1, §7.7). Attention-ranked entries — already
  * scored and capped at 6 by `useUnifiedConversations` — rendered as ConversationRows
  * under a --text-section uppercase header. Incoming friend requests rank ABOVE them
  * (they are literally waiting on the user) as RequestRows that open /app/friends.
@@ -66,6 +67,8 @@ function RequestRow({ request, onOpen, navIndex, tabIndex }: RequestRowProps) {
 
 export interface NeedsYouProps {
   entries: ConversationEntry[];
+  /** Attention-bearing entries that continue in Recent after the six-row cap. */
+  overflowCount?: number;
   /** Incoming friend requests, rendered above the ranked conversation rows. */
   requests?: FriendRequestEntry[];
   /** Open the friends surface (/app/friends) from a request row. */
@@ -80,6 +83,7 @@ export interface NeedsYouProps {
 
 export function NeedsYou({
   entries,
+  overflowCount = 0,
   requests = [],
   onOpenRequest,
   activeKey,
@@ -91,7 +95,14 @@ export function NeedsYou({
 
   return (
     <section aria-label="Needs you" className="flex flex-col gap-0.5">
-      <h2 className="px-2 pb-1 text-section uppercase text-text-muted">Needs you</h2>
+      <div className="flex items-center justify-between gap-2 px-2 pb-1">
+        <h2 className="text-section uppercase text-text-muted">Needs you</h2>
+        {overflowCount > 0 && (
+          <span className="text-meta normal-case tabular-nums text-text-muted">
+            +{overflowCount} below
+          </span>
+        )}
+      </div>
 
       {isEmpty ? (
         <div className="flex flex-col items-start gap-1.5 px-2 py-3">
@@ -117,14 +128,16 @@ export function NeedsYou({
           {entries.map((entry, i) => {
             const navIndex = navIndexStart + requests.length + i;
             return (
-              <ConversationRow
-                key={entry.key}
-                entry={entry}
-                active={entry.key === activeKey}
-                onClick={onSelect}
-                navIndex={navIndex}
-                tabIndex={navIndex === activeNavIndex ? 0 : -1}
-              />
+              <div key={entry.key}>
+                <ConversationRow
+                  entry={entry}
+                  active={entry.key === activeKey}
+                  onClick={onSelect}
+                  navIndex={navIndex}
+                  tabIndex={navIndex === activeNavIndex ? 0 : -1}
+                />
+                <VoiceChannelOccupants entry={entry} />
+              </div>
             );
           })}
         </div>

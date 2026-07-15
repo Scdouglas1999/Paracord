@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useChannelStore } from '../stores/channelStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useReadStateStore } from '../stores/readStateStore';
+import { useServerListStore } from '../stores/serverListStore';
 import { useUIStore } from '../stores/uiStore';
 import type { Channel } from '../types';
 import { DMPage } from './DMPage';
@@ -25,6 +26,14 @@ vi.mock('../components/message/MessageInput', () => ({
 vi.mock('../components/message/DmPickerModal', () => ({
   DmPickerModal: ({ open }: { open: boolean }) =>
     open ? <div data-testid="dm-picker" /> : null,
+}));
+
+vi.mock('../components/voice/VoiceControlBar', () => ({
+  VoiceControlBar: () => <div data-testid="voice-control-bar" />,
+}));
+
+vi.mock('../components/voice/StreamViewer', () => ({
+  StreamViewer: () => <div data-testid="stream-viewer" />,
 }));
 
 const currentUser = {
@@ -115,6 +124,7 @@ describe('DMPage — conversation view (ContextPanel-driven member surface)', ()
   beforeEach(() => {
     useAuthStore.setState({ user: currentUser });
     useUIStore.setState({ contextPanelMode: null });
+    useServerListStore.setState({ activeServerId: null, servers: [] });
   });
 
   it('renders the message surface with no docked member <aside>', () => {
@@ -152,12 +162,33 @@ describe('DMPage — conversation view (ContextPanel-driven member surface)', ()
 
     expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
   });
+
+  it('resolves DM metadata from the cross-server DM cache on deep links', async () => {
+    useServerListStore.setState({ activeServerId: 'srv-a' });
+    const channel = groupDm();
+    useChannelStore.setState({
+      channelsByGuild: { '': [] },
+      dmChannelsByServer: { 'srv-b': [channel] },
+      channelsById: { [channel.id]: channel },
+      channels: [],
+      selectedChannelId: null,
+      selectedGuildId: null,
+    });
+
+    renderDmPage('/app/dms/dm-1');
+
+    expect(screen.getByRole('button', { name: 'Members' })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(useServerListStore.getState().activeServerId).toBe('srv-b');
+    });
+  });
 });
 
 describe('DMPage — all-conversations index (/app/dms)', () => {
   beforeEach(() => {
     useAuthStore.setState({ user: currentUser });
     useUIStore.setState({ contextPanelMode: null });
+    useServerListStore.setState({ activeServerId: null, servers: [] });
     useReadStateStore.setState({ byServer: {}, readStates: {} });
     usePresenceStore.setState({ presences: new Map(), presenceOrder: new Map() });
   });
@@ -217,6 +248,7 @@ describe('DMPage — all-conversations index (/app/dms)', () => {
     // Most-recent-activity conversation sorts first.
     expect(rows[0].textContent).toContain('Nova');
     expect(rows[1].textContent).toContain('Ancient');
+    expect(screen.getAllByTestId('dm-last-activity')).toHaveLength(2);
 
     // No read state + a last message ⇒ unread indicator.
     expect(screen.getAllByTestId('unread-dot').length).toBeGreaterThan(0);
@@ -224,5 +256,34 @@ describe('DMPage — all-conversations index (/app/dms)', () => {
     await user.click(rows[0]);
     expect(screen.getByTestId('message-list')).toBeInTheDocument();
     expect(useChannelStore.getState().selectedChannelId).toBe('dm-fresh');
+  });
+
+  it('filters conversations by name and offers a clear recovery action', async () => {
+    const user = userEvent.setup();
+    const nova = {
+      ...directDm(),
+      id: 'dm-nova',
+      recipient: { ...bob, username: 'Nova' },
+      last_message_id: '1000000000000000',
+    } as unknown as Channel;
+    const launch = {
+      ...groupDm(),
+      id: 'dm-launch',
+      last_message_id: '2000000000000000',
+    } as unknown as Channel;
+    seedDmList([nova, launch]);
+
+    renderDmPage('/app/dms');
+    await user.type(screen.getByRole('searchbox', { name: 'Filter conversations' }), 'nova');
+
+    expect(screen.getByText('Conversations — 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Nova')).toBeInTheDocument();
+    expect(screen.queryByText('Launch group')).not.toBeInTheDocument();
+
+    await user.clear(screen.getByRole('searchbox', { name: 'Filter conversations' }));
+    await user.type(screen.getByRole('searchbox', { name: 'Filter conversations' }), 'missing');
+    expect(screen.getByText('No matching conversations')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Clear filter' }));
+    expect(screen.getByText('Launch group')).toBeInTheDocument();
   });
 });

@@ -9,6 +9,7 @@ use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
+use url::Url;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
@@ -16,6 +17,7 @@ use crate::middleware::AuthUser;
 const MAX_EVENT_NAME_LEN: usize = 100;
 const MAX_EVENT_DESCRIPTION_LEN: usize = 1000;
 const MAX_EVENT_LOCATION_LEN: usize = 200;
+const MAX_EVENT_IMAGE_URL_LEN: usize = 2_000;
 
 fn contains_dangerous_markup(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
@@ -24,6 +26,37 @@ fn contains_dangerous_markup(value: &str) -> bool {
         || lower.contains("onerror=")
         || lower.contains("onload=")
         || lower.contains("<iframe")
+}
+
+fn normalize_event_image_url(raw: &str) -> Result<String, ApiError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_EVENT_IMAGE_URL_LEN {
+        return Err(ApiError::BadRequest("Invalid event image URL".into()));
+    }
+
+    let parsed =
+        Url::parse(trimmed).map_err(|_| ApiError::BadRequest("Invalid event image URL".into()))?;
+    if parsed.username() != "" || parsed.password().is_some() {
+        return Err(ApiError::BadRequest("Invalid event image URL".into()));
+    }
+
+    if parsed.scheme() != "https" {
+        return Err(ApiError::BadRequest(
+            "Event image URL must use HTTPS".into(),
+        ));
+    }
+
+    Ok(parsed.to_string())
+}
+
+fn normalize_event_image_url_patch(
+    value: &Option<Option<String>>,
+) -> Result<Option<Option<String>>, ApiError> {
+    match value {
+        None => Ok(None),
+        Some(None) => Ok(Some(None)),
+        Some(Some(raw)) => normalize_event_image_url(raw).map(|url| Some(Some(url))),
+    }
 }
 
 fn event_to_json(
@@ -350,6 +383,11 @@ pub async fn create_event(
     let event_channel_id = parse_optional_id(body.event_channel_id.as_deref(), "event_channel_id")?;
     let recurrence_rule = normalize_recurrence_rule(body.recurrence_rule.as_deref())?;
     let reminder_minutes = validate_reminder_minutes(body.reminder_minutes)?;
+    let image_url = body
+        .image_url
+        .as_deref()
+        .map(normalize_event_image_url)
+        .transpose()?;
 
     let event_id = paracord_util::snowflake::generate(1);
     let event = paracord_db::scheduled_events::create_event(
@@ -364,7 +402,7 @@ pub async fn create_event(
         body.entity_type,
         channel_id,
         body.location.as_deref(),
-        body.image_url.as_deref(),
+        image_url.as_deref(),
         recurrence_rule.as_deref(),
         reminder_minutes,
         event_channel_id,
@@ -481,6 +519,7 @@ pub async fn update_event(
     let event_channel_id = parse_optional_id_patch(&body.event_channel_id, "event_channel_id")?;
     let recurrence_rule = normalize_recurrence_rule_patch(&body.recurrence_rule)?;
     let reminder_minutes = validate_reminder_minutes_patch(body.reminder_minutes)?;
+    let image_url = normalize_event_image_url_patch(&body.image_url)?;
 
     let updated = paracord_db::scheduled_events::update_event(
         &state.db,
@@ -493,7 +532,7 @@ pub async fn update_event(
         body.entity_type,
         channel_id,
         location.as_ref().map(|value| value.as_deref()),
-        body.image_url.as_ref().map(|value| value.as_deref()),
+        image_url.as_ref().map(|value| value.as_deref()),
         recurrence_rule.as_ref().map(|value| value.as_deref()),
         reminder_minutes,
         event_channel_id,
@@ -668,4 +707,22 @@ pub async fn remove_rsvp(
     );
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_event_image_url;
+
+    #[test]
+    fn event_image_urls_require_safe_network_schemes() {
+        assert_eq!(
+            normalize_event_image_url(" https://cdn.example.test/event.png ").unwrap(),
+            "https://cdn.example.test/event.png"
+        );
+        assert!(normalize_event_image_url("http://localhost:8090/event.png").is_err());
+        assert!(normalize_event_image_url("javascript:alert(1)").is_err());
+        assert!(normalize_event_image_url("file:///etc/passwd").is_err());
+        assert!(normalize_event_image_url("http://example.test/event.png").is_err());
+        assert!(normalize_event_image_url("https://user:pass@example.test/event.png").is_err());
+    }
 }

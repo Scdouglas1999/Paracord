@@ -63,25 +63,33 @@ pub async fn get_mfa_config(pool: &DbPool, user_id: i64) -> Result<Option<MfaCon
     Ok(row)
 }
 
-/// Upsert a TOTP secret for setup (enabled=false until verified).
+/// Upsert a *pending* TOTP secret for setup (enabled=false until verified).
+///
+/// The `ON CONFLICT` branch is guarded by `WHERE mfa_configs.enabled = FALSE`
+/// so re-running setup can never overwrite the live secret or clear the
+/// `enabled` flag of an account that already has MFA active. Weakening an
+/// enabled account must go through `disable_mfa`, which requires a valid
+/// current code. Returns `true` when the pending secret was written, `false`
+/// when the write was refused because MFA is already enabled.
 pub async fn upsert_mfa_secret(
     pool: &DbPool,
     user_id: i64,
     totp_secret: &str,
-) -> Result<(), DbError> {
-    sqlx::query(
+) -> Result<bool, DbError> {
+    let result = sqlx::query(
         "INSERT INTO mfa_configs (user_id, totp_secret, enabled)
          VALUES ($1, $2, FALSE)
          ON CONFLICT (user_id) DO UPDATE SET
             totp_secret = $2,
             enabled = FALSE,
-            updated_at = CURRENT_TIMESTAMP",
+            updated_at = CURRENT_TIMESTAMP
+         WHERE mfa_configs.enabled = FALSE",
     )
     .bind(user_id)
     .bind(totp_secret)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
 /// Enable MFA after TOTP code verified. Also updates users.mfa_enabled.
@@ -191,4 +199,59 @@ pub async fn consume_backup_code(
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_pool() -> DbPool {
+        let pool = crate::create_pool("sqlite::memory:", 1).await.unwrap();
+        crate::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    async fn setup_user(pool: &DbPool) -> i64 {
+        let user_id = 1;
+        crate::users::create_user(pool, user_id, "alice", 1, "alice@example.com", "hash")
+            .await
+            .unwrap();
+        user_id
+    }
+
+    #[tokio::test]
+    async fn upsert_stores_pending_secret_when_no_config() {
+        let pool = test_pool().await;
+        let user_id = setup_user(&pool).await;
+
+        let stored = upsert_mfa_secret(&pool, user_id, "secret-a").await.unwrap();
+        assert!(stored, "first setup should store the pending secret");
+
+        let cfg = get_mfa_config(&pool, user_id).await.unwrap().unwrap();
+        assert_eq!(cfg.totp_secret, "secret-a");
+        assert!(!cfg.enabled);
+    }
+
+    #[tokio::test]
+    async fn upsert_refuses_to_weaken_enabled_config() {
+        let pool = test_pool().await;
+        let user_id = setup_user(&pool).await;
+
+        // Complete a real setup + enable.
+        upsert_mfa_secret(&pool, user_id, "secret-a").await.unwrap();
+        enable_mfa(&pool, user_id).await.unwrap();
+
+        // Re-running setup must NOT overwrite the live secret or clear `enabled`.
+        let stored = upsert_mfa_secret(&pool, user_id, "attacker-secret")
+            .await
+            .unwrap();
+        assert!(!stored, "setup must be refused while MFA is enabled");
+
+        let cfg = get_mfa_config(&pool, user_id).await.unwrap().unwrap();
+        assert!(cfg.enabled, "MFA must remain enabled after refused setup");
+        assert_eq!(
+            cfg.totp_secret, "secret-a",
+            "live secret must not be overwritten"
+        );
+    }
 }

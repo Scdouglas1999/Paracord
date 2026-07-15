@@ -1,4 +1,5 @@
 import { Search } from 'lucide-react';
+import { formatModShortcut } from '../../../lib/keyboardShortcuts';
 import { useUIStore } from '../../../stores/uiStore';
 
 /**
@@ -25,7 +26,7 @@ export function SidebarSearch() {
       <Search size={16} aria-hidden className="shrink-0" />
       <span className="flex-1 truncate text-label">Search or jump to…</span>
       <kbd className="shrink-0 rounded-xs border border-border-subtle bg-bg-mod-subtle px-1.5 py-0.5 text-meta font-semibold text-text-secondary">
-        ⌘K
+        {formatModShortcut('K')}
       </kbd>
     </button>
   );

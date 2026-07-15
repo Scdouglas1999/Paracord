@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Search, Home, Users, MessageCircle, Plus } from 'lucide-react';
 
@@ -14,6 +14,8 @@ import type { GuildSummary, FriendRequestEntry } from '../../../hooks/useUnified
 import { LOCAL_SERVER_ID } from '../../../lib/connectionManager';
 import { isAdmin as isGlobalAdmin } from '../../../types';
 import { cn } from '../../../lib/utils';
+import { displayName } from '../../../lib/displayName';
+import { guildInitials, resolveGuildIconUrl } from '../../../lib/guildIcon';
 
 import { SidebarSearch } from './SidebarSearch';
 import { AnchorNav } from './AnchorNav';
@@ -25,8 +27,10 @@ import { CallDock } from './CallDock';
 import { UserPanel } from '../UserPanel';
 import { CreateGuildModal } from '../../guild/CreateGuildModal';
 
+const RECENT_COLLAPSED_CAP = 5;
+
 /**
- * The Unified Sidebar (layout-spec §1, §6, §7.6) — the single left rail that
+ * The Unified Sidebar (layout-spec §1, §6, §7.7) — the single left rail that
  * REPLACES both the Discord guild rail and the channel column. A ~300px collapsible
  * column on `--bg-secondary` (elevation ramp), fed entirely by the one memoized
  * `useUnifiedConversations` cross-server selector.
@@ -166,13 +170,14 @@ function CollapsedRail({
       <div
         data-roving-container=""
         role="listbox"
-        aria-label="Joined servers"
+        aria-label="Joined spaces"
         aria-orientation="vertical"
         className="flex flex-1 flex-col items-center gap-2 overflow-y-auto scrollbar-none"
       >
         {spaces.map((space, i) => {
           const active = space.id === activeGuildId;
           const hasAttention = attentionGuildIds.has(space.id);
+          const iconSrc = resolveGuildIconUrl({ icon: space.icon });
           return (
             <button
               key={space.id}
@@ -185,7 +190,7 @@ function CollapsedRail({
               tabIndex={i === activeIdx ? 0 : -1}
               onClick={() => openSpace(space)}
               className={cn(
-                'group relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-meta font-semibold outline-none transition-[border-radius,background-color,color] duration-[180ms] ease-[var(--ease-out)] hover:rounded-md focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]',
+                'group relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full text-meta font-semibold outline-none transition-[border-radius,background-color,color] duration-[180ms] ease-[var(--ease-out)] hover:rounded-md focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]',
                 active
                   ? 'rounded-md bg-accent-tint text-accent-primary'
                   : 'bg-bg-mod-strong text-text-secondary hover:bg-accent-tint hover:text-accent-primary',
@@ -197,12 +202,11 @@ function CollapsedRail({
                   className="absolute -left-3 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-secondary"
                 />
               )}
-              {space.name
-                .split(' ')
-                .map((w) => w[0])
-                .join('')
-                .slice(0, 2)
-                .toUpperCase() || '?'}
+              {iconSrc ? (
+                <img src={iconSrc} alt="" className="h-full w-full object-cover" />
+              ) : (
+                guildInitials(space.name)
+              )}
               {hasAttention && !active && (
                 <span
                   data-testid="space-attention-dot"
@@ -228,7 +232,7 @@ function CollapsedRail({
           onClick={() => useUIStore.getState().setUserSettingsOpen(true)}
           className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-primary text-label font-semibold text-text-on-accent shadow-sm outline-none transition-transform duration-[140ms] ease-[var(--ease-out)] focus-visible:shadow-[var(--focus-ring)] active:scale-[.97]"
         >
-          {user?.username?.charAt(0).toUpperCase() || 'U'}
+          {displayName(user).charAt(0).toUpperCase()}
         </button>
       </div>
     </div>
@@ -246,13 +250,15 @@ export function UnifiedSidebar() {
   // The muted-guild set — read live from the shared producer/consumer so muted
   // guilds carry no attention signal in the merge (§3.2). SpacesList is the writer.
   const { mutedGuildIds } = useMutedGuilds();
-  const { needsYou, recent, pinned, spaces, requests } = useUnifiedConversations(mutedGuildIds);
+  const { needsYou, needsYouOverflowCount, recent, pinned, spaces, requests } =
+    useUnifiedConversations(mutedGuildIds);
   const userPanel = useUserPanelWiring();
 
   // The create/join-server flow reuses the existing CreateGuildModal (Create/Join/
   // Template tabs), mounted once and opened from the expanded "Add a space" row or the
   // collapsed "+" button — the same modal HomePage's quick action mounts. Not rebuilt.
   const [showCreateGuild, setShowCreateGuild] = useState(false);
+  const [recentExpanded, setRecentExpanded] = useState(false);
   const openCreateGuild = useCallback(() => setShowCreateGuild(true), []);
 
   const activeServer = activeServerId ?? LOCAL_SERVER_ID;
@@ -260,12 +266,35 @@ export function UnifiedSidebar() {
   const activeGuildId = params.guildId ?? null;
   const activeKey = activeChannelId ? conversationKey(activeServer, activeChannelId) : null;
 
-  // Guilds with a live attention signal → collapsed-rail dot (§6).
+  // Recent is a movement aid, not an archive. Keep five rows visible by default
+  // so Spaces cannot be buried; retain an active older row as a sixth exception.
+  const visibleRecent = useMemo(() => {
+    if (recentExpanded || recent.length <= RECENT_COLLAPSED_CAP) return recent;
+    const first = recent.slice(0, RECENT_COLLAPSED_CAP);
+    if (!activeKey || first.some((entry) => entry.key === activeKey)) return first;
+    const activeEntry = recent.find((entry) => entry.key === activeKey);
+    return activeEntry ? [...first, activeEntry] : first;
+  }, [activeKey, recent, recentExpanded]);
+
+  // Guilds with an attention signal → both collapsed and expanded Space dots.
+  // Attention overflow beyond the Needs-you cap currently continues in Recent,
+  // so inspect both partitions rather than silently dropping those guilds.
   const attentionGuildIds = useMemo(() => {
     const set = new Set<string>();
-    for (const e of needsYou) if (e.guildId) set.add(e.guildId);
+    for (const e of [...needsYou, ...recent]) {
+      if (
+        e.guildId &&
+        (e.mentionCount > 0 ||
+          e.isDMUnread ||
+          e.isThreadReply ||
+          e.unread ||
+          e.hasVoiceActivity)
+      ) {
+        set.add(e.guildId);
+      }
+    }
     return set;
-  }, [needsYou]);
+  }, [needsYou, recent]);
 
   // Stable identity so memoized ConversationRows don't re-render on every parent
   // pass (the per-message re-render storm fix depends on a stable onClick).
@@ -289,7 +318,6 @@ export function UnifiedSidebar() {
   // request row and the "Add a friend" zero-state action both land on /app/friends.
   const goFriends = useCallback(() => navigate('/app/friends'), [navigate]);
   const goDiscovery = useCallback(() => navigate('/app/discovery'), [navigate]);
-  const goDms = useCallback(() => navigate('/app/dms'), [navigate]);
   const openRequest = useCallback((_r: FriendRequestEntry) => navigate('/app/friends'), [navigate]);
 
   // -- Flat roving-tabindex ordinals (§5). Anchors come FIRST, then Needs-you (its
@@ -300,7 +328,7 @@ export function UnifiedSidebar() {
   const needsYouConvStart = needsYouStart + requests.length; // conversation rows follow
   const pinnedStart = needsYouConvStart + needsYou.length;
   const recentStart = pinnedStart + pinned.length;
-  const spacesStart = recentStart + recent.length;
+  const spacesStart = recentStart + visibleRecent.length;
 
   const pathname = location.pathname;
   const homeActive = pathname === '/app' || pathname === '/app/';
@@ -313,7 +341,7 @@ export function UnifiedSidebar() {
   let activeNavIndex = 0;
   const inNeeds = activeKey ? needsYou.findIndex((e) => e.key === activeKey) : -1;
   const inPinned = activeKey ? pinned.findIndex((e) => e.key === activeKey) : -1;
-  const inRecent = activeKey ? recent.findIndex((e) => e.key === activeKey) : -1;
+  const inRecent = activeKey ? visibleRecent.findIndex((e) => e.key === activeKey) : -1;
   const inSpaces = activeGuildId ? spaces.findIndex((s) => s.id === activeGuildId) : -1;
   if (inNeeds >= 0) activeNavIndex = needsYouConvStart + inNeeds;
   else if (inPinned >= 0) activeNavIndex = pinnedStart + inPinned;
@@ -339,8 +367,8 @@ export function UnifiedSidebar() {
         <aside
           aria-label="Navigation"
           data-collapsed="false"
-          style={{ width: `${sidebarWidth}px` }}
-          className="flex h-full shrink-0 flex-col border-r border-border-subtle bg-bg-secondary"
+          style={{ '--preferred-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+          className="flex h-full w-[88vw] shrink-0 flex-col border-r border-border-subtle bg-bg-secondary md:w-[min(var(--preferred-sidebar-width),32vw)]"
         >
           <div className="shrink-0 p-2">
             <SidebarSearch />
@@ -356,6 +384,7 @@ export function UnifiedSidebar() {
             <AnchorNav friendRequestCount={requests.length} navIndexStart={0} activeNavIndex={activeNavIndex} />
             <NeedsYou
               entries={needsYou}
+              overflowCount={needsYouOverflowCount}
               requests={requests}
               onOpenRequest={openRequest}
               activeKey={activeKey}
@@ -365,16 +394,18 @@ export function UnifiedSidebar() {
             />
             <PinnedRail entries={pinned} activeKey={activeKey} onSelect={openConversation} navIndexStart={pinnedStart} activeNavIndex={activeNavIndex} />
             <RecentList
-              entries={recent}
+              entries={visibleRecent}
               activeKey={activeKey}
               onSelect={openConversation}
               onAddFriend={goFriends}
               onExploreServers={goDiscovery}
-              onViewAll={goDms}
+              totalCount={recent.length}
+              expanded={recentExpanded}
+              onToggleExpanded={() => setRecentExpanded((value) => !value)}
               navIndexStart={recentStart}
               activeNavIndex={activeNavIndex}
             />
-            <SpacesList spaces={spaces} activeGuildId={activeGuildId} onAddSpace={openCreateGuild} navIndexStart={spacesStart} activeNavIndex={activeNavIndex} />
+            <SpacesList spaces={spaces} attentionGuildIds={attentionGuildIds} activeGuildId={activeGuildId} onAddSpace={openCreateGuild} navIndexStart={spacesStart} activeNavIndex={activeNavIndex} />
           </div>
 
           <div className="shrink-0">

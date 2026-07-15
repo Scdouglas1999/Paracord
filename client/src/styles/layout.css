@@ -114,8 +114,8 @@ html[data-theme='high-contrast'] #root {
 }
 
 .nav-panel {
-  width: 260px;
-  min-width: 260px;
+  width: clamp(14rem, 22vw, 18rem);
+  min-width: min(14rem, 100%);
   height: 100%;
   overflow: hidden;
   border-radius: 20px;
@@ -126,8 +126,8 @@ html[data-theme='high-contrast'] #root {
 }
 
 .nav-panel-expanded {
-  width: 260px;
-  min-width: 260px;
+  width: clamp(14rem, 22vw, 18rem);
+  min-width: min(14rem, 100%);
 }
 
 .nav-panel-collapsed {
@@ -504,3 +504,52 @@ html[data-theme='high-contrast'] #root {
   background: var(--overlay-backdrop);
 }
 
+.topbar-overlay-backdrop {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+
+/* Native video underlay hole (Linux desktop only).
+   While a stream tile is composited on the native GL surface BELOW the
+   webview, StreamViewer sets `data-native-underlay` on <html> (refcounted).
+   The base backgrounds on the ancestor chain above the tile then go
+   transparent — html/body/#root plus the AppShell wrappers marked
+   `data-native-underlay-clear` — so the tile's cleared pixels form a real
+   hole down to the video. Panels (sidebar, topbar, chat) keep their own
+   opaque backgrounds, and the GTK toplevel beneath is painted the same base
+   color (#141b17) as the default --bg-primary, so punched regions read as
+   the app's own background. Never set in the browser build or on overlay
+   platforms (macOS).
+
+   Floating overlays that cover the hole must stay opaque: translucent
+   backdrop-blur panels over a live underlay visually merge into the stream.
+   Mark hosts with `data-native-overlay-occlude` (StreamOverlayPortal does)
+   and prefer solid `--bg-floating` / `--bg-accent` fills. */
+html[data-native-underlay],
+html[data-native-underlay] body,
+html[data-native-underlay] #root,
+html[data-native-underlay] [data-native-underlay-clear] {
+  background: transparent;
+}
+
+/* Force solid paint on floating chrome over the underlay hole. Translucent
+   --bg-floating + backdrop-blur lets live GL show through; with underlay
+   visibility-flip repaints that chrome was also getting glued into the
+   stream (stuck Mute/Deafen labels + dark gradient blobs). Opaque secondary
+   fills keep menus/tooltips visually ABOVE the video without blanking it.
+
+   ONLY mark opaque PANELS / small chrome with these attributes — NEVER a
+   full-screen `inset-0` backdrop. This rule repaints the marked box solid
+   --bg-secondary, so a marked backdrop paints the WHOLE viewport dark and the
+   stream "blacks out" (and the dialog looks stuck) on every modal open — the
+   Modal-backdrop regression fixed 2026-07. Modal / settings backdrops stay
+   translucent so the video dims behind them instead of vanishing. */
+html[data-native-underlay] [data-native-overlay-occlude],
+html[data-native-underlay] [data-stream-overlay-portal],
+html[data-native-underlay] [role="tooltip"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background-color: var(--bg-secondary) !important;
+}

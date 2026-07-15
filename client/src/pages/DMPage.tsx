@@ -1,24 +1,30 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { MessagesSquare, Users, PenSquare, Hash } from 'lucide-react';
+import { MessagesSquare, Users, PenSquare, Hash, Search, X } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { MessageList } from '../components/message/MessageList';
 import { MessageInput } from '../components/message/MessageInput';
 import { DmPickerModal } from '../components/message/DmPickerModal';
+import { VoiceControlBar } from '../components/voice/VoiceControlBar';
+import { StreamViewer } from '../components/voice/StreamViewer';
 import { useChannelStore } from '../stores/channelStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useMessageStore } from '../stores/messageStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useUIStore } from '../stores/uiStore';
+import { useVoiceStore } from '../stores/voiceStore';
+import { useAuthStore } from '../stores/authStore';
 import { LOCAL_SERVER_ID } from '../lib/connectionManager';
 import { computeGuildUnread } from '../hooks/useUnreadCounts';
 import { snowflakeToMs } from '../lib/attention/conversationModel';
 import { safeStoredImageDataUrl } from '../lib/security';
 import { EmptyState } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
 import { ChannelType, type Channel, type Message, type ReadState } from '../types';
+import { displayName } from '../lib/displayName';
 
 const EMPTY_CHANNELS: Channel[] = [];
 
@@ -53,13 +59,36 @@ interface DmRow {
 /** Best-effort DM/group-DM title from the channel's recipient(s). */
 function dmTitle(ch: Channel): string {
   if (ch.name) return ch.name;
-  if (ch.recipient?.username) return ch.recipient.username;
-  if (ch.recipients?.length) return ch.recipients.map((r) => r.username).join(', ');
+  if (ch.recipient) return displayName(ch.recipient);
+  if (ch.recipients?.length) return ch.recipients.map((r) => displayName(r)).join(', ');
   return 'Direct Message';
 }
 
 function activityMs(id: string | null): number {
   return id ? snowflakeToMs(id) : 0;
+}
+
+function formatDmActivity(id: string | null): { short: string; full: string } | null {
+  if (!id) return null;
+  try {
+    const date = new Date(activityMs(id));
+    if (Number.isNaN(date.getTime())) return null;
+    const now = new Date();
+    const full = date.toLocaleString();
+    if (date.toDateString() === now.toDateString()) {
+      return { short: date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), full };
+    }
+    const daysAgo = (now.getTime() - date.getTime()) / 86_400_000;
+    if (daysAgo >= 0 && daysAgo < 7) {
+      return { short: date.toLocaleDateString([], { weekday: 'short' }), full };
+    }
+    if (date.getFullYear() === now.getFullYear()) {
+      return { short: date.toLocaleDateString([], { month: 'short', day: 'numeric' }), full };
+    }
+    return { short: date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }), full };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -90,12 +119,35 @@ export function DMPage() {
   const setContextPanelMode = useUIStore((s) => s.setContextPanelMode);
   const [replyingTo, setReplyingTo] = useState<{ id: string; author: string; content: string } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [conversationQuery, setConversationQuery] = useState('');
 
-  const dmChannel = dmChannels.find((c) => c.id === channelId);
+  // Voice hooks must run unconditionally (before any early return).
+  const voiceConnected = useVoiceStore((s) => s.connected);
+  const voiceChannelId = useVoiceStore((s) => s.channelId);
+  const voiceGuildId = useVoiceStore((s) => s.guildId);
+  const watchedStreamerId = useVoiceStore((s) => s.watchedStreamerId);
+  const setWatchedStreamer = useVoiceStore((s) => s.setWatchedStreamer);
+  const selfStream = useVoiceStore((s) => s.selfStream);
+  const stopStream = useVoiceStore((s) => s.stopStream);
+  const participants = useVoiceStore((s) => s.participants);
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+
+  const dmChannelInfo = useMemo(() => {
+    if (!channelId) return null;
+    const activeId = activeServerId ?? LOCAL_SERVER_ID;
+    const activeChannel = dmChannels.find((c) => c.id === channelId);
+    if (activeChannel) return { channel: activeChannel, serverId: activeId };
+    for (const [serverId, channels] of Object.entries(dmChannelsByServer)) {
+      const channel = channels.find((c) => c.id === channelId);
+      if (channel) return { channel, serverId };
+    }
+    return null;
+  }, [activeServerId, channelId, dmChannels, dmChannelsByServer]);
+  const dmChannel = dmChannelInfo?.channel;
   const isGroupDM = dmChannel?.channel_type === 3 || dmChannel?.type === 3;
   const recipientName = isGroupDM
     ? (dmChannel?.name || dmChannel?.recipients?.map((r) => r.username).join(', ') || 'Group DM')
-    : (dmChannel?.recipient?.username || 'Direct Message');
+    : (dmChannel?.recipient ? displayName(dmChannel.recipient) : 'Direct Message');
 
   // Reset transient chat state and any lingering context panel when the DM changes.
   useEffect(() => {
@@ -106,9 +158,20 @@ export function DMPage() {
   // Reuse the sidebar's cross-server DM fetch path (no new endpoint) so past and
   // present conversations across every connected server land in the list.
   useEffect(() => {
-    if (channelId) return;
+    if (channelId && dmChannel) return;
     void useChannelStore.getState().loadAllDmChannels();
-  }, [channelId]);
+  }, [channelId, dmChannel]);
+
+  useEffect(() => {
+    if (
+      !dmChannelInfo
+      || dmChannelInfo.serverId === LOCAL_SERVER_ID
+      || activeServerId === dmChannelInfo.serverId
+    ) {
+      return;
+    }
+    useServerListStore.getState().setActive(dmChannelInfo.serverId);
+  }, [activeServerId, dmChannelInfo]);
 
   // Merge every server's DMs into one recency-sorted list. Reuses computeGuildUnread
   // for per-channel unread/mention against the right per-server read-state bucket.
@@ -144,11 +207,29 @@ export function DMPage() {
     out.sort((a, b) => activityMs(b.lastActivityId) - activityMs(a.lastActivityId));
     return out;
   }, [dmChannelsByServer, dmChannels, byServer, activeServerId]);
+  const filteredRows = useMemo(() => {
+    const query = conversationQuery.trim().toLocaleLowerCase();
+    if (!query) return rows;
+    return rows.filter((row) => row.title.toLocaleLowerCase().includes(query));
+  }, [conversationQuery, rows]);
 
   const openConversation = (id: string) => {
     useChannelStore.getState().selectChannel(id);
     navigate(`/app/dms/${id}`);
   };
+
+  const inThisDmCall =
+    voiceConnected &&
+    channelId != null &&
+    voiceChannelId === channelId &&
+    voiceGuildId === 'dm';
+
+  const watchedStreamerName = useMemo(() => {
+    if (!watchedStreamerId) return undefined;
+    if (currentUserId != null && watchedStreamerId === currentUserId) return 'You';
+    const vs = participants.get(watchedStreamerId);
+    return vs ? displayName(vs) : undefined;
+  }, [watchedStreamerId, currentUserId, participants]);
 
   // ---- Index view: the all-conversations destination -----------------------
   if (!channelId) {
@@ -190,14 +271,46 @@ export function DMPage() {
               />
             ) : (
               <>
-                <div className="mb-2 px-1 text-section uppercase text-text-muted">
-                  Conversations — {rows.length}
+                <div className="relative mb-4 max-w-xl">
+                  <Search size={16} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                  <Input
+                    type="search"
+                    aria-label="Filter conversations"
+                    placeholder="Filter conversations"
+                    className="pl-9 pr-10"
+                    value={conversationQuery}
+                    onChange={(event) => setConversationQuery(event.target.value)}
+                  />
+                  {conversationQuery && (
+                    <button
+                      type="button"
+                      aria-label="Clear conversation filter"
+                      onClick={() => setConversationQuery('')}
+                      className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-sm text-text-muted outline-none hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
                 </div>
-                <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
-                  {rows.map((row) => (
-                    <DmListRow key={row.channelId} row={row} onOpen={openConversation} />
-                  ))}
+                <div className="mb-2 flex items-center justify-between gap-3 px-1 text-section uppercase text-text-muted">
+                  <span>Conversations — {conversationQuery ? `${filteredRows.length} of ${rows.length}` : rows.length}</span>
+                  {conversationQuery && <span className="normal-case tracking-normal">Filtered by name</span>}
                 </div>
+                {filteredRows.length === 0 ? (
+                  <EmptyState
+                    className="border border-border-subtle bg-bg-secondary"
+                    icon={<Search size={20} />}
+                    title="No matching conversations"
+                    description={`No direct or group conversations match “${conversationQuery.trim()}”.`}
+                    action={<Button variant="secondary" size="sm" onClick={() => setConversationQuery('')}>Clear filter</Button>}
+                  />
+                ) : (
+                  <div className="divide-y divide-border-subtle overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+                    {filteredRows.map((row) => (
+                      <DmListRow key={row.channelId} row={row} onOpen={openConversation} />
+                    ))}
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -208,11 +321,11 @@ export function DMPage() {
     );
   }
 
-  // ---- Conversation view: unchanged message surface ------------------------
+  // ---- Conversation view ---------------------------------------------------
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-primary">
       <TopBar isDM recipientName={recipientName} dmChannelId={channelId} />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {isGroupDM && (
           <div className="flex justify-end border-b border-border-subtle px-3 py-2">
             <button
@@ -227,17 +340,39 @@ export function DMPage() {
             </button>
           </div>
         )}
+        {inThisDmCall && watchedStreamerId && (
+          <div className="relative max-h-[40vh] min-h-[180px] shrink-0 border-b border-border-subtle bg-black">
+            <StreamViewer
+              streamerId={watchedStreamerId}
+              streamerName={watchedStreamerName}
+              expectingStream={
+                Boolean(
+                  currentUserId != null &&
+                    watchedStreamerId === currentUserId &&
+                    selfStream,
+                )
+              }
+              onStopWatching={() => setWatchedStreamer(null)}
+              onStopStream={
+                currentUserId != null && watchedStreamerId === currentUserId
+                  ? () => stopStream()
+                  : undefined
+              }
+            />
+          </div>
+        )}
         <MessageList
           channelId={channelId}
           onReply={(msg: Message) =>
             setReplyingTo({
               id: msg.id,
-              author: msg.author.username,
+              author: displayName(msg.author),
               content: msg.content || '',
             })
           }
         />
         <MessageInput channelId={channelId} replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} />
+        {inThisDmCall && <VoiceControlBar />}
       </div>
     </div>
   );
@@ -269,6 +404,7 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (id: string) => void }
   const src = safeStoredImageDataUrl(row.avatar);
   const showMention = row.mentionCount > 0;
   const showUnreadDot = row.unread && !showMention;
+  const activity = formatDmActivity(row.lastActivityId);
 
   return (
     <button
@@ -307,6 +443,16 @@ function DmListRow({ row, onOpen }: { row: DmRow; onOpen: (id: string) => void }
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
+        {activity && (
+          <time
+            data-testid="dm-last-activity"
+            dateTime={new Date(activityMs(row.lastActivityId)).toISOString()}
+            title={activity.full}
+            className={cn('mr-1 text-meta tabular-nums', row.unread ? 'text-text-secondary' : 'text-text-muted')}
+          >
+            {activity.short}
+          </time>
+        )}
         {showMention && (
           <span
             data-testid="mention-badge"

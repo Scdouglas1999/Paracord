@@ -31,6 +31,18 @@ function shadeHex(hex: string, amount: number): string {
   return `#${[r, g, b].map((part) => part.toString(16).padStart(2, '0')).join('')}`;
 }
 
+/** Scale RGB channels toward black while preserving the preset's hue. */
+function scaleHex(hex: string, factor: number): string {
+  const normalized = hex.replace('#', '');
+  if (normalized.length !== 6) return hex;
+  const num = Number.parseInt(normalized, 16);
+  if (Number.isNaN(num)) return hex;
+  const channels = [(num >> 16) & 0xff, (num >> 8) & 0xff, num & 0xff];
+  return `#${channels
+    .map((channel) => Math.round(channel * factor).toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
 function hexToRgbString(hex: string): string {
   const normalized = hex.replace('#', '');
   if (normalized.length !== 6) return '235, 77, 75';
@@ -108,9 +120,9 @@ const THEME_VARIABLES: Record<ThemeName, Record<string, string>> = {
     'color-text-primary': '#16211b',
     'color-text-secondary': '#4a5a50',
     'color-text-muted': '#6c7c72',
-    'color-text-link': '#0c8f63',
-    'color-accent-primary': '#0e9e6e',
-    'color-accent-primary-hover': '#12b47e',
+    'color-text-link': '#126f4d',
+    'color-accent-primary': '#188e66',
+    'color-accent-primary-hover': '#16825d',
     'color-accent-success': '#128a54',
     'color-accent-danger': '#c93a44',
     'color-accent-warning': '#b5841e',
@@ -146,7 +158,7 @@ const THEME_VARIABLES: Record<ThemeName, Record<string, string>> = {
     'ambient-glow-primary': 'transparent',
     'ambient-glow-success': 'transparent',
     'ambient-glow-danger': 'transparent',
-    'accent-primary-rgb': '14, 158, 110',
+    'accent-primary-rgb': '24, 142, 102',
   },
   amoled: {
     'color-bg-primary': '#000000',
@@ -331,13 +343,16 @@ export function useTheme() {
         root.style.setProperty(`--${legacyName}`, value);
       }
     }
-    const accentBase = ACCENT_PRESETS[accentPreset] || ACCENT_PRESETS.emerald;
-    const accentHover = shadeHex(accentBase, 0.18);
-    const accentActive = shadeHex(accentBase, -0.12);
-    // Bright accents (emerald included) fail AA as link text on the light theme's
-    // near-white surfaces, so deepen the link color there while keeping the fill
-    // bright. Dark themes use the accent as-is (reads at AA on dark surfaces).
-    const linkColor = activeTheme === 'light' ? shadeHex(accentBase, -0.42) : accentBase;
+    const presetBase = ACCENT_PRESETS[accentPreset] || ACCENT_PRESETS.emerald;
+    // Light surfaces need a deeper rendering of every user accent preset: 68%
+    // preserves the hue while keeping the worst-case emerald above 3:1 against
+    // --bg-primary. Hover/active deepen further instead of washing toward white.
+    const accentBase = activeTheme === 'light' ? scaleHex(presetBase, 0.68) : presetBase;
+    const accentHover =
+      activeTheme === 'light' ? scaleHex(presetBase, 0.62) : shadeHex(accentBase, 0.18);
+    const accentActive =
+      activeTheme === 'light' ? scaleHex(presetBase, 0.58) : shadeHex(accentBase, -0.12);
+    const linkColor = activeTheme === 'light' ? scaleHex(presetBase, 0.55) : accentBase;
     root.style.setProperty('--color-accent-primary', accentBase);
     root.style.setProperty('--color-accent-primary-hover', accentHover);
     root.style.setProperty('--color-accent-primary-active', accentActive);

@@ -19,6 +19,10 @@ describe('Modal', () => {
     const dialog = screen.getByRole('dialog', { name: 'Test dialog' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(dialog).toHaveAttribute('tabindex', '-1');
+    expect(dialog).toHaveClass(
+      'max-h-[calc(100dvh-2rem)]',
+      'max-w-[calc(100vw-2rem)]',
+    );
     // Portalled to body, not inside the React root container.
     expect(dialog.closest('#root')).toBeNull();
   });
@@ -52,5 +56,12 @@ describe('Modal', () => {
 
     await user.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledTimes(2);
+
+    // Backdrop is the fixed inset container wrapping the dialog panel.
+    const dialog = screen.getByRole('dialog', { name: 'Test dialog' });
+    const backdrop = dialog.parentElement;
+    expect(backdrop).toBeTruthy();
+    await user.pointer({ keys: '[MouseLeft>]', target: backdrop! });
+    expect(onClose).toHaveBeenCalledTimes(3);
   });
 });

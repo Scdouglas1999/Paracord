@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useKeyboardNavigation } from './useKeyboardNavigation';
 import { useUIStore } from '../stores/uiStore';
+import { useChannelStore } from '../stores/channelStore';
 
 /**
  * useKeyboardNavigation owns two flagship new-IA behaviors (layout-spec §5):
@@ -107,6 +108,28 @@ describe('useKeyboardNavigation — roving-tabindex sidebar movement', () => {
   });
 });
 
+describe('useKeyboardNavigation — Mod+F search', () => {
+  it('opens the search context panel when a channel is selected', () => {
+    useChannelStore.setState({ selectedChannelId: 'ch1' });
+    useUIStore.setState({ contextPanelMode: null });
+    renderHarness();
+
+    fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true });
+
+    expect(useUIStore.getState().contextPanelMode).toBe('search');
+  });
+
+  it('does nothing when no channel is selected', () => {
+    useChannelStore.setState({ selectedChannelId: null });
+    useUIStore.setState({ contextPanelMode: null });
+    renderHarness();
+
+    fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true });
+
+    expect(useUIStore.getState().contextPanelMode).toBeNull();
+  });
+});
+
 describe('useKeyboardNavigation — Escape precedence (§5)', () => {
   it('closes the Command Palette first, leaving the ContextPanel open', () => {
     useUIStore.setState({ commandPaletteOpen: true, contextPanelMode: 'members' });
@@ -129,6 +152,33 @@ describe('useKeyboardNavigation — Escape precedence (§5)', () => {
     expect(useUIStore.getState().contextPanelMode).toBeNull();
   });
 
+  it('leaves the ContextPanel open while a modal dialog owns Escape', () => {
+    useUIStore.setState({ commandPaletteOpen: false, contextPanelMode: 'members' });
+    renderHarness();
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    document.body.appendChild(dialog);
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+
+    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    dialog.remove();
+  });
+
+  it('leaves the ContextPanel open while a transient menu owns Escape', () => {
+    useUIStore.setState({ commandPaletteOpen: false, contextPanelMode: 'members' });
+    renderHarness();
+    const menu = document.createElement('div');
+    menu.setAttribute('role', 'menu');
+    document.body.appendChild(menu);
+
+    fireEvent.keyDown(menu, { key: 'Escape' });
+
+    expect(useUIStore.getState().contextPanelMode).toBe('members');
+    menu.remove();
+  });
+
   it('closes the narrow sidebar overlay last, only once palette + panel are closed', () => {
     vi.stubGlobal(
       'matchMedia',
@@ -148,5 +198,18 @@ describe('useKeyboardNavigation — Escape precedence (§5)', () => {
     fireEvent.keyDown(document.body, { key: 'Escape' });
 
     expect(useUIStore.getState().sidebarCollapsed).toBe(true);
+  });
+});
+
+describe('useKeyboardNavigation — Mod+F search', () => {
+  it('opens contextPanelMode search when a channel is selected', async () => {
+    const { useChannelStore } = await import('../stores/channelStore');
+    useChannelStore.setState({ selectedChannelId: 'ch-1' });
+    useUIStore.setState({ contextPanelMode: null });
+    renderHarness();
+
+    fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true });
+
+    expect(useUIStore.getState().contextPanelMode).toBe('search');
   });
 });

@@ -107,6 +107,13 @@ function serializePrekeyStore(store: LocalPrekeyStore): SerializedLocalPrekeySto
       publicKey: toBase64(k.publicKey),
       privateKey: toBase64(k.privateKey),
     })),
+    lastResortPrekey: store.lastResortPrekey
+      ? {
+          id: store.lastResortPrekey.id,
+          publicKey: toBase64(store.lastResortPrekey.publicKey),
+          privateKey: toBase64(store.lastResortPrekey.privateKey),
+        }
+      : null,
     nextOPKId: store.nextOPKId,
   };
 }
@@ -124,6 +131,13 @@ function deserializePrekeyStore(s: SerializedLocalPrekeyStore): LocalPrekeyStore
       publicKey: fromBase64(k.publicKey),
       privateKey: fromBase64(k.privateKey),
     })),
+    lastResortPrekey: s.lastResortPrekey
+      ? {
+          id: s.lastResortPrekey.id,
+          publicKey: fromBase64(s.lastResortPrekey.publicKey),
+          privateKey: fromBase64(s.lastResortPrekey.privateKey),
+        }
+      : null,
     nextOPKId: s.nextOPKId,
   };
 }
@@ -162,6 +176,10 @@ export function generatePrekeyBundle(_identityPrivateEd25519: Uint8Array): Local
     });
   }
 
+  // Long-lived last-resort OPK (never deleted on the server when handed out)
+  const lastResort = generateX25519KeyPair();
+  const lastResortId = spkId + OPK_BATCH_SIZE + 1;
+
   return {
     signedPrekey: {
       id: spkId,
@@ -170,7 +188,12 @@ export function generatePrekeyBundle(_identityPrivateEd25519: Uint8Array): Local
       createdAt: Date.now(),
     },
     oneTimePrekeys,
-    nextOPKId: spkId + OPK_BATCH_SIZE + 1,
+    lastResortPrekey: {
+      id: lastResortId,
+      publicKey: lastResort.publicKey,
+      privateKey: lastResort.privateKey,
+    },
+    nextOPKId: lastResortId + 1,
   };
 }
 
@@ -203,22 +226,47 @@ export function generateAdditionalOPKs(
 }
 
 /**
- * Consume a local one-time prekey by ID, returning its private key.
+ * Resolve a local one-time prekey by ID, returning its private key.
+ * Disposable OPKs are removed from the store; the last-resort key is kept.
  */
 export function consumeLocalOPK(
   store: LocalPrekeyStore,
   opkId: number,
 ): { privateKey: Uint8Array; updatedStore: LocalPrekeyStore } | null {
   const idx = store.oneTimePrekeys.findIndex((k) => k.id === opkId);
-  if (idx === -1) return null;
+  if (idx !== -1) {
+    const key = store.oneTimePrekeys[idx];
+    const remaining = [...store.oneTimePrekeys];
+    remaining.splice(idx, 1);
+    return {
+      privateKey: key.privateKey,
+      updatedStore: { ...store, oneTimePrekeys: remaining },
+    };
+  }
 
-  const key = store.oneTimePrekeys[idx];
-  const remaining = [...store.oneTimePrekeys];
-  remaining.splice(idx, 1);
+  if (store.lastResortPrekey && store.lastResortPrekey.id === opkId) {
+    return {
+      privateKey: store.lastResortPrekey.privateKey,
+      updatedStore: store,
+    };
+  }
 
+  return null;
+}
+
+/** Ensure the local store has a last-resort prekey (for stores created before this field). */
+export function ensureLocalLastResortPrekey(store: LocalPrekeyStore): LocalPrekeyStore {
+  if (store.lastResortPrekey) return store;
+  const key = generateX25519KeyPair();
+  const id = store.nextOPKId;
   return {
-    privateKey: key.privateKey,
-    updatedStore: { ...store, oneTimePrekeys: remaining },
+    ...store,
+    lastResortPrekey: {
+      id,
+      publicKey: key.publicKey,
+      privateKey: key.privateKey,
+    },
+    nextOPKId: id + 1,
   };
 }
 

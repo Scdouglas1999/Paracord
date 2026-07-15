@@ -9,7 +9,8 @@ const authState = {
 };
 
 const serverListState = {
-  servers: [] as Array<{ id: string }>,
+  servers: [] as Array<{ id: string; token?: string | null; refreshToken?: string | null }>,
+  tokensHydrated: true,
 };
 
 vi.mock('./stores/authStore', () => ({
@@ -48,6 +49,7 @@ describe('AuthRoute', () => {
   beforeEach(() => {
     authState.token = null;
     authState.sessionBootstrapComplete = true;
+    serverListState.tokensHydrated = true;
     serverListState.servers = [{ id: 's1' }]; // serverStatus resolves to 'ready' synchronously
   });
 
@@ -63,6 +65,27 @@ describe('AuthRoute', () => {
     renderAuthRouteAt('/login');
     expect(screen.getByText('Login form')).toBeInTheDocument();
     expect(screen.queryByText('App shell')).not.toBeInTheDocument();
+  });
+
+  it('redirects away from login when a saved server token was restored', () => {
+    serverListState.servers = [{ id: 's1', token: 'server-token' }];
+    renderAuthRouteAt('/login');
+    expect(screen.getByText('App shell')).toBeInTheDocument();
+    expect(screen.queryByText('Login form')).not.toBeInTheDocument();
+  });
+
+  it('redirects away from login when a saved server refresh token can restore the session', () => {
+    serverListState.servers = [{ id: 's1', refreshToken: 'server-refresh-token' }];
+    renderAuthRouteAt('/login');
+    expect(screen.getByText('App shell')).toBeInTheDocument();
+    expect(screen.queryByText('Login form')).not.toBeInTheDocument();
+  });
+
+  it('waits for saved server tokens before deciding whether to show login', () => {
+    serverListState.tokensHydrated = false;
+    renderAuthRouteAt('/login');
+    expect(screen.getByText('Restoring session...')).toBeInTheDocument();
+    expect(screen.queryByText('Login form')).not.toBeInTheDocument();
   });
 });
 

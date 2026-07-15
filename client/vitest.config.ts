@@ -14,6 +14,12 @@ export default defineConfig({
     // keeps genuine hangs bounded while giving real work room to finish.
     testTimeout: 20000,
     hookTimeout: 20000,
+    // Each test worker owns a Vite transform pipeline and a jsdom instance.
+    // Running one per logical CPU exhausts memory and leaves worker processes
+    // alive long after the last assertion on CI and developer laptops. Keep a
+    // small, fixed pool so the release gate is deterministic rather than
+    // depending on the host's reported CPU count.
+    maxWorkers: 4,
     include: ['src/**/*.test.{ts,tsx}'],
     css: false,
     coverage: {

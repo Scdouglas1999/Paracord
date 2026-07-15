@@ -75,6 +75,12 @@ pub struct Options {
     /// Only implemented for Windows and macOS currently
     pub captures_audio: bool,
     pub exclude_current_process_audio: bool,
+    /// Windows only (spec §7): opt in to the zero-copy WGC→MFT capture route,
+    /// where frames are delivered as GPU-resident `ID3D11Texture2D`
+    /// (`VideoFrame::D3D11Texture`) instead of a CPU BGRA readback. The Windows
+    /// engine chooses its capture route from this flag once at capture start; it
+    /// is ignored on Linux/macOS. Defaults to `false` (CPU BGRA readback).
+    pub prefer_gpu_texture: bool,
 }
 
 /// Screen capturer class
@@ -138,6 +144,35 @@ impl Capturer {
 
             if let Some(frame) = self.engine.process_channel_item(res) {
                 return Ok(frame);
+            }
+        }
+    }
+
+    /// Block for up to `timeout` waiting for the next captured frame.
+    ///
+    /// Returns `Ok(Some(frame))` when a frame arrives, `Ok(None)` on timeout,
+    /// and `Err(_)` once the capture channel disconnects. Lets a caller that
+    /// owns the capturer park the thread instead of busy-polling, while still
+    /// waking on a bounded interval so an external stop flag is observed.
+    pub fn recv_frame_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Option<Frame>, mpsc::RecvTimeoutError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let res = match self.rx.recv_timeout(remaining) {
+                Ok(res) => res,
+                Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(err) => return Err(err),
+            };
+            if let Some(frame) = self.engine.process_channel_item(res) {
+                return Ok(Some(frame));
+            }
+            // Item was filtered (not a deliverable frame); keep waiting until the
+            // deadline rather than returning a spurious timeout.
+            if std::time::Instant::now() >= deadline {
+                return Ok(None);
             }
         }
     }

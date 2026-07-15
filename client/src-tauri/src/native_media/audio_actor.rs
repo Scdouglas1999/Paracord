@@ -14,10 +14,13 @@
 //! actor handle instead.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use tokio::sync::{mpsc, oneshot};
 
+use paracord_codec::audio::aec::{ReferenceConsumer, ReferenceRing, REFERENCE_RING_CAPACITY};
 use paracord_codec::audio::capture::AudioCapture;
 use paracord_codec::audio::playback::AudioPlayback;
 
@@ -39,12 +42,32 @@ enum AudioCommand {
         ssrc: u32,
         reply: oneshot::Sender<Option<mpsc::Sender<PcmFrame>>>,
     },
+    AddStreamPlaybackSource {
+        ssrc: u32,
+        reply: oneshot::Sender<Option<mpsc::Sender<PcmFrame>>>,
+    },
+    RemovePlaybackSource {
+        ssrc: u32,
+    },
+    SetSourceGain {
+        ssrc: u32,
+        gain: f32,
+    },
     SwitchOutputDevice {
         device_index: usize,
-        ssrcs: Vec<u32>,
-        reply: oneshot::Sender<Result<HashMap<u32, mpsc::Sender<PcmFrame>>, String>>,
+        voice_ssrcs: Vec<u32>,
+        stream_ssrcs: Vec<u32>,
+        reply: oneshot::Sender<Result<SwitchedSources, String>>,
     },
     Shutdown,
+}
+
+/// Fresh per-SSRC senders after an output-device switch, split by source kind so
+/// each is re-registered with the matching (mono voice / stereo stream) mixer
+/// source layout.
+pub struct SwitchedSources {
+    pub voice: HashMap<u32, mpsc::Sender<PcmFrame>>,
+    pub stream: HashMap<u32, mpsc::Sender<PcmFrame>>,
 }
 
 /// Handle to the dedicated audio thread. Cloneable-safe (`Send + Sync`) because
@@ -53,6 +76,17 @@ enum AudioCommand {
 pub struct AudioActor {
     tx: mpsc::UnboundedSender<AudioCommand>,
     thread: Option<JoinHandle<()>>,
+    /// Far-end reference ring for the AEC. Owned by the actor (which owns both
+    /// capture and playback) so it survives output-device switches: each new
+    /// `AudioPlayback` attaches a fresh producer to this same ring, and the mic
+    /// send task holds one stable consumer (contract AEC4).
+    reference: Arc<ReferenceRing>,
+    /// Echo-cancellation / AGC enables (contract AEC3, default ON). Live here
+    /// rather than on the session so the (unowned) command handlers can flip them
+    /// through the `Arc<AudioActor>` the session already holds, and the mic send
+    /// task reads them each frame.
+    echo_cancellation_enabled: Arc<AtomicBool>,
+    agc_enabled: Arc<AtomicBool>,
 }
 
 impl AudioActor {
@@ -63,14 +97,51 @@ impl AudioActor {
     pub fn spawn() -> Self {
         let handle = tokio::runtime::Handle::current();
         let (tx, rx) = mpsc::unbounded_channel();
+        let reference = ReferenceRing::new(REFERENCE_RING_CAPACITY);
+        let thread_reference = reference.clone();
         let thread = std::thread::Builder::new()
             .name("paracord-audio".to_string())
-            .spawn(move || run_audio_thread(rx, handle))
+            .spawn(move || run_audio_thread(rx, handle, thread_reference))
             .expect("failed to spawn audio actor thread");
         Self {
             tx,
             thread: Some(thread),
+            reference,
+            echo_cancellation_enabled: Arc::new(AtomicBool::new(true)),
+            agc_enabled: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// A consumer for the far-end reference ring, held by the mic send task.
+    pub fn reference_consumer(&self) -> ReferenceConsumer {
+        self.reference.consumer()
+    }
+
+    /// Shared echo-cancellation enable flag (contract AEC3). The send task reads
+    /// it; command handlers flip it via [`AudioActor::set_echo_cancellation`].
+    pub fn echo_cancellation_flag(&self) -> Arc<AtomicBool> {
+        self.echo_cancellation_enabled.clone()
+    }
+
+    /// Shared AGC enable flag (contract AEC3).
+    pub fn agc_flag(&self) -> Arc<AtomicBool> {
+        self.agc_enabled.clone()
+    }
+
+    /// Toggle echo cancellation (contract AEC3). Called by the
+    /// `voice_set_echo_cancellation` command handler (in `commands.rs`, which is
+    /// not owned by this change — see the AEC report notes).
+    #[allow(dead_code)] // wired by the voice_set_echo_cancellation command
+    pub fn set_echo_cancellation(&self, enabled: bool) {
+        self.echo_cancellation_enabled
+            .store(enabled, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Toggle AGC (contract AEC3). Called by the `voice_set_agc` command handler.
+    #[allow(dead_code)] // wired by the voice_set_agc command
+    pub fn set_agc(&self, enabled: bool) {
+        self.agc_enabled
+            .store(enabled, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn send(&self, command: AudioCommand) -> Result<(), String> {
@@ -115,8 +186,8 @@ impl AudioActor {
         let _ = self.send(AudioCommand::StopPlayback);
     }
 
-    /// Register a new remote playout source, returning the sender the caller
-    /// pushes decoded PCM into. `None` if playback is not currently running.
+    /// Register a new remote **mono voice** playout source, returning the sender
+    /// the caller pushes decoded PCM into. `None` if playback is not running.
     pub async fn add_playback_source(&self, ssrc: u32) -> Option<mpsc::Sender<PcmFrame>> {
         let (reply, rx) = oneshot::channel();
         self.send(AudioCommand::AddPlaybackSource { ssrc, reply })
@@ -124,18 +195,41 @@ impl AudioActor {
         rx.await.ok().flatten()
     }
 
+    /// Register a new remote **stereo stream** playout source (contract C4/AU4),
+    /// returning the sender for 1920-sample interleaved-stereo frames.
+    pub async fn add_stream_playback_source(&self, ssrc: u32) -> Option<mpsc::Sender<PcmFrame>> {
+        let (reply, rx) = oneshot::channel();
+        self.send(AudioCommand::AddStreamPlaybackSource { ssrc, reply })
+            .ok()?;
+        rx.await.ok().flatten()
+    }
+
+    /// Remove a playout source (best effort). Used by the idle-source reaper (AU9).
+    pub async fn remove_playback_source(&self, ssrc: u32) {
+        let _ = self.send(AudioCommand::RemovePlaybackSource { ssrc });
+    }
+
+    /// Set a playout source's gain (contract AU4). Clamped by the caller.
+    pub fn set_source_gain(&self, ssrc: u32, gain: f32) {
+        let _ = self.send(AudioCommand::SetSourceGain { ssrc, gain });
+    }
+
     /// Switch the output device, re-attaching the given remote sources to the
-    /// new device and returning their fresh senders. A stale host index falls
-    /// back to the system default so a failed switch never silences audio.
+    /// new device and returning their fresh senders (voice mono + stream stereo,
+    /// kept separate so each is rebuilt with the right layout). A stale host
+    /// index falls back to the system default so a failed switch never silences
+    /// audio.
     pub async fn switch_output_device(
         &self,
         device_index: usize,
-        ssrcs: Vec<u32>,
-    ) -> Result<HashMap<u32, mpsc::Sender<PcmFrame>>, String> {
+        voice_ssrcs: Vec<u32>,
+        stream_ssrcs: Vec<u32>,
+    ) -> Result<SwitchedSources, String> {
         let (reply, rx) = oneshot::channel();
         self.send(AudioCommand::SwitchOutputDevice {
             device_index,
-            ssrcs,
+            voice_ssrcs,
+            stream_ssrcs,
             reply,
         })?;
         rx.await
@@ -155,7 +249,11 @@ impl Drop for AudioActor {
     }
 }
 
-fn run_audio_thread(mut rx: mpsc::UnboundedReceiver<AudioCommand>, handle: tokio::runtime::Handle) {
+fn run_audio_thread(
+    mut rx: mpsc::UnboundedReceiver<AudioCommand>,
+    handle: tokio::runtime::Handle,
+    reference: Arc<ReferenceRing>,
+) {
     let mut capture: Option<AudioCapture> = None;
     let mut playback: Option<AudioPlayback> = None;
 
@@ -195,8 +293,8 @@ fn run_audio_thread(mut rx: mpsc::UnboundedReceiver<AudioCommand>, handle: tokio
                 reply,
             } => {
                 let result = match device_index {
-                    Some(index) => AudioPlayback::start_device(index),
-                    None => AudioPlayback::start(),
+                    Some(index) => AudioPlayback::start_device(index, Some(reference.clone())),
+                    None => AudioPlayback::start(Some(reference.clone())),
                 };
                 match result {
                     Ok(new_playback) => {
@@ -222,14 +320,35 @@ fn run_audio_thread(mut rx: mpsc::UnboundedReceiver<AudioCommand>, handle: tokio
                 });
                 let _ = reply.send(sender);
             }
+            AudioCommand::AddStreamPlaybackSource { ssrc, reply } => {
+                let sender = playback.as_ref().map(|pb| {
+                    let _runtime = handle.enter();
+                    pb.add_stream_source(ssrc)
+                });
+                let _ = reply.send(sender);
+            }
+            AudioCommand::RemovePlaybackSource { ssrc } => {
+                if let Some(pb) = playback.as_ref() {
+                    pb.remove_source(ssrc);
+                }
+            }
+            AudioCommand::SetSourceGain { ssrc, gain } => {
+                if let Some(pb) = playback.as_ref() {
+                    pb.set_source_gain(ssrc, gain);
+                }
+            }
             AudioCommand::SwitchOutputDevice {
                 device_index,
-                ssrcs,
+                voice_ssrcs,
+                stream_ssrcs,
                 reply,
             } => {
                 // Build the replacement before tearing down the current output
                 // so a failed switch never leaves the user with no audio.
-                let replacement = match AudioPlayback::start_device(device_index) {
+                let replacement = match AudioPlayback::start_device(
+                    device_index,
+                    Some(reference.clone()),
+                ) {
                     Ok(pb) => pb,
                     Err(err) => {
                         tracing::warn!(
@@ -237,7 +356,7 @@ fn run_audio_thread(mut rx: mpsc::UnboundedReceiver<AudioCommand>, handle: tokio
                             error = %err,
                             "output device index unavailable; falling back to default output device"
                         );
-                        match AudioPlayback::start() {
+                        match AudioPlayback::start(Some(reference.clone())) {
                             Ok(pb) => pb,
                             Err(err) => {
                                 let _ = reply
@@ -247,20 +366,23 @@ fn run_audio_thread(mut rx: mpsc::UnboundedReceiver<AudioCommand>, handle: tokio
                         }
                     }
                 };
-                let senders = {
+                let switched = {
                     let _runtime = handle.enter();
-                    ssrcs
-                        .into_iter()
-                        .map(|ssrc| {
-                            let sender = replacement.add_source(ssrc);
-                            (ssrc, sender)
-                        })
-                        .collect::<HashMap<_, _>>()
+                    SwitchedSources {
+                        voice: voice_ssrcs
+                            .into_iter()
+                            .map(|ssrc| (ssrc, replacement.add_source(ssrc)))
+                            .collect(),
+                        stream: stream_ssrcs
+                            .into_iter()
+                            .map(|ssrc| (ssrc, replacement.add_stream_source(ssrc)))
+                            .collect(),
+                    }
                 };
                 if let Some(old) = playback.replace(replacement) {
                     old.stop();
                 }
-                let _ = reply.send(Ok(senders));
+                let _ = reply.send(Ok(switched));
             }
             AudioCommand::Shutdown => {
                 if let Some(old) = capture.take() {

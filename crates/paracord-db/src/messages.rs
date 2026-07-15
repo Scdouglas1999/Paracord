@@ -1,7 +1,6 @@
 use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use paracord_models::id::{ChannelId, MessageId, UserId};
-use paracord_models::permissions::Permissions;
 use sqlx::Row;
 
 #[derive(Debug, Clone)]
@@ -314,6 +313,10 @@ pub async fn get_channel_messages_typed(
     after: Option<MessageId>,
     limit: i64,
 ) -> Result<Vec<MessageRow>, DbError> {
+    // Defense-in-depth: never let a non-positive limit reach the SQL LIMIT
+    // clause (SQLite treats LIMIT <= -1 as unbounded; Postgres errors on
+    // negatives). Callers should already clamp, but guard here regardless.
+    let limit = limit.clamp(1, 500);
     let rows = match (before, after) {
         (Some(before_id), _) => {
             sqlx::query_as::<_, MessageRow>(
@@ -400,11 +403,22 @@ pub async fn update_message_authorized(
     channel_id: i64,
     actor_id: i64,
     content: &str,
+    can_manage: bool,
 ) -> Result<Option<MessageRow>, DbError> {
-    update_message_authorized_with_meta(pool, id, channel_id, actor_id, content, None, None).await
+    update_message_authorized_with_meta(
+        pool, id, channel_id, actor_id, content, None, None, can_manage,
+    )
+    .await
 }
 
 /// Core implementation using newtype IDs.
+///
+/// Authorization is decided by the caller: the message is updated when the actor
+/// is its author, or when `can_manage` is `true`. `can_manage` must be computed
+/// with `compute_channel_permissions` (which honors channel permission
+/// overwrites) rather than from base role bits, so channel-scoped MANAGE_MESSAGES
+/// denials are respected. This mirrors `delete_message_authorized_typed`. The
+/// author check stays in SQL so the update remains a single atomic statement.
 pub async fn update_message_authorized_typed(
     pool: &DbPool,
     id: MessageId,
@@ -413,56 +427,27 @@ pub async fn update_message_authorized_typed(
     content: &str,
     nonce: Option<&str>,
     flags: Option<i32>,
+    can_manage: bool,
 ) -> Result<Option<MessageRow>, DbError> {
-    let manage_messages = Permissions::MANAGE_MESSAGES.bits();
-    let administrator = Permissions::ADMINISTRATOR.bits();
     let row = sqlx::query_as::<_, MessageRow>(
-        "WITH channel_ctx AS (
-             SELECT space_id AS guild_id
-             FROM channels
-             WHERE id = $2
-         ),
-         actor_can_manage AS (
-             SELECT 1
-             FROM channel_ctx ctx
-             INNER JOIN spaces s ON s.id = ctx.guild_id
-             WHERE s.owner_id = $3
-
-             UNION
-
-             SELECT 1
-             FROM channel_ctx ctx
-             INNER JOIN members m
-                ON m.user_id = $3
-               AND m.guild_id = ctx.guild_id
-             INNER JOIN roles r
-                ON r.space_id = ctx.guild_id
-             LEFT JOIN member_roles mr
-                ON mr.role_id = r.id
-               AND mr.user_id = $3
-             WHERE (mr.user_id IS NOT NULL OR r.id = ctx.guild_id)
-               AND ((r.permissions & $5) != 0 OR (r.permissions & $6) != 0)
-             LIMIT 1
-         )
-         UPDATE messages
+        "UPDATE messages
          SET content = $4,
-             edited_at = $9,
-             nonce = $7,
-             flags = COALESCE($8, flags)
+             edited_at = $5,
+             nonce = $6,
+             flags = COALESCE($7, flags)
          WHERE id = $1
            AND channel_id = $2
-           AND (author_id = $3 OR EXISTS (SELECT 1 FROM actor_can_manage))
+           AND (author_id = $3 OR $8)
          RETURNING id, channel_id, author_id, content, nonce, message_type, flags, edited_at, CASE WHEN pinned THEN 1 ELSE 0 END AS pinned, reference_id, e2ee_header, created_at, embeds, components",
     )
     .bind(id)
     .bind(channel_id)
     .bind(actor_id)
     .bind(content)
-    .bind(manage_messages)
-    .bind(administrator)
+    .bind(datetime_to_db_text(Utc::now()))
     .bind(nonce)
     .bind(flags)
-    .bind(datetime_to_db_text(Utc::now()))
+    .bind(can_manage)
     .fetch_optional(pool)
     .await?;
     Ok(row)
@@ -477,6 +462,7 @@ pub async fn update_message_authorized_with_meta(
     content: &str,
     nonce: Option<&str>,
     flags: Option<i32>,
+    can_manage: bool,
 ) -> Result<Option<MessageRow>, DbError> {
     update_message_authorized_typed(
         pool,
@@ -486,6 +472,7 @@ pub async fn update_message_authorized_with_meta(
         content,
         nonce,
         flags,
+        can_manage,
     )
     .await
 }
@@ -505,52 +492,30 @@ pub async fn delete_message(pool: &DbPool, id: i64) -> Result<(), DbError> {
 }
 
 /// Core implementation using newtype IDs.
+///
+/// Authorization is decided by the caller: the message is deleted when the actor
+/// is its author, or when `can_manage` is `true`. `can_manage` must be computed
+/// with `compute_channel_permissions` (which honors channel permission
+/// overwrites) rather than from base role bits, so channel-scoped MANAGE_MESSAGES
+/// denials are respected. The author check stays in SQL so the delete remains a
+/// single atomic statement.
 pub async fn delete_message_authorized_typed(
     pool: &DbPool,
     id: MessageId,
     channel_id: ChannelId,
     actor_id: UserId,
+    can_manage: bool,
 ) -> Result<bool, DbError> {
-    let manage_messages = Permissions::MANAGE_MESSAGES.bits();
-    let administrator = Permissions::ADMINISTRATOR.bits();
     let result = sqlx::query(
-        "WITH channel_ctx AS (
-             SELECT space_id AS guild_id
-             FROM channels
-             WHERE id = $2
-         ),
-         actor_can_manage AS (
-             SELECT 1
-             FROM channel_ctx ctx
-             INNER JOIN spaces s ON s.id = ctx.guild_id
-             WHERE s.owner_id = $3
-
-             UNION
-
-             SELECT 1
-             FROM channel_ctx ctx
-             INNER JOIN members m
-                ON m.user_id = $3
-               AND m.guild_id = ctx.guild_id
-             INNER JOIN roles r
-                ON r.space_id = ctx.guild_id
-             LEFT JOIN member_roles mr
-                ON mr.role_id = r.id
-               AND mr.user_id = $3
-             WHERE (mr.user_id IS NOT NULL OR r.id = ctx.guild_id)
-               AND ((r.permissions & $4) != 0 OR (r.permissions & $5) != 0)
-             LIMIT 1
-         )
-         DELETE FROM messages
+        "DELETE FROM messages
          WHERE id = $1
            AND channel_id = $2
-           AND (author_id = $3 OR EXISTS (SELECT 1 FROM actor_can_manage))",
+           AND (author_id = $3 OR $4)",
     )
     .bind(id)
     .bind(channel_id)
     .bind(actor_id)
-    .bind(manage_messages)
-    .bind(administrator)
+    .bind(can_manage)
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
@@ -562,12 +527,14 @@ pub async fn delete_message_authorized(
     id: i64,
     channel_id: i64,
     actor_id: i64,
+    can_manage: bool,
 ) -> Result<bool, DbError> {
     delete_message_authorized_typed(
         pool,
         MessageId::new(id),
         ChannelId::new(channel_id),
         UserId::new(actor_id),
+        can_manage,
     )
     .await
 }
@@ -729,6 +696,9 @@ pub async fn search_messages_typed(
     before: Option<DateTime<Utc>>,
 ) -> Result<Vec<MessageRow>, DbError> {
     const MESSAGE_FLAG_DM_E2EE: i32 = 1 << 0;
+    // Defense-in-depth: clamp the bound LIMIT to a positive value so a
+    // negative caller limit can never become an unbounded SQLite read.
+    let limit = limit.clamp(1, 500);
     let after_text = after.map(datetime_to_db_text);
     let before_text = before.map(datetime_to_db_text);
     match crate::active_database_engine() {
@@ -785,12 +755,11 @@ pub async fn search_messages_typed(
 
             match fts_result {
                 Ok(rows) => Ok(rows),
-                Err(err) if is_missing_fts_table(&err) => {
-                    // The FTS5 virtual table hasn't been created yet (e.g. the
-                    // migration has not run). Degrade to a LIKE scan only in
-                    // this specific case; any other error (SQLITE_BUSY, IO,
-                    // malformed MATCH) must propagate so we don't silently
-                    // mask failures behind a full-table scan.
+                Err(err) if is_unusable_fts_index(&err) => {
+                    // The FTS5 index is missing or unusable (for example, a
+                    // stale local database has the pre-standalone FTS shape).
+                    // Degrade to a LIKE scan for search-index failures only;
+                    // unrelated DB errors still propagate.
                     tracing::warn!(
                         error = %err,
                         "messages_fts unavailable; falling back to LIKE search"
@@ -829,12 +798,18 @@ pub async fn search_messages_typed(
     }
 }
 
-/// Returns true when `err` is a SQLite "no such table: messages_fts" error,
-/// meaning the FTS5 virtual table has not been created yet.
-fn is_missing_fts_table(err: &sqlx::Error) -> bool {
+/// Returns true when SQLite cannot use the message FTS index. This is kept
+/// narrow to search-index failures so unrelated DB errors still surface.
+fn is_unusable_fts_index(err: &sqlx::Error) -> bool {
     matches!(err, sqlx::Error::Database(db) if {
         let msg = db.message().to_ascii_lowercase();
-        msg.contains("no such table") && msg.contains("messages_fts")
+        (msg.contains("messages_fts")
+            && (msg.contains("no such table")
+                || msg.contains("no such column")
+                || msg.contains("no such module")
+                || msg.contains("malformed")
+                || msg.contains("corrupt")))
+            || msg.contains("unable to use function match")
     })
 }
 
@@ -964,10 +939,9 @@ pub async fn search_messages_in_channels_typed(
 
             match fts_result {
                 Ok(rows) => Ok(rows),
-                Err(err) if is_missing_fts_table(&err) => {
+                Err(err) if is_unusable_fts_index(&err) => {
                     // Same degradation as the single-channel search: if the FTS5
-                    // table is absent, fall back to a LIKE scan. Any other error
-                    // propagates so failures aren't masked.
+                    // index is missing or unusable, fall back to a LIKE scan.
                     tracing::warn!(
                         error = %err,
                         "messages_fts unavailable; falling back to LIKE search"
@@ -1886,6 +1860,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_channel_messages_negative_limit_is_clamped() {
+        // Regression for L14-01: a negative limit must not become an unbounded
+        // SQLite `LIMIT -1` read. The DB layer clamps it to a positive value.
+        let pool = test_pool().await;
+        let (user_id, _, channel_id) = setup_channel(&pool).await;
+        for i in 0..10 {
+            create_message_typed(
+                &pool,
+                MessageId::new(6100 + i),
+                ChannelId::new(channel_id),
+                UserId::new(user_id),
+                &format!("msg {}", i),
+                0,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        let messages =
+            get_channel_messages_typed(&pool, ChannelId::new(channel_id), None, None, -1)
+                .await
+                .unwrap();
+        // Clamped to a single row rather than dumping the whole channel.
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[tokio::test]
     async fn test_update_message() {
         let pool = test_pool().await;
         let (user_id, _, channel_id) = setup_channel(&pool).await;
@@ -1980,6 +1981,47 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_search_messages_falls_back_when_fts_index_is_unusable() {
+        let pool = test_pool().await;
+        let (user_id, _, channel_id) = setup_channel(&pool).await;
+        create_message_typed(
+            &pool,
+            MessageId::new(9050),
+            ChannelId::new(channel_id),
+            UserId::new(user_id),
+            "stale index fallback needle",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+
+        sqlx::query("DROP TABLE messages_fts")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE messages_fts(content TEXT, channel_id INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let results = search_messages_typed(
+            &pool,
+            ChannelId::new(channel_id),
+            "needle",
+            50,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, 9050);
     }
 
     #[tokio::test]

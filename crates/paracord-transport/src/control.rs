@@ -591,7 +591,8 @@ mod tests {
                 codec: VideoCodec::H264,
                 encode: true,
                 decode: true,
-                hardware_accelerated: true,
+                encode_hardware: true,
+                decode_hardware: true,
             }],
         };
         let encoded = msg.encode().unwrap();
@@ -609,7 +610,8 @@ mod tests {
                     codec: VideoCodec::Av1,
                     encode: false,
                     decode: true,
-                    hardware_accelerated: true,
+                    encode_hardware: false,
+                    decode_hardware: true,
                 }],
             }],
         };

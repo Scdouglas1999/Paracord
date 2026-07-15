@@ -377,10 +377,15 @@ pub async fn process_interaction_response(
             let data = callback_data.ok_or_else(|| {
                 CoreError::BadRequest("callback data required for autocomplete response".into())
             })?;
-            // Dispatch autocomplete choices back to the invoking user
+            // Dispatch autocomplete choices back to the invoking user.
+            // Include channel/guild/application so the client can stamp context
+            // even when it never recorded a pending interaction.
             let autocomplete_payload = json!({
                 "interaction_id": interaction_id.to_string(),
                 "type": 8,
+                "application_id": token_row.application_id.to_string(),
+                "channel_id": token_row.channel_id.to_string(),
+                "guild_id": token_row.guild_id.map(|id| id.to_string()),
                 "data": data,
             });
             state.event_bus.dispatch_to_users(
@@ -395,10 +400,28 @@ pub async fn process_interaction_response(
             let data = callback_data.ok_or_else(|| {
                 CoreError::BadRequest("callback data required for modal response".into())
             })?;
-            // Dispatch a modal event to the invoking user
+            let modal_data = serde_json::to_string(data)
+                .map_err(|e| CoreError::Internal(format!("serialize modal: {e}")))?;
+            let issued = paracord_db::interaction_tokens::mark_modal_issued(
+                &state.db,
+                interaction_id,
+                &modal_data,
+                Utc::now(),
+            )
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))?;
+            if !issued {
+                return Err(CoreError::BadRequest(
+                    "a modal was already issued for this interaction".into(),
+                ));
+            }
+            // Dispatch a modal event to the invoking user (with channel/guild stamp).
             let modal_payload = json!({
                 "interaction_id": interaction_id.to_string(),
                 "type": 9,
+                "application_id": token_row.application_id.to_string(),
+                "channel_id": token_row.channel_id.to_string(),
+                "guild_id": token_row.guild_id.map(|id| id.to_string()),
                 "data": data,
             });
             state.event_bus.dispatch_to_users(

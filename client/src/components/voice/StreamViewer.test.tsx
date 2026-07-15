@@ -46,6 +46,10 @@ describe('StreamViewer', () => {
         dispatchEvent: vi.fn(),
       })),
     });
+
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      clearRect: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
   });
 
   it('shows the unavailable placeholder when no track is active', () => {
@@ -69,6 +73,32 @@ describe('StreamViewer', () => {
     expect(screen.queryByText('Encoder unavailable.')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Show stream warning' }));
     expect(screen.getByText('Encoder unavailable.')).toBeInTheDocument();
+  });
+
+  it('portals stream warning details to document.body (above native underlay)', () => {
+    render(
+      <div data-testid="mount">
+        <StreamViewer streamerId="u2" streamerName="Alice" issueMessage="Encoder unavailable." />
+      </div>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show stream warning' }));
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('data-stream-overlay-portal');
+    expect(status.parentElement).toBe(document.body);
+    expect(screen.getByTestId('mount').contains(status)).toBe(false);
+  });
+
+  it('dismisses portaled stream warning details on outside pointerdown', () => {
+    render(
+      <div>
+        <StreamViewer streamerId="u2" streamerName="Alice" issueMessage="Encoder unavailable." />
+        <button type="button">Outside</button>
+      </div>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show stream warning' }));
+    expect(screen.getByText('Encoder unavailable.')).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside' }));
+    expect(screen.queryByText('Encoder unavailable.')).toBeNull();
   });
 
   it('wires the stop-watching control', () => {
@@ -107,6 +137,30 @@ describe('StreamViewer', () => {
     ).toBeInTheDocument();
   });
 
+  it('dismisses stream warning details on Escape before leaving maximize', () => {
+    render(
+      <StreamViewer
+        streamerId="u1"
+        streamerName="You"
+        issueMessage="Encoder stalled"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize stream viewer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show stream warning' }));
+    expect(screen.getByText('Encoder stalled')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByText('Encoder stalled')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Restore stream viewer' }),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(
+      screen.getByRole('button', { name: 'Maximize stream viewer' }),
+    ).toBeInTheDocument();
+  });
+
   it('surfaces the system audio badge when capture is active', () => {
     voiceState.current.systemAudioCaptureActive = true;
     render(<StreamViewer streamerId="u2" streamerName="Alice" />);
@@ -119,5 +173,53 @@ describe('StreamViewer', () => {
     expect(screen.getByText('System Audio Capture Is Active')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'I understand' }));
     expect(voiceState.current.acknowledgeSystemAudioPrivacyWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it('mounts the native media viewer without calling hooks from effects', () => {
+    const unsubscribeVideo = vi.fn();
+    const unsubscribeAudio = vi.fn();
+    const mediaEngine = {
+      subscribeVideo: vi.fn(() => unsubscribeVideo),
+      subscribeScreenShareAudio: vi.fn(() => unsubscribeAudio),
+      setSourceVolume: vi.fn(),
+      listPublishedTracks: vi.fn().mockResolvedValue([]),
+      registerTrackSubscription: vi.fn(),
+    };
+    voiceState.current.mediaEngine = mediaEngine;
+
+    const { unmount } = render(<StreamViewer streamerId="u2" streamerName="Alice" />);
+
+    expect(mediaEngine.subscribeVideo).toHaveBeenCalledWith(
+      'u2',
+      expect.any(HTMLCanvasElement),
+      expect.any(Function),
+    );
+    expect(mediaEngine.subscribeScreenShareAudio).toHaveBeenCalledWith(
+      'u2',
+      expect.any(Function),
+    );
+
+    unmount();
+    expect(unsubscribeVideo).toHaveBeenCalledTimes(1);
+    expect(unsubscribeAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards mute/unmute to mediaEngine.setSourceVolume on both engines', () => {
+    const mediaEngine = {
+      subscribeVideo: vi.fn(() => vi.fn()),
+      subscribeScreenShareAudio: vi.fn(() => vi.fn()),
+      setSourceVolume: vi.fn(),
+      listPublishedTracks: vi.fn().mockResolvedValue([]),
+      registerTrackSubscription: vi.fn(),
+    };
+    voiceState.current.mediaEngine = mediaEngine;
+
+    render(<StreamViewer streamerId="u2" streamerName="Alice" />);
+
+    fireEvent.click(screen.getByTitle('Mute'));
+    expect(mediaEngine.setSourceVolume).toHaveBeenCalledWith('u2', 0);
+
+    fireEvent.click(screen.getByTitle('Unmute'));
+    expect(mediaEngine.setSourceVolume).toHaveBeenCalledWith('u2', 1);
   });
 });

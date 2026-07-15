@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Users, MessageSquare, X, Search, Check, UserPlus, UserRoundPlus, Inbox, Ban, ArrowUpRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useRelationshipStore } from '../stores/relationshipStore';
@@ -12,6 +13,8 @@ import { EmptyState } from '../components/ui/Feedback';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
+import { displayName } from '../lib/displayName';
+import { UserProfilePopup } from '../components/user/UserProfile';
 
 type FriendsTab = 'online' | 'all' | 'requests' | 'blocked';
 
@@ -37,12 +40,14 @@ function ActionButton({
   label,
   onClick,
   disabled,
+  alwaysVisible = false,
   tone = 'neutral',
   children,
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  alwaysVisible?: boolean;
   tone?: 'neutral' | 'success' | 'danger';
   children: ReactNode;
 }) {
@@ -54,7 +59,8 @@ function ActionButton({
       title={label}
       aria-label={label}
       className={cn(
-        'flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-bg-mod-subtle text-text-secondary opacity-100 outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 sm:focus-visible:opacity-100',
+        'flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-bg-mod-subtle text-text-secondary outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-strong focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50',
+        !alwaysVisible && 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 sm:focus-visible:opacity-100',
         tone === 'success' && 'text-accent-success hover:text-accent-success',
         tone === 'danger' && 'hover:text-accent-danger',
         tone === 'neutral' && 'hover:text-text-primary',
@@ -72,31 +78,41 @@ function PersonRow({
   subtitle,
   status,
   showPresence,
+  onOpenProfile,
   actions,
 }: {
   name: string;
   subtitle: string;
   status?: string;
   showPresence?: boolean;
+  onOpenProfile?: (anchor: HTMLButtonElement) => void;
   actions: ReactNode;
 }) {
   return (
-    <div className="group flex items-center gap-3 px-4 py-2.5 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
-      <div className="relative shrink-0">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary">
-          {name.charAt(0).toUpperCase()}
+    <div className="group flex items-center gap-1.5 px-2 py-1.5 transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle">
+      <button
+        type="button"
+        aria-label={`Open profile for ${name}`}
+        onClick={(event) => onOpenProfile?.(event.currentTarget)}
+        disabled={!onOpenProfile}
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-sm px-2 py-1 text-left outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-default"
+      >
+        <div className="relative shrink-0">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-tint text-label font-semibold text-accent-primary">
+            {name.charAt(0).toUpperCase()}
+          </div>
+          {showPresence && status && status !== 'offline' && (
+            <span
+              className={cn('absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full', STATUS_COLOR[status] ?? 'bg-status-offline')}
+              style={{ boxShadow: '0 0 0 2.5px var(--bg-secondary)' }}
+            />
+          )}
         </div>
-        {showPresence && status && status !== 'offline' && (
-          <span
-            className={cn('absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full', STATUS_COLOR[status] ?? 'bg-status-offline')}
-            style={{ boxShadow: '0 0 0 2.5px var(--bg-secondary)' }}
-          />
-        )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-label font-semibold text-text-primary">{name}</div>
-        <div className="truncate text-meta text-text-muted">{subtitle}</div>
-      </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-label font-semibold text-text-primary">{name}</div>
+          <div className="truncate text-meta text-text-muted">{subtitle}</div>
+        </div>
+      </button>
       <div className="flex items-center gap-1.5">{actions}</div>
     </div>
   );
@@ -111,6 +127,7 @@ export function FriendsPage() {
   const [relationshipError, setRelationshipError] = useState<string | null>(null);
   const [pendingActions, setPendingActions] = useState<Set<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const [profile, setProfile] = useState<{ user: Relationship['user']; position: { x: number; y: number } } | null>(null);
   const addInputRef = useRef<HTMLInputElement>(null);
   const relationships = useRelationshipStore((s) => s.relationships);
   const fetchRelationships = useRelationshipStore((s) => s.fetchRelationships);
@@ -154,6 +171,11 @@ export function FriendsPage() {
     requestAnimationFrame(() => addInputRef.current?.focus());
   };
 
+  const openProfile = (user: Relationship['user'], anchor: HTMLButtonElement) => {
+    const rect = anchor.getBoundingClientRect();
+    setProfile({ user, position: { x: rect.right, y: rect.top } });
+  };
+
   const handleAddFriend = async () => {
     const identifier = addFriendInput.trim();
     if (!identifier || isActionPending('add')) return;
@@ -161,8 +183,27 @@ export function FriendsPage() {
     setRelationshipError(null);
     startAction('add');
     try {
+      const before = useRelationshipStore.getState().relationships;
       await useRelationshipStore.getState().addFriend(identifier);
-      setAddFriendStatus({ type: 'success', message: `Friend request sent to ${identifier}!` });
+      await useRelationshipStore.getState().fetchRelationships();
+      const after = useRelationshipStore.getState().relationships;
+      const matched = after.find(
+        (r) =>
+          r.user.username.toLowerCase() === identifier.toLowerCase()
+          || r.user.id === identifier,
+      );
+      const newlyAdded = matched && !before.some((r) => r.user.id === matched.user.id && r.type === matched.type);
+      if (!matched || !newlyAdded) {
+        // Server returns 204 for unknown usernames to avoid enumeration — don't claim success.
+        setAddFriendStatus({
+          type: 'success',
+          message: `If an account named "${identifier}" exists, a friend request was sent.`,
+        });
+      } else if (matched.type === 1) {
+        setAddFriendStatus({ type: 'success', message: `You are now friends with ${matched.user.username}!` });
+      } else {
+        setAddFriendStatus({ type: 'success', message: `Friend request sent to ${matched.user.username}!` });
+      }
       setAddFriendInput('');
     } catch (err: unknown) {
       const normalized = err as {
@@ -246,7 +287,9 @@ export function FriendsPage() {
   const filteredList = useMemo(() => {
     if (!searchQuery.trim()) return friendListSource;
     const q = searchQuery.toLowerCase();
-    return friendListSource.filter((r) => r.user.username.toLowerCase().includes(q));
+    return friendListSource.filter((r) =>
+      r.user.username.toLowerCase().includes(q) || displayName(r.user).toLowerCase().includes(q)
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [friendListSource, searchQuery]);
 
@@ -370,6 +413,7 @@ export function FriendsPage() {
               onDecline={(id) => void handleRemoveFriend(id)}
               onAdd={openAddFriend}
               isPending={isActionPending}
+              onOpenProfile={openProfile}
             />
           ) : (
             <>
@@ -410,23 +454,25 @@ export function FriendsPage() {
                       return (
                         <PersonRow
                           key={rel.id}
-                          name={rel.user.username}
+                          name={displayName(rel.user)}
                           subtitle={subtitle}
                           status={status}
                           showPresence={isFriend}
+                          onOpenProfile={(anchor) => openProfile(rel.user, anchor)}
                           actions={
                             <>
                               {isFriend && (
                                 <ActionButton
-                                  label={`Message ${rel.user.username}`}
+                                  label={`Message ${displayName(rel.user)}`}
                                   onClick={() => void handleMessageFriend(rel.user.id)}
                                   disabled={isActionPending(`message:${rel.user.id}`)}
+                                  alwaysVisible
                                 >
                                   <MessageSquare size={16} />
                                 </ActionButton>
                               )}
                               <ActionButton
-                                label={`${rel.type === 2 ? 'Unblock' : 'Remove'} ${rel.user.username}`}
+                                label={`${rel.type === 2 ? 'Unblock' : 'Remove'} ${displayName(rel.user)}`}
                                 tone="danger"
                                 onClick={() => void handleRemoveFriend(rel.user.id)}
                                 disabled={isActionPending(`remove:${rel.user.id}`)}
@@ -445,6 +491,14 @@ export function FriendsPage() {
           )}
         </div>
       </div>
+      {profile && createPortal(
+        <UserProfilePopup
+          user={profile.user}
+          position={profile.position}
+          onClose={() => setProfile(null)}
+        />,
+        document.body,
+      )}
     </div>
   );
 }
@@ -458,6 +512,7 @@ function RequestsView({
   onDecline,
   onAdd,
   isPending,
+  onOpenProfile,
 }: {
   incoming: Relationship[];
   outgoing: Relationship[];
@@ -465,6 +520,7 @@ function RequestsView({
   onDecline: (userId: string) => void;
   onAdd: () => void;
   isPending: (key: string) => boolean;
+  onOpenProfile: (user: Relationship['user'], anchor: HTMLButtonElement) => void;
 }) {
   if (incoming.length === 0 && outgoing.length === 0) {
     return (
@@ -490,12 +546,13 @@ function RequestsView({
             {incoming.map((rel) => (
               <PersonRow
                 key={rel.id}
-                name={rel.user.username}
+                name={displayName(rel.user)}
                 subtitle="Wants to be your friend"
+                onOpenProfile={(anchor) => onOpenProfile(rel.user, anchor)}
                 actions={
                   <>
                     <ActionButton
-                      label={`Accept friend request from ${rel.user.username}`}
+                      label={`Accept friend request from ${displayName(rel.user)}`}
                       tone="success"
                       onClick={() => onAccept(rel.user.id)}
                       disabled={isPending(`accept:${rel.user.id}`)}
@@ -503,7 +560,7 @@ function RequestsView({
                       <Check size={16} />
                     </ActionButton>
                     <ActionButton
-                      label={`Decline friend request from ${rel.user.username}`}
+                      label={`Decline friend request from ${displayName(rel.user)}`}
                       tone="danger"
                       onClick={() => onDecline(rel.user.id)}
                       disabled={isPending(`remove:${rel.user.id}`)}
@@ -525,11 +582,12 @@ function RequestsView({
             {outgoing.map((rel) => (
               <PersonRow
                 key={rel.id}
-                name={rel.user.username}
+                name={displayName(rel.user)}
                 subtitle="Request sent — waiting to hear back"
+                onOpenProfile={(anchor) => onOpenProfile(rel.user, anchor)}
                 actions={
                   <ActionButton
-                    label={`Cancel friend request to ${rel.user.username}`}
+                    label={`Cancel friend request to ${displayName(rel.user)}`}
                     tone="danger"
                     onClick={() => onDecline(rel.user.id)}
                     disabled={isPending(`remove:${rel.user.id}`)}

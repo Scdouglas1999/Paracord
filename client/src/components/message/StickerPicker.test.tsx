@@ -139,4 +139,15 @@ describe('StickerPicker', () => {
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
+
+  it('closes on Escape', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    listStickers.mockResolvedValue(stickerResponse([]));
+    render(<StickerPicker guildId="g1" onSelect={vi.fn()} onClose={onClose} />);
+
+    await screen.findByText('No stickers yet');
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

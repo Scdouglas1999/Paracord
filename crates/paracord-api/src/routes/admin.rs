@@ -308,11 +308,12 @@ pub async fn list_users(
     _admin: AdminUser,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<Value>, ApiError> {
-    let limit = params.limit.unwrap_or(50).min(100);
+    let limit = params.limit.unwrap_or(50).clamp(1, 100);
     let cursor = params.cursor;
 
     let users = if let Some(offset) = params.offset {
         // Backward-compatible support for legacy offset clients.
+        let offset = offset.max(0);
         paracord_db::users::list_users_paginated(&state.db, offset, limit)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?

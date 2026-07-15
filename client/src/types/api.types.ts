@@ -82,5 +82,7 @@ export interface InviteAcceptResponse {
 export interface PaginationParams {
   before?: string;
   after?: string;
+  /** Anchor id: returns a window of messages centered on this id. */
+  around?: string;
   limit?: number;
 }

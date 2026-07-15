@@ -85,15 +85,28 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
     };
   }, [query, fetchGifs]);
 
-  // Close on click outside
+  // Close on click outside or Escape (ignore composer toggle buttons that own this picker)
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (pickerRef.current?.contains(target)) return;
+      if ((target as Element).closest?.('[data-composer-picker-toggle]')) return;
+      onClose();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
         onClose();
       }
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, [onClose]);
 
   const handleSelect = (gif: TenorGif) => {
@@ -110,8 +123,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
   return (
     <div
       ref={pickerRef}
-      className="popup-enter flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
-      style={{ width: 400, maxHeight: 460 }}
+      className="popup-enter flex w-[min(25rem,calc(100vw-1rem))] max-h-[min(28.75rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
     >
       {/* Inset search */}
       <div className="shrink-0 px-3 pb-1.5 pt-3">

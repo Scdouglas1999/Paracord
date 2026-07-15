@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelApi } from '../../api/channels';
@@ -81,6 +81,36 @@ describe('ChannelPermissionsEditor', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to save overwrite: Cannot deny administrator permissions.',
     );
+  });
+
+  it('explains inherited outcomes and updates the effective preview live', async () => {
+    const user = userEvent.setup();
+    vi.mocked(channelApi.getOverwrites).mockResolvedValue({ data: [everyoneOverwrite] } as never);
+    renderEditor();
+
+    await user.click(await screen.findByRole('button', { name: '@everyone' }));
+    expect(screen.getByText('0 allowed · 15 denied')).toBeInTheDocument();
+    expect(screen.getByText('Combines the @everyone base role with this channel override.')).toBeInTheDocument();
+    const viewRow = screen.getByTestId('permission-row-VIEW_CHANNEL');
+    expect(within(viewRow).getByText('Inherited → denied')).toBeInTheDocument();
+
+    await user.click(within(viewRow).getByRole('button', { name: 'Allow View Channel' }));
+    expect(within(viewRow).getByText('Effective → allowed')).toBeInTheDocument();
+    expect(screen.getByText('1 allowed · 14 denied')).toBeInTheDocument();
+  });
+
+  it('makes administrator bypass explicit in the preview', async () => {
+    const user = userEvent.setup();
+    const moderatorOverwrite: ChannelOverwrite = {
+      ...everyoneOverwrite,
+      target_id: 'role-mod',
+    };
+    vi.mocked(channelApi.getOverwrites).mockResolvedValue({ data: [moderatorOverwrite] } as never);
+    renderEditor();
+
+    await user.click(await screen.findByRole('button', { name: 'Moderators' }));
+    expect(screen.getByText(/Administrator access bypasses channel overrides/i)).toBeInTheDocument();
+    expect(screen.getByText('15 allowed · 0 denied')).toBeInTheDocument();
   });
 
   it('shows concrete API details when adding a role overwrite fails', async () => {

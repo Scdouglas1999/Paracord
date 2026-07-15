@@ -157,6 +157,7 @@ export function AccountSetupPage() {
               </div>
               <button
                 type="button"
+                aria-label={copied ? 'Recovery phrase copied' : 'Copy recovery phrase'}
                 onClick={handleCopyPhrase}
                 className="mt-3 inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-meta font-semibold text-text-link transition-colors hover:bg-accent-tint"
               >

@@ -206,6 +206,17 @@ describe('EventList', () => {
     );
   });
 
+  it('does not render unsafe event cover URLs', async () => {
+    getMock.mockResolvedValueOnce({
+      data: [{ ...scheduledEvent, image_url: 'javascript:alert(1)' }],
+    });
+
+    const { container } = render(<EventList guildId="guild-1" />);
+
+    expect(await screen.findByText('Release Planning')).toBeInTheDocument();
+    expect(container.querySelector('img[src^="javascript:"]')).toBeNull();
+  });
+
   it('shows a retryable load error with API details instead of an empty event list', async () => {
     getMock.mockRejectedValueOnce({
       response: { data: { message: 'Calendar database is offline.' } },

@@ -106,6 +106,12 @@ describe('ConversationRow state rendering', () => {
     expect(screen.queryByTestId('mention-badge')).not.toBeInTheDocument();
   });
 
+  it('does not show the plain unread dot on the active row', () => {
+    render(<ConversationRow entry={makeEntry({ unread: true })} active onClick={vi.fn()} />);
+    expect(screen.getByRole('option')).toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByTestId('unread-dot')).not.toBeInTheDocument();
+  });
+
   it('shows an emerald mention badge with the count, superseding the unread dot', () => {
     render(<ConversationRow entry={makeEntry({ unread: true, mentionCount: 3 })} onClick={vi.fn()} />);
     const badge = screen.getByTestId('mention-badge');

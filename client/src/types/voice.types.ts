@@ -10,6 +10,8 @@ export interface VoiceState {
   self_stream: boolean;
   self_video: boolean;
   suppress: boolean;
+  request_to_speak_at?: string | null;
   username?: string;
+  display_name?: string | null;
   avatar_hash?: string | null;
 }

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Presence } from '../types';
+import type { Activity, Presence } from '../types';
 
 const DEFAULT_SCOPE = 'global';
 
@@ -9,6 +9,28 @@ function normalizeScope(scope?: string): string {
 
 export function makePresenceKey(userId: string, scope?: string): string {
   return `${normalizeScope(scope)}:${String(userId)}`;
+}
+
+function activitiesEqual(a: Activity[] | undefined, b: Activity[] | undefined): boolean {
+  const left = a ?? [];
+  const right = b ?? [];
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    const x = left[i];
+    const y = right[i];
+    if (
+      x.name !== y.name ||
+      x.type !== y.type ||
+      x.activity_type !== y.activity_type ||
+      x.details !== y.details ||
+      x.state !== y.state ||
+      x.started_at !== y.started_at ||
+      x.application_id !== y.application_id
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Monotonic counter so the "most recently updated" fallback is deterministic
@@ -60,17 +82,27 @@ export const usePresenceStore = create<PresenceState>()((set, get) => ({
 
   updatePresence: (presence, scope) =>
     set((state) => {
-      const presences = new Map(state.presences);
-      const presenceOrder = new Map(state.presenceOrder);
       const userId = String(presence.user_id);
       const key = makePresenceKey(userId, scope);
-      const existing = presences.get(key);
-      presences.set(key, {
+      const existing = state.presences.get(key);
+      const next: Presence = {
         ...existing,
         ...presence,
         user_id: userId,
         activities: presence.activities ?? existing?.activities ?? [],
-      });
+      };
+      // Skip Map clones / subscriber churn when the scoped presence is unchanged.
+      if (
+        existing &&
+        existing.status === next.status &&
+        existing.guild_id === next.guild_id &&
+        activitiesEqual(existing.activities, next.activities)
+      ) {
+        return state;
+      }
+      const presences = new Map(state.presences);
+      const presenceOrder = new Map(state.presenceOrder);
+      presences.set(key, next);
       presenceOrder.set(key, ++presenceWriteSeq);
       return { presences, presenceOrder };
     }),

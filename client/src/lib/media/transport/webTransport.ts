@@ -12,9 +12,12 @@ export interface StreamControlMessage {
 
 export class WebTransportManager {
   private transport: WebTransport | null = null;
+  /** Reused for the connection lifetime — avoid getWriter()/releaseLock() per datagram. */
+  private datagramWriter: WritableStreamDefaultWriter<Uint8Array> | null = null;
 
   private datagramCallbacks: Array<(data: Uint8Array) => void> = [];
   private streamControlCallbacks: Array<(msg: StreamControlMessage) => void> = [];
+  private uniStreamCallbacks: Array<(data: Uint8Array) => void> = [];
   private closeCallbacks: Array<(reason: string) => void> = [];
   private restoredCallbacks: Array<() => void> = [];
 
@@ -59,6 +62,7 @@ export class WebTransportManager {
 
       this.transport = new WebTransport(url, options);
       await this.transport.ready;
+      this.datagramWriter = this.transport.datagrams.writable.getWriter();
 
       // Send auth on first bidirectional stream
       const controlStream = await this.transport.createBidirectionalStream();
@@ -91,9 +95,10 @@ export class WebTransportManager {
         this.hasConnectedOnce = true;
       }
 
-      // Start reading datagrams and control messages
+      // Start reading datagrams, control messages, and keyframe uni streams
       this.readDatagrams();
       this.readIncomingStreamControls();
+      this.readIncomingUniStreams();
 
       // Handle connection close
       this.transport.closed
@@ -104,6 +109,7 @@ export class WebTransportManager {
           this.handleClose(err.message || 'Connection lost');
         });
     } catch (err) {
+      this.releaseDatagramWriter();
       this.transport = null;
       const msg = err instanceof Error ? err.message : 'Unknown connection error';
       if (this.shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -121,6 +127,7 @@ export class WebTransportManager {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.releaseDatagramWriter();
     if (this.transport) {
       try {
         this.transport.close({ closeCode: 0, reason: 'Client disconnect' });
@@ -130,9 +137,21 @@ export class WebTransportManager {
   }
 
   sendDatagram(data: Uint8Array): void {
-    if (!this.transport) return;
-    const writer = this.transport.datagrams.writable.getWriter();
-    writer.write(data).finally(() => writer.releaseLock());
+    const writer = this.datagramWriter;
+    if (!writer) return;
+    void writer.write(data).catch(() => {
+      // Datagram write failed (connection closing); ignore — handleClose reconnects.
+    });
+  }
+
+  private releaseDatagramWriter(): void {
+    if (!this.datagramWriter) return;
+    try {
+      this.datagramWriter.releaseLock();
+    } catch {
+      // Already released or stream closed.
+    }
+    this.datagramWriter = null;
   }
 
   onDatagram(cb: (data: Uint8Array) => void): void {
@@ -155,6 +174,37 @@ export class WebTransportManager {
       await writer.write(frame);
     } finally {
       writer.releaseLock();
+    }
+  }
+
+  /**
+   * Register a callback for whole-frame keyframe messages arriving on
+   * WebTransport unidirectional streams. Each callback receives the complete
+   * message body (the stream drained to its FIN) byte-for-byte as the relay
+   * forwarded it — the same wire framing native QUIC uni streams use (§5).
+   */
+  onUniStream(cb: (data: Uint8Array) => void): void {
+    this.uniStreamCallbacks.push(cb);
+  }
+
+  /**
+   * Publish one whole-frame keyframe message on a fresh unidirectional stream.
+   * The message is written and the stream finished (its FIN delimits the frame),
+   * mirroring the native publisher's `send_encoded_video_frame_stream`.
+   */
+  async sendUniStream(data: Uint8Array): Promise<void> {
+    if (!this.transport) return;
+    const stream = await this.transport.createUnidirectionalStream();
+    const writer = stream.getWriter();
+    try {
+      await writer.write(data);
+      await writer.close();
+    } finally {
+      try {
+        writer.releaseLock();
+      } catch {
+        // Already released by close().
+      }
     }
   }
 
@@ -236,7 +286,54 @@ export class WebTransportManager {
     }
   }
 
+  private async readIncomingUniStreams(): Promise<void> {
+    if (!this.transport?.incomingUnidirectionalStreams) return;
+    const reader = this.transport.incomingUnidirectionalStreams.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        void this.handleIncomingUniStream(value);
+      }
+    } catch {
+      // Stream closed
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  private async handleIncomingUniStream(stream: ReadableStream<Uint8Array>): Promise<void> {
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        chunks.push(value);
+        total += value.byteLength;
+      }
+      if (total === 0) return;
+      const combined = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      for (const cb of this.uniStreamCallbacks) {
+        cb(combined);
+      }
+    } catch {
+      // Ignore truncated/aborted uni streams (a stale keyframe the relay reset).
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   private handleClose(reason: string): void {
+    this.releaseDatagramWriter();
     this.transport = null;
 
     if (this.shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {

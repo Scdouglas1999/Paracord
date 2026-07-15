@@ -59,6 +59,16 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
   }, [fetchStickers]);
 
   useEffect(() => {
+    const onStickersChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ guild_id?: string }>).detail;
+      if (detail?.guild_id && guildId && detail.guild_id !== guildId) return;
+      void fetchStickers();
+    };
+    window.addEventListener('paracord:stickers-changed', onStickersChanged);
+    return () => window.removeEventListener('paracord:stickers-changed', onStickersChanged);
+  }, [fetchStickers, guildId]);
+
+  useEffect(() => {
     const q = query.trim().toLowerCase();
     if (!q) {
       setFiltered(stickers);
@@ -67,22 +77,34 @@ export function StickerPicker({ guildId, onSelect, onClose }: StickerPickerProps
     }
   }, [query, stickers]);
 
-  // Close on click outside
+  // Close on click outside or Escape (ignore composer toggle buttons that own this picker)
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (pickerRef.current?.contains(target)) return;
+      if ((target as Element).closest?.('[data-composer-picker-toggle]')) return;
+      onClose();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
         onClose();
       }
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, [onClose]);
 
   return (
     <div
       ref={pickerRef}
-      className="popup-enter flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
-      style={{ width: 340, maxHeight: 420 }}
+      className="popup-enter flex w-[min(21.25rem,calc(100vw-1rem))] max-h-[min(26.25rem,calc(100dvh-1rem))] flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating shadow-lg"
     >
       {/* Header */}
       <div className="shrink-0 border-b border-border-subtle px-3 pb-2.5 pt-3">

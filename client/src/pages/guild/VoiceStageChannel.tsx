@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { EyeOff, LayoutList, Mic, Monitor, PanelLeft, PictureInPicture2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, EyeOff, Hand, LayoutList, Mic, Monitor, PanelLeft, PictureInPicture2, X } from 'lucide-react';
 import { RoomEvent, Track } from 'livekit-client';
 import { StreamViewer } from '../../components/voice/StreamViewer';
 import { VideoGrid } from '../../components/voice/VideoGrid';
@@ -16,6 +16,8 @@ import { stageApi, type StageInstance } from '../../api/stage';
 import { extractApiError } from '../../api/client';
 import { VoiceLobby } from './VoiceLobby';
 import { VoiceChatSidebar } from './VoiceChatSidebar';
+import { Button } from '../../components/ui/Button';
+import { displayName } from '../../lib/displayName';
 
 type VideoLayout = 'top' | 'side' | 'pip' | 'hidden';
 
@@ -46,8 +48,12 @@ export function VoiceStageChannel({
     connectionErrorChannelId,
     channelId: voiceChannelId,
     participants,
+    selfMute,
+    selfVideo,
     joinChannel,
     clearConnectionError,
+    toggleMute,
+    toggleVideo,
   } = useVoice();
   const { selfStream, stopStream } = useStream();
   const watchedStreamerId = useVoiceStore((s) => s.watchedStreamerId);
@@ -67,6 +73,7 @@ export function VoiceStageChannel({
   const [stageInstance, setStageInstance] = useState<StageInstance | null>(null);
   const [stageLoading, setStageLoading] = useState(false);
   const [stageBusy, setStageBusy] = useState(false);
+  const [stageRequestBusy, setStageRequestBusy] = useState(false);
   const [stageError, setStageError] = useState<string | null>(null);
   const [stageTopicDraft, setStageTopicDraft] = useState('');
   const [splitState, setSplitState] = useState<{ left: PaneSource; right: PaneSource }>({
@@ -93,6 +100,35 @@ export function VoiceStageChannel({
     () => stageParticipants.filter((participant) => participant.suppress),
     [stageParticipants],
   );
+  const currentStageParticipant = useMemo(
+    () => (currentUserId ? stageParticipants.find((participant) => participant.user_id === currentUserId) : undefined),
+    [currentUserId, stageParticipants],
+  );
+  const isStageAudience = Boolean(isStage && currentStageParticipant?.suppress !== false);
+  const hasRequestedToSpeak = Boolean(currentStageParticipant?.request_to_speak_at);
+  const speakerRequests = useMemo(
+    () => stageAudience.filter((participant) => participant.request_to_speak_at),
+    [stageAudience],
+  );
+
+  // Demotion must be privacy-safe on the client as well as enforced by the
+  // media server. Stop every local publishing surface so a later promotion
+  // never resumes a microphone, camera, or share without an explicit action.
+  useEffect(() => {
+    if (!inSelectedVoiceChannel || !isStageAudience) return;
+    if (!selfMute) void toggleMute();
+    if (selfVideo) void toggleVideo();
+    if (selfStream) stopStream();
+  }, [
+    inSelectedVoiceChannel,
+    isStageAudience,
+    selfMute,
+    selfVideo,
+    selfStream,
+    toggleMute,
+    toggleVideo,
+    stopStream,
+  ]);
   const activeStreamerSet = useMemo(() => new Set(activeStreamers), [activeStreamers]);
   const ownStreamIssueMessage = selfStream ? streamAudioWarning : null;
   const watchedStreamerName = useMemo(() => {
@@ -144,7 +180,7 @@ export function VoiceStageChannel({
     };
   }, [channelId, isStage]);
 
-  const refreshStageInstance = async () => {
+  const refreshStageInstance = useCallback(async () => {
     if (!channelId || !isStage) {
       setStageInstance(null);
       return;
@@ -164,7 +200,18 @@ export function VoiceStageChannel({
       }
       setStageError(extractApiError(err));
     }
-  };
+  }, [channelId, isStage]);
+
+  useEffect(() => {
+    if (!channelId || !isStage) return;
+    const onStageChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ channel_id?: string; guild_id?: string }>).detail;
+      if (detail?.channel_id && detail.channel_id !== channelId) return;
+      void refreshStageInstance();
+    };
+    window.addEventListener('paracord:stage-instance-changed', onStageChanged);
+    return () => window.removeEventListener('paracord:stage-instance-changed', onStageChanged);
+  }, [channelId, isStage, refreshStageInstance]);
 
   const createStageInstance = async () => {
     if (!channelId || !isStage) return;
@@ -235,6 +282,36 @@ export function VoiceStageChannel({
       setStageError(extractApiError(err));
     } finally {
       setStageBusy(false);
+    }
+  };
+
+  const toggleSpeakerRequest = async () => {
+    if (!stageInstance || !isStageAudience) return;
+    setStageRequestBusy(true);
+    setStageError(null);
+    try {
+      if (hasRequestedToSpeak) {
+        await stageApi.cancelSpeakerRequest(stageInstance.id);
+      } else {
+        await stageApi.requestToSpeak(stageInstance.id);
+      }
+    } catch (err) {
+      setStageError(extractApiError(err));
+    } finally {
+      setStageRequestBusy(false);
+    }
+  };
+
+  const dismissSpeakerRequest = async (userId: string) => {
+    if (!stageInstance) return;
+    setStageRequestBusy(true);
+    setStageError(null);
+    try {
+      await stageApi.dismissSpeakerRequest(stageInstance.id, userId);
+    } catch (err) {
+      setStageError(extractApiError(err));
+    } finally {
+      setStageRequestBusy(false);
     }
   };
 
@@ -315,10 +392,7 @@ export function VoiceStageChannel({
     room.on(RoomEvent.LocalTrackPublished, recomputeActiveStreamers);
     room.on(RoomEvent.LocalTrackUnpublished, recomputeActiveStreamers);
 
-    const pollInterval = setInterval(recomputeActiveStreamers, 2000);
-
     return () => {
-      clearInterval(pollInterval);
       room.off(RoomEvent.TrackSubscribed, recomputeActiveStreamers);
       room.off(RoomEvent.TrackUnsubscribed, recomputeActiveStreamers);
       room.off(RoomEvent.TrackPublished, recomputeActiveStreamers);
@@ -488,9 +562,16 @@ export function VoiceStageChannel({
   ) : null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col relative text-text-muted">
+    <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col relative text-text-muted">
       {inSelectedVoiceChannel && (
-        <VoiceControlBar onToggleChat={() => setShowVoiceChat(!showVoiceChat)} isChatOpen={showVoiceChat} />
+        <VoiceControlBar
+          onToggleChat={() => setShowVoiceChat(!showVoiceChat)}
+          isChatOpen={showVoiceChat}
+          listenOnly={isStageAudience}
+          requestToSpeakPending={hasRequestedToSpeak}
+          requestBusy={stageRequestBusy}
+          onToggleRequestToSpeak={() => { void toggleSpeakerRequest(); }}
+        />
       )}
 
       {!inSelectedVoiceChannel && (
@@ -509,6 +590,12 @@ export function VoiceStageChannel({
             }
           }}
           onJoin={() => {
+            if (channelId && guildId) {
+              void joinChannel(channelId, guildId);
+            }
+          }}
+          onWatchStream={(userId) => {
+            setWatchedStreamer(userId);
             if (channelId && guildId) {
               void joinChannel(channelId, guildId);
             }
@@ -539,11 +626,11 @@ export function VoiceStageChannel({
         />
       )}
       {inSelectedVoiceChannel && (
-        <div className="flex min-h-0 flex-1 relative bg-black">
+        <div data-native-underlay-clear="" className="flex min-h-0 flex-1 relative bg-black">
           {/* Video Area */}
-          <div className="flex min-h-0 flex-1 flex-col relative bg-black/40 group/video">
+          <div data-native-underlay-clear="" className="flex min-h-0 flex-1 flex-col relative bg-black/40 group/video">
             {!isStage && (watchedStreamerId || videoLayout === 'side') && (
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1 rounded-md border border-border-subtle bg-bg-floating px-1.5 py-1.5 shadow-lg backdrop-blur-md opacity-0 group-hover/video:opacity-100 group-focus-within/video:opacity-100 transition-opacity">
+              <div data-native-overlay-occlude="" className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1 rounded-md border border-border-subtle bg-bg-floating px-1.5 py-1.5 shadow-lg backdrop-blur-md opacity-0 group-hover/video:opacity-100 group-focus-within/video:opacity-100 transition-opacity">
                 <span className="px-1 text-section uppercase text-text-muted">View</span>
                 <div className="mx-0.5 h-4 w-px bg-border-strong" />
                 {([
@@ -568,7 +655,7 @@ export function VoiceStageChannel({
               </div>
             )}
             {videoLayout === 'side' ? (
-              <div className="flex min-h-0 flex-1 gap-2">
+              <div data-native-underlay-clear="" className="flex min-h-0 flex-1 gap-2">
                 <SplitPane
                   source={splitState.left}
                   onSourceChange={(src) => setSplitState((prev) => ({ ...prev, left: src }))}
@@ -602,20 +689,20 @@ export function VoiceStageChannel({
               </div>
             ) : watchedStreamerId ? (
               videoLayout === 'pip' ? (
-                <div className="relative min-h-0 flex-1 overflow-hidden">
+                <div data-native-underlay-clear="" className="relative min-h-0 flex-1 overflow-hidden">
                   {streamViewerElement}
                   <div className="absolute bottom-3 right-3 z-10">
                     <VideoGrid layout="pip" />
                   </div>
                 </div>
               ) : videoLayout === 'hidden' ? (
-                <div className="min-h-0 flex-1 overflow-hidden">
+                <div data-native-underlay-clear="" className="min-h-0 flex-1 overflow-hidden">
                   {streamViewerElement}
                 </div>
               ) : (
                 <>
                   <VideoGrid layout="compact" />
-                  <div className="min-h-0 flex-1 overflow-hidden">
+                  <div data-native-underlay-clear="" className="min-h-0 flex-1 overflow-hidden">
                     {streamViewerElement}
                   </div>
                 </>
@@ -630,24 +717,102 @@ export function VoiceStageChannel({
                         {isStage ? <Mic size={20} /> : <Monitor size={20} />}
                       </div>
                       <h3 className="font-display text-heading text-text-primary">
-                        {isStage ? 'The stage is live' : 'Pick a stream to watch'}
+                        {isStage ? (stageInstance?.topic || 'The stage is live') : 'Pick a stream to watch'}
                       </h3>
-                      <p className="mt-2 max-w-prose text-body text-text-secondary">
-                        {isStage ? (
-                          <>
-                            <span className="font-semibold tabular-nums text-text-primary">{stageSpeakers.length}</span>{' '}
-                            {stageSpeakers.length === 1 ? 'speaker' : 'speakers'} on stage and{' '}
-                            <span className="font-semibold tabular-nums text-text-primary">{stageAudience.length}</span> in the
-                            audience. Their audio is already playing.
-                          </>
-                        ) : (
-                          <>
-                            Hit the{' '}
-                            <span className="font-semibold text-accent-danger">LIVE</span> badge next to anyone in
-                            the voice list to bring their screen share here.
-                          </>
-                        )}
-                      </p>
+                      {isStage ? (
+                        <>
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-meta font-semibold ${isStageAudience ? 'bg-bg-mod-subtle text-text-secondary' : 'bg-accent-tint text-accent-primary'}`}>
+                              {isStageAudience ? <Hand size={13} /> : <Mic size={13} />}
+                              {isStageAudience ? (hasRequestedToSpeak ? 'Request sent' : 'You’re listening') : 'You’re on stage'}
+                            </span>
+                            <span className="text-meta text-text-muted">
+                              {stageSpeakers.length} {stageSpeakers.length === 1 ? 'speaker' : 'speakers'} · {stageAudience.length} listening
+                            </span>
+                          </div>
+                          <p className="mt-3 max-w-prose text-body text-text-secondary">
+                            {isStageAudience
+                              ? hasRequestedToSpeak
+                                ? 'Moderators can see your request. You can keep listening or cancel it from the control bar.'
+                                : 'You joined as an audience member. Raise your hand from the control bar when you want to contribute.'
+                              : 'Your microphone, camera, and screen share controls are available while you’re on stage.'}
+                          </p>
+                          {canManageStage && speakerRequests.length > 0 && (
+                            <div className="mt-5 rounded-md border border-border-subtle bg-bg-secondary p-3.5">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-section uppercase text-text-muted">Requests to speak</div>
+                                  <p className="mt-0.5 text-meta text-text-secondary">
+                                    {speakerRequests.length} {speakerRequests.length === 1 ? 'person is' : 'people are'} waiting.
+                                  </p>
+                                </div>
+                                <span className="rounded-full bg-accent-tint px-2 py-0.5 text-meta font-semibold tabular-nums text-accent-primary">
+                                  {speakerRequests.length}
+                                </span>
+                              </div>
+                              <div className="mt-3 flex flex-col gap-1.5">
+                                {speakerRequests.map((participant) => (
+                                  <div key={participant.user_id} className="flex items-center gap-2 rounded-sm bg-bg-tertiary px-2.5 py-2">
+                                    <Hand size={15} className="shrink-0 text-accent-primary" />
+                                    <span className="min-w-0 flex-1 truncate text-label text-text-primary">{displayName(participant)}</span>
+                                    <Button
+                                      size="sm"
+                                      disabled={stageBusy || stageRequestBusy}
+                                      onClick={() => { void inviteSpeaker(participant.user_id); }}
+                                    >
+                                      <Check size={14} className="mr-1" /> Invite
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      aria-label={`Dismiss ${displayName(participant)}'s request`}
+                                      disabled={stageBusy || stageRequestBusy}
+                                      onClick={() => { void dismissSpeakerRequest(participant.user_id); }}
+                                    >
+                                      <X size={14} />
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {stageError && (
+                            <div role="alert" className="mt-4 rounded-sm border border-accent-danger/35 bg-danger-tint px-3 py-2 text-meta text-accent-danger">
+                              {stageError}
+                            </div>
+                          )}
+                        </>
+                      ) : activeStreamers.length > 0 ? (
+                        <div className="mt-4 flex flex-col gap-2">
+                          {activeStreamers.map((userId) => {
+                            const name =
+                              currentUserId != null && userId === currentUserId
+                                ? 'You'
+                                : participantNames.get(userId) ?? `User ${userId.slice(0, 6)}`;
+                            return (
+                              <button
+                                key={userId}
+                                type="button"
+                                onClick={() => setWatchedStreamer(userId)}
+                                className="flex items-center gap-3 rounded-sm border border-border-subtle bg-bg-secondary px-3 py-2.5 text-left outline-none transition-colors hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
+                              >
+                                <span className="inline-flex items-center rounded-xs bg-danger-tint px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent-danger">
+                                  Live
+                                </span>
+                                <span className="truncate text-label text-text-primary">
+                                  Watch {name}&rsquo;s stream
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="mt-2 max-w-prose text-body text-text-secondary">
+                          When someone shares their screen, they show up in this list and in the
+                          sidebar under the voice channel so you can watch with one click. You can
+                          also use the Side layout source picker.
+                        </p>
+                      )}
                       <div className="mt-4 font-code text-meta text-text-muted">
                         {!isStage && activeStreamers.length > 0
                           ? `${activeStreamers.length} stream${activeStreamers.length === 1 ? '' : 's'} live right now`

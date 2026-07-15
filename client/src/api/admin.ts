@@ -26,6 +26,25 @@ export interface FederatedServer {
   created_at: string;
 }
 
+export interface FederationPeerTrustState {
+  server_name: string;
+  mode: string;
+  reason?: string | null;
+  quarantined_until_ms?: number | null;
+  updated_at_ms: number;
+}
+
+export interface FederationModerationSubscription {
+  id: string | number;
+  source_server?: string | null;
+  source_url: string;
+  enabled: boolean;
+  last_fetch_at_ms?: number | null;
+  last_error?: string | null;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
 export const adminApi = {
   getStats: () => getApi().get<{
     total_users: number;
@@ -153,5 +172,46 @@ export const adminApi = {
   deleteFederatedServer: (serverName: string) =>
     getApi().delete(
       resolveServerRootUrl(`/_paracord/federation/v1/servers/${encodeURIComponent(serverName)}`)
+    ),
+
+  listModerationState: () =>
+    getApi().get<{ states: FederationPeerTrustState[] }>(
+      resolveServerRootUrl('/_paracord/federation/v1/moderation/state')
+    ),
+
+  applyModerationList: (data: {
+    source: string;
+    entries: Array<{
+      server_name: string;
+      action: string;
+      reason?: string;
+      quarantine_minutes?: number;
+    }>;
+  }) =>
+    getApi().post<{ source: string; applied: number }>(
+      resolveServerRootUrl('/_paracord/federation/v1/moderation/apply'),
+      data
+    ),
+
+  listModerationSubscriptions: () =>
+    getApi().get<{ subscriptions: FederationModerationSubscription[] }>(
+      resolveServerRootUrl('/_paracord/federation/v1/moderation/subscriptions')
+    ),
+
+  upsertModerationSubscription: (data: {
+    source_url: string;
+    source_server?: string;
+    enabled?: boolean;
+  }) =>
+    getApi().post(
+      resolveServerRootUrl('/_paracord/federation/v1/moderation/subscriptions'),
+      data
+    ),
+
+  deleteModerationSubscription: (subscriptionId: string) =>
+    getApi().delete(
+      resolveServerRootUrl(
+        `/_paracord/federation/v1/moderation/subscriptions/${encodeURIComponent(subscriptionId)}`
+      )
     ),
 };

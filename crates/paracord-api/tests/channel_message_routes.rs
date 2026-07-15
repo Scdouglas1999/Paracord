@@ -215,6 +215,81 @@ async fn create_guild_channel_send_message_flow_works_end_to_end() -> anyhow::Re
 }
 
 #[tokio::test]
+async fn saved_messages_round_trip_with_visibility_enforcement() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Saved Messages Guild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "research").await?;
+    let message_id = post_message(&ctx, &channel_id, "Keep this launch checklist handy").await?;
+
+    let (status, saved) = ctx
+        .request_json(
+            Method::PUT,
+            &format!("/api/v1/users/@me/saved-messages/{message_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "save failed: {saved}");
+    assert_eq!(saved["message_id"], message_id);
+
+    // Saving again is idempotent and must not duplicate the item.
+    let (status, _) = ctx
+        .request_json(
+            Method::PUT,
+            &format!("/api/v1/users/@me/saved-messages/{message_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, list) = ctx
+        .request_json(Method::GET, "/api/v1/users/@me/saved-messages", None)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "list failed: {list}");
+    assert_eq!(list["total"], 1);
+    let items = list["items"].as_array().context("saved items array")?;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["message"]["id"], message_id);
+    assert_eq!(
+        items[0]["message"]["content"],
+        "Keep this launch checklist handy"
+    );
+    assert_eq!(items[0]["channel"]["id"], channel_id);
+
+    let outsider_token = create_authenticated_user_token(
+        &ctx.db,
+        &ctx.jwt_secret,
+        "saved-outsider",
+        "OutsiderPass123!",
+    )
+    .await?;
+    let (status, _) = ctx
+        .request_json_as(
+            Method::PUT,
+            &format!("/api/v1/users/@me/saved-messages/{message_id}"),
+            None,
+            &outsider_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = ctx
+        .request_json(
+            Method::DELETE,
+            &format!("/api/v1/users/@me/saved-messages/{message_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, list) = ctx
+        .request_json(Method::GET, "/api/v1/users/@me/saved-messages", None)
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["items"], json!([]));
+    assert_eq!(list["total"], 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn channel_crud_routes_work() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let guild_id = create_guild(&ctx, "Channel CRUD Guild").await?;
@@ -402,6 +477,7 @@ async fn message_list_page_shape_with_reactions_is_stable() -> anyhow::Result<()
         let author = msg.get("author").context("author field present")?;
         assert!(author.get("id").and_then(Value::as_str).is_some());
         assert!(author.get("username").and_then(Value::as_str).is_some());
+        assert!(author.get("display_name").is_some());
         assert!(author.get("discriminator").is_some());
         assert!(author.get("bot").and_then(Value::as_bool).is_some());
         assert!(msg.get("attachments").and_then(Value::as_array).is_some());
@@ -651,6 +727,288 @@ async fn add_reaction_without_add_reactions_permission_is_forbidden() -> anyhow:
         status,
         StatusCode::FORBIDDEN,
         "member without ADD_REACTIONS must be forbidden: {payload}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn moderator_delete_respects_channel_manage_messages_overwrite() -> anyhow::Result<()> {
+    // A role that holds MANAGE_MESSAGES guild-wide but is DENIED it on a specific
+    // channel via an overwrite must not be able to delete other members' messages
+    // in that channel. Moderator-delete authority must flow through effective
+    // (overwrite-aware) permission, not base role bits.
+    use paracord_core::permissions::OVERWRITE_TARGET_ROLE;
+    use paracord_models::permissions::Permissions;
+
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Mod Delete Overwrite Guild").await?;
+    let guild_id_num = guild_id_i64(&guild_id)?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "moderated").await?;
+    let channel_id_num = channel_id.parse::<i64>()?;
+
+    // A victim posts a message the helper will try to delete.
+    let (victim_token, _victim_uid) = ctx.add_member("victim", guild_id_num).await?;
+    let (status, message) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            Some(json!({ "content": "please don't delete me" })),
+            &victim_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "post failed: {message}");
+    let message_id = message["id"]
+        .as_str()
+        .context("message id should be a string")?
+        .to_string();
+
+    // A "Helper" role grants MANAGE_MESSAGES guild-wide.
+    let helper_role_id = paracord_util::snowflake::generate(1);
+    paracord_db::roles::create_role(
+        &ctx.db,
+        helper_role_id,
+        guild_id_num,
+        "Helper",
+        Permissions::MANAGE_MESSAGES.bits(),
+    )
+    .await?;
+    let (helper_token, helper_uid) = ctx.add_member("helper", guild_id_num).await?;
+    paracord_db::roles::add_member_role(&ctx.db, helper_uid, guild_id_num, helper_role_id).await?;
+
+    // ...but this channel explicitly DENIES MANAGE_MESSAGES for the Helper role.
+    paracord_db::channel_overwrites::upsert_channel_overwrite(
+        &ctx.db,
+        channel_id_num,
+        helper_role_id,
+        OVERWRITE_TARGET_ROLE,
+        0,
+        Permissions::MANAGE_MESSAGES.bits(),
+    )
+    .await?;
+
+    // The helper must NOT be able to delete another member's message here.
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::DELETE,
+            &format!("/api/v1/channels/{channel_id}/messages/{message_id}"),
+            None,
+            &helper_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "channel overwrite denying MANAGE_MESSAGES must block moderator delete: {payload}"
+    );
+
+    // Sanity: in a channel without the deny overwrite the same helper CAN delete,
+    // proving the guild-wide grant is still effective where not overridden.
+    let other_channel_id = create_text_channel(&ctx, &guild_id, "unmoderated").await?;
+    let (status, other_message) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{other_channel_id}/messages"),
+            Some(json!({ "content": "deletable elsewhere" })),
+            &victim_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "post failed: {other_message}");
+    let other_message_id = other_message["id"]
+        .as_str()
+        .context("message id should be a string")?
+        .to_string();
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::DELETE,
+            &format!("/api/v1/channels/{other_channel_id}/messages/{other_message_id}"),
+            None,
+            &helper_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "helper with guild-wide MANAGE_MESSAGES should delete where no deny overwrite exists: {payload}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn moderator_edit_respects_channel_manage_messages_overwrite() -> anyhow::Result<()> {
+    // A role that holds MANAGE_MESSAGES guild-wide but is DENIED it on a specific
+    // channel via an overwrite must not be able to edit other members' messages in
+    // that channel. Moderator-edit authority must flow through effective
+    // (overwrite-aware) permission, not base role bits. Mirrors the delete path.
+    use paracord_core::permissions::OVERWRITE_TARGET_ROLE;
+    use paracord_models::permissions::Permissions;
+
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Mod Edit Overwrite Guild").await?;
+    let guild_id_num = guild_id_i64(&guild_id)?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "moderated").await?;
+    let channel_id_num = channel_id.parse::<i64>()?;
+
+    // A victim posts a message the helper will try to edit.
+    let (victim_token, _victim_uid) = ctx.add_member("victim", guild_id_num).await?;
+    let (status, message) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            Some(json!({ "content": "please don't edit me" })),
+            &victim_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "post failed: {message}");
+    let message_id = message["id"]
+        .as_str()
+        .context("message id should be a string")?
+        .to_string();
+
+    // A "Helper" role grants MANAGE_MESSAGES guild-wide.
+    let helper_role_id = paracord_util::snowflake::generate(1);
+    paracord_db::roles::create_role(
+        &ctx.db,
+        helper_role_id,
+        guild_id_num,
+        "Helper",
+        Permissions::MANAGE_MESSAGES.bits(),
+    )
+    .await?;
+    let (helper_token, helper_uid) = ctx.add_member("helper", guild_id_num).await?;
+    paracord_db::roles::add_member_role(&ctx.db, helper_uid, guild_id_num, helper_role_id).await?;
+
+    // ...but this channel explicitly DENIES MANAGE_MESSAGES for the Helper role.
+    paracord_db::channel_overwrites::upsert_channel_overwrite(
+        &ctx.db,
+        channel_id_num,
+        helper_role_id,
+        OVERWRITE_TARGET_ROLE,
+        0,
+        Permissions::MANAGE_MESSAGES.bits(),
+    )
+    .await?;
+
+    // The helper must NOT be able to edit another member's message here.
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::PATCH,
+            &format!("/api/v1/channels/{channel_id}/messages/{message_id}"),
+            Some(json!({ "content": "edited by helper" })),
+            &helper_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "channel overwrite denying MANAGE_MESSAGES must block moderator edit: {payload}"
+    );
+
+    // The author can still edit their own message in the same channel, proving the
+    // overwrite only gates the moderator (non-author) path.
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::PATCH,
+            &format!("/api/v1/channels/{channel_id}/messages/{message_id}"),
+            Some(json!({ "content": "edited by author" })),
+            &victim_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "author must always be able to edit their own message: {payload}"
+    );
+
+    // Sanity: in a channel without the deny overwrite the same helper CAN edit,
+    // proving the guild-wide grant is still effective where not overridden.
+    let other_channel_id = create_text_channel(&ctx, &guild_id, "unmoderated").await?;
+    let (status, other_message) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{other_channel_id}/messages"),
+            Some(json!({ "content": "editable elsewhere" })),
+            &victim_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "post failed: {other_message}");
+    let other_message_id = other_message["id"]
+        .as_str()
+        .context("message id should be a string")?
+        .to_string();
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::PATCH,
+            &format!("/api/v1/channels/{other_channel_id}/messages/{other_message_id}"),
+            Some(json!({ "content": "edited by helper elsewhere" })),
+            &helper_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "helper with guild-wide MANAGE_MESSAGES should edit where no deny overwrite exists: {payload}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cross_channel_reaction_write_is_rejected() -> anyhow::Result<()> {
+    // A reaction PUT/DELETE whose path channel_id does not own the target
+    // message must be rejected with NotFound, even when the caller has full
+    // permissions on the path channel. Guards against cross-channel IDOR writes.
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Cross Channel Reaction Guild").await?;
+    let visible_channel_id = create_text_channel(&ctx, &guild_id, "visible").await?;
+    let other_channel_id = create_text_channel(&ctx, &guild_id, "other").await?;
+
+    // Post a message in the OTHER channel.
+    let (status, message) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/channels/{other_channel_id}/messages"),
+            Some(json!({ "content": "in other channel" })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED);
+    let message_id = message["id"]
+        .as_str()
+        .context("message id should be a string")?
+        .to_string();
+
+    // Try to add a reaction via the VISIBLE channel path against the message
+    // that lives in the OTHER channel.
+    let (status, payload) = ctx
+        .request_json(
+            Method::PUT,
+            &format!(
+                "/api/v1/channels/{visible_channel_id}/messages/{message_id}/reactions/thumbsup/@me"
+            ),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "cross-channel reaction add must be rejected: {payload}"
+    );
+
+    // Same for removal.
+    let (status, payload) = ctx
+        .request_json(
+            Method::DELETE,
+            &format!(
+                "/api/v1/channels/{visible_channel_id}/messages/{message_id}/reactions/thumbsup/@me"
+            ),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "cross-channel reaction remove must be rejected: {payload}"
     );
 
     Ok(())
@@ -1002,6 +1360,36 @@ async fn bulk_delete_enforces_bounds_and_permission() -> anyhow::Result<()> {
     assert!(ids.contains(&m3.as_str()), "unrelated message must survive");
     assert!(!ids.contains(&m1.as_str()));
     assert!(!ids.contains(&m2.as_str()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn text_channel_search_returns_matching_messages() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Text Search Guild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "search-chat").await?;
+
+    let matching_id = post_message(&ctx, &channel_id, "needle in a normal text channel").await?;
+    let _other_id = post_message(&ctx, &channel_id, "hay in the same channel").await?;
+
+    let (status, results) = ctx
+        .request_json(
+            Method::GET,
+            &format!("/api/v1/channels/{channel_id}/messages/search?q=needle"),
+            None,
+        )
+        .await?;
+
+    assert_eq!(status, StatusCode::OK, "text search failed: {results}");
+    let list = results
+        .as_array()
+        .context("search results should be an array")?;
+    assert!(
+        list.iter()
+            .any(|m| m.get("id").and_then(Value::as_str) == Some(matching_id.as_str())),
+        "text search should include the matching message: {results}"
+    );
 
     Ok(())
 }

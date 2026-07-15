@@ -2,44 +2,8 @@ import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
-import { useVoiceStore } from '../stores/voiceStore';
 import { useUIStore } from '../stores/uiStore';
-import { useAuthStore } from '../stores/authStore';
-import { toggleVoiceMute, toggleVoiceDeaf } from './useVoice';
 import { isTauri } from '../lib/tauriEnv';
-
-const DEFAULT_KEYBINDS: Record<string, string> = {
-  toggleMute: 'Ctrl+Shift+M',
-  toggleDeafen: 'Ctrl+Shift+D',
-};
-
-/**
- * Parse a keybind string like "Ctrl+Shift+M" and check if a KeyboardEvent
- * matches it.
- */
-function matchesKeybind(e: KeyboardEvent, keybind: string | undefined): boolean {
-  if (!keybind || keybind === 'Not set') return false;
-
-  const parts = keybind.split('+').map((p) => p.trim());
-  const requireCtrl = parts.includes('Ctrl');
-  const requireShift = parts.includes('Shift');
-  const requireAlt = parts.includes('Alt');
-  const requireMeta = parts.includes('Meta');
-  const key = parts.filter(
-    (p) => !['Ctrl', 'Shift', 'Alt', 'Meta'].includes(p),
-  )[0];
-
-  if (!key) return false;
-
-  if (e.ctrlKey !== requireCtrl) return false;
-  if (e.shiftKey !== requireShift) return false;
-  if (e.altKey !== requireAlt) return false;
-  if (e.metaKey !== requireMeta) return false;
-
-  // Compare key case-insensitively for single chars
-  const eventKey = e.key.length === 1 ? e.key.toUpperCase() : e.key;
-  return eventKey === key;
-}
 
 /**
  * Global keyboard shortcuts for the app shell:
@@ -47,10 +11,12 @@ function matchesKeybind(e: KeyboardEvent, keybind: string | undefined): boolean 
  * - Ctrl+Alt+Up / Ctrl+Alt+Down: switch previous/next guild
  * - Ctrl+, : open user settings
  * - Ctrl+Shift+, : open current guild settings
+ * - Mod+F: open channel message search (ContextPanel search mode)
  * - Ctrl+B: toggle Unified Sidebar collapse
  * - ArrowUp/Down + Home/End: roving-tabindex nav within the sidebar row list
  * - Escape: Command Palette → ContextPanel → narrow sidebar overlay (§5 precedence)
- * - Configurable voice keybinds (default: Ctrl+Shift+M = mute, Ctrl+Shift+D = deafen)
+ *
+ * Mute/deafen keybinds are owned by useVoiceKeybinds (not duplicated here).
  */
 export function useKeyboardNavigation() {
   const navigate = useNavigate();
@@ -58,9 +24,8 @@ export function useKeyboardNavigation() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Block browser shortcuts in Tauri desktop app
+      // Block browser shortcuts in Tauri desktop app (except Mod+F → search below)
       if (isTauri()) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'f' && !e.shiftKey) { e.preventDefault(); return; }
         if ((e.ctrlKey || e.metaKey) && e.key === 'p') { e.preventDefault(); return; }
         if ((e.ctrlKey || e.metaKey) && e.key === 'r') { e.preventDefault(); return; }
         if (e.key === 'F12') { e.preventDefault(); return; }
@@ -88,6 +53,15 @@ export function useKeyboardNavigation() {
           e.preventDefault();
           return;
         }
+        // Modal dialogs and transient menus own the top layer of the Escape
+        // stack. Their own handler closes exactly that surface; do not also
+        // collapse the ContextPanel behind it on the same keypress.
+        if (
+          typeof document !== 'undefined'
+          && document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]')
+        ) {
+          return;
+        }
         if (ui.contextPanelMode !== null) {
           ui.setContextPanelMode(null);
           e.preventDefault();
@@ -104,6 +78,18 @@ export function useKeyboardNavigation() {
         }
         // Don't override escape in UserSettings (it has its own handler)
         return;
+      }
+
+      // -- Mod+F: open channel message search --
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+        if (!isEditing) {
+          e.preventDefault();
+          const channelId = useChannelStore.getState().selectedChannelId;
+          if (channelId) {
+            useUIStore.getState().setContextPanelMode('search');
+          }
+          return;
+        }
       }
 
       // -- Ctrl+B: toggle sidebar collapse (layout-spec §5) --
@@ -221,30 +207,8 @@ export function useKeyboardNavigation() {
         return;
       }
 
-      // Read user-configured keybinds (fall back to defaults)
-      const settings = useAuthStore.getState().settings;
-      const keybinds: Record<string, string> = {
-        ...DEFAULT_KEYBINDS,
-        ...((settings?.keybinds as Record<string, string> | undefined) || {}),
-      };
-
-      // -- Toggle mute (configurable) --
-      if (matchesKeybind(e, keybinds.toggleMute)) {
-        e.preventDefault();
-        if (useVoiceStore.getState().connected) {
-          void toggleVoiceMute();
-        }
-        return;
-      }
-
-      // -- Toggle deafen (configurable) --
-      if (matchesKeybind(e, keybinds.toggleDeafen)) {
-        e.preventDefault();
-        if (useVoiceStore.getState().connected) {
-          void toggleVoiceDeaf();
-        }
-        return;
-      }
+      // Mute/deafen keybinds live exclusively in useVoiceKeybinds so a single
+      // handler owns them (avoids double-toggle when both hooks are mounted).
     };
 
     window.addEventListener('keydown', handler);

@@ -52,11 +52,11 @@ describe('EmojiPicker server emojis', () => {
 
     render(<EmojiPicker guildId="g1" onSelect={onSelect} onClose={onClose} />);
 
-    fireEvent.click(screen.getByText('Server Emojis'));
+    fireEvent.click(screen.getByText('Space Emojis'));
     expect(await screen.findByRole('button', { name: /party_parrot/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /ship_it/ })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText('Search server emojis...'), {
+    fireEvent.change(screen.getByPlaceholderText('Search space emojis...'), {
       target: { value: 'party' },
     });
 
@@ -92,8 +92,25 @@ describe('EmojiPicker server emojis', () => {
 
     await waitFor(() => expect(listGuild).toHaveBeenCalledTimes(2));
 
-    fireEvent.click(screen.getByText('Server Emojis'));
+    fireEvent.click(screen.getByText('Space Emojis'));
 
     expect(await screen.findByRole('button', { name: /new_static/ })).toBeInTheDocument();
+  });
+
+  it('closes on Escape and on outside click in inline mode', () => {
+    const onClose = vi.fn();
+    listGuild.mockResolvedValue(emojiResponse([]));
+    render(
+      <div>
+        <button type="button">Outside</button>
+        <EmojiPicker guildId="g1" onSelect={vi.fn()} onClose={onClose} />
+      </div>,
+    );
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Outside' }));
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 });

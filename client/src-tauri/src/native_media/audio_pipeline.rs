@@ -1,22 +1,39 @@
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration as StdDuration, Instant};
 
 use bytes::{BufMut, BytesMut};
+use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 
 use paracord_codec::audio::jitter::JitterBuffer;
 use paracord_codec::audio::opus::{OpusDecoder, FRAME_SIZE};
-use paracord_transport::protocol::{MediaHeader, TrackType, HEADER_SIZE};
+use paracord_transport::protocol::{MediaHeader, TrackType, HEADER_SIZE, MAX_STREAM_FRAME_SIZE};
 
 use super::session::{NativeMediaSession, RemoteAudioState};
 
 const VOICE_BITRATE_BPS: i32 = 96_000;
-const STREAM_BITRATE_BPS: i32 = 192_000;
+/// How long an audio SSRC may go without a datagram before the playout loop
+/// reaps its decoder/jitter state so it stops burning PLC decodes at 50Hz (AU9).
+const SOURCE_INACTIVITY_REAP: StdDuration = StdDuration::from_secs(5);
+/// Cadence for pushing the receive-side measured loss rate into the voice
+/// encoder's FEC tuning (AU5).
+const LOSS_FEEDBACK_INTERVAL: StdDuration = StdDuration::from_secs(1);
+/// Upper clamp for the encoder packet-loss percentage fed from measured loss.
+const MAX_ENCODER_LOSS_PERC: u8 = 20;
 
 pub struct StreamRemoteAudioState {
+    /// Which participant published this screen-audio track. Retained for
+    /// diagnostics/routing context; the mixer keys purely on SSRC.
+    #[allow(dead_code)]
     pub publisher_user_id: i64,
     pub decoder: OpusDecoder,
     pub jitter_buffer: JitterBuffer<Vec<u8>>,
+    /// Native cpal mixer sink for this stream's decoded stereo audio (C4/AU4).
+    pub playback_tx: mpsc::Sender<Vec<f32>>,
+    /// Last datagram-arrival instant, for the inactivity reaper (AU9).
+    pub last_packet: Instant,
+    /// Set once a real (non-PLC) packet has decoded; gates PLC (AU9).
+    pub has_played: bool,
 }
 
 fn stream_audio_publisher_for_ssrc(
@@ -48,6 +65,14 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
     let conn_inner = session.connection.inner().clone();
     let current_key_epoch = session.current_key_epoch.clone();
     let frame_encryptor = session.frame_encryptor.clone();
+    let noise_suppression_enabled = session.noise_suppression_enabled.clone();
+    let remote_audio = session.remote_audio.clone();
+    // AEC/AGC (contract AEC4): the far-end reference is the native mixer's
+    // rendered output, tapped in the audio actor; the enables live there too so
+    // the toggle commands can reach them.
+    let mut reference_consumer = session.audio_actor.reference_consumer();
+    let echo_cancellation_enabled = session.audio_actor.echo_cancellation_flag();
+    let agc_enabled = session.audio_actor.agc_flag();
 
     let handle = tokio::spawn(async move {
         // Per-task codec instances (avoids borrowing from session across await)
@@ -58,9 +83,15 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                 return;
             }
         };
+        // Bitrate is fixed for the voice track; set it once rather than per frame.
+        if let Err(e) = opus_encoder.set_bitrate(VOICE_BITRATE_BPS) {
+            tracing::warn!("opus bitrate init failed: {e}");
+        }
+        let mut echo_canceller = paracord_codec::audio::aec::EchoCanceller::new();
         let mut noise_suppressor = paracord_codec::audio::noise::NoiseSuppressor::new();
         let mut seq: u16 = 0;
         let mut timestamp: u32 = 0;
+        let mut last_loss_update = Instant::now();
 
         loop {
             tokio::select! {
@@ -68,16 +99,46 @@ pub fn spawn_audio_send_task(session: &mut NativeMediaSession) {
                 frame = pcm_rx.recv() => {
                     let Some(pcm) = frame else { break };
 
+                    // Always drain the far-end reference so it stays time-aligned
+                    // with live playback across mute gaps (keeps the ring fresh).
+                    let reference = reference_consumer.next_frame(FRAME_SIZE);
+
                     let mic_muted = muted.load(Ordering::SeqCst);
                     if mic_muted {
                         continue;
                     }
 
-                    if let Err(e) = opus_encoder.set_bitrate(VOICE_BITRATE_BPS) {
-                        tracing::warn!("opus bitrate update failed: {e}");
+                    // Periodically retune FEC to the measured receive-side loss as
+                    // a network-quality proxy (AU5), clamped to a sane ceiling.
+                    if last_loss_update.elapsed() >= LOSS_FEEDBACK_INTERVAL {
+                        last_loss_update = Instant::now();
+                        let loss_pct = {
+                            let remote = remote_audio.lock().await;
+                            let mut worst = 0.0f64;
+                            for state in remote.values() {
+                                worst = worst.max(state.jitter_buffer.stats().loss_rate);
+                            }
+                            (worst * 100.0).round() as u8
+                        };
+                        let clamped = loss_pct.min(MAX_ENCODER_LOSS_PERC);
+                        if let Err(e) = opus_encoder.set_packet_loss_perc(clamped) {
+                            tracing::warn!("opus packet-loss tuning failed: {e}");
+                        }
                     }
 
-                    let mixed = noise_suppressor.process_frame(&pcm);
+                    // Pipeline (contract AEC4): capture -> AEC -> AGC -> RNNoise
+                    // -> Opus. The echo canceller runs on the raw mic (before
+                    // RNNoise, which would distort the echo path); AGC is applied
+                    // inside `process`, then RNNoise, then Opus.
+                    echo_canceller
+                        .set_echo_cancellation(echo_cancellation_enabled.load(Ordering::SeqCst));
+                    echo_canceller.set_agc(agc_enabled.load(Ordering::SeqCst));
+                    let cleaned = echo_canceller.process(&pcm, &reference);
+
+                    // Runtime noise-suppression toggle (AU13).
+                    noise_suppressor
+                        .set_enabled(noise_suppression_enabled.load(Ordering::SeqCst));
+                    let mixed = noise_suppressor.process_frame(&cleaned);
 
                     // Compute audio level (RMS → dBov approximation)
                     let audio_level = compute_audio_level(&mixed);
@@ -167,14 +228,15 @@ pub fn spawn_screen_audio_send_task(session: &mut NativeMediaSession) {
     let track_sender_keys = session.track_sender_keys.clone();
 
     let handle = tokio::spawn(async move {
-        let mut opus_encoder = match paracord_codec::audio::opus::OpusEncoder::new() {
+        // Stereo screen-audio encoder (contract C4): 48kHz stereo, Audio
+        // application, 192kbps, DTX off. Frames are 1920 interleaved f32.
+        let mut opus_encoder = match paracord_codec::audio::opus::OpusEncoder::new_stream_audio() {
             Ok(e) => e,
             Err(e) => {
                 tracing::error!("screen audio send task: opus encoder init failed: {e}");
                 return;
             }
         };
-        let _ = opus_encoder.set_bitrate(STREAM_BITRATE_BPS);
         let mut seq: u16 = 0;
         let mut timestamp: u32 = 0;
 
@@ -302,13 +364,17 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                             Ok(decryptor) => decryptor,
                             Err(_) => continue,
                         };
-                        match decryptor.decrypt(
+                        let result = decryptor.decrypt(
                             &header_bytes,
                             header.ssrc,
                             header.key_epoch,
                             header.sequence,
                             payload,
-                        ) {
+                        );
+                        // N11 (AU12): make a run of decrypt failures loud rather
+                        // than manifesting as silently-missing media.
+                        super::events::note_decrypt_result(&app, header.ssrc, result.is_ok());
+                        match result {
                             Ok(data) => data,
                             Err(_) => continue,
                         }
@@ -320,12 +386,13 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                                 continue;
                             }
                             let arrival_ms = start_time.elapsed().as_millis() as u64;
-                            let stream_publisher = {
-                                let registry = stream_registry.lock().await;
-                                stream_audio_publisher_for_ssrc(&registry, header.ssrc)
-                            };
 
-                            if let Some(publisher_user_id) = stream_publisher {
+                            // Established-source fast paths (AU12). Both state
+                            // maps are keyed by SSRC, so an already-known source
+                            // routes without touching the stream registry; only a
+                            // brand-new SSRC consults the registry (once, below)
+                            // to learn whether it is a screen-audio or voice track.
+                            {
                                 let mut stream_audio = stream_remote_audio.lock().await;
                                 if let Some(state) = stream_audio.get_mut(&header.ssrc) {
                                     state.jitter_buffer.insert(
@@ -334,11 +401,35 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                                         decrypted,
                                         arrival_ms,
                                     );
+                                    state.last_packet = Instant::now();
                                     continue;
                                 }
-                                drop(stream_audio);
+                            }
+                            {
+                                let mut remote = remote_audio.lock().await;
+                                if let Some(state) = remote.get_mut(&header.ssrc) {
+                                    state.jitter_buffer.insert(
+                                        header.sequence,
+                                        header.timestamp,
+                                        decrypted,
+                                        arrival_ms,
+                                    );
+                                    state.audio_level = header.audio_level;
+                                    state.last_packet = Instant::now();
+                                    continue;
+                                }
+                            }
 
-                                let decoder = match OpusDecoder::new() {
+                            // New SSRC: resolve its role from the registry once.
+                            let stream_publisher = {
+                                let registry = stream_registry.lock().await;
+                                stream_audio_publisher_for_ssrc(&registry, header.ssrc)
+                            };
+
+                            if let Some(publisher_user_id) = stream_publisher {
+                                // Stereo decoder: the screen-audio track is 48kHz
+                                // stereo end-to-end (contract C4).
+                                let decoder = match OpusDecoder::new_stereo() {
                                     Ok(decoder) => decoder,
                                     Err(e) => {
                                         tracing::warn!(
@@ -348,10 +439,28 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                                         continue;
                                     }
                                 };
+                                // Decoded stereo plays through the native cpal
+                                // mixer, not the webview (contract C4/AU4).
+                                let playback_tx = match audio_actor
+                                    .add_stream_playback_source(header.ssrc)
+                                    .await
+                                {
+                                    Some(tx) => tx,
+                                    None => {
+                                        tracing::warn!(
+                                            ssrc = header.ssrc,
+                                            "audio playback unavailable; dropping stream audio source"
+                                        );
+                                        continue;
+                                    }
+                                };
                                 let mut state = StreamRemoteAudioState {
                                     publisher_user_id,
                                     decoder,
                                     jitter_buffer: JitterBuffer::new(),
+                                    playback_tx,
+                                    last_packet: Instant::now(),
+                                    has_played: false,
                                 };
                                 state.jitter_buffer.insert(
                                     header.sequence,
@@ -366,23 +475,8 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                                 continue;
                             }
 
-                            // Fast path: SSRC already has decode/playout state.
-                            {
-                                let mut remote = remote_audio.lock().await;
-                                if let Some(state) = remote.get_mut(&header.ssrc) {
-                                    state.jitter_buffer.insert(
-                                        header.sequence,
-                                        header.timestamp,
-                                        decrypted,
-                                        arrival_ms,
-                                    );
-                                    state.audio_level = header.audio_level;
-                                    continue;
-                                }
-                            }
-
-                            // Slow path: first datagram from a new remote SSRC.
-                            // Lazily build its decoder + playout source. The
+                            // Voice slow path: first datagram from a new voice
+                            // SSRC. Lazily build its decoder + playout source. The
                             // `remote_audio` guard is intentionally not held
                             // across the `audio_actor` await because `OpusDecoder`
                             // is not `Sync` and would make the task future
@@ -415,6 +509,8 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                                 jitter_buffer: JitterBuffer::new(),
                                 playback_tx,
                                 audio_level: header.audio_level,
+                                last_packet: Instant::now(),
+                                has_played: false,
                             };
                             state.jitter_buffer.insert(
                                 header.sequence,
@@ -429,6 +525,7 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
                                 &header,
                                 &decrypted,
                                 &app,
+                                &conn_inner,
                             );
                         }
                     }
@@ -440,66 +537,181 @@ pub fn spawn_datagram_recv_task(session: &mut NativeMediaSession, app: tauri::Ap
     session.datagram_recv_task = Some(handle);
 }
 
-/// Spawn the playout task: 20ms timer → pull from jitter buffers → Opus decode → send to playback mixer.
-pub fn spawn_playout_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
+/// Spawn the uni-stream receive task: QUIC unidirectional stream (one whole
+/// keyframe or large frame) → read to FIN → hand to the video pipeline, which
+/// decrypts the single AEAD unit and feeds it into the same per-track
+/// reorder/decode pipeline as the datagram delta path (keyed by frame_id).
+pub fn spawn_uni_stream_recv_task(session: &mut NativeMediaSession, app: tauri::AppHandle) {
+    let shutdown = session.shutdown.clone();
+    let conn_inner = session.connection.inner().clone();
+    let frame_decryptor = session.frame_decryptor.clone();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            let recv = tokio::select! {
+                _ = shutdown.notified() => break,
+                result = conn_inner.accept_uni() => match result {
+                    Ok(recv) => recv,
+                    Err(_) => break,
+                }
+            };
+
+            // One read+dispatch task per stream so a large or slow keyframe never
+            // blocks accepting a newer one; the video pipeline then culls the
+            // stale keyframe by frame_id (L1 stale-stream backpressure).
+            let app = app.clone();
+            let frame_decryptor = frame_decryptor.clone();
+            let conn = conn_inner.clone();
+            tokio::spawn(async move {
+                let mut recv = recv;
+                match recv.read_to_end(MAX_STREAM_FRAME_SIZE).await {
+                    Ok(body) => {
+                        super::video_pipeline::handle_video_stream_frame(
+                            &body,
+                            &frame_decryptor,
+                            &app,
+                            &conn,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::debug!("keyframe uni-stream read failed: {e}");
+                    }
+                }
+            });
+        }
+    });
+
+    session.uni_stream_recv_task = Some(handle);
+}
+
+/// Pull one 20ms frame from a jitter buffer and decode it, recovering losses.
+///
+/// On a present packet: decode normally. On a gap (AU5): if the following packet
+/// has already arrived, reconstruct the lost frame from its Opus in-band FEC;
+/// otherwise emit PLC — but only once the source has actually played a real
+/// packet (AU9), so a brand-new/idle source never emits concealment noise.
+/// Returns `None` when nothing should be played this tick.
+fn pull_and_decode(
+    jitter: &mut JitterBuffer<Vec<u8>>,
+    decoder: &mut OpusDecoder,
+    has_played: &mut bool,
+) -> Option<Vec<f32>> {
+    match jitter.pull() {
+        Some(opus_bytes) => {
+            *has_played = true;
+            match decoder.decode(&opus_bytes) {
+                Ok(samples) => Some(samples),
+                Err(_) => decoder.decode_plc().ok(),
+            }
+        }
+        None => {
+            // Try FEC recovery from the next buffered packet before PLC.
+            if let Some(next) = jitter.peek_next_payload() {
+                if let Ok(samples) = decoder.decode_fec(next) {
+                    *has_played = true;
+                    return Some(samples);
+                }
+            }
+            if *has_played {
+                decoder.decode_plc().ok()
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Spawn the playout task: 20ms timer → pull from jitter buffers → Opus decode →
+/// send to the native cpal mixer (voice mono, stream stereo). Also runs the
+/// undeafen resync (AU6) and the idle-source reaper (AU9).
+pub fn spawn_playout_task(session: &mut NativeMediaSession) {
     let shutdown = session.shutdown.clone();
     let deafened = session.deafened.clone();
     let remote_audio = session.remote_audio.clone();
     let stream_remote_audio = session.stream_remote_audio.clone();
+    let audio_actor = session.audio_actor.clone();
 
     let handle = tokio::spawn(async move {
         let mut tick = interval(Duration::from_millis(20));
+        let mut was_deafened = false;
 
         loop {
             tokio::select! {
                 _ = shutdown.notified() => break,
                 _ = tick.tick() => {
-                    if deafened.load(Ordering::SeqCst) {
+                    let now_deafened = deafened.load(Ordering::SeqCst);
+
+                    // Undeafen resync (AU6): packets were dropped pre-insertion
+                    // while deafened, so every jitter buffer's `next_seq` is now
+                    // stale. Reset them so they re-lock onto the live stream
+                    // instead of draining silence for the whole deafen window.
+                    if was_deafened && !now_deafened {
+                        for state in remote_audio.lock().await.values_mut() {
+                            state.jitter_buffer.reset();
+                            state.has_played = false;
+                        }
+                        for state in stream_remote_audio.lock().await.values_mut() {
+                            state.jitter_buffer.reset();
+                            state.has_played = false;
+                        }
+                    }
+                    was_deafened = now_deafened;
+
+                    if now_deafened {
                         continue;
                     }
 
-                    let mut remote = remote_audio.lock().await;
-                    for (_ssrc, state) in remote.iter_mut() {
-                        let pcm = match state.jitter_buffer.pull() {
-                            Some(opus_bytes) => {
-                                match state.decoder.decode(&opus_bytes) {
-                                    Ok(samples) => samples,
-                                    Err(_) => state.decoder.decode_plc().unwrap_or_default(),
+                    // Voice sources (mono).
+                    let mut reap: Vec<u32> = Vec::new();
+                    {
+                        let mut remote = remote_audio.lock().await;
+                        for (ssrc, state) in remote.iter_mut() {
+                            if state.last_packet.elapsed() > SOURCE_INACTIVITY_REAP {
+                                reap.push(*ssrc);
+                                continue;
+                            }
+                            if let Some(pcm) = pull_and_decode(
+                                &mut state.jitter_buffer,
+                                &mut state.decoder,
+                                &mut state.has_played,
+                            ) {
+                                if !pcm.is_empty() {
+                                    let _ = state.playback_tx.try_send(pcm);
                                 }
                             }
-                            None => {
-                                state.decoder.decode_plc().unwrap_or_default()
-                            }
-                        };
-
-                        if !pcm.is_empty() {
-                            let _ = state.playback_tx.try_send(pcm);
+                        }
+                        for ssrc in &reap {
+                            remote.remove(ssrc);
                         }
                     }
-                    drop(remote);
+                    for ssrc in reap.drain(..) {
+                        audio_actor.remove_playback_source(ssrc).await;
+                    }
 
-                    let mut stream_audio = stream_remote_audio.lock().await;
-                    for (_ssrc, state) in stream_audio.iter_mut() {
-                        let pcm = match state.jitter_buffer.pull() {
-                            Some(opus_bytes) => {
-                                match state.decoder.decode(&opus_bytes) {
-                                    Ok(samples) => samples,
-                                    Err(_) => state.decoder.decode_plc().unwrap_or_default(),
+                    // Stream / system-audio sources (stereo → cpal mixer, AU4).
+                    {
+                        let mut stream_audio = stream_remote_audio.lock().await;
+                        for (ssrc, state) in stream_audio.iter_mut() {
+                            if state.last_packet.elapsed() > SOURCE_INACTIVITY_REAP {
+                                reap.push(*ssrc);
+                                continue;
+                            }
+                            if let Some(pcm) = pull_and_decode(
+                                &mut state.jitter_buffer,
+                                &mut state.decoder,
+                                &mut state.has_played,
+                            ) {
+                                if !pcm.is_empty() {
+                                    let _ = state.playback_tx.try_send(pcm);
                                 }
                             }
-                            None => state.decoder.decode_plc().unwrap_or_default(),
-                        };
-                        if pcm.is_empty() {
-                            continue;
                         }
-                        use tauri::Emitter;
-                        let _ = app.emit(
-                            "media_stream_audio_pcm",
-                            serde_json::json!({
-                                "userId": state.publisher_user_id.to_string(),
-                                "samples": pcm,
-                            }),
-                        );
+                        for ssrc in &reap {
+                            stream_audio.remove(ssrc);
+                        }
+                    }
+                    for ssrc in reap.drain(..) {
+                        audio_actor.remove_playback_source(ssrc).await;
                     }
                 }
             }

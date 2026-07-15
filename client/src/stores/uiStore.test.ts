@@ -129,14 +129,14 @@ describe('uiStore', () => {
     expect(useUIStore.getState().sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
   });
 
-  it('persists contextPanelMode, sidebarWidth and sidebarCollapsed', () => {
+  it('persists sidebar geometry but not transient contextPanelMode', () => {
     useUIStore.getState().setContextPanelMode('members');
     useUIStore.getState().setSidebarWidth(360);
     useUIStore.getState().setSidebarCollapsed(true);
     const raw = localStorage.getItem('ui-storage');
     expect(raw).toBeTruthy();
     const persisted = JSON.parse(raw as string).state;
-    expect(persisted.contextPanelMode).toBe('members');
+    expect(persisted.contextPanelMode).toBeUndefined();
     expect(persisted.sidebarWidth).toBe(360);
     expect(persisted.sidebarCollapsed).toBe(true);
   });

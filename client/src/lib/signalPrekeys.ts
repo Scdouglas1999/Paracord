@@ -6,6 +6,7 @@ import {
   savePrekeyStore,
   generatePrekeyBundle,
   generateAdditionalOPKs,
+  ensureLocalLastResortPrekey,
 } from './crypto/sessionManager';
 import { OPK_LOW_THRESHOLD, OPK_BATCH_SIZE, SIGNED_PREKEY_ROTATION_MS } from './crypto/types';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
@@ -18,7 +19,8 @@ import { ed25519, x25519 } from '@noble/curves/ed25519.js';
  * 2. Checks server-side OPK count
  * 3. Uploads signed prekey if not yet uploaded
  * 4. Generates + uploads more OPKs if below threshold
- * 5. Rotates signed prekey if older than 7 days
+ * 5. Uploads last-resort prekey if missing on server
+ * 6. Rotates signed prekey if older than 7 days
  */
 export async function ensurePrekeysUploaded(): Promise<void> {
   await withUnlockedPrivateKey(async (privateKey) => {
@@ -29,7 +31,7 @@ export async function ensurePrekeysUploaded(): Promise<void> {
       store = generatePrekeyBundle(privateKey);
       await savePrekeyStore(store);
 
-      // Upload everything
+      // Upload everything including last-resort
       const spkSig = ed25519.sign(store.signedPrekey.publicKey, privateKey);
       await keysApi.uploadKeys({
         signed_prekey: {
@@ -41,8 +43,20 @@ export async function ensurePrekeysUploaded(): Promise<void> {
           id: k.id,
           public_key: toBase64(k.publicKey),
         })),
+        last_resort_prekey: store.lastResortPrekey
+          ? {
+              id: store.lastResortPrekey.id,
+              public_key: toBase64(store.lastResortPrekey.publicKey),
+            }
+          : undefined,
       });
       return;
+    }
+
+    // Migrate stores created before last-resort support
+    if (!store.lastResortPrekey) {
+      store = ensureLocalLastResortPrekey(store);
+      await savePrekeyStore(store);
     }
 
     // Check server-side key counts
@@ -95,6 +109,16 @@ export async function ensurePrekeysUploaded(): Promise<void> {
           })),
         });
       }
+    }
+
+    // Upload last-resort if the server does not have one yet
+    if (!counts.last_resort_prekey_uploaded && store.lastResortPrekey) {
+      await keysApi.uploadKeys({
+        last_resort_prekey: {
+          id: store.lastResortPrekey.id,
+          public_key: toBase64(store.lastResortPrekey.publicKey),
+        },
+      });
     }
   });
 }

@@ -174,7 +174,7 @@ describe('DeveloperPage metrics', () => {
     await user.click(screen.getByRole('button', { name: 'Regen Token' }));
     expect(await screen.findByText('regenerated-token')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    await user.click(screen.getByRole('button', { name: 'Copy bot token' }));
 
     await waitFor(() => {
       expect(writeClipboardText).toHaveBeenCalledWith('regenerated-token');

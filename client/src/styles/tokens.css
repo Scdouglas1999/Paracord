@@ -111,7 +111,8 @@
   --spacing-header-height: 3.5rem;
   --spacing-sidebar-width: 5rem;
   --spacing-channel-sidebar-width: 18rem;
-  --spacing-member-list-width: 15.75rem;
+  /* Context surfaces scale with the window instead of claiming a fixed rail. */
+  --spacing-member-list-width: clamp(14rem, 24vw, 20rem);
   --sidebar-item-size: 3.25rem;
 
   /* ---- Type: Tailwind-mirrored raw sizes (keep for parity with text-*) ------ */
@@ -226,7 +227,7 @@
   :root {
     --spacing-sidebar-width: 4.5rem;
     --spacing-channel-sidebar-width: 15.5rem;
-    --spacing-member-list-width: 14rem;
+    --spacing-member-list-width: 88vw;
     --sidebar-item-size: 2.75rem;
   }
 
@@ -243,7 +244,7 @@
   :root {
     --spacing-sidebar-width: 4rem;
     --spacing-channel-sidebar-width: min(88vw, 19rem);
-    --spacing-member-list-width: min(88vw, 19rem);
+    --spacing-member-list-width: 88vw;
     --sidebar-item-size: 2.5rem;
   }
 }
@@ -378,21 +379,21 @@
   --text-primary: #16211b;
   --text-secondary: #4a5a50;
   --text-muted: #6c7c72;
-  --text-link: #0c8f63;
+  --text-link: #126f4d;
 
-  --accent-primary: #0e9e6e;
-  --accent-primary-hover: #12b47e;
-  --accent-primary-active: #0b8a60;
+  --accent-primary: #188e66;
+  --accent-primary-hover: #16825d;
+  --accent-primary-active: #147852;
   --accent-secondary: #0f9d9a;
   --accent-success: #128a54;
   --accent-warning: #b5841e;
   --accent-danger: #c93a44;
   --accent-danger-fill: #c93a44;
   --accent-info: #2f6fd0;
-  --text-on-accent: #ffffff;
+  --text-on-accent: #04140d;
 
-  --accent-tint: rgba(14, 158, 110, 0.12);
-  --accent-tint-strong: rgba(14, 158, 110, 0.18);
+  --accent-tint: rgba(24, 142, 102, 0.12);
+  --accent-tint-strong: rgba(24, 142, 102, 0.18);
   --teal-tint: rgba(15, 157, 154, 0.12);
   --success-tint: rgba(18, 138, 84, 0.14);
   --warning-tint: rgba(181, 132, 30, 0.16);
@@ -430,7 +431,7 @@
   --ambient-glow-primary: transparent;
   --ambient-glow-success: transparent;
   --ambient-glow-danger: transparent;
-  --accent-primary-rgb: 14, 158, 110;
+  --accent-primary-rgb: 24, 142, 102;
   --bg-code: rgba(22, 45, 33, 0.08);
   --border-code: rgba(22, 45, 33, 0.08);
 }
@@ -562,7 +563,7 @@
 
 /* Baseline reset lives in @layer base so Tailwind's layered margin/spacing
    utilities (@layer utilities, which cascades after base) still win. Left
-   unlayered, `* { margin: 0 }` outranks every `mr-*/mt-*/space-y-*` utility in
+   unlayered, `* { margin: 0 }` outranks every directional-margin and vertical-spacing utility in
    the app (unlayered author styles beat layered ones regardless of
    specificity), silently zeroing all margin utilities — the root cause of the
    app-wide "squished spacing" regression. */

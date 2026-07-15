@@ -52,7 +52,7 @@ client/src/pages/AppShell.tsx                         ← replaces AppLayout.tsx
 │   ├─ <SidebarSearch/>         components/layout/sidebar/SidebarSearch.tsx    (search field + ⌘K command-palette opener)
 │   ├─ <NeedsYou/>              components/layout/sidebar/NeedsYou.tsx         (attention-ranked, capped 6; emerald badges)
 │   ├─ <PinnedRail/>            components/layout/sidebar/PinnedRail.tsx       (pinned conversations, floats above Recent)
-│   ├─ <RecentList/>            components/layout/sidebar/RecentList.tsx       (heterogeneous rows, MERGED across all servers)
+│   ├─ <RecentList/>            components/layout/sidebar/RecentList.tsx       (heterogeneous rows, MERGED; bounded + expandable)
 │   ├─ <SpacesList/>            components/layout/sidebar/SpacesList.tsx       (joined guilds → guild Home; absorbs folders/ctx-menu)
 │   └─ (footer)
 │       ├─ <CallDock/>          components/layout/sidebar/CallDock.tsx         (persistent call dock — reuses MiniVoiceBar; only when voice connected)
@@ -64,8 +64,8 @@ client/src/pages/AppShell.tsx                         ← replaces AppLayout.tsx
 ├─ <ContextPanel/>              components/layout/ContextPanel.tsx             (right; toggleable; closed on narrow) — modes below
 │   ├─ members  → wraps existing components/layout/MemberList.tsx
 │   ├─ threads  → existing components/message/ThreadPanel.tsx (+ thread list)
-│   ├─ pins     → existing pins panel surface (from TopBar pins overlay)
-│   ├─ search   → existing search results surface (from TopBar search overlay)
+│   ├─ pins     → panel-native pinned-message list (modal only inside the narrow overlay shell)
+│   ├─ search   → panel-native channel search + filters (modal only inside the narrow overlay shell)
 │   └─ economy  → existing components/guild/GuildEconomyPanel.tsx
 │
 ├─ <MiniVoiceBar/>              components/voice/MiniVoiceBar.tsx              (MOBILE bottom dock only — sidebar CallDock covers desktop)
@@ -84,6 +84,7 @@ client/src/pages/GuildHomePage.tsx                    ← renamed from GuildHub.
     ├─ <LiveRoomsGrid/>         components/rooms/LiveRoomsGrid.tsx     (voice+stage channels → RoomCards; live first, quiet compact)
     │   └─ <RoomCard/>          components/rooms/RoomCard.tsx          (live | quiet | stage | stream states)
     │       └─ <OccupantStack/> components/rooms/OccupantStack.tsx     (overlapping avatars, speaking ring, +N)
+    ├─ <SpaceBriefing/>         components/rooms/SpaceBriefing.tsx     (configured Hub welcome + featured channels; omitted when empty)
     ├─ <AroundNowStrip/>        components/rooms/AroundNowStrip.tsx    (online-member strip → "View all" opens ContextPanel members)
     └─ <TextChannelList/>       components/rooms/TextChannelList.tsx   (buildChannelGroups categories, unread/mention badges → chat route)
 ```
@@ -95,13 +96,27 @@ message internals (`MessageList`, `MessageInput`, threads, files) — reused, ne
 They render a reworked **`TopBar`** (`components/layout/TopBar.tsx`): breadcrumb chip
 `GuildName /` (→ guild Home) + `#channel` + topic (DMs: avatar + name), and a context
 toggle cluster that drives `contextPanelMode`. The right panel is `ContextPanel`, not a
-docked `MemberList`.
+docked `MemberList`. The channel label opens `ChannelSwitcher`: a searchable, grouped
+local-room popover with a direct Rooms-home entry. It restores fast channel movement
+without restoring the retired always-visible channel column.
 
 ### App Home (no guild selected) — HomePage
 
-`client/src/pages/HomePage.tsx` (reworked): DM/friends presence-first analog —
-**live DM/group calls first** (new `LiveDmCallSection`, reuses `RoomCard` + `voiceStore`),
-then friends-around-now (already present), then recent DMs. "Global Happening Now" done right.
+`client/src/pages/HomePage.tsx` — **Pulse Lobby + Catch-up** complementary canvas (does
+**not** duplicate sidebar NeedsYou / RecentList / SpacesList):
+1. Fraunces greeting + meaningful status + New message (+ optional brand mark)
+2. **Happening now** — live DM/group calls **and** occupied guild voice/stage rooms
+   (`RoomCard`); section omitted when empty
+3. **Around now** — horizontal friend avatar strip (guild `AroundNowStrip` pattern); click → DM
+4. **Pick up** — short richer continue rows from `useUnifiedConversations().recent` (capped)
+5. Rail — **Your servers** with unread/live attention dots
+6. **Jump in** — start-something actions remain available in active and quiet states
+
+The primary-space Resume CTA also remains available during live activity; pulse sections
+lead the page but do not erase continuity. Quiet composition uses one unified `EmptyState`
+(not stacked per-section empties). Friend-request
+pending is a light header pulse → `/app/friends`, not a rebuilt requests tab.
+Presentational pieces live under `client/src/components/home/`.
 
 ### Attention data layer (new)
 
@@ -134,7 +149,7 @@ client/src/stores/pinnedStore.ts                  (zustand+persist — pinned co
 | TopBar Summary / Follows / Inbox / Help overlays | **SURVIVE** | remain TopBar-anchored popovers (Inbox is *complemented* — not replaced — by sidebar `NeedsYou`) |
 | `pages/AppLayout.tsx` | **DIES** | `pages/AppShell.tsx` |
 | `pages/GuildHub.tsx` | **RENAMED + REWORKED** | `pages/GuildHomePage.tsx` → `RoomsView` |
-| `pages/HomePage.tsx` | **REWORKED** (survives) | live-DM-calls-first Home |
+| `pages/HomePage.tsx` | **REWORKED** (survives) | Pulse Lobby + Catch-up Home |
 | `pages/GuildPage.tsx` | **REWORKED** (survives) | ChatView (breadcrumb + ContextPanel) |
 | `pages/DMPage.tsx` | **REWORKED** (survives) | ChatView for DMs |
 | `pages/GuildSettingsPage.tsx` | **SURVIVES** | overlay (`guildSettingsId`) **and** route `guilds/:id/settings`; entry moves to `GuildHomeHeader` |
@@ -199,6 +214,7 @@ One memoized hook is the only place the cross-server list is built. It subscribe
 
 ```ts
 { needsYou: ConversationEntry[];   // scored, !pinned, capped 6
+  needsYouOverflowCount: number;   // explicit attention count continuing below the cap
   recent:   ConversationEntry[];   // remaining, sorted by lastActivityId desc
   pinned:   ConversationEntry[];   // in user pin order
   spaces:   GuildSummary[] }       // joined guilds for SpacesList
@@ -265,7 +281,7 @@ Routes are **preserved and only re-skinned** — no new paths (⌘K + sidebar co
 
 | Path | Element (module) | Meaning after overhaul |
 |---|---|---|
-| `/app` (index) | `HomePage` | App Home — live DM calls, friends around, recent DMs |
+| `/app` (index) | `HomePage` | App Home — live rooms, around strip, pick-up, servers rail |
 | `/app/guilds/:guildId` | `GuildHomePage` *(was GuildHub)* | **Guild Home = Rooms view** |
 | `/app/guilds/:guildId/settings` | `GuildSettingsPage` | guild settings (also reachable as overlay via `guildSettingsId`) |
 | `/app/guilds/:guildId/channels/:channelId` | `GuildPage` | **ChatView** (text) / room view (voice/stage) |
@@ -315,7 +331,9 @@ Breakpoint via `useMobile()` (≤768px); gestures via `useSwipeGesture`. On moun
 - **ContextPanel → right overlay.** Swipe-left opens it in `members` mode (matches today's `setMemberPanelOpen(true)` gesture); default closed.
 - **Guild Home (`RoomsView`) stacks to one column:** header → live rooms → around-now → text channels.
 - **ChatView topbar compact;** breadcrumb collapses to the channel chip; ContextPanel default closed.
-- **`MobileBottomNav` retained** (Home / DMs / Server / Friends / Settings).
+- **`MobileBottomNav` retained** (Home / DMs / Space / Friends / Settings). Space always
+  opens the selected guild's Rooms home (or the first joined space as a fallback), never a
+  stale last channel and never a no-op when joined spaces exist.
 - **`MiniVoiceBar` mobile dock** stays in `AppShell` main (the sidebar CallDock is unreachable while the overlay sidebar is closed, so the mobile bottom dock remains the persistent call surface).
 
 Desktop collapse (`Ctrl+B` / footer control): `sidebarCollapsed=true` → 64px **icon rail**
@@ -372,12 +390,36 @@ Guild name in Fraunces (`font-display`, Title/Display step). "Who's around now" 
 `usePermissions(MANAGE_GUILD)` → `setGuildSettingsId(guildId)` — this is where the old
 `GuildChannelList` dropdown entry now lives. Invite affordance alongside.
 
-### 7.6 Sidebar `ConversationRow` recipe (`components/layout/sidebar/ConversationRow.tsx`)
+### 7.6 `SpaceBriefing` (`components/rooms/SpaceBriefing.tsx`)
+Consumes the existing `guild.hub_settings` on the member-facing Rooms front door so Hub
+configuration is not orphaned in admin. It renders **after live rooms** to preserve the
+presence-first hierarchy and disappears entirely when no safe banner, welcome copy, or
+valid featured text channel is configured. The banner is real community content in a
+bounded panel, never a gradient hero. Featured rooms preserve the admin-authored order,
+filter stale/non-text ids, and route through the normal channel destination.
+
+### 7.7 Sidebar `ConversationRow` recipe (`components/layout/sidebar/ConversationRow.tsx`)
 Nav-item base (§7). **Active:** `--accent-tint` fill + 3px teal left edge bar + `--text-primary`.
 Heterogeneous leading element by `kind`: guild channel = `#`/type icon + small
 `--text-muted` guild-context label; DM/group = avatar + presence dot; thread = thread icon;
 guild home = guild avatar. **Emerald mention badge** (`--accent-primary` + `--text-on-accent`);
 8px `--accent-primary` unread dot. Voice-active rows show a small live indicator.
+
+`RecentList` shows at most five rows by default so Spaces remains visible, with an explicit
+in-place “Show N more” control. It never labels the DM-only `/app/dms` route “All
+conversations.” `NeedsYou` shows its overflow count, and expanded Space rows carry the same
+attention dot as the collapsed rail.
+
+### 7.8 `ChannelSwitcher` (`components/layout/ChannelSwitcher.tsx`)
+The active channel label in guild chat is a compact trigger, not another permanent rail.
+The floating surface provides a filter, category-grouped text/forum/voice/stage destinations,
+the current-channel state, and a first-class “Rooms home” entry. Arrow keys traverse
+destinations; `Escape` closes and restores focus. On narrow layouts it uses the same trigger
+and a viewport-bounded menu rather than a hover-only control.
+
+On narrow screens the TopBar keeps only the local high-frequency actions visible (search and,
+for spaces, members). Summary, pins, threads, follows, economy, settings, Inbox, and help move
+into one labeled overflow menu; they remain keyboard-accessible without crowding the room name.
 
 ---
 
@@ -402,7 +444,7 @@ old pages working while the new shell renders new components.
 
 ### Wave 3 — Rooms / Chat / Pages (page bodies)
 9. `components/rooms/*` + rename `GuildHub.tsx` → `GuildHomePage.tsx` (`RoomsView`); update `App.tsx` import + rename `GuildHub.test.tsx` → `GuildHomePage.test.tsx` asserting the room-card IA (speaking ring, quiet vs live, stream watch, around-now, text grouping, admin entry).
-10. Rework `HomePage` (live-DM-calls-first) — reuse `RoomCard`; update `HomePage.test.tsx` to the new IA.
+10. Rework `HomePage` (Pulse Lobby + Catch-up) — reuse `RoomCard` / Around strip patterns; update `HomePage.test.tsx` to the new IA.
 11. Rework `GuildPage`/`DMPage` ChatView: reworked `TopBar` (breadcrumb chip + context toggles → `contextPanelMode`); migrate its Search/Pins/Members/Economy/Threads toggles off the legacy setters onto `setContextPanelMode`. Update `TopBar.*.test.tsx`.
 12. Extract `DmPickerModal` from `DMList`; wire it to `SidebarSearch`/Home "new DM".
 13. Extend `useKeyboardNavigation` (roving sidebar arrows, Esc precedence, `Ctrl+B`).

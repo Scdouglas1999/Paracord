@@ -27,6 +27,11 @@ import { useUIStore } from '../../stores/uiStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useMediaDevices } from '../../hooks/useMediaDevices';
 import { useMobile } from '../../hooks/useMobile';
+import {
+  buildDevicePickerOptions,
+  isAdvancedMediaDevice,
+  systemDefaultOptionLabel,
+} from '../../lib/media/deviceLabels';
 import { APP_NAME } from '../../lib/constants';
 import { hasAccount as hasLocalCryptoAccount } from '../../lib/account';
 import { isAdmin } from '../../types';
@@ -55,7 +60,10 @@ import {
   saveKnownActivityAppsToStorage,
 } from '../../lib/activityPresence';
 import { formatIdentityFingerprint } from '../../lib/keyVerification';
-import { safeExternalUrl } from '../../lib/security';
+import { isAllowedImageMimeType, safeExternalUrl } from '../../lib/security';
+import { resolveUserAvatarUrl } from '../../lib/userAvatar';
+import { displayName as resolveDisplayName } from '../../lib/displayName';
+import { formatShortcut } from '../../lib/keyboardShortcuts';
 import { CustomCSS } from '../customization/CustomCSS';
 import { ThemeSelector } from '../customization/ThemeSelector';
 
@@ -104,8 +112,21 @@ const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 export function UserSettings({ onClose }: UserSettingsProps) {
   const navigate = useNavigate();
-  const [activeSection, setActiveSection] = useState<SettingsSection>('account');
+  const initialSection = useUIStore((s) => s.userSettingsInitialSection);
+  const [activeSection, setActiveSection] = useState<SettingsSection>(() => {
+    const candidate = initialSection as SettingsSection | null;
+    if (candidate && NAV_ITEMS.some((item) => item.id === candidate)) return candidate;
+    return 'account';
+  });
   const [mobileShowNav, setMobileShowNav] = useState(true);
+
+  useEffect(() => {
+    const candidate = initialSection as SettingsSection | null;
+    if (candidate && NAV_ITEMS.some((item) => item.id === candidate)) {
+      setActiveSection(candidate);
+      setMobileShowNav(false);
+    }
+  }, [initialSection]);
   const user = useAuthStore(s => s.user);
   const settings = useAuthStore(s => s.settings);
   const logout = useAuthStore(s => s.logout);
@@ -125,6 +146,8 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [bio, setBio] = useState('');
   const [pronouns, setPronouns] = useState('');
   const [linkedAccountsInput, setLinkedAccountsInput] = useState('');
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [locale, setLocale] = useState('en-US');
   const [messageCompact, setMessageCompact] = useState(false);
   const [notifications, setNotifications] = useState<Record<string, unknown>>({});
@@ -138,14 +161,49 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const {
     audioInputDevices,
     audioOutputDevices,
+    videoInputDevices,
     selectedAudioInput,
     selectedAudioOutput,
+    selectedVideoInput,
     selectAudioInput,
     selectAudioOutput,
+    selectVideoInput,
     enumerate,
   } = useMediaDevices();
+  const [showAllAudioDevices, setShowAllAudioDevices] = useState(false);
   const applyAudioInputDevice = useVoiceStore((s) => s.applyAudioInputDevice);
   const applyAudioOutputDevice = useVoiceStore((s) => s.applyAudioOutputDevice);
+  const audioInputOptions = useMemo(
+    () =>
+      buildDevicePickerOptions(audioInputDevices, {
+        showAll: showAllAudioDevices,
+        selectedDeviceId: selectedAudioInput,
+        fallbackNoun: 'Microphone',
+      }),
+    [audioInputDevices, showAllAudioDevices, selectedAudioInput]
+  );
+  const audioOutputOptions = useMemo(
+    () =>
+      buildDevicePickerOptions(audioOutputDevices, {
+        showAll: showAllAudioDevices,
+        selectedDeviceId: selectedAudioOutput,
+        fallbackNoun: 'Speaker',
+      }),
+    [audioOutputDevices, showAllAudioDevices, selectedAudioOutput]
+  );
+  const videoInputOptions = useMemo(
+    () =>
+      buildDevicePickerOptions(videoInputDevices, {
+        showAll: showAllAudioDevices,
+        selectedDeviceId: selectedVideoInput,
+        fallbackNoun: 'Camera',
+      }),
+    [videoInputDevices, showAllAudioDevices, selectedVideoInput]
+  );
+  const hasAdvancedDevices =
+    audioInputDevices.some((d) => isAdvancedMediaDevice(d)) ||
+    audioOutputDevices.some((d) => isAdvancedMediaDevice(d)) ||
+    videoInputDevices.some((d) => isAdvancedMediaDevice(d));
   const userIsAdmin = user ? isAdmin(user.flags ?? 0) : false;
   const [restartConfirm, setRestartConfirm] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -232,8 +290,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         : '';
       setLinkedAccountsInput(linked);
       setAccountNewEmail(user.email || '');
+      setAvatarFile(null);
+      setAvatarPreview(resolveUserAvatarUrl(user.avatar_hash || user.avatar));
     }
-  }, [user?.id, user?.display_name, user?.bio, user?.pronouns, user?.linked_accounts, user?.email]);
+  }, [user?.id, user?.display_name, user?.bio, user?.pronouns, user?.linked_accounts, user?.email, user?.avatar_hash, user?.avatar]);
 
   useEffect(() => {
     if (settings) {
@@ -288,8 +348,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       if (typeof notif?.['audioOutputDeviceId'] === 'string') {
         selectAudioOutput(notif['audioOutputDeviceId'] as string);
       }
+      if (typeof notif?.['videoInputDeviceId'] === 'string') {
+        selectVideoInput(notif['videoInputDeviceId'] as string);
+      }
     }
-  }, [settings, setLowBandwidthModeUI]);
+  }, [settings, setLowBandwidthModeUI, selectAudioInput, selectAudioOutput, selectVideoInput]);
 
   useEffect(() => {
     if (activeSection !== 'voice') return;
@@ -436,6 +499,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     setSaving(true);
     clearStatus();
     try {
+      if (avatarFile) {
+        const { data } = await authApi.uploadAvatar(avatarFile);
+        useAuthStore.setState({ user: data });
+      }
       await updateUser({
         display_name: displayName || undefined,
         bio: bio || undefined,
@@ -448,12 +515,28 @@ export function UserSettings({ onClose }: UserSettingsProps) {
         },
       });
       await fetchUser();
+      setAvatarFile(null);
       setSuccessStatus('Profile updated.');
     } catch (err) {
       setErrorStatus(`Failed to update profile: ${extractApiError(err)}`);
     } finally {
       setSaving(false);
     }
+  };
+
+  const processAvatarFile = (file: File | undefined) => {
+    if (!file) return;
+    if (!isAllowedImageMimeType(file.type)) {
+      setErrorStatus('Please upload PNG, JPG, GIF, or WEBP.');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setErrorStatus('Avatar must be 2 MB or smaller.');
+      return;
+    }
+    clearStatus();
+    setAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
   };
 
   const loadSessions = useCallback(async () => {
@@ -657,6 +740,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
           ...mergedNotifications,
           audioInputDeviceId: selectedAudioInput,
           audioOutputDeviceId: selectedAudioOutput,
+          videoInputDeviceId: selectedVideoInput,
         },
         keybinds: mergedKeybinds,
       });
@@ -716,6 +800,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
           ...mergedNotifications,
           audioInputDeviceId: selectedAudioInput,
           audioOutputDeviceId: selectedAudioOutput,
+          videoInputDeviceId: selectedVideoInput,
         },
         keybinds: mergedKeybinds,
       });
@@ -929,7 +1014,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
       ) : (
         <nav
           aria-label="User settings"
-          className="relative z-10 flex w-64 shrink-0 flex-col overflow-y-auto border-r border-border-subtle bg-bg-secondary px-3 py-6"
+          className="relative z-10 flex w-[clamp(11rem,24vw,16rem)] shrink-0 flex-col overflow-y-auto border-r border-border-subtle bg-bg-secondary px-3 py-6"
         >
           <button
             onClick={onClose}
@@ -1010,11 +1095,15 @@ export function UserSettings({ onClose }: UserSettingsProps) {
             {activeSection === 'account' && (
               <div>
                 <header className="mb-8 flex items-center gap-4">
-                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-accent-tint font-display text-2xl font-bold text-accent-primary ring-1 ring-inset ring-border-strong">
-                    {user?.username?.charAt(0).toUpperCase() || 'U'}
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent-tint font-display text-2xl font-bold text-accent-primary ring-1 ring-inset ring-border-strong">
+                    {avatarPreview ? (
+                      <img src={avatarPreview} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      resolveDisplayName(user).charAt(0).toUpperCase()
+                    )}
                   </div>
                   <div className="min-w-0">
-                    <h2 className="truncate text-heading text-text-primary">{user?.username || 'My Account'}</h2>
+                    <h2 className="truncate text-heading text-text-primary">{user ? resolveDisplayName(user) : 'My Account'}</h2>
                     <p className="mt-0.5 text-sm text-text-secondary">
                       Manage your profile, security, and how you sign in.
                     </p>
@@ -1025,6 +1114,25 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 <section>
                   <h3 className="text-section uppercase text-text-muted">Public profile</h3>
                   <div className="mt-2 divide-y divide-border-subtle">
+                    <div className="flex flex-wrap items-center justify-between gap-4 py-4">
+                      <div className="min-w-0">
+                        <div className="text-label text-text-primary">Avatar</div>
+                        <p className="mt-0.5 text-meta text-text-secondary">PNG, JPG, GIF, or WEBP up to 2 MB.</p>
+                      </div>
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-border-subtle px-3 py-1.5 text-label font-medium text-text-secondary transition-colors hover:bg-bg-mod-subtle hover:text-text-primary">
+                        Change avatar
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/gif,image/webp"
+                          className="sr-only"
+                          onChange={(e) => {
+                            processAvatarFile(e.target.files?.[0]);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                    </div>
+
                     <div className="flex flex-wrap items-center justify-between gap-4 py-4">
                       <div className="min-w-0">
                         <div className="text-label text-text-primary">Username</div>
@@ -1535,10 +1643,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           });
                         }}
                       >
-                        <option value="">Default</option>
-                        {audioInputDevices.map((device) => (
+                        <option value="">{systemDefaultOptionLabel('audioinput')}</option>
+                        {audioInputOptions.map((device) => (
                           <option key={device.deviceId} value={device.deviceId}>
-                            {device.label || `Microphone ${device.deviceId.slice(0, 6)}`}
+                            {device.isSystemDefault ? `${device.label} (system default)` : device.label}
                           </option>
                         ))}
                       </Select>
@@ -1562,14 +1670,41 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                           });
                         }}
                       >
-                        <option value="">Default</option>
-                        {audioOutputDevices.map((device) => (
+                        <option value="">{systemDefaultOptionLabel('audiooutput')}</option>
+                        {audioOutputOptions.map((device) => (
                           <option key={device.deviceId} value={device.deviceId}>
-                            {device.label || `Speaker ${device.deviceId.slice(0, 6)}`}
+                            {device.isSystemDefault ? `${device.label} (system default)` : device.label}
                           </option>
                         ))}
                       </Select>
                     </div>
+                    <div className="py-4">
+                      <label htmlFor="voice-camera" className="text-label text-text-primary">Camera</label>
+                      <p className="mt-0.5 text-meta text-text-secondary">Used when you turn on video in a call.</p>
+                      <Select
+                        id="voice-camera"
+                        className="mt-2.5 max-w-md"
+                        value={selectedVideoInput || ''}
+                        onChange={(e) => {
+                          selectVideoInput(e.target.value);
+                        }}
+                      >
+                        <option value="">{systemDefaultOptionLabel('videoinput')}</option>
+                        {videoInputOptions.map((device) => (
+                          <option key={device.deviceId} value={device.deviceId}>
+                            {device.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    {(hasAdvancedDevices || showAllAudioDevices) && (
+                      <ToggleRow
+                        title="Show all devices"
+                        description="Include monitors, null sinks, and virtual processors that are usually hidden."
+                        on={showAllAudioDevices}
+                        onToggle={() => setShowAllAudioDevices((prev) => !prev)}
+                      />
+                    )}
                   </div>
                 </section>
 
@@ -1774,7 +1909,11 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                         <span className="text-label text-text-primary">{kb.action}</span>
                         <input
                           className="h-10 w-full rounded-sm border border-border-subtle bg-bg-tertiary px-3 font-code text-sm text-text-muted outline-none transition-[border-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] focus-visible:border-accent-primary focus-visible:shadow-[var(--focus-ring-input)] sm:w-52"
-                          value={capturingKeybind === kb.key ? 'Press keys…' : String(mergedKeybinds[kb.key] ?? '')}
+                          value={
+                            capturingKeybind === kb.key
+                              ? 'Press keys…'
+                              : formatShortcut(String(mergedKeybinds[kb.key] ?? ''))
+                          }
                           readOnly
                           onFocus={() => setCapturingKeybind(kb.key)}
                           onBlur={() => setCapturingKeybind(null)}
@@ -2004,6 +2143,8 @@ function NavButton({ item, active, onClick }: { item: NavItem; active: boolean; 
   const Icon = item.icon;
   return (
     <button
+      type="button"
+      aria-label={item.label}
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
       className={cn(

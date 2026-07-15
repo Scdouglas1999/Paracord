@@ -39,6 +39,10 @@ pub struct MediaParticipant {
     pub muted: bool,
     /// Whether the participant has deafened themselves.
     pub deafened: bool,
+    /// Whether the participant is authorized to publish media (derived from the
+    /// SPEAK permission at join time). When `false`, the participant joins as a
+    /// listen-only subscriber and any published-track announcements are ignored.
+    pub can_publish: bool,
     /// The participant's publicly reachable address (for P2P).
     pub public_addr: Option<SocketAddr>,
 }
@@ -56,8 +60,16 @@ impl MediaParticipant {
             video_capabilities: Vec::new(),
             muted: false,
             deafened: false,
+            can_publish: true,
             public_addr: None,
         }
+    }
+
+    /// Set whether this participant may publish media (SPEAK). Chainable so the
+    /// join site can express the authorization inline with construction.
+    pub fn with_can_publish(mut self, can_publish: bool) -> Self {
+        self.can_publish = can_publish;
+        self
     }
 
     pub fn set_video_capabilities(&mut self, capabilities: Vec<VideoCodecCapability>) {
@@ -84,7 +96,15 @@ impl MediaParticipant {
     }
 
     /// Publish or update a stream-aware track announcement.
+    ///
+    /// A participant lacking publish rights (SPEAK denied) is not allowed to
+    /// announce tracks: video/screen-share fan-out in the relay requires a
+    /// resolved published track, so dropping the announcement here fails the
+    /// publish closed without needing to trust the client.
     pub fn publish_track(&mut self, track: PublishedTrack) {
+        if !self.can_publish {
+            return;
+        }
         self.published_tracks
             .insert((track.stream_id.clone(), track.track_id.clone()), track);
     }
@@ -215,6 +235,23 @@ mod tests {
         assert!(p.subscriptions.contains(&2));
         assert!(p.subscriptions.contains(&3));
         assert!(p.subscriptions.contains(&4));
+    }
+
+    #[test]
+    fn listen_only_participant_cannot_publish_tracks() {
+        // SPEAK denied at join → can_publish=false → track announcements dropped.
+        let mut p = MediaParticipant::new(1, "s".to_string()).with_can_publish(false);
+        assert!(!p.can_publish);
+        let track = PublishedTrack {
+            stream_id: StreamId::new("stream-1"),
+            track_id: TrackId::new("screen"),
+            publisher_user_id: 1,
+            kind: paracord_transport::control::TrackKind::Video,
+            codec: Some(paracord_transport::stream::VideoCodec::H264),
+            layers: vec![],
+        };
+        p.publish_track(track);
+        assert!(p.published_tracks.is_empty());
     }
 
     #[test]

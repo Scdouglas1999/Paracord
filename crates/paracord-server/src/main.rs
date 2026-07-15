@@ -781,6 +781,35 @@ async fn main() -> Result<()> {
         },
     );
 
+    // Loudly refuse to be silent about serving auth tokens over cleartext.
+    // When the server is bound to a non-loopback interface (LAN/WAN/Docker
+    // 0.0.0.0) with no active TLS, every login, JWT access/refresh token and
+    // session/CSRF cookie crosses the wire in plaintext and can be captured by
+    // any on-path attacker. This is the insecure Docker/quick-start default, so
+    // make it impossible to miss and tell the operator exactly how to fix it.
+    if !bind_is_loopback && tls_rustls_config.is_none() {
+        tracing::warn!("============================================================");
+        tracing::warn!("  SECURITY WARNING: serving plaintext HTTP on a public bind!");
+        tracing::warn!("");
+        tracing::warn!(
+            "  Bind address {} is not loopback and TLS is not active.",
+            config.server.bind_address
+        );
+        tracing::warn!("  Auth tokens, session cookies and all traffic are sent in");
+        tracing::warn!("  cleartext and can be captured by anyone on the network.");
+        tracing::warn!("");
+        tracing::warn!("  Do NOT expose this port to a LAN/WAN as-is. Either:");
+        tracing::warn!("    - terminate TLS at a reverse proxy in front (Caddy/nginx), or");
+        tracing::warn!("    - set PARACORD_TLS_ENABLED=true (self-signed bootstrap/ACME), or");
+        tracing::warn!("    - keep the port reachable only from localhost/a trusted proxy.");
+        if config.server.public_url.is_some() {
+            tracing::warn!("");
+            tracing::warn!("  public_url is configured, so remote clients are expected:");
+            tracing::warn!("  plaintext exposure here is an active account-takeover risk.");
+        }
+        tracing::warn!("============================================================");
+    }
+
     if let Some(ref rustls_config) = tls_rustls_config {
         tls::spawn_acme_renewal_task(
             config.tls.clone(),
@@ -1034,13 +1063,43 @@ fn ensure_federation_signing_key_file(path: &str) -> Result<String> {
     if !path.exists() {
         let (key, _) = paracord_federation::signing::generate_keypair();
         let key_hex = paracord_federation::signing::signing_key_to_hex(&key);
-        std::fs::write(path, format!("{key_hex}\n")).with_context(|| {
-            format!(
-                "failed to write federation signing key file '{}'",
-                path.display()
-            )
-        })?;
-        harden_secret_file_permissions(path);
+        let contents = format!("{key_hex}\n");
+        // Create the key file with restrictive permissions BEFORE writing any
+        // bytes so the freshly generated Ed25519 key never exists on disk in a
+        // world-readable state. A plain write honors the umask (typically 0644)
+        // and only chmods afterward — a TOCTOU exposure on multi-tenant hosts.
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+                .with_context(|| {
+                    format!(
+                        "failed to create federation signing key file '{}'",
+                        path.display()
+                    )
+                })?;
+            file.write_all(contents.as_bytes()).with_context(|| {
+                format!(
+                    "failed to write federation signing key file '{}'",
+                    path.display()
+                )
+            })?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(path, &contents).with_context(|| {
+                format!(
+                    "failed to write federation signing key file '{}'",
+                    path.display()
+                )
+            })?;
+            harden_secret_file_permissions(path);
+        }
         tracing::info!("Generated federation signing key at '{}'", path.display());
         return Ok(key_hex);
     }
@@ -1301,6 +1360,8 @@ fn livekit_credentials_look_insecure(api_key: &str, api_secret: &str) -> bool {
         || secret_lower == "secret"
         || key_lower.contains("change_me")
         || secret_lower.contains("change_me")
+        // Known secret shipped in docker-compose.yml — never let it pass as-is.
+        || secret_lower.contains("paracord-local-dev")
     {
         return true;
     }
@@ -1321,13 +1382,6 @@ fn build_at_rest_profile(config: &config::Config) -> Result<AtRestRuntimeProfile
                 config::DatabaseEngine::Postgres => "postgres",
             }
         );
-    }
-
-    if !encrypt_sqlite && !config.at_rest.encrypt_files {
-        tracing::warn!(
-            "At-rest encryption profile is enabled, but no storage targets are selected"
-        );
-        return Ok(AtRestRuntimeProfile::default());
     }
 
     let key_env_name = config.at_rest.key_env.trim();
@@ -3261,9 +3315,15 @@ async fn handle_webtransport_connection(
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_share_url, ensure_federation_signing_key_file, livekit_credentials_look_insecure,
-        normalize_https_host, parse_detected_public_ip,
+        build_at_rest_profile, derive_share_url, ensure_federation_signing_key_file,
+        livekit_credentials_look_insecure, normalize_https_host, parse_detected_public_ip,
     };
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn derive_share_url_prefers_public_url() {
@@ -3337,10 +3397,34 @@ mod tests {
     #[test]
     fn detects_insecure_livekit_credentials() {
         assert!(livekit_credentials_look_insecure("devkey", "devsecret"));
+        // The 33-char default shipped in docker-compose.yml must be rejected
+        // despite being long enough and matching no other placeholder token.
+        assert!(livekit_credentials_look_insecure(
+            "paracordlocal",
+            "paracord-local-dev-livekit-secret",
+        ));
         assert!(!livekit_credentials_look_insecure(
             "paracord_0123456789abcdef",
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         ));
+    }
+
+    #[test]
+    fn at_rest_master_key_enables_totp_without_file_or_sqlite_targets() {
+        let _guard = env_lock().lock().expect("env lock");
+        const KEY_ENV: &str = "PARACORD_TEST_TOTP_ONLY_MASTER_KEY";
+        std::env::set_var(KEY_ENV, format!("hex:{}", "11".repeat(32)));
+        let mut config = crate::config::Config::default();
+        config.at_rest.enabled = true;
+        config.at_rest.encrypt_files = false;
+        config.at_rest.encrypt_sqlite = false;
+        config.at_rest.key_env = KEY_ENV.to_string();
+
+        let profile = build_at_rest_profile(&config).expect("TOTP-only at-rest profile");
+        std::env::remove_var(KEY_ENV);
+        assert!(profile.totp_cryptor.is_some());
+        assert!(profile.file_cryptor.is_none());
+        assert!(profile.sqlite_key_hex.is_none());
     }
 
     #[test]

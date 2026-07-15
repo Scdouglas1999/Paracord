@@ -6,7 +6,7 @@ import { cn } from '../../../lib/utils';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';
 
 /**
- * Heterogeneous sidebar conversation row (layout-spec §7.6; design-spec §7 Nav item,
+ * Heterogeneous sidebar conversation row (layout-spec §7.7; design-spec §7 Nav item,
  * §1.2/§1.5). The single row primitive consumed by NeedsYou / PinnedRail / RecentList.
  *
  * Nav-item base (34px, --radius-sm). Active = --accent-tint fill + a 3px teal
@@ -110,7 +110,7 @@ function ConversationRowComponent({
   const { kind, title, contextLabel, unread, mentionCount, hasVoiceActivity } = entry;
   const useAvatar = AVATAR_KINDS.has(kind);
   const showMention = mentionCount > 0;
-  const showUnreadDot = unread && !showMention;
+  const showUnreadDot = unread && !active && !showMention;
 
   return (
     <button

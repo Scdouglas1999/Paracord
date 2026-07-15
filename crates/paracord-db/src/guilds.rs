@@ -179,26 +179,29 @@ pub async fn update_guild(
 /// Update a guild's discovery visibility and its discovery tags.
 ///
 /// `discovery_tags` is written to the dedicated `discovery_tags` column and is
-/// kept separate from `allowed_roles` (the role-gating allowed role IDs), which
-/// this function does not touch.
+/// kept separate from `allowed_roles` (the role-gating allowed role IDs).
+/// When `allowed_roles` is `None`, the existing column value is preserved.
 /// Core implementation using newtype ID.
 pub async fn update_space_visibility(
     pool: &DbPool,
     id: GuildId,
     visibility: &str,
     discovery_tags: &str,
+    allowed_roles: Option<&str>,
 ) -> Result<SpaceRow, DbError> {
     let row = sqlx::query_as::<_, SpaceRow>(
         "UPDATE spaces
          SET visibility = $2,
              discovery_tags = $3,
-             updated_at = $4
+             allowed_roles = COALESCE($4, allowed_roles),
+             updated_at = $5
          WHERE id = $1
          RETURNING id, name, description, icon_hash, banner_hash, owner_id, features, system_channel_id, vanity_url_code, visibility, allowed_roles, discovery_tags, created_at, hub_settings, bot_settings"
     )
     .bind(id)
     .bind(visibility)
     .bind(discovery_tags)
+    .bind(allowed_roles)
     .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
@@ -544,13 +547,18 @@ mod tests {
         create_guild(&pool, 900, "Vis Guild", 1, None)
             .await
             .unwrap();
-        let updated =
-            update_space_visibility(&pool, GuildId::new(900), "public", "[\"gaming\",\"chat\"]")
-                .await
-                .unwrap();
+        let updated = update_space_visibility(
+            &pool,
+            GuildId::new(900),
+            "public",
+            "[\"gaming\",\"chat\"]",
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(updated.visibility, "public");
         // Discovery tags land in their own column, leaving allowed_roles (the
-        // role-gating role IDs) untouched.
+        // role-gating role IDs) untouched when not provided.
         assert_eq!(updated.discovery_tags, "[\"gaming\",\"chat\"]");
         assert_eq!(updated.allowed_roles, "[]");
     }
@@ -565,15 +573,36 @@ mod tests {
         create_guild(&pool, 950, "Public Guild", 1, None)
             .await
             .unwrap();
-        let updated = update_space_visibility(&pool, GuildId::new(950), "public", "[\"gaming\"]")
-            .await
-            .unwrap();
+        let updated = update_space_visibility(
+            &pool,
+            GuildId::new(950),
+            "public",
+            "[\"gaming\"]",
+            Some("[]"),
+        )
+        .await
+        .unwrap();
         assert_eq!(updated.visibility, "public");
         assert_eq!(
             parse_allowed_role_ids(&updated.allowed_roles),
             Vec::<i64>::new()
         );
         assert_eq!(updated.discovery_tags, "[\"gaming\"]");
+    }
+
+    #[tokio::test]
+    async fn test_update_space_visibility_writes_allowed_roles() {
+        let pool = test_pool().await;
+        create_test_user(&pool, 1).await;
+        create_guild(&pool, 960, "Roles Guild", 1, None)
+            .await
+            .unwrap();
+        let updated =
+            update_space_visibility(&pool, GuildId::new(960), "roles", "[]", Some("[11,22]"))
+                .await
+                .unwrap();
+        assert_eq!(updated.visibility, "roles");
+        assert_eq!(parse_allowed_role_ids(&updated.allowed_roles), vec![11, 22]);
     }
 
     #[tokio::test]

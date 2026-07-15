@@ -432,9 +432,36 @@ fn generate_self_signed(
 
     std::fs::write(cert_path, certified_key.cert.pem())
         .with_context(|| format!("Failed to write cert to {:?}", cert_path))?;
-    std::fs::write(key_path, certified_key.key_pair.serialize_pem())
-        .with_context(|| format!("Failed to write key to {:?}", key_path))?;
-    harden_private_key_permissions(key_path)?;
+    // Create the private key file with restrictive permissions BEFORE writing
+    // any bytes so there is no window in which another local user can read the
+    // freshly minted key. A plain write honors the umask (typically 0644) and
+    // only chmods afterward — a TOCTOU exposure on multi-tenant hosts.
+    let key_pem = certified_key.key_pair.serialize_pem();
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        // A stale key may linger if a previous run wrote the key but not the
+        // cert; remove it so create_new starts from a clean 0600 file.
+        if key_path.exists() {
+            std::fs::remove_file(key_path)
+                .with_context(|| format!("Failed to replace existing key at {:?}", key_path))?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(key_path)
+            .with_context(|| format!("Failed to create key file {:?}", key_path))?;
+        file.write_all(key_pem.as_bytes())
+            .with_context(|| format!("Failed to write key to {:?}", key_path))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(key_path, key_pem)
+            .with_context(|| format!("Failed to write key to {:?}", key_path))?;
+        harden_private_key_permissions(key_path)?;
+    }
 
     tracing::info!("Self-signed TLS certificate written to {:?}", cert_path);
     tracing::info!("TLS private key written to {:?}", key_path);

@@ -58,10 +58,11 @@ impl WebTransportServer {
         // Enable ALPN for HTTP/3
         server_crypto.alpn_protocols = vec![b"h3".to_vec()];
 
-        let server_config = quinn::ServerConfig::with_crypto(Arc::new(
+        let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(
             QuicServerConfig::try_from(server_crypto)
                 .map_err(|e| WebTransportError::Bind(e.to_string()))?,
         ));
+        server_config.transport_config(crate::endpoint::server_transport_config());
 
         let endpoint = quinn::Endpoint::server(server_config, config.bind_addr)
             .map_err(WebTransportError::Io)?;
@@ -187,6 +188,24 @@ impl WebTransportSession {
         self.quinn_conn.accept_bi().await
     }
 
+    /// Open a unidirectional stream to the browser.
+    ///
+    /// The uni-stream bridge carries whole-frame keyframe messages (contract S5)
+    /// byte-for-byte in the exact same wire framing as native QUIC uni streams —
+    /// no QSID prefix, no re-encoding. Under h3-quinn a WebTransport uni stream is
+    /// a plain quinn uni stream, so this delegates straight to the connection.
+    pub async fn open_uni(&self) -> Result<quinn::SendStream, quinn::ConnectionError> {
+        self.quinn_conn.open_uni().await
+    }
+
+    /// Accept a unidirectional stream from the browser (one whole keyframe frame).
+    ///
+    /// Mirror of [`Self::open_uni`] for the browser→relay direction: the bridge
+    /// relays these to the relay ingress as QUIC uni streams unchanged.
+    pub async fn accept_uni(&self) -> Result<quinn::RecvStream, quinn::ConnectionError> {
+        self.quinn_conn.accept_uni().await
+    }
+
     /// Remote address of the browser client.
     pub fn remote_address(&self) -> SocketAddr {
         self.quinn_conn.remote_address()
@@ -258,6 +277,17 @@ fn encode_quic_varint(val: u64) -> Vec<u8> {
     }
 }
 
+/// Bound on each WebTransport bridge channel, in datagrams.
+///
+/// The bridge is an extra queue hop between the QUIC connection and the relay.
+/// Unbounded, a stalled peer (slow browser downlink, or a relay reader that
+/// falls behind) lets the queue grow without limit and buffers seconds of stale
+/// media. Bounding it caps that backlog; media is unreliable, so an over-full
+/// bridge drops the datagram rather than blocking — the same shedding quinn
+/// does when its own datagram buffer overflows. Sized to clear a fragmented
+/// keyframe burst without hoarding.
+const BRIDGE_CHANNEL_CAPACITY: usize = 8192;
+
 /// Spawn a datagram bridge that translates between HTTP/3 datagrams
 /// (with QSID varint prefix) and raw media packets.
 ///
@@ -270,11 +300,12 @@ pub fn spawn_webtransport_bridge(
     quinn_conn: quinn::Connection,
     qsid: u64,
 ) -> (
-    tokio::sync::mpsc::UnboundedSender<Bytes>,
-    tokio::sync::mpsc::UnboundedReceiver<Bytes>,
+    tokio::sync::mpsc::Sender<Bytes>,
+    tokio::sync::mpsc::Receiver<Bytes>,
 ) {
-    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
-    let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
+    let (outbound_tx, mut outbound_rx) =
+        tokio::sync::mpsc::channel::<Bytes>(BRIDGE_CHANNEL_CAPACITY);
+    let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel::<Bytes>(BRIDGE_CHANNEL_CAPACITY);
 
     let qsid_prefix = Bytes::from(encode_quic_varint(qsid));
     let conn_out = quinn_conn.clone();
@@ -300,8 +331,13 @@ pub fn spawn_webtransport_bridge(
             if let Some((_qsid_val, prefix_len)) = decode_quic_varint(&datagram) {
                 if prefix_len <= datagram.len() {
                     let raw = datagram.slice(prefix_len..);
-                    if inbound_tx.send(raw).is_err() {
-                        break;
+                    // Unreliable media: if the relay reader is behind, drop
+                    // rather than block the QUIC read loop. A closed receiver
+                    // means the session is gone, so stop the bridge.
+                    match inbound_tx.try_send(raw) {
+                        Ok(()) => {}
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
                     }
                 }
             }
@@ -309,4 +345,75 @@ pub fn spawn_webtransport_bridge(
     });
 
     (outbound_tx, inbound_rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::endpoint::{certificate_hash, generate_self_signed_cert, MediaEndpoint};
+
+    /// Establish a raw QUIC loopback pair, returning `(server_conn, client_conn)`.
+    /// Stands in for the h3-quinn WebTransport connection the bridge treats as a
+    /// plain quinn connection (see `open_uni` / `accept_uni` docs).
+    async fn quinn_pair() -> (quinn::Connection, quinn::Connection) {
+        let tls = generate_self_signed_cert().unwrap();
+        let cert_hash = certificate_hash(&tls.cert_chain[0]);
+        let server = MediaEndpoint::bind("127.0.0.1:0".parse().unwrap(), tls).unwrap();
+        let server_addr = server.local_addr().unwrap();
+        let client = MediaEndpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        let client_connecting = client
+            .connect_pinned(server_addr, "localhost", &cert_hash)
+            .unwrap();
+        let server_incoming = server.accept().await.expect("server should accept");
+        let server_conn = server_incoming.accept().unwrap().await.unwrap();
+        let client_conn = client_connecting.await.unwrap();
+        // Keep the endpoints alive for the duration of the connection by leaking
+        // them into the test process; they are cleaned up on process exit.
+        std::mem::forget(server);
+        std::mem::forget(client);
+        (server_conn, client_conn)
+    }
+
+    fn wt_session(conn: quinn::Connection) -> WebTransportSession {
+        WebTransportSession {
+            quinn_conn: conn,
+            path: "/media".to_string(),
+        }
+    }
+
+    /// A whole-frame keyframe message written on a WebTransport uni stream must
+    /// arrive at the peer byte-for-byte, in BOTH directions (contract S5). The
+    /// FIN delimits the message, so `read_to_end` recovers exactly the bytes sent.
+    #[tokio::test]
+    async fn uni_stream_round_trip_is_byte_identical_both_directions() {
+        let (server_conn, client_conn) = quinn_pair().await;
+        let server = wt_session(server_conn);
+        let client = wt_session(client_conn);
+
+        // relay → browser: server opens a uni stream, browser accepts + drains it.
+        let frame_a = Bytes::from((0u32..4096).map(|i| i as u8).collect::<Vec<u8>>());
+        let mut send = server.open_uni().await.unwrap();
+        send.write_all(&frame_a).await.unwrap();
+        send.finish().unwrap();
+        let mut recv = client.accept_uni().await.unwrap();
+        let got_a = recv.read_to_end(1024 * 1024).await.unwrap();
+        assert_eq!(
+            got_a.as_slice(),
+            frame_a.as_ref(),
+            "relay→browser byte-identical"
+        );
+
+        // browser → relay: browser opens a uni stream, relay accepts + drains it.
+        let frame_b = Bytes::from(vec![0xABu8; 70_000]);
+        let mut send = client.open_uni().await.unwrap();
+        send.write_all(&frame_b).await.unwrap();
+        send.finish().unwrap();
+        let mut recv = server.accept_uni().await.unwrap();
+        let got_b = recv.read_to_end(1024 * 1024).await.unwrap();
+        assert_eq!(
+            got_b.as_slice(),
+            frame_b.as_ref(),
+            "browser→relay byte-identical"
+        );
+    }
 }

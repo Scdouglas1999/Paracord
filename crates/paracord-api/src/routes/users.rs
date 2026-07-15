@@ -1,5 +1,5 @@
 use axum::{
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -7,6 +7,7 @@ use paracord_core::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::OnceLock;
 use std::time::Instant;
 use url::Url;
@@ -18,6 +19,8 @@ use crate::routes::security;
 const MAX_DISPLAY_NAME_LEN: usize = 64;
 const MAX_BIO_LEN: usize = 512;
 const MAX_CUSTOM_STATUS_LEN: usize = 128;
+const MAX_AVATAR_IMAGE_SIZE: usize = 2 * 1024 * 1024;
+const MAX_AVATAR_DATA_URL_LEN: usize = 2 * 1024 * 1024;
 const MAX_CUSTOM_CSS_LEN: usize = 10 * 1024;
 const MAX_PROFILE_PRONOUNS_LEN: usize = 64;
 const MAX_PROFILE_LINKED_ACCOUNTS: usize = 8;
@@ -51,13 +54,81 @@ fn settings_route_slow_ms() -> u64 {
     })
 }
 
+// display_name, bio, and custom_status are plain user text that is surfaced
+// verbatim over the REST/WS API and rendered by arbitrary (non-escaping)
+// ecosystem consumers — bots, third-party clients, embeds, moderation
+// dashboards. A substring denylist of a handful of tags/handlers is trivially
+// bypassed (onmouseover=, <img>, <svg>, whitespace before '=', etc.), so we use
+// positive validation instead: reject the HTML-injection primitives outright.
+// '<' (and '>') cannot open any tag, which closes the entire tag-injection
+// class for fields that never legitimately contain markup. We also keep
+// rejecting the 'javascript:' URI scheme (as the prior denylist did) for
+// consumers that might place the value directly into an href/src. The
+// first-party React client already escapes these, so this is defense-in-depth
+// for external consumers and does not alter stored text.
 fn contains_dangerous_markup(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("<script")
-        || lower.contains("javascript:")
-        || lower.contains("onerror=")
-        || lower.contains("onload=")
-        || lower.contains("<iframe")
+    if value.contains('<') || value.contains('>') {
+        return true;
+    }
+    value.to_ascii_lowercase().contains("javascript:")
+}
+
+// Canonicalize CSS escape sequences the same way the browser tokenizer does, so
+// escaped spellings such as `\75rl(` (\75 = 'u') or `@\69mport` normalize to their
+// literal form (`url(`, `@import`) before substring matching. Without this the
+// checks below match only the literal ASCII spelling and are trivially bypassed
+// with hex/character escapes. Mirrors `decodeCssEscapes` in client security.ts.
+fn decode_css_escapes(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            result.push(ch);
+            continue;
+        }
+        match chars.peek().copied() {
+            None => break, // trailing backslash
+            Some(next) if next.is_ascii_hexdigit() => {
+                let mut hex = String::new();
+                while hex.len() < 6 {
+                    match chars.peek().copied() {
+                        Some(c) if c.is_ascii_hexdigit() => {
+                            hex.push(c);
+                            chars.next();
+                        }
+                        _ => break,
+                    }
+                }
+                // A single trailing whitespace is consumed as part of the escape.
+                if matches!(chars.peek().copied(), Some(c) if c.is_whitespace()) {
+                    chars.next();
+                }
+                let cp = u32::from_str_radix(&hex, 16).unwrap_or(0);
+                let decoded = if cp == 0 || cp > 0x0010_FFFF || (0xD800..=0xDFFF).contains(&cp) {
+                    '\u{FFFD}'
+                } else {
+                    char::from_u32(cp).unwrap_or('\u{FFFD}')
+                };
+                result.push(decoded);
+            }
+            Some('\n') | Some('\r') | Some('\u{000C}') => {
+                chars.next(); // line continuation: drop backslash + newline
+            }
+            Some(next) => {
+                result.push(next); // literal escape: the character stands for itself
+                chars.next();
+            }
+        }
+    }
+    result
+}
+
+fn contains_disallowed_css_directive(value: &str) -> bool {
+    value.contains("@import")
+        || value.contains("@font-face")
+        || value.contains("url(")
+        || value.contains("expression(")
+        || value.contains("javascript:")
 }
 
 fn sanitize_custom_css(value: &str) -> Result<Option<String>, ApiError> {
@@ -68,12 +139,12 @@ fn sanitize_custom_css(value: &str) -> Result<Option<String>, ApiError> {
     if trimmed.len() > MAX_CUSTOM_CSS_LEN {
         return Err(ApiError::BadRequest("custom_css exceeds 10KB".into()));
     }
+    // Check both the raw text and its escape-decoded form so escaped spellings
+    // (e.g. `\75rl(` or `@\69mport`) cannot smuggle url()/@import past the guards.
     let lower = trimmed.to_ascii_lowercase();
-    if lower.contains("@import")
-        || lower.contains("@font-face")
-        || lower.contains("url(")
-        || lower.contains("expression(")
-        || lower.contains("javascript:")
+    let decoded_lower = decode_css_escapes(trimmed).to_ascii_lowercase();
+    if contains_disallowed_css_directive(&lower)
+        || contains_disallowed_css_directive(&decoded_lower)
     {
         return Err(ApiError::BadRequest(
             "custom_css contains disallowed directives".into(),
@@ -193,7 +264,212 @@ pub async fn get_me(
 pub struct UpdateMeRequest {
     pub display_name: Option<String>,
     pub bio: Option<String>,
+    /// Legacy data-URL avatars are still accepted for backward compatibility,
+    /// but clients should prefer `POST /users/@me/avatar`.
     pub avatar_hash: Option<String>,
+}
+
+fn avatar_api_path(user_id: i64) -> String {
+    format!("/api/v1/users/{user_id}/avatar")
+}
+
+fn avatar_storage_dir(storage_path: &str) -> PathBuf {
+    FsPath::new(storage_path).join("avatars")
+}
+
+fn detect_avatar_image(
+    data: &[u8],
+    claimed: Option<&str>,
+) -> Result<(&'static str, &'static str), ApiError> {
+    if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Ok(("image/png", "png"));
+    }
+    if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        return Ok(("image/gif", "gif"));
+    }
+    if data.starts_with(b"RIFF") && data.len() >= 12 && &data[8..12] == b"WEBP" {
+        return Ok(("image/webp", "webp"));
+    }
+    if data.len() >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+        return Ok(("image/jpeg", "jpg"));
+    }
+    // Fall back to claimed type only when magic bytes are inconclusive.
+    match claimed {
+        Some("image/png") | Some("image/gif") | Some("image/webp") | Some("image/jpeg")
+        | Some("image/jpg") => Err(ApiError::BadRequest(
+            "Avatar file contents do not match the declared image type".into(),
+        )),
+        _ => Err(ApiError::BadRequest(
+            "Only PNG, JPG, GIF, or WEBP avatars are supported".into(),
+        )),
+    }
+}
+
+async fn remove_stored_avatar_files(storage_path: &str, user_id: i64) {
+    let dir = avatar_storage_dir(storage_path);
+    for ext in ["png", "jpg", "jpeg", "gif", "webp"] {
+        let path = dir.join(format!("{user_id}.{ext}"));
+        let _ = tokio::fs::remove_file(path).await;
+    }
+}
+
+pub async fn upload_avatar(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, ApiError> {
+    let mut image_data: Option<Vec<u8>> = None;
+    let mut content_type: Option<String> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?
+    {
+        match field.name().unwrap_or("").trim() {
+            "image" | "file" | "avatar" => {
+                content_type = field.content_type().map(str::to_string);
+                image_data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                        .to_vec(),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let image_data =
+        image_data.ok_or_else(|| ApiError::BadRequest("Missing avatar image".into()))?;
+    if image_data.is_empty() || image_data.len() > MAX_AVATAR_IMAGE_SIZE {
+        return Err(ApiError::BadRequest(
+            "Avatar must be between 1 byte and 2 MB".into(),
+        ));
+    }
+
+    let (resolved_ct, ext) = detect_avatar_image(&image_data, content_type.as_deref())?;
+    let _ = resolved_ct;
+
+    let storage_dir = avatar_storage_dir(&state.config.storage_path);
+    tokio::fs::create_dir_all(&storage_dir)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    remove_stored_avatar_files(&state.config.storage_path, auth.user_id).await;
+
+    let file_path = storage_dir.join(format!("{}.{}", auth.user_id, ext));
+    tokio::fs::write(&file_path, &image_data)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let avatar_hash = avatar_api_path(auth.user_id);
+    let updated = paracord_core::user::update_profile(
+        &state.db,
+        auth.user_id,
+        None,
+        None,
+        Some(&avatar_hash),
+    )
+    .await?;
+
+    let update_event = json!({
+        "user": {
+            "id": updated.id.to_string(),
+            "username": &updated.username,
+            "display_name": &updated.display_name,
+            "discriminator": updated.discriminator,
+            "avatar_hash": &updated.avatar_hash,
+            "banner_hash": &updated.banner_hash,
+            "bio": &updated.bio,
+            "flags": updated.flags,
+            "bot": paracord_core::is_bot(updated.flags),
+            "system": false,
+            "created_at": updated.created_at.to_rfc3339(),
+        }
+    });
+    state
+        .event_bus
+        .dispatch_to_users("USER_UPDATE", update_event.clone(), vec![auth.user_id]);
+    if let Ok(guilds) = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into()).await {
+        for guild in guilds {
+            state
+                .event_bus
+                .dispatch("USER_UPDATE", update_event.clone(), Some(guild.id));
+        }
+    }
+
+    Ok(Json(json!({
+        "id": updated.id.to_string(),
+        "username": updated.username,
+        "discriminator": updated.discriminator,
+        "email": updated.email,
+        "display_name": updated.display_name,
+        "avatar_hash": updated.avatar_hash,
+        "banner_hash": updated.banner_hash,
+        "bio": updated.bio,
+        "flags": updated.flags,
+        "bot": paracord_core::is_bot(updated.flags),
+        "system": false,
+    })))
+}
+
+pub async fn get_user_avatar(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(user_id): Path<i64>,
+) -> Result<axum::response::Response, ApiError> {
+    let user = paracord_db::users::get_user_by_id(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    let expected = avatar_api_path(user_id);
+    if user.avatar_hash.as_deref() != Some(expected.as_str()) {
+        return Err(ApiError::NotFound);
+    }
+
+    let dir = avatar_storage_dir(&state.config.storage_path);
+    let mut found: Option<(PathBuf, &'static str)> = None;
+    for (ext, content_type) in [
+        ("png", "image/png"),
+        ("jpg", "image/jpeg"),
+        ("jpeg", "image/jpeg"),
+        ("gif", "image/gif"),
+        ("webp", "image/webp"),
+    ] {
+        let path = dir.join(format!("{user_id}.{ext}"));
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            found = Some((path, content_type));
+            break;
+        }
+    }
+    let (path, content_type) = found.ok_or(ApiError::NotFound)?;
+    let data = tokio::fs::read(&path)
+        .await
+        .map_err(|_| ApiError::NotFound)?;
+
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static(content_type),
+            ),
+            (
+                header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("private, max-age=3600"),
+            ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                axum::http::HeaderValue::from_static("nosniff"),
+            ),
+        ],
+        data,
+    )
+        .into_response())
 }
 
 pub async fn update_me(
@@ -221,6 +497,13 @@ pub async fn update_me(
             return Err(ApiError::BadRequest("bio contains unsafe markup".into()));
         }
     }
+    if let Some(avatar) = body.avatar_hash.as_deref() {
+        if avatar.starts_with("data:") && avatar.len() > MAX_AVATAR_DATA_URL_LEN {
+            return Err(ApiError::BadRequest(
+                "avatar_hash data URL is too large; use POST /users/@me/avatar".into(),
+            ));
+        }
+    }
 
     let updated = paracord_core::user::update_profile(
         &state.db,
@@ -230,6 +513,32 @@ pub async fn update_me(
         body.avatar_hash.as_deref(),
     )
     .await?;
+
+    let update_event = json!({
+        "user": {
+            "id": updated.id.to_string(),
+            "username": &updated.username,
+            "display_name": &updated.display_name,
+            "discriminator": updated.discriminator,
+            "avatar_hash": &updated.avatar_hash,
+            "banner_hash": &updated.banner_hash,
+            "bio": &updated.bio,
+            "flags": updated.flags,
+            "bot": paracord_core::is_bot(updated.flags),
+            "system": false,
+            "created_at": updated.created_at.to_rfc3339(),
+        }
+    });
+    state
+        .event_bus
+        .dispatch_to_users("USER_UPDATE", update_event.clone(), vec![auth.user_id]);
+    if let Ok(guilds) = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into()).await {
+        for guild in guilds {
+            state
+                .event_bus
+                .dispatch("USER_UPDATE", update_event.clone(), Some(guild.id));
+        }
+    }
 
     Ok(Json(json!({
         "id": updated.id.to_string(),
@@ -291,14 +600,33 @@ pub async fn get_settings(
     }
 
     if let Some(s) = settings {
+        let status = if matches!(
+            s.presence_status.as_str(),
+            "online" | "idle" | "dnd" | "invisible"
+        ) {
+            s.presence_status.as_str()
+        } else {
+            // Legacy fallback for rows that still only have notifications JSON.
+            s.notifications
+                .get("presenceStatus")
+                .and_then(|v| v.as_str())
+                .filter(|v| matches!(*v, "online" | "idle" | "dnd" | "invisible"))
+                .unwrap_or("online")
+        };
+        let custom_status = s.custom_status.clone().or_else(|| {
+            s.notifications
+                .get("customStatus")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string())
+        });
         Ok(Json(json!({
             "user_id": s.user_id.to_string(),
             "theme": s.theme,
             "locale": s.locale,
             "message_display_compact": s.message_display == "compact",
             "custom_css": s.custom_css,
-            "status": "online",
-            "custom_status": null,
+            "status": status,
+            "custom_status": custom_status,
             "crypto_auth_enabled": s.crypto_auth_enabled,
             "notifications": s.notifications,
             "keybinds": s.keybinds,
@@ -389,11 +717,35 @@ pub async fn update_settings(
         }
     }
 
+    if let Some(status) = body.status.as_deref() {
+        if !matches!(status, "online" | "idle" | "dnd" | "invisible") {
+            return Err(ApiError::BadRequest(
+                "status must be online, idle, dnd, or invisible".into(),
+            ));
+        }
+    }
+
     let custom_css = if let Some(css) = body.custom_css.as_deref() {
         sanitize_custom_css(css)?
     } else {
         existing.as_ref().and_then(|s| s.custom_css.clone())
     };
+
+    let notifications = body
+        .notifications
+        .clone()
+        .or_else(|| existing.as_ref().map(|s| s.notifications.clone()))
+        .unwrap_or_else(|| json!({}));
+
+    let presence_status = body.status.as_deref();
+    let custom_status_update = body.custom_status.as_ref().map(|status| {
+        let trimmed = status.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
 
     let upsert_started = Instant::now();
     let settings = paracord_db::users::upsert_user_settings(
@@ -404,7 +756,9 @@ pub async fn update_settings(
         message_display,
         custom_css.as_deref(),
         body.crypto_auth_enabled,
-        body.notifications.as_ref(),
+        presence_status,
+        custom_status_update,
+        Some(&notifications),
         body.keybinds.as_ref(),
     )
     .await
@@ -459,8 +813,8 @@ pub async fn update_settings(
         "locale": settings.locale,
         "message_display_compact": settings.message_display == "compact",
         "custom_css": settings.custom_css,
-        "status": body.status.unwrap_or_else(|| "online".to_string()),
-        "custom_status": body.custom_status,
+        "status": settings.presence_status,
+        "custom_status": settings.custom_status,
         "crypto_auth_enabled": settings.crypto_auth_enabled,
         "notifications": settings.notifications,
         "keybinds": settings.keybinds,
@@ -1062,4 +1416,68 @@ pub async fn import_identity(
     let json_value =
         serde_json::to_value(&result).map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
     Ok(Json(json_value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{contains_dangerous_markup, decode_css_escapes, sanitize_custom_css};
+
+    #[test]
+    fn markup_check_rejects_injection_primitives() {
+        // Vectors the old five-token denylist missed.
+        assert!(contains_dangerous_markup(
+            "<img src=x onmouseover=alert(1)>"
+        ));
+        assert!(contains_dangerous_markup("<svg onload=alert(1)>"));
+        assert!(contains_dangerous_markup(
+            "<a href=javascript:alert(1)>x</a>"
+        ));
+        assert!(contains_dangerous_markup("hello <b>bold</b>"));
+        assert!(contains_dangerous_markup("javascript:alert(1)"));
+        assert!(contains_dangerous_markup("data:text/html,<x>"));
+    }
+
+    #[test]
+    fn markup_check_allows_plain_text() {
+        assert!(!contains_dangerous_markup("Ada Lovelace"));
+        assert!(!contains_dangerous_markup(
+            "just vibing \u{1f60e} — she/her"
+        ));
+        assert!(!contains_dangerous_markup("email me at a@b.com"));
+    }
+
+    #[test]
+    fn allows_plain_safe_css() {
+        let css = ":root { --bg-primary: #1a1a2e; color: red; }";
+        let out = sanitize_custom_css(css).expect("safe css should pass");
+        assert_eq!(out.as_deref(), Some(css));
+    }
+
+    #[test]
+    fn rejects_literal_url() {
+        assert!(sanitize_custom_css(":root{background:url(https://evil/x)}").is_err());
+    }
+
+    #[test]
+    fn rejects_hex_escaped_url() {
+        // `\75` = 'u' — decodes to `url(` in the browser but has no literal "url(".
+        assert!(sanitize_custom_css(":root{background:\\75rl(https://evil/x)}").is_err());
+        // Hex escape with a trailing whitespace terminator.
+        assert!(sanitize_custom_css(":root{background:\\75 rl(https://evil/x)}").is_err());
+    }
+
+    #[test]
+    fn rejects_escaped_at_import() {
+        // `\69` = 'i' — decodes to `@import`.
+        assert!(sanitize_custom_css("@\\69mport 'https://evil/x';").is_err());
+    }
+
+    #[test]
+    fn decode_css_escapes_matches_browser_tokenizer() {
+        assert_eq!(decode_css_escapes("\\75rl("), "url(");
+        assert_eq!(decode_css_escapes("\\75 rl("), "url(");
+        assert_eq!(decode_css_escapes("@\\69mport"), "@import");
+        // Literal escape: the character stands for itself.
+        assert_eq!(decode_css_escapes("\\@import"), "@import");
+    }
 }

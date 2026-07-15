@@ -24,8 +24,16 @@ const mockUIState = vi.hoisted(() => ({
   sidebarCollapsed: false,
   toggleSidebarCollapsed: vi.fn(),
   setCommandPaletteOpen: vi.fn(),
+  setGuildSettingsId: vi.fn(),
   connectionStatus: 'connected',
   connectionLatency: 42,
+}));
+
+const mockPermissions = vi.hoisted(() => ({
+  permissions: 0n,
+  isAdmin: false,
+  isOwner: false,
+  isLoading: false,
 }));
 
 vi.mock('../../hooks/useVoice', () => ({
@@ -48,9 +56,13 @@ vi.mock('../../stores/uiStore', () => ({
   useUIStore: (selector: (state: typeof mockUIState) => unknown) => selector(mockUIState),
 }));
 
+vi.mock('../../hooks/usePermissions', () => ({
+  usePermissions: () => mockPermissions,
+}));
+
 vi.mock('../../stores/channelStore', () => ({
-  useChannelStore: (selector: (state: { channelsByGuild: Record<string, unknown[]> }) => unknown) =>
-    selector({ channelsByGuild: {} }),
+  useChannelStore: (selector: (state: { channelsByGuild: Record<string, unknown[]>; channelsById: Record<string, unknown> }) => unknown) =>
+    selector({ channelsByGuild: {}, channelsById: {} }),
 }));
 
 vi.mock('../../hooks/useMobile', () => ({
@@ -81,6 +93,7 @@ function renderDmTopBar() {
           path="/app/dms/:channelId"
           element={<TopBar isDM recipientName="Ada" dmChannelId="dm-1" />}
         />
+        <Route path="/app/dms" element={<div>Messages index</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -117,5 +130,14 @@ describe('TopBar DM voice calls', () => {
         ]),
       );
     });
+  });
+
+  it('returns from a direct-message conversation to the Messages index', async () => {
+    const user = userEvent.setup();
+    renderDmTopBar();
+
+    await user.click(screen.getByRole('button', { name: 'Back to Messages' }));
+
+    expect(screen.getByText('Messages index')).toBeInTheDocument();
   });
 });

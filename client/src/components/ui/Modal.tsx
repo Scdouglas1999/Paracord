@@ -27,8 +27,8 @@ type ModalPlacement = 'center' | 'top';
 type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | 'auto';
 
 const SIZE_CLASS: Record<ModalSize, string> = {
-  sm: 'w-full max-w-[440px]',
-  md: 'w-full max-w-[560px]',
+  sm: 'w-full max-w-md',
+  md: 'w-full max-w-xl',
   lg: 'w-full max-w-2xl',
   xl: 'w-full max-w-3xl',
   auto: '',
@@ -155,6 +155,13 @@ export function Modal({
   return createPortal(
     <AnimatePresence>
       {open && (
+        // The backdrop deliberately carries NO `data-native-overlay-occlude`.
+        // Over the Linux native underlay the force-opaque rule (layout.css)
+        // repaints marked elements solid --bg-secondary; on this full-screen
+        // `inset-0` backdrop that painted the ENTIRE viewport dark whenever a
+        // stream was live, so opening any modal "blacked out" the stream and the
+        // dialog looked stuck. The backdrop stays translucent (dims the video
+        // behind); the opaque panel below carries the content and reads clearly.
         <div
           className={cn(
             'fixed inset-0 flex modal-backdrop backdrop-blur-sm',
@@ -162,7 +169,13 @@ export function Modal({
             PLACEMENT_CLASS[placement],
             backdropClassName,
           )}
-          onClick={closeOnBackdrop ? onClose : undefined}
+          onMouseDown={
+            closeOnBackdrop
+              ? (event) => {
+                  if (event.target === event.currentTarget) onClose();
+                }
+              : undefined
+          }
         >
           <motion.div
             ref={ref}
@@ -177,11 +190,10 @@ export function Modal({
             exit={panelMotion.exit}
             transition={MODAL_TRANSITION}
             className={cn(
-              'relative overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl',
+              'relative max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-border-strong bg-bg-accent shadow-xl',
               SIZE_CLASS[size],
               panelClassName,
             )}
-            onClick={(e) => e.stopPropagation()}
             onKeyDown={onKeyDown}
           >
             <ModalContext.Provider value={{ onClose, closeLabel }}>

@@ -62,14 +62,12 @@ class MediaAudioProcessor extends AudioWorkletProcessor {
         const dbov = rms > 0 ? 20 * Math.log10(rms) : -127;
         const audioLevel = Math.max(0, Math.min(127, Math.round(-dbov)));
 
-        // Post frame to main thread
-        this.port.postMessage({
-          type: 'frame',
-          samples: this.buffer.slice(),
-          audioLevel,
-        });
-
+        // Transfer the filled buffer to the main thread (zero-copy). Allocate a
+        // fresh accumulator immediately so we never touch a detached ArrayBuffer.
+        const samples = this.buffer;
+        this.buffer = new Float32Array(FRAME_SIZE);
         this.bufferOffset = 0;
+        this.port.postMessage({ type: 'frame', samples, audioLevel }, [samples.buffer]);
       }
     }
 

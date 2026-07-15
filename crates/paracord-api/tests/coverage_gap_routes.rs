@@ -1069,6 +1069,17 @@ async fn group_sender_keys_post_get_and_ack() -> anyhow::Result<()> {
     .await?;
     let recipient_id = current_user_id_with_token(&ctx, &recipient_token).await?;
 
+    // Group DM creation requires a friend or shared-guild relationship with each
+    // recipient (block/consent parity with 1:1 DMs) — befriend the recipient.
+    let caller_id = current_user_id(&ctx).await?.parse::<i64>()?;
+    paracord_db::relationships::create_relationship(
+        &ctx.db,
+        caller_id,
+        recipient_id.parse::<i64>()?,
+        1,
+    )
+    .await?;
+
     let (status, payload) = ctx
         .request_json(
             Method::POST,
@@ -1256,6 +1267,8 @@ async fn moderation_templates_apply_timed_mute() -> anyhow::Result<()> {
 async fn dm_group_routes_create_and_list_channels() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let recipient_id = create_external_user(&ctx, "dmpeer").await?;
+    let caller_id = current_user_id(&ctx).await?.parse::<i64>()?;
+    paracord_db::relationships::create_relationship(&ctx.db, caller_id, recipient_id, 1).await?;
 
     let (status, payload) = ctx
         .request_json(
@@ -1287,6 +1300,92 @@ async fn dm_group_routes_create_and_list_channels() -> anyhow::Result<()> {
         channels.iter().any(|entry| entry["id"] == channel_id),
         "expected group DM in list response: {payload}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn group_dm_create_and_add_recipient_enforce_block_and_consent() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let caller_id = current_user_id(&ctx).await?.parse::<i64>()?;
+
+    // A user who has blocked the caller must not be pullable into a group DM.
+    let blocker_id = create_external_user(&ctx, "dmblocker").await?;
+    paracord_db::relationships::create_relationship(&ctx.db, blocker_id, caller_id, 2).await?;
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/users/@me/channels",
+            Some(json!({ "recipient_ids": [blocker_id.to_string()] })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "group DM creation must reject a blocking recipient: {payload}"
+    );
+
+    // A stranger (no friendship / shared guild) must also be rejected on create.
+    let stranger_id = create_external_user(&ctx, "dmstranger").await?;
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/users/@me/channels",
+            Some(json!({ "recipient_ids": [stranger_id.to_string()] })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "group DM creation must reject a non-consenting recipient: {payload}"
+    );
+
+    // Create a legitimate group DM with a friend, then try to add the blocker.
+    let friend_id = create_external_user(&ctx, "dmfriend").await?;
+    paracord_db::relationships::create_relationship(&ctx.db, caller_id, friend_id, 1).await?;
+    let (status, payload) = ctx
+        .request_json(
+            Method::POST,
+            "/api/v1/users/@me/channels",
+            Some(json!({ "recipient_ids": [friend_id.to_string()] })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "group DM setup failed: {payload}"
+    );
+    let channel_id = payload["id"]
+        .as_str()
+        .context("group DM id should be a string")?
+        .to_string();
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::PUT,
+            &format!("/api/v1/channels/{channel_id}/recipients/{blocker_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "add-recipient must reject pulling in a blocking user: {payload}"
+    );
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::PUT,
+            &format!("/api/v1/channels/{channel_id}/recipients/{stranger_id}"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "add-recipient must reject a non-consenting user: {payload}"
+    );
+
     Ok(())
 }
 
@@ -1474,6 +1573,8 @@ async fn dm_create_route_forbids_unrelated_users() -> anyhow::Result<()> {
 async fn group_dm_recipients_route_denies_non_member_access() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let recipient_id = create_external_user(&ctx, "dmgrouppeer").await?;
+    let caller_id = current_user_id(&ctx).await?.parse::<i64>()?;
+    paracord_db::relationships::create_relationship(&ctx.db, caller_id, recipient_id, 1).await?;
 
     let (status, payload) = ctx
         .request_json(
@@ -1563,6 +1664,118 @@ async fn webhook_execution_creates_message_via_token_route() -> anyhow::Result<(
     );
     assert_eq!(payload["content"], json!("coverage webhook payload"));
     assert_eq!(payload["channel_id"], json!(channel_id));
+    Ok(())
+}
+
+/// Issue 2 regression: the per-webhook rate-limit budget must only be consumed
+/// by token-authenticated requests. The webhook_id is public (part of the
+/// delivery URL), so a flood of bogus-token requests must not exhaust the
+/// per-webhook window and deny a legitimate delivery. Each test app is stamped
+/// with a distinct client IP, so the global per-IP limiter does not interfere.
+#[tokio::test]
+async fn webhook_rate_budget_only_consumed_after_token_auth() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Webhook RateLimit Guild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "webhook-rl").await?;
+
+    let (status, webhook) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/guilds/{guild_id}/webhooks"),
+            Some(json!({ "name": "RateLimit Hook", "channel_id": channel_id })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "create webhook failed: {webhook}");
+    let webhook_id = webhook["id"].as_str().context("webhook id")?.to_string();
+    let real_token = webhook["token"].as_str().context("webhook token")?.to_string();
+
+    // WEBHOOK_RATE_LIMIT is 30 requests / 60s. Fire that many bogus-token
+    // requests against the known webhook_id. Each must be rejected as NotFound
+    // (token checked first) and must NOT charge the per-webhook window.
+    let bogus_token = "0".repeat(64);
+    for _ in 0..30 {
+        let (status, _payload) = ctx
+            .request_json_no_auth(
+                Method::POST,
+                &format!("/api/v1/webhooks/{webhook_id}/{bogus_token}"),
+                Some(json!({ "content": "should not authenticate" })),
+            )
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "bogus-token webhook execution must be rejected as NotFound, not rate-limited",
+        );
+    }
+
+    // The legitimate delivery must still succeed. Before the fix (rate limit
+    // charged before token validation) the bogus flood filled the window and
+    // this returned 429 Too Many Requests.
+    let (status, payload) = ctx
+        .request_json_no_auth(
+            Method::POST,
+            &format!("/api/v1/webhooks/{webhook_id}/{real_token}"),
+            Some(json!({ "content": "legit delivery" })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "legit delivery must not be denied by a bogus-token flood: {payload}",
+    );
+    Ok(())
+}
+
+/// Issue 1 (defense-in-depth) regression: a presented token that equals the
+/// SHA-256 hash of the raw token must NOT authenticate. A raw token still
+/// authenticates (round-trip preserved); presenting its hash does not, so
+/// knowledge of the stored digest can never be replayed as a credential.
+#[tokio::test]
+async fn webhook_token_digest_is_not_accepted_as_credential() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Webhook Token Guild").await?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "webhook-token").await?;
+
+    let (status, webhook) = ctx
+        .request_json(
+            Method::POST,
+            &format!("/api/v1/guilds/{guild_id}/webhooks"),
+            Some(json!({ "name": "Token Hook", "channel_id": channel_id })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "create webhook failed: {webhook}");
+    let webhook_id = webhook["id"].as_str().context("webhook id")?.to_string();
+    let raw_token = webhook["token"].as_str().context("webhook token")?.to_string();
+
+    // Legit path: the RAW token returned by create must authenticate.
+    let (status, payload) = ctx
+        .request_json_no_auth(
+            Method::POST,
+            &format!("/api/v1/webhooks/{webhook_id}/{raw_token}"),
+            Some(json!({ "content": "legit via raw token" })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "legit webhook execution with the raw token must succeed: {payload}",
+    );
+
+    // Pass-the-hash: presenting sha256(raw_token) must NOT authenticate.
+    let token_digest = paracord_api::secure_tokens::hash_token_sha256_hex(&raw_token);
+    let (status, _payload) = ctx
+        .request_json_no_auth(
+            Method::POST,
+            &format!("/api/v1/webhooks/{webhook_id}/{token_digest}"),
+            Some(json!({ "content": "attempted pass-the-hash" })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "presenting the sha256 digest of the raw token must not authenticate",
+    );
+
     Ok(())
 }
 
@@ -1731,6 +1944,16 @@ async fn profile_fields_include_pronouns_and_linked_accounts() -> anyhow::Result
     let (status, payload) = ctx
         .request_json(
             Method::PATCH,
+            "/api/v1/users/@me",
+            Some(json!({ "display_name": "Visible Name" })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "update profile failed: {payload}");
+    assert_eq!(payload["display_name"], json!("Visible Name"));
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::PATCH,
             "/api/v1/users/@me/settings",
             Some(json!({
                 "notifications": {
@@ -1752,6 +1975,7 @@ async fn profile_fields_include_pronouns_and_linked_accounts() -> anyhow::Result
         .request_json(Method::GET, "/api/v1/users/@me", None)
         .await?;
     assert_eq!(status, StatusCode::OK, "get me failed: {me_payload}");
+    assert_eq!(me_payload["display_name"], json!("Visible Name"));
     assert_eq!(me_payload["pronouns"], json!("they/them"));
     let me_accounts = me_payload["linked_accounts"]
         .as_array()
@@ -2306,6 +2530,33 @@ async fn channel_summary_uses_configured_ai_provider() -> anyhow::Result<()> {
         summary.contains("ship on Friday"),
         "expected AI summary content in response: {payload}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tenor_search_and_trending_require_auth() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+
+    // Tenor proxy routes take AuthUser — unauthenticated callers must get 401
+    // even when a Tenor API key is not configured (auth runs before the key check).
+    let (search_status, _) = ctx
+        .request_json_no_auth(Method::GET, "/api/v1/tenor/search?q=cats&limit=5", None)
+        .await?;
+    assert_eq!(
+        search_status,
+        StatusCode::UNAUTHORIZED,
+        "tenor search must require authentication"
+    );
+
+    let (trending_status, _) = ctx
+        .request_json_no_auth(Method::GET, "/api/v1/tenor/trending?limit=5", None)
+        .await?;
+    assert_eq!(
+        trending_status,
+        StatusCode::UNAUTHORIZED,
+        "tenor trending must require authentication"
+    );
+
     Ok(())
 }
 

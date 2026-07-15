@@ -1,8 +1,9 @@
-import { Headphones, HeadphoneOff, Mic, MicOff, Monitor, Users, Video } from 'lucide-react';
+import { Hand, Headphones, HeadphoneOff, Mic, MicOff, Monitor, Users, Video } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { StageInstance } from '../../api/stage';
 import type { VoiceState } from '../../types';
 import { Button } from '../../components/ui/Button';
+import { displayName } from '../../lib/displayName';
 
 interface VoiceLobbyProps {
   channelName: string;
@@ -14,6 +15,8 @@ interface VoiceLobbyProps {
   voiceJoinPending: boolean;
   onRetryJoin: () => void;
   onJoin: () => void;
+  /** When set, streaming participants show a Watch button that calls this. */
+  onWatchStream?: (userId: string) => void;
   canManageStage: boolean;
   stageInstance: StageInstance | null;
   stageLoading: boolean;
@@ -32,7 +35,7 @@ interface VoiceLobbyProps {
 // Avatar with a meaning-carrying ring: teal→emerald duotone when streaming
 // (the rationed brand moment), emerald when on camera, otherwise a quiet edge.
 function ParticipantAvatar({ p }: { p: VoiceState }) {
-  const initial = (p.username || '?')[0].toUpperCase();
+  const initial = displayName(p)[0].toUpperCase();
   const ringClass = p.self_stream
     ? 'bg-gradient-to-br from-accent-secondary to-accent-primary'
     : p.self_video
@@ -57,6 +60,7 @@ export function VoiceLobby({
   voiceJoinPending,
   onRetryJoin,
   onJoin,
+  onWatchStream,
   canManageStage,
   stageInstance,
   stageLoading,
@@ -81,9 +85,14 @@ export function VoiceLobby({
     >
       <ParticipantAvatar p={p} />
       <span className="min-w-0 flex-1 truncate text-label text-text-primary">
-        {p.username || p.user_id}
+        {displayName(p)}
       </span>
       <div className="flex items-center gap-1.5">
+        {isStage && p.request_to_speak_at && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-accent-tint px-2 py-0.5 text-[10px] font-semibold text-accent-primary" title="Requested to speak">
+            <Hand size={11} /> Raised hand
+          </span>
+        )}
         {p.self_mute && (
           <span title="Muted"><MicOff size={14} className="text-accent-danger" /></span>
         )}
@@ -94,7 +103,19 @@ export function VoiceLobby({
           <span title="Camera on"><Video size={14} className="text-accent-primary" /></span>
         )}
         {p.self_stream && (
-          <span title="Streaming"><Monitor size={14} className="text-accent-secondary" /></span>
+          onWatchStream ? (
+            <button
+              type="button"
+              onClick={() => onWatchStream(p.user_id)}
+              className="inline-flex items-center rounded-xs bg-danger-tint px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-wide text-accent-danger outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-accent-danger/20 focus-visible:shadow-[var(--focus-ring)]"
+              title={`Watch ${displayName(p)}'s stream`}
+              aria-label={`Watch ${displayName(p)}'s stream`}
+            >
+              Live
+            </button>
+          ) : (
+            <span title="Streaming"><Monitor size={14} className="text-accent-secondary" /></span>
+          )
         )}
       </div>
       {isStage && canManageStage && stageInstance && (

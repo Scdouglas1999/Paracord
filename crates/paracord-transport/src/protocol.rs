@@ -140,6 +140,73 @@ impl VideoFrameMetadata {
     }
 }
 
+/// Upper bound on a single stream-delivered video frame message.
+///
+/// The uni-stream keyframe path carries one whole (encrypted) frame per message.
+/// At the highest screen-share preset a keyframe is a few megabytes; this cap
+/// bounds a single length-delimited read so a malformed or hostile stream cannot
+/// force an unbounded allocation on the relay or a receiver.
+pub const MAX_STREAM_FRAME_SIZE: usize = 16 * 1024 * 1024;
+
+/// A whole video frame delivered on a QUIC unidirectional stream — the
+/// loss-resilient path for keyframes and any frame too large to survive as
+/// hundreds of all-or-nothing datagram fragments.
+///
+/// One whole frame is carried per uni stream: the stream's FIN delimits the
+/// message, so the reader drains the stream to end and parses exactly one frame.
+/// The wire layout is:
+///
+/// ```text
+/// [16-byte MediaHeader]   // cleartext; the relay routes on `ssrc` exactly like a datagram
+/// [VideoFrameMetadata]    // cleartext; stream/track/frame identity + is_keyframe
+/// [payload...]            // AES-GCM ciphertext of the WHOLE frame (one AEAD unit)
+/// ```
+///
+/// The payload is encrypted as a single AEAD unit with the 16-byte MediaHeader
+/// as AAD — the same key/nonce scheme as the datagram path, differing only in
+/// that the frame is not fragmented. The receiver distinguishes this whole-frame
+/// format from the datagram fragment format by which transport it arrived on
+/// (uni stream vs datagram), so no separate format tag is needed on the wire.
+///
+/// The relay forwards this message byte-for-byte without decrypting it: it reads
+/// the cleartext [`MediaHeader`] for routing and re-emits the identical bytes to
+/// each subscriber on a fresh uni stream (same opaque-ciphertext fan-out as the
+/// datagram path).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaStreamFrame {
+    pub header: MediaHeader,
+    pub metadata: VideoFrameMetadata,
+    pub payload: Bytes,
+}
+
+impl MediaStreamFrame {
+    /// Serialize to the wire layout: header + metadata + ciphertext payload.
+    pub fn encode(&self) -> Result<Bytes, ProtocolError> {
+        let mut buf = BytesMut::with_capacity(HEADER_SIZE + 64 + self.payload.len());
+        self.header.encode(&mut buf);
+        self.metadata.encode(&mut buf)?;
+        buf.extend_from_slice(&self.payload);
+        Ok(buf.freeze())
+    }
+
+    /// Parse a whole-frame stream message from a complete message body.
+    ///
+    /// The caller is responsible for having read exactly one message (the whole
+    /// uni stream up to FIN); everything after the header + metadata is treated
+    /// as the encrypted payload.
+    pub fn decode(buf: &[u8]) -> Result<Self, ProtocolError> {
+        let mut cursor = buf;
+        let header = MediaHeader::decode(&mut cursor)?;
+        let metadata = VideoFrameMetadata::decode(&mut cursor)?;
+        let payload = Bytes::copy_from_slice(cursor);
+        Ok(Self {
+            header,
+            metadata,
+            payload,
+        })
+    }
+}
+
 impl MediaHeader {
     pub fn new(track_type: TrackType, ssrc: u32) -> Self {
         Self {
@@ -314,5 +381,53 @@ mod tests {
         metadata.encode(&mut buf).unwrap();
         let decoded = VideoFrameMetadata::decode(&mut buf.freeze()).unwrap();
         assert_eq!(metadata, decoded);
+    }
+
+    #[test]
+    fn media_stream_frame_round_trip() {
+        let header = MediaHeader {
+            version: 1,
+            track_type: TrackType::Video,
+            simulcast_layer: 1,
+            sequence: 9001,
+            timestamp: 4242,
+            ssrc: 0x0BADF00D,
+            audio_level: 127,
+            key_epoch: 5,
+            payload_length: 0,
+            codec: VideoCodec::Vp9.header_id(),
+        };
+        let metadata = VideoFrameMetadata {
+            stream_id: StreamId::new("stream-42"),
+            track_id: TrackId::new("screen"),
+            frame_id: 12_345,
+            layer_id: 1,
+            codec: VideoCodec::Vp9,
+            timestamp_us: 987_654,
+            is_keyframe: true,
+            fragment_index: 0,
+            fragment_count: 1,
+        };
+        // A payload longer than u16::MAX proves the whole-frame path is not bound
+        // by the 16-bit header payload_length field (it is length-delimited by the
+        // uni stream itself).
+        let payload = Bytes::from(vec![0xABu8; 70_000]);
+        let frame = MediaStreamFrame {
+            header,
+            metadata,
+            payload: payload.clone(),
+        };
+
+        let encoded = frame.encode().unwrap();
+        let decoded = MediaStreamFrame::decode(&encoded).unwrap();
+        assert_eq!(decoded.header, header);
+        assert_eq!(decoded.metadata, frame.metadata);
+        assert_eq!(decoded.payload, payload);
+
+        // The relay routes on the cleartext header alone; it must be parseable
+        // from the front of the message without touching the payload.
+        let routed = MediaHeader::decode(&mut &encoded[..HEADER_SIZE]).unwrap();
+        assert_eq!(routed.ssrc, header.ssrc);
+        assert_eq!(routed.track_type, TrackType::Video);
     }
 }

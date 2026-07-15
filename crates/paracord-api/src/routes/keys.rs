@@ -41,6 +41,10 @@ pub struct OneTimePrekeyUpload {
 pub struct UploadKeysRequest {
     pub signed_prekey: Option<SignedPrekeyUpload>,
     pub one_time_prekeys: Option<Vec<OneTimePrekeyUpload>>,
+    /// Long-lived last-resort one-time prekey. Handed out (without deletion) as
+    /// an X3DH fallback once the disposable pool is drained, so a hostile caller
+    /// cannot exhaust the pool and force new sessions down to signed-prekey-only.
+    pub last_resort_prekey: Option<OneTimePrekeyUpload>,
 }
 
 /// PUT /api/v1/users/@me/keys -- Upload prekey bundle
@@ -98,6 +102,24 @@ pub async fn upload_keys(
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
 
+    let mut last_resort_prekey_id: Option<i64> = None;
+    if let Some(lrk) = &body.last_resort_prekey {
+        if !is_valid_base64(&lrk.public_key, EXPECTED_KEY_BASE64_LEN) {
+            return Err(ApiError::BadRequest(
+                "Invalid last-resort prekey public_key format (expected 44 base64 chars)".into(),
+            ));
+        }
+        paracord_db::prekeys::upsert_last_resort_prekey(
+            &state.db,
+            lrk.id,
+            auth.user_id,
+            &lrk.public_key,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        last_resort_prekey_id = Some(lrk.id);
+    }
+
     let total = paracord_db::prekeys::count_one_time_prekeys(&state.db, auth.user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -106,6 +128,7 @@ pub async fn upload_keys(
         "signed_prekey_id": signed_prekey_id,
         "one_time_prekeys_stored": opk_stored,
         "one_time_prekeys_total": total,
+        "last_resort_prekey_id": last_resort_prekey_id,
     })))
 }
 
@@ -163,8 +186,13 @@ pub async fn get_key_count(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .is_some();
 
+    let has_last_resort = paracord_db::prekeys::has_last_resort_prekey(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
     Ok(Json(json!({
         "one_time_prekeys_remaining": count,
         "signed_prekey_uploaded": has_spk,
+        "last_resort_prekey_uploaded": has_last_resort,
     })))
 }

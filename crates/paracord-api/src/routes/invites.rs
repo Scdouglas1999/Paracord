@@ -220,6 +220,19 @@ pub async fn create_invite(
     )
     .await;
 
+    state.event_bus.dispatch(
+        "INVITE_CREATE",
+        json!({
+            "code": invite.code,
+            "guild_id": space_id.to_string(),
+            "channel_id": invite.channel_id.to_string(),
+            "inviter_id": invite.inviter_id.map(|id| id.to_string()),
+            "max_uses": invite.max_uses,
+            "max_age": invite.max_age,
+        }),
+        Some(space_id),
+    );
+
     Ok((
         StatusCode::CREATED,
         Json(json!({

@@ -1,6 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Monitor, Video, ChevronDown, X } from 'lucide-react';
 import type { WebcamTile } from '../../hooks/useWebcamTiles';
+import {
+  StreamOverlayPortal,
+  useAnchoredOverlayCoords,
+  useOverlayDismiss,
+} from './streamOverlayPortal';
 
 export type PaneSource =
   | { type: 'none' }
@@ -18,6 +23,8 @@ interface SplitPaneSourcePickerProps {
   currentUserId: string | null;
 }
 
+const MENU_WIDTH = 208;
+
 export function SplitPaneSourcePicker({
   source,
   onSourceChange,
@@ -28,29 +35,18 @@ export function SplitPaneSourcePicker({
   currentUserId,
 }: SplitPaneSourcePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
-  // Close on outside click
-  useEffect(() => {
-    if (!isOpen) return;
-    const onMouseDown = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
-  }, [isOpen]);
+  const close = useCallback(() => setIsOpen(false), []);
+  const isInside = useCallback(
+    (target: Node) =>
+      Boolean(triggerRef.current?.contains(target) || panelRef.current?.contains(target)),
+    [],
+  );
+  useOverlayDismiss(isOpen, close, isInside);
 
-  // Close on Escape
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsOpen(false);
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [isOpen]);
+  const coords = useAnchoredOverlayCoords(isOpen, triggerRef, 'below-start', MENU_WIDTH);
 
   const getSourceLabel = (src: PaneSource): string => {
     if (src.type === 'none') return 'Select source';
@@ -72,9 +68,12 @@ export function SplitPaneSourcePicker({
   };
 
   return (
-    <div ref={containerRef} className="relative z-20">
+    <div className="relative z-20">
       <button
+        ref={triggerRef}
         onClick={() => setIsOpen((prev) => !prev)}
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
         className="flex items-center gap-1.5 rounded-sm border border-border-subtle px-2.5 py-1.5 text-meta font-medium shadow-sm outline-none backdrop-blur-md transition-[color,background-color,box-shadow] duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:shadow-[var(--focus-ring)]"
         style={{
           backgroundColor: 'color-mix(in srgb, var(--bg-floating) 85%, transparent)',
@@ -87,10 +86,19 @@ export function SplitPaneSourcePicker({
         <ChevronDown size={12} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
+      {/* Portaled over native stream underlays — in-pane absolute menus composite behind GL video. */}
       {isOpen && (
-        <div
-          className="absolute left-0 top-full mt-1 min-w-[210px] rounded-md border border-border-subtle p-1 shadow-lg"
-          style={{ backgroundColor: 'var(--bg-floating)', backdropFilter: 'blur(16px)' }}
+        <StreamOverlayPortal
+          panelRef={panelRef}
+          role="listbox"
+          aria-label="Pane source"
+          className="min-w-[min(13rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] rounded-md border border-border-subtle p-1 shadow-lg"
+          style={{
+            top: coords?.top ?? 40,
+            left: coords?.left ?? 8,
+            backgroundColor: 'var(--bg-floating)',
+            backdropFilter: 'blur(16px)',
+          }}
         >
           {/* None option */}
           <button
@@ -178,7 +186,7 @@ export function SplitPaneSourcePicker({
               No one is streaming or on camera right now.
             </div>
           )}
-        </div>
+        </StreamOverlayPortal>
       )}
     </div>
   );

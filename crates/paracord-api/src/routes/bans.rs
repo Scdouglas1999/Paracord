@@ -51,18 +51,42 @@ pub async fn list_bans(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let result: Vec<Value> = bans
-        .iter()
-        .map(|b| {
-            json!({
-                "user_id": b.user_id.to_string(),
-                "guild_id": guild_id.to_string(),
-                "reason": b.reason,
-                "banned_by": b.banned_by.map(|id| id.to_string()),
-                "created_at": b.created_at.to_rfc3339(),
-            })
-        })
-        .collect();
+    let mut result: Vec<Value> = Vec::with_capacity(bans.len());
+    for b in bans {
+        let user = paracord_db::users::get_user_by_id(&state.db, b.user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let user_json = match user {
+            Some(u) => json!({
+                "id": u.id.to_string(),
+                "username": u.username,
+                "display_name": u.display_name,
+                "discriminator": u.discriminator,
+                "avatar_hash": u.avatar_hash,
+                "flags": u.flags,
+                "bot": paracord_core::is_bot(u.flags),
+                "system": false,
+            }),
+            None => json!({
+                "id": b.user_id.to_string(),
+                "username": format!("Unknown#{}", b.user_id),
+                "display_name": null,
+                "discriminator": 0,
+                "avatar_hash": null,
+                "flags": 0,
+                "bot": false,
+                "system": false,
+            }),
+        };
+        result.push(json!({
+            "user_id": b.user_id.to_string(),
+            "user": user_json,
+            "guild_id": guild_id.to_string(),
+            "reason": b.reason,
+            "banned_by": b.banned_by.map(|id| id.to_string()),
+            "created_at": b.created_at.to_rfc3339(),
+        }));
+    }
 
     Ok(Json(json!(result)))
 }
@@ -97,6 +121,15 @@ pub async fn ban_member(
         reason.as_deref(),
     )
     .await?;
+
+    // Terminate any in-progress voice/video call the banned member is part of so
+    // they stop eavesdropping on and injecting into the call, and cannot
+    // reconnect against a stale voice state within their media token's lifetime.
+    crate::routes::voice::evict_user_from_guild_media(&state, guild_id, user_id).await;
+
+    // Evict the banned member's cached channel permissions so a stale cache hit
+    // cannot keep granting access for the remainder of the cache TTL.
+    paracord_core::permissions::invalidate_user(&state.permission_cache, user_id).await;
 
     state.event_bus.dispatch(
         "GUILD_BAN_ADD",

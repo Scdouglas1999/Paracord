@@ -1,4 +1,5 @@
 import { getApi } from './activeClient';
+import { connectionManager } from '../lib/connectionManager';
 import type { AxiosRequestConfig } from 'axios';
 import type {
   Channel,
@@ -189,6 +190,9 @@ export const channelApi = {
   triggerTyping: (id: string) => getApi().post(`/channels/${id}/typing`),
   updateReadState: (id: string, lastMessageId?: string) =>
     getApi().put(`/channels/${id}/read`, { last_message_id: lastMessageId }),
+  updateReadStateForServer: (serverId: string, id: string, lastMessageId?: string) =>
+    (connectionManager.getApiClient(serverId) ?? getApi())
+      .put(`/channels/${id}/read`, { last_message_id: lastMessageId }),
 
   updatePositions: (guildId: string, positions: { id: string; position: number; parent_id?: string | null }[]) =>
     getApi().patch<{ updated: number }>(`/guilds/${guildId}/channels`, positions),

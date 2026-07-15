@@ -676,6 +676,16 @@ fn looks_like_placeholder_secret(raw: &str) -> bool {
         || normalized == "devkey"
         || normalized == "devsecret"
         || normalized == "secret"
+        // Legacy config/paracord.toml value. It was a publicly known,
+        // repository-shipped development secret and must never be accepted for
+        // a running server, regardless of its length.
+        || normalized == "paracord_dev_secret_key_change_in_production_1234567890abcdef"
+        // Known secret shipped in docker-compose.yml. Reject it so a copied
+        // repo default can never pass validation, even when public_url is set.
+        || normalized.contains("paracord-local-dev")
+        // Previously-shipped LiveKit dev API secret. It was a publicly known,
+        // repository-shipped development value and must never pass validation.
+        || normalized == "paracord_secret_key_at_least_32chars!"
 }
 
 fn validate_secret_configuration(config: &Config) -> Result<()> {
@@ -1470,8 +1480,8 @@ fn parse_optional_days(raw: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        generate_config_template, validate_secret_configuration, Config, DatabaseConfig,
-        DatabaseEngine, TlsConfig,
+        generate_config_template, looks_like_placeholder_secret, validate_secret_configuration,
+        Config, DatabaseConfig, DatabaseEngine, TlsConfig,
     };
     use std::sync::Mutex;
 
@@ -1510,6 +1520,32 @@ mod tests {
     }
 
     #[test]
+    fn validate_secret_errors_when_livekit_uses_shipped_default_secret() {
+        // The docker-compose default secret is 33 chars and matches no legacy
+        // placeholder token, yet must be rejected for a LiveKit-only operator.
+        let mut config = Config::default();
+        config.voice.native_media = false;
+        config.livekit.api_key = "paracordlocal".to_string();
+        config.livekit.api_secret = "paracord-local-dev-livekit-secret".to_string();
+        assert!(validate_secret_configuration(&config).is_err());
+    }
+
+    #[test]
+    fn validate_secret_errors_when_livekit_uses_shipped_dev_api_secret() {
+        // The previously-shipped LiveKit dev secret is 36 chars and matches no
+        // other placeholder token, yet must be rejected for a LiveKit operator.
+        let mut config = Config::default();
+        config.voice.native_media = false;
+        config.livekit.api_key = "devkey_livekit".to_string();
+        config.livekit.api_secret = "paracord_secret_key_at_least_32chars!".to_string();
+        assert!(validate_secret_configuration(&config).is_err());
+        // Also rejected outright by the placeholder detector.
+        assert!(looks_like_placeholder_secret(
+            "paracord_secret_key_at_least_32chars!"
+        ));
+    }
+
+    #[test]
     fn validate_secret_errors_on_weak_jwt_regardless_of_media() {
         // Short JWT with native media on (LiveKit check skipped) still fails.
         let mut native = Config::default();
@@ -1521,6 +1557,14 @@ mod tests {
         livekit_only.voice.native_media = false;
         livekit_only.auth.jwt_secret = String::new();
         assert!(validate_secret_configuration(&livekit_only).is_err());
+    }
+
+    #[test]
+    fn validate_secret_rejects_legacy_public_jwt_secret() {
+        let mut config = Config::default();
+        config.auth.jwt_secret =
+            "paracord_dev_secret_key_change_in_production_1234567890abcdef".to_string();
+        assert!(validate_secret_configuration(&config).is_err());
     }
 
     #[test]

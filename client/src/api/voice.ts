@@ -6,6 +6,8 @@ export interface VoiceJoinResponse {
   url_candidates?: string[];
   room_name: string;
   session_id?: string;
+  /** Stage audience members are subscriber-only until a moderator promotes them. */
+  suppress?: boolean;
   quality_preset?: string;
   /** When true, the server supports native QUIC media and the client should
    *  use the MediaEngine interface instead of LiveKit. */

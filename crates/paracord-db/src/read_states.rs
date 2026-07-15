@@ -48,7 +48,13 @@ pub async fn update_read_state(
     let row = sqlx::query_as::<_, ReadStateRow>(
         "INSERT INTO read_states (user_id, channel_id, last_message_id, mention_count)
          VALUES ($1, $2, $3, 0)
-         ON CONFLICT (user_id, channel_id) DO UPDATE SET last_message_id = $3, mention_count = 0
+         ON CONFLICT (user_id, channel_id) DO UPDATE SET
+             last_message_id = CASE
+                 WHEN excluded.last_message_id > read_states.last_message_id
+                 THEN excluded.last_message_id
+                 ELSE read_states.last_message_id
+             END,
+             mention_count = 0
          RETURNING user_id, channel_id, last_message_id, mention_count",
     )
     .bind(user_id)
@@ -76,4 +82,46 @@ pub async fn increment_mention_count(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_pool() -> DbPool {
+        let pool = crate::create_pool("sqlite::memory:", 1).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE read_states (
+                user_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                last_message_id BIGINT NOT NULL DEFAULT 0,
+                mention_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, channel_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn delayed_read_update_cannot_move_cursor_backwards() {
+        let pool = test_pool().await;
+        update_read_state(&pool, 1, 2, 200).await.unwrap();
+        increment_mention_count(&pool, 1, 2).await.unwrap();
+
+        let row = update_read_state(&pool, 1, 2, 100).await.unwrap();
+        assert_eq!(row.last_message_id, 200);
+        assert_eq!(row.mention_count, 0);
+    }
+
+    #[tokio::test]
+    async fn newer_read_update_advances_cursor() {
+        let pool = test_pool().await;
+        update_read_state(&pool, 1, 2, 100).await.unwrap();
+
+        let row = update_read_state(&pool, 1, 2, 200).await.unwrap();
+        assert_eq!(row.last_message_id, 200);
+    }
 }

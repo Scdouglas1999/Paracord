@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from 'react';
+import { useEffect, type ReactNode, type RefObject } from 'react';
 import { X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Modal } from '../../ui/Modal';
@@ -48,6 +48,18 @@ export function TopBarOverlay({
   closeLabel = 'Close',
   bodyClassName,
 }: TopBarOverlayProps) {
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return;
+    const dispatch = () => window.dispatchEvent(new Event('paracord:native-underlay-repaint'));
+    const raf = window.requestAnimationFrame(dispatch);
+    dispatch();
+    return () => {
+      window.cancelAnimationFrame(raf);
+      dispatch();
+      window.setTimeout(dispatch, 280);
+    };
+  }, [open]);
+
   return (
     <Modal
       open={open}
@@ -57,7 +69,7 @@ export function TopBarOverlay({
       labelledBy={titleId}
       placement="top"
       zIndexClassName="z-50"
-      backdropClassName="px-2 pb-[calc(var(--safe-bottom)+0.75rem)] pt-[calc(var(--safe-top)+3.75rem)] sm:px-4 sm:pt-20"
+      backdropClassName="topbar-overlay-backdrop px-2 pb-[calc(var(--safe-bottom)+0.75rem)] pt-[calc(var(--safe-top)+3.75rem)] sm:px-4 sm:pt-20"
       panelClassName={cn(
         'flex flex-col rounded-md border-border-subtle bg-bg-floating shadow-lg',
         panelClassName,

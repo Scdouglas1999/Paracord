@@ -19,6 +19,7 @@ const MAX_VANITY_CODE_LEN: usize = 32;
 const MAX_GUILD_DESCRIPTION_LEN: usize = 1_024;
 const MAX_DISCOVERY_TAGS: usize = 10;
 const MAX_DISCOVERY_TAG_LEN: usize = 32;
+const MAX_ALLOWED_ROLES: usize = 50;
 const TRACE_ID_HEADER: &str = "x-paracord-trace-id";
 static CHANNEL_ROUTE_STAGE_TRACE: OnceLock<bool> = OnceLock::new();
 static CHANNEL_ROUTE_SLOW_MS: OnceLock<u64> = OnceLock::new();
@@ -100,7 +101,55 @@ fn normalize_discovery_tags(tags: &[String]) -> Result<String, ApiError> {
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))
 }
 
-fn guild_json(guild: &paracord_db::guilds::GuildRow, member_count: Option<i64>) -> Value {
+async fn normalize_allowed_roles(
+    state: &AppState,
+    guild_id: i64,
+    roles: &[String],
+) -> Result<String, ApiError> {
+    if roles.len() > MAX_ALLOWED_ROLES {
+        return Err(ApiError::BadRequest(format!(
+            "allowed_roles cannot contain more than {MAX_ALLOWED_ROLES} roles"
+        )));
+    }
+
+    let guild_roles = paracord_db::roles::get_guild_roles(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let valid_ids: std::collections::HashSet<i64> =
+        guild_roles.into_iter().map(|role| role.id).collect();
+
+    let mut normalized = Vec::with_capacity(roles.len());
+    for raw in roles {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let role_id = trimmed
+            .parse::<i64>()
+            .map_err(|_| ApiError::BadRequest("allowed_roles must be role snowflake IDs".into()))?;
+        if !valid_ids.contains(&role_id) {
+            return Err(ApiError::BadRequest(
+                "allowed_roles contains a role that does not belong to this guild".into(),
+            ));
+        }
+        if !normalized.contains(&role_id) {
+            normalized.push(role_id);
+        }
+    }
+
+    serde_json::to_string(&normalized)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))
+}
+
+pub(crate) fn guild_json(
+    guild: &paracord_db::guilds::GuildRow,
+    member_count: Option<i64>,
+) -> Value {
+    let allowed_roles: Vec<String> =
+        paracord_db::guilds::parse_allowed_role_ids(&guild.allowed_roles)
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect();
     let mut value = json!({
         "id": guild.id.to_string(),
         "name": guild.name,
@@ -109,6 +158,7 @@ fn guild_json(guild: &paracord_db::guilds::GuildRow, member_count: Option<i64>) 
         "owner_id": guild.owner_id.to_string(),
         "created_at": guild.created_at.to_rfc3339(),
         "visibility": guild.visibility,
+        "allowed_roles": allowed_roles,
         "discovery_tags": parse_discovery_tags(&guild.discovery_tags),
         "hub_settings": guild.hub_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
         "bot_settings": guild.bot_settings.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
@@ -134,6 +184,7 @@ pub struct UpdateGuildRequest {
     pub bot_settings: Option<Value>,
     pub visibility: Option<String>,
     pub discovery_tags: Option<Vec<String>>,
+    pub allowed_roles: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -239,6 +290,21 @@ pub async fn update_guild(
         .map(|tags| normalize_discovery_tags(tags))
         .transpose()?;
 
+    let allowed_roles = match body.allowed_roles.as_ref() {
+        Some(roles) => Some(normalize_allowed_roles(&state, guild_id, roles).await?),
+        None => None,
+    };
+    if visibility.as_deref() == Some("roles")
+        && allowed_roles
+            .as_deref()
+            .map(|raw| paracord_db::guilds::parse_allowed_role_ids(raw).is_empty())
+            .unwrap_or(false)
+    {
+        return Err(ApiError::BadRequest(
+            "visibility \"roles\" requires at least one allowed_roles entry".into(),
+        ));
+    }
+
     let hub_settings_str = body
         .hub_settings
         .as_ref()
@@ -260,6 +326,7 @@ pub async fn update_guild(
         bot_settings_str.as_deref(),
         visibility.as_deref(),
         discovery_tags.as_deref(),
+        allowed_roles.as_deref(),
     )
     .await?;
 
@@ -475,6 +542,12 @@ pub async fn get_channels(
         auth.user_id,
     )
     .await?;
+    paracord_core::permissions::seed_channel_permissions(
+        &state.permission_cache,
+        auth.user_id,
+        &channel_permissions,
+    )
+    .await;
     let permissions_ms = permissions_started.elapsed().as_millis() as u64;
 
     let serialize_started = Instant::now();

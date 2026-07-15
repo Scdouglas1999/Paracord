@@ -37,7 +37,8 @@ function hasLikelyIconButtonClass(openingTag) {
 }
 
 function hasDialogRole(openingTag) {
-  return /\srole\s*=\s*(?:"(?:dialog|alertdialog)"|'(?:dialog|alertdialog)'|\{\s*["'](?:dialog|alertdialog)["']\s*\})/.test(openingTag);
+  return /\srole\s*=\s*(?:"(?:dialog|alertdialog)"|'(?:dialog|alertdialog)'|\{\s*["'](?:dialog|alertdialog)["']\s*\})/.test(openingTag) ||
+    /\srole\s*=\s*\{\s*role\s*\}/.test(openingTag);
 }
 
 function hasDialogAccessibleName(openingTag) {

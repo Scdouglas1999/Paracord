@@ -60,13 +60,13 @@ export function AdminPage() {
   return (
     <div className="flex h-full min-h-0 gap-3">
       {/* Sidebar nav */}
-      <aside className="flex w-64 min-w-[16rem] flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
+      <aside className="flex w-[clamp(11rem,24vw,16rem)] shrink-0 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-secondary shadow-sm">
         <div className="flex items-center gap-3 border-b border-border-subtle px-4 py-4">
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => navigate('/app')}
             className="flex h-9 w-9 items-center justify-center rounded-sm text-interactive-normal outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle hover:text-text-primary focus-visible:shadow-[var(--focus-ring)]"
-            aria-label="Go back"
-            title="Go back"
+            aria-label="Back to home"
+            title="Back to home"
           >
             <ArrowLeft size={18} />
           </button>
