@@ -352,7 +352,16 @@ jobs:
             libasound2-dev \
             libvpx-dev \
             libpipewire-0.3-dev \
-            libdbus-1-dev
+            libdbus-1-dev \
+            libavutil-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libpulse-dev \
+            libspeexdsp-dev
           if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
             sudo apt-get install -y libayatana-appindicator3-dev
           else
