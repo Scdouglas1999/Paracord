@@ -160,6 +160,16 @@ def parse_status() -> dict[int, Section]:
 
 
 def main() -> int:
+    if not GOAL.exists():
+        # goal.txt is an intentionally-local planning document (gitignored) and is
+        # not present in CI checkouts. The checklist cross-check runs during local
+        # release prep where goal.txt exists; skip (rather than fail) when absent so
+        # the release workflow does not depend on an unpublished local-only file.
+        print(
+            f"SKIP: {GOAL.name} not present (local-only planning doc); "
+            "skipping checklist cross-validation."
+        )
+        return 0
     goal_sections = parse_goal()
     status_sections = parse_status()
     errors: list[str] = []
