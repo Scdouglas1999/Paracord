@@ -280,7 +280,7 @@ sudo pacman -S libvpx webkit2gtk-4.1          # Arch / CachyOS
 cd client && npm install && npx tauri build
 ```
 
-Windows developers source `scripts/set-vpx-env.ps1` for vcpkg libvpx paths. Full notes: [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md).
+Windows developers source `scripts/set-vpx-env.ps1` for vcpkg libvpx paths.
 
 ### Linting
 

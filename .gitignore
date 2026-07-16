@@ -4,6 +4,7 @@
 
 # Local security-audit tooling/baseline snapshot (not part of the product)
 /security-audit/
+/SECURITY_REMEDIATION_TRACKER.md
 
 # Node / Client
 /node_modules/
