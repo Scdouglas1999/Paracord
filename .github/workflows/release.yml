@@ -501,14 +501,16 @@ jobs:
         with:
           sparse-checkout: RELEASE_NOTES.md
           sparse-checkout-cone-mode: false
-          clean: false
+          # Check out into a subdirectory so this checkout cannot wipe the
+          # already-downloaded `artifacts/` directory in the workspace root.
+          path: _release_src
 
       - name: Build release body from RELEASE_NOTES.md
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f RELEASE_NOTES.md ]; then
-            cp RELEASE_NOTES.md artifacts/body.md
+          if [ -f _release_src/RELEASE_NOTES.md ]; then
+            cp _release_src/RELEASE_NOTES.md artifacts/body.md
           else
             echo "## Release ${GITHUB_REF_NAME}" > artifacts/body.md
           fi
