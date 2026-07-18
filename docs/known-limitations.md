@@ -1,6 +1,6 @@
 # Known Limitations
 
-This page documents support boundaries for the v0.9.0 release candidate. Items here are not security exceptions; they are product or platform limitations that should be visible before publishing public artifacts.
+This page documents support boundaries for the v1.0.0 release. Items here are not security exceptions; they are product or platform limitations that should be visible before publishing public artifacts.
 
 ## Native Media
 

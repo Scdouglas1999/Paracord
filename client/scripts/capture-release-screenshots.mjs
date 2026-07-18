@@ -1,335 +1,185 @@
 import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const PORT = Number(process.env.PARACORD_SCREENSHOT_PORT ?? 4173);
-const BASE_URL = `http://127.0.0.1:${PORT}`;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_ROOT = path.resolve(SCRIPT_DIR, '..');
 const ROOT = path.resolve(CLIENT_ROOT, '..');
-const OUT_DIR = path.join(ROOT, 'docs', 'screenshots');
+const OUT_DIR = path.join(ROOT, 'docs', 'images', 'readme');
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+const BASE_URL = (process.env.PARACORD_SCREENSHOT_BASE_URL ?? 'http://127.0.0.1:8090')
+  .replace(/\/+$/, '');
+const USERNAME = process.env.PARACORD_SCREENSHOT_USER;
+const PASSWORD = process.env.PARACORD_SCREENSHOT_PASSWORD;
+
+function requireFixtureCredentials() {
+  if (USERNAME && PASSWORD) return;
+  throw new Error(
+    [
+      'README screenshots require a populated local fixture instance.',
+      'Set PARACORD_SCREENSHOT_USER and PARACORD_SCREENSHOT_PASSWORD, and optionally',
+      'PARACORD_SCREENSHOT_BASE_URL (default: http://127.0.0.1:8090).',
+      'Use temporary fixture data only; never point this script at production.',
+    ].join('\n'),
+  );
 }
 
-async function waitForPreview(proc) {
-  for (let i = 0; i < 60; i += 1) {
-    if (proc.exitCode !== null) {
-      throw new Error(`vite preview exited early with code ${proc.exitCode}`);
-    }
-    try {
-      const response = await fetch(BASE_URL);
-      if (response.ok) return;
-    } catch {
-      // Retry below.
-    }
-    await sleep(500);
+async function expectOne(locator, description) {
+  const count = await locator.count();
+  if (count !== 1) {
+    throw new Error(`Expected one ${description}, found ${count}.`);
   }
-  throw new Error('vite preview did not become reachable');
+  return locator;
 }
 
-async function stopPreview(proc) {
-  if (proc.exitCode !== null || proc.pid == null) return;
-  if (process.platform === 'win32') {
-    await new Promise((resolve) => {
-      const killer = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
-        stdio: 'ignore',
-      });
-      killer.on('close', resolve);
-      killer.on('error', resolve);
-    });
+async function dismissIfPresent(page, role, name) {
+  const locator = page.getByRole(role, { name, exact: true });
+  if ((await locator.count()) === 1) {
+    await locator.click();
+  }
+}
+
+async function dismissWhenReady(page, role, name, timeout = 2_000) {
+  const locator = page.getByRole(role, { name, exact: true });
+  try {
+    await locator.waitFor({ state: 'visible', timeout });
+  } catch {
     return;
   }
-  proc.kill();
+  await expectOne(locator, `${name} button`);
+  await locator.click();
 }
 
-async function installRoutes(page) {
-  const guildId = '1001';
-  const textChannelId = '2001';
-  const voiceChannelId = '2002';
-  const nowIso = new Date('2026-05-16T12:00:00.000Z').toISOString();
-  const userPayload = {
-    id: '42',
-    username: 'release-preview',
-    discriminator: '0001',
-    avatar_hash: null,
-    bot: false,
-    system: false,
-    flags: 0,
-    created_at: nowIso,
-  };
-  const messages = [
-    {
-      id: '3001',
-      channel_id: textChannelId,
-      author: {
-        id: '43',
-        username: 'alex',
-        discriminator: '0001',
-        avatar_hash: null,
-      },
-      content: 'Release candidate smoke is green for the core chat path.',
-      pinned: false,
-      type: 0,
-      message_type: 0,
-      timestamp: nowIso,
-      created_at: nowIso,
-      edited_timestamp: null,
-      edited_at: null,
-      reference_id: null,
-      attachments: [],
-      reactions: [{ emoji: 'check', count: 3, me: false }],
-    },
-    {
-      id: '3002',
-      channel_id: textChannelId,
-      author: {
-        id: userPayload.id,
-        username: userPayload.username,
-        discriminator: userPayload.discriminator,
-        avatar_hash: null,
-      },
-      content: 'Bundled client, routing, and release smoke coverage are current.',
-      pinned: false,
-      type: 0,
-      message_type: 0,
-      timestamp: nowIso,
-      created_at: nowIso,
-      edited_timestamp: null,
-      edited_at: null,
-      reference_id: null,
-      attachments: [],
-      reactions: [],
-    },
-  ];
-
-  await page.route('**/health', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ status: 'ok' }),
-    });
-  });
-
-  await page.route('**/api/v1/**', async (route) => {
-    const request = route.request();
-    const method = request.method();
-    const url = new URL(request.url());
-    const requestPath = url.pathname;
-    const json = (status, payload) =>
-      route.fulfill({
-        status,
-        contentType: 'application/json',
-        body: JSON.stringify(payload),
-      });
-
-    if (requestPath === '/api/v1/auth/refresh' && method === 'POST') {
-      return json(200, { token: 'screenshot-token', refresh_token: 'screenshot-refresh', user: userPayload });
-    }
-    if (requestPath === '/api/v1/users/@me' && method === 'GET') {
-      return json(200, userPayload);
-    }
-    if (requestPath === '/api/v1/users/@me/settings' && method === 'GET') {
-      return json(200, {
-        user_id: userPayload.id,
-        theme: 'dark',
-        locale: 'en-US',
-        message_display_compact: false,
-        custom_css: null,
-        status: 'online',
-        custom_status: null,
-        crypto_auth_enabled: false,
-        notifications: {},
-        keybinds: {},
-      });
-    }
-    if (requestPath === '/api/v1/users/@me/guilds' && method === 'GET') {
-      return json(200, [
-        {
-          id: guildId,
-          name: 'Paracord Preview',
-          server_url: 'https://preview.paracord.local',
-          icon_hash: null,
-          owner_id: userPayload.id,
-          member_count: 4,
-          features: [],
-          created_at: nowIso,
-        },
-      ]);
-    }
-    if (requestPath === `/api/v1/guilds/${guildId}` && method === 'GET') {
-      return json(200, {
-        id: guildId,
-        name: 'Paracord Preview',
-        server_url: 'https://preview.paracord.local',
-        icon_hash: null,
-        owner_id: userPayload.id,
-        member_count: 4,
-        features: [],
-        hub_settings: null,
-        created_at: nowIso,
-      });
-    }
-    if (requestPath === `/api/v1/guilds/${guildId}/channels` && method === 'GET') {
-      return json(200, [
-        {
-          id: textChannelId,
-          guild_id: guildId,
-          name: 'release-chat',
-          type: 0,
-          channel_type: 0,
-          position: 0,
-          nsfw: false,
-          parent_id: null,
-          required_role_ids: [],
-          created_at: nowIso,
-        },
-        {
-          id: voiceChannelId,
-          guild_id: guildId,
-          name: 'Voice Review',
-          type: 2,
-          channel_type: 2,
-          position: 1,
-          nsfw: false,
-          parent_id: null,
-          required_role_ids: [],
-          created_at: nowIso,
-        },
-      ]);
-    }
-    if (requestPath === `/api/v1/guilds/${guildId}/members` && method === 'GET') {
-      return json(200, []);
-    }
-    if (requestPath === `/api/v1/guilds/${guildId}/onboarding/me` && method === 'GET') {
-      return json(200, {
-        settings: null,
-        member_state: {
-          accepted_rules: true,
-          selected_role_ids: [],
-          completed_at: nowIso,
-        },
-      });
-    }
-    if (requestPath === `/api/v1/channels/${textChannelId}/messages` && method === 'GET') {
-      return json(200, messages);
-    }
-    if (requestPath === `/api/v1/channels/${textChannelId}/read` && method === 'PUT') {
-      return json(200, { channel_id: textChannelId, last_message_id: '3002', mention_count: 0 });
-    }
-    if (requestPath === `/api/v1/guilds/${guildId}/economy/leaderboard` && method === 'GET') {
-      return json(200, { guild_id: guildId, entries: [], limit: 8 });
-    }
-    if (requestPath === `/api/v1/guilds/${guildId}/economy/me` && method === 'GET') {
-      return json(200, {
-        guild_id: guildId,
-        user_id: userPayload.id,
-        xp: 0,
-        level: 0,
-        rank: null,
-        last_xp_at: nowIso,
-        progress: {
-          current_level_floor: 0,
-          next_level_at: 100,
-          xp_into_level: 0,
-          xp_required_this_level: 100,
-        },
-        streak: {
-          days: 0,
-          longest_days: 0,
-          last_active_date: nowIso.slice(0, 10),
-        },
-        achievements: [],
-      });
-    }
-    if (requestPath === `/api/v1/guilds/${guildId}/economy/level-roles` && method === 'GET') {
-      return json(200, { guild_id: guildId, mappings: [] });
-    }
-
-    if (method === 'GET') return json(200, []);
-    return route.fulfill({ status: 204, body: '' });
-  });
-
-  await page.route('**/api/v2/rt/session', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        ws_url: 'ws://127.0.0.1:0/gateway',
-        session_id: 'screenshot-session',
-        token: 'screenshot-rt-token',
-      }),
-    });
-  });
-  await page.route('**/api/v2/rt/events**', async (route) => {
-    await route.fulfill({
-      status: 200,
-      headers: {
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
-      },
-      body: 'event: gateway\ndata: {"op":0,"t":"READY","d":{}}\n\n',
-    });
-  });
-  await page.route('**/api/v2/rt/commands', async (route) => {
-    await route.fulfill({ status: 204, body: '' });
+async function capture(page, name) {
+  await page.screenshot({
+    path: path.join(OUT_DIR, name),
+    type: 'jpeg',
+    quality: 88,
+    fullPage: false,
   });
 }
 
-async function capture() {
+async function login(page) {
+  await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded' });
+
+  const identity = page.getByPlaceholder('you@example.com or username', { exact: true });
+  const password = page.getByPlaceholder('Enter your password', { exact: true });
+  await identity.waitFor({ timeout: 20_000 });
+  await expectOne(identity, 'login identity field');
+  await expectOne(password, 'login password field');
+
+  await identity.fill(USERNAME);
+  await password.fill(PASSWORD);
+  await (await expectOne(page.getByRole('button', { name: 'Log In', exact: true }), 'Log In button')).click();
+  await page.waitForURL(/\/app(?:\/|$)/, { timeout: 20_000 });
+  await page.getByRole('heading', { level: 1 }).waitFor({ timeout: 20_000 });
+
+  await dismissIfPresent(page, 'button', 'Skip tour');
+}
+
+async function openFirstSpace(page) {
+  const spaces = page.getByRole('region', { name: 'Spaces', exact: true });
+  await expectOne(spaces, 'Spaces region');
+
+  const joinedSpaces = spaces.getByRole('group', { name: 'Joined spaces', exact: true });
+  await expectOne(joinedSpaces, 'Joined spaces group');
+
+  const candidates = await joinedSpaces.getByRole('option').all();
+  for (const candidate of candidates) {
+    const name = (await candidate.getAttribute('aria-label')) ?? (await candidate.innerText());
+    if (!/add a space/i.test(name)) {
+      await candidate.click();
+      return;
+    }
+  }
+  throw new Error('The fixture account must belong to at least one space.');
+}
+
+async function openFirstTextChannel(page) {
+  const channels = page.getByRole('region', { name: 'Text channels', exact: true });
+  await expectOne(channels, 'Text channels region');
+  const buttons = await channels.getByRole('button').all();
+  if (buttons.length === 0) {
+    throw new Error('The fixture space must contain at least one text channel.');
+  }
+  await buttons[0].click();
+  await page.getByRole('textbox', { name: /^Message #/ }).waitFor({ timeout: 20_000 });
+  await dismissIfPresent(page, 'button', 'Close welcome screen');
+}
+
+async function run() {
+  requireFixtureCredentials();
   await mkdir(OUT_DIR, { recursive: true });
-  const previewCommand =
-    process.platform === 'win32'
-      ? {
-          command: 'cmd.exe',
-          args: [
-            '/d',
-            '/s',
-            '/c',
-            `npm run preview -- --host 127.0.0.1 --port ${PORT}`,
-          ],
-        }
-      : {
-          command: 'npm',
-          args: ['run', 'preview', '--', '--host', '127.0.0.1', '--port', String(PORT)],
-        };
-  const preview = spawn(
-    previewCommand.command,
-    previewCommand.args,
-    {
-      cwd: CLIENT_ROOT,
-      env: { ...process.env, BROWSER: 'none' },
-      stdio: 'ignore',
-    },
-  );
 
+  const browser = await chromium.launch();
   try {
-    await waitForPreview(preview);
-    const browser = await chromium.launch();
-    try {
-      const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
-      await installRoutes(page);
-      await page.goto(`${BASE_URL}/app`, { waitUntil: 'domcontentloaded' });
-      await page.getByText(/Welcome to Paracord/i).waitFor({ timeout: 15_000 });
-      await page.screenshot({ path: path.join(OUT_DIR, 'dashboard-current.png'), fullPage: true });
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 1,
+      colorScheme: 'dark',
+    });
 
-      await page.goto(`${BASE_URL}/app/guilds/1001/channels/2001`, { waitUntil: 'domcontentloaded' });
-      await page.getByPlaceholder(/Message #release-chat/).waitFor({ timeout: 15_000 });
-      await page.screenshot({ path: path.join(OUT_DIR, 'text-chat-current.png'), fullPage: true });
-    } finally {
-      await browser.close();
-    }
+    await login(page);
+    await capture(page, 'home-2026.jpg');
+
+    await openFirstSpace(page);
+    await page.getByRole('region', { name: 'Rooms', exact: true }).waitFor({ timeout: 20_000 });
+    await dismissWhenReady(page, 'button', 'Done');
+    await capture(page, 'rooms-2026.jpg');
+
+    await openFirstTextChannel(page);
+    await page.getByRole('feed', { name: 'Message history', exact: true }).waitFor({ timeout: 20_000 });
+    await capture(page, 'messaging-2026.jpg');
+
+    const memberList = await expectOne(
+      page.getByRole('button', { name: 'Member List', exact: true }),
+      'Member List button',
+    );
+    await memberList.click();
+    await page.getByRole('complementary', { name: 'Members', exact: true }).waitFor();
+    await capture(page, 'members-2026.jpg');
+    await (await expectOne(
+      page.getByRole('button', { name: 'Close Members panel', exact: true }),
+      'Close Members panel button',
+    )).click();
+
+    await (await expectOne(
+      page.getByRole('button', { name: 'Search — open command palette', exact: true }),
+      'command palette button',
+    )).click();
+    await page.getByRole('dialog', { name: 'Command Palette', exact: true }).waitFor();
+    await capture(page, 'command-palette-2026.jpg');
+    await page.getByRole('textbox', { name: 'Search command palette', exact: true }).press('Escape');
+
+    await (await expectOne(
+      page.getByRole('button', { name: 'Open user settings', exact: true }),
+      'user settings button',
+    )).click();
+    await (await expectOne(
+      page.getByRole('button', { name: 'Appearance', exact: true }),
+      'Appearance settings button',
+    )).click();
+    await page.getByRole('heading', { name: 'Appearance', exact: true }).waitFor();
+    await capture(page, 'appearance-2026.jpg');
+    await (await expectOne(
+      page.getByRole('button', { name: 'Close user settings', exact: true }),
+      'Close user settings button',
+    )).click();
+
+    await (await expectOne(
+      page.getByRole('button', { name: 'Space settings', exact: true }),
+      'Space settings button',
+    )).click();
+    await page.getByRole('dialog', { name: 'Space settings', exact: true }).waitFor();
+    await capture(page, 'space-settings-2026.jpg');
   } finally {
-    await stopPreview(preview);
+    await browser.close();
   }
 }
 
-capture().catch((error) => {
+run().catch((error) => {
   console.error(error);
-  process.exit(1);
+  process.exitCode = 1;
 });

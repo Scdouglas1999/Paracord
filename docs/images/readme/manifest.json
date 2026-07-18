@@ -1,17 +1,13 @@
 {
-  "captured_at": "2026-07-13T00:30:34.240287+00:00",
+  "captured_at": "2026-07-18",
   "folder": "docs/images/readme",
   "files": [
-    "readme-command-palette.png",
-    "readme-dms.png",
-    "readme-friends.png",
-    "readme-guild-settings.png",
-    "readme-home.png",
-    "readme-members.png",
-    "readme-messaging.png",
-    "readme-rooms.png",
-    "readme-settings.png",
-    "readme-sidebar.png",
-    "readme-voice.png"
+    "home-2026.jpg",
+    "rooms-2026.jpg",
+    "messaging-2026.jpg",
+    "members-2026.jpg",
+    "command-palette-2026.jpg",
+    "appearance-2026.jpg",
+    "space-settings-2026.jpg"
   ]
 }
