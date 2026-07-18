@@ -22,6 +22,10 @@
   <a href="docs/getting-started.md">Documentation</a>
 </p>
 
+<p align="center">
+  Current release: <strong>v1.0.0</strong>
+</p>
+
 ---
 
 Paracord is a source-available, Discord-style community platform that you run yourself. A server can host spaces, text and voice rooms, direct messages, roles, moderation, bots, events, onboarding, and community tools without depending on a third-party media service.
