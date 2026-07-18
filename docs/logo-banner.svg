@@ -1,281 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 200" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 240" role="img" aria-labelledby="title desc">
+  <title id="title">Paracord</title>
+  <desc id="desc">Paracord interlocking-link mark and wordmark on a warm dark background.</desc>
   <defs>
-    <!-- Rope gradient -->
-    <linearGradient id="ropeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#6f8aff"/>
-      <stop offset="20%" stop-color="#8b5cf6"/>
-      <stop offset="40%" stop-color="#6f8aff"/>
-      <stop offset="60%" stop-color="#8b5cf6"/>
-      <stop offset="80%" stop-color="#6f8aff"/>
-      <stop offset="100%" stop-color="#8b5cf6"/>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#101713"/>
+      <stop offset="1" stop-color="#142019"/>
     </linearGradient>
-    <!-- Background glow -->
-    <radialGradient id="bgGlow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#6f8aff" stop-opacity="0.1"/>
-      <stop offset="100%" stop-color="#6f8aff" stop-opacity="0"/>
+    <linearGradient id="mark" x1="66" y1="53" x2="190" y2="177" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2bbbad"/>
+      <stop offset="1" stop-color="#24d196"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(139 119) rotate(21) scale(250 180)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#24d196" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#24d196" stop-opacity="0"/>
     </radialGradient>
-    <!-- Text glow -->
-    <filter id="textGlow" x="-10%" y="-20%" width="120%" height="140%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur"/>
-      <feFlood flood-color="#6f8aff" flood-opacity="0.35"/>
-      <feComposite in2="blur" operator="in"/>
-      <feMerge>
-        <feMergeNode/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
+    <filter id="shadow" x="-25%" y="-25%" width="150%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#050806" flood-opacity=".42"/>
     </filter>
-    <!-- Rope texture -->
-    <pattern id="ropeTexture" patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(35)">
-      <line x1="0" y1="0" x2="10" y2="10" stroke="#a5b4fc" stroke-width="0.6" stroke-opacity="0.3"/>
-      <line x1="3" y1="0" x2="13" y2="10" stroke="#c4b5fd" stroke-width="0.3" stroke-opacity="0.2"/>
-    </pattern>
-    <!-- Rope shadow filter -->
-    <filter id="ropeShadow" x="-5%" y="-5%" width="110%" height="120%">
-      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#0c0a1a" flood-opacity="0.6"/>
-    </filter>
-
-    <!--
-      WEAVING STRATEGY:
-      The rope snakes across the text in a sine wave, alternating
-      between behind and in front at each letter. Transitions happen
-      at the CENTER of the 10px letter-spacing gaps so the switch
-      never falls within a letter stroke.
-
-      Layer order:
-      1. Rope segments BEHIND the text (clipped to behind-letter columns)
-      2. The text itself
-      3. Rope segments IN FRONT of the text (clipped to front-letter columns)
-
-      Alternating pattern (odd letters behind, even letters in front):
-        P (1st) — BEHIND     A (2nd) — IN FRONT
-        R (3rd) — BEHIND     A (4th) — IN FRONT
-        C (5th) — BEHIND     O (6th) — IN FRONT
-        R (7th) — BEHIND     D (8th) — IN FRONT
-    -->
-
-    <!-- Clip path boundaries placed at gap centers between letters.
-         Adjusted from rendered glyph positions (Segoe UI weight 800,
-         font-size 88, letter-spacing 10, text-anchor middle at x=450).
-         Right half (C–D) verified correct; left half (P–R1) shifted
-         ~12-15px left to match actual glyph edges.
-           P: ~165-226   gap center 231
-           A: ~236-295   gap center 300
-           R: ~305-364   gap center 369
-           A: ~374-444   gap center 449
-           C: 454-510    gap center 515
-           O: 520-582    gap center 587
-           R: 592-648    gap center 653
-           D: 658-718
-    -->
-    <clipPath id="behindLetters">
-      <!-- Odd letters: P, R1, C, R2 — rope passes behind these -->
-      <rect x="165" y="0" width="66"  height="200"/>  <!-- P:  165-231 -->
-      <rect x="300" y="0" width="69"  height="200"/>  <!-- R1: 300-369 -->
-      <rect x="449" y="0" width="66"  height="200"/>  <!-- C:  449-515 -->
-      <rect x="587" y="0" width="66"  height="200"/>  <!-- R2: 587-653 -->
-    </clipPath>
-    <clipPath id="inFrontOfLetters">
-      <!-- Even letters + edges: A1, A2, O, D — rope passes in front -->
-      <rect x="0"   y="0" width="165" height="200"/>  <!-- before P -->
-      <rect x="231" y="0" width="69"  height="200"/>  <!-- A1: 231-300 -->
-      <rect x="369" y="0" width="80"  height="200"/>  <!-- A2: 369-449 -->
-      <rect x="515" y="0" width="72"  height="200"/>  <!-- O:  515-587 -->
-      <rect x="653" y="0" width="247" height="200"/>  <!-- D + after: 653-900 -->
-    </clipPath>
   </defs>
 
-  <!-- Background -->
-  <rect width="900" height="200" fill="#0c0a1a" rx="16"/>
-  <rect width="900" height="200" fill="url(#bgGlow)" rx="16"/>
+  <rect width="960" height="240" rx="24" fill="url(#panel)"/>
+  <rect x=".75" y=".75" width="958.5" height="238.5" rx="23.25" fill="none" stroke="#2b3a31" stroke-width="1.5"/>
+  <rect width="420" height="240" rx="24" fill="url(#glow)"/>
 
-  <!-- Subtle dot grid -->
-  <g opacity="0.035">
-    <circle cx="50" cy="50" r="1" fill="#fff"/><circle cx="100" cy="50" r="1" fill="#fff"/>
-    <circle cx="150" cy="50" r="1" fill="#fff"/><circle cx="200" cy="50" r="1" fill="#fff"/>
-    <circle cx="250" cy="50" r="1" fill="#fff"/><circle cx="300" cy="50" r="1" fill="#fff"/>
-    <circle cx="350" cy="50" r="1" fill="#fff"/><circle cx="400" cy="50" r="1" fill="#fff"/>
-    <circle cx="450" cy="50" r="1" fill="#fff"/><circle cx="500" cy="50" r="1" fill="#fff"/>
-    <circle cx="550" cy="50" r="1" fill="#fff"/><circle cx="600" cy="50" r="1" fill="#fff"/>
-    <circle cx="650" cy="50" r="1" fill="#fff"/><circle cx="700" cy="50" r="1" fill="#fff"/>
-    <circle cx="750" cy="50" r="1" fill="#fff"/><circle cx="800" cy="50" r="1" fill="#fff"/>
-    <circle cx="850" cy="50" r="1" fill="#fff"/>
-    <circle cx="50" cy="100" r="1" fill="#fff"/><circle cx="100" cy="100" r="1" fill="#fff"/>
-    <circle cx="150" cy="100" r="1" fill="#fff"/><circle cx="200" cy="100" r="1" fill="#fff"/>
-    <circle cx="250" cy="100" r="1" fill="#fff"/><circle cx="300" cy="100" r="1" fill="#fff"/>
-    <circle cx="350" cy="100" r="1" fill="#fff"/><circle cx="400" cy="100" r="1" fill="#fff"/>
-    <circle cx="450" cy="100" r="1" fill="#fff"/><circle cx="500" cy="100" r="1" fill="#fff"/>
-    <circle cx="550" cy="100" r="1" fill="#fff"/><circle cx="600" cy="100" r="1" fill="#fff"/>
-    <circle cx="650" cy="100" r="1" fill="#fff"/><circle cx="700" cy="100" r="1" fill="#fff"/>
-    <circle cx="750" cy="100" r="1" fill="#fff"/><circle cx="800" cy="100" r="1" fill="#fff"/>
-    <circle cx="850" cy="100" r="1" fill="#fff"/>
-    <circle cx="50" cy="150" r="1" fill="#fff"/><circle cx="100" cy="150" r="1" fill="#fff"/>
-    <circle cx="150" cy="150" r="1" fill="#fff"/><circle cx="200" cy="150" r="1" fill="#fff"/>
-    <circle cx="250" cy="150" r="1" fill="#fff"/><circle cx="300" cy="150" r="1" fill="#fff"/>
-    <circle cx="350" cy="150" r="1" fill="#fff"/><circle cx="400" cy="150" r="1" fill="#fff"/>
-    <circle cx="450" cy="150" r="1" fill="#fff"/><circle cx="500" cy="150" r="1" fill="#fff"/>
-    <circle cx="550" cy="150" r="1" fill="#fff"/><circle cx="600" cy="150" r="1" fill="#fff"/>
-    <circle cx="650" cy="150" r="1" fill="#fff"/><circle cx="700" cy="150" r="1" fill="#fff"/>
-    <circle cx="750" cy="150" r="1" fill="#fff"/><circle cx="800" cy="150" r="1" fill="#fff"/>
-    <circle cx="850" cy="150" r="1" fill="#fff"/>
+  <g filter="url(#shadow)">
+    <rect x="56" y="48" width="144" height="144" rx="40" fill="url(#mark)"/>
+    <rect x="82" y="96" width="66" height="54" rx="27" fill="none" stroke="#f7fff9" stroke-width="12" opacity=".96"/>
+    <rect x="112" y="96" width="66" height="54" rx="27" fill="none" stroke="#f7fff9" stroke-width="12" opacity=".64"/>
   </g>
 
-  <!-- ============================================================ -->
-  <!-- LAYER 1: Rope segments that go BEHIND the text               -->
-  <!-- ============================================================ -->
-  <g clip-path="url(#behindLetters)">
-    <!-- Shadow -->
-    <path d="
-      M 15,108
-      C 50,78 80,62 130,70
-      C 165,76 185,100 215,115
-      C 245,130 275,118 310,92
-      C 340,68 365,58 400,68
-      C 430,76 450,100 480,115
-      C 510,130 540,115 570,88
-      C 600,62 625,55 660,68
-      C 690,78 710,100 740,112
-      C 765,122 790,108 820,82
-      C 842,64 860,62 890,75
-    " stroke="#0c0a1a" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.5"/>
-    <!-- Main rope -->
-    <path d="
-      M 15,108
-      C 50,78 80,62 130,70
-      C 165,76 185,100 215,115
-      C 245,130 275,118 310,92
-      C 340,68 365,58 400,68
-      C 430,76 450,100 480,115
-      C 510,130 540,115 570,88
-      C 600,62 625,55 660,68
-      C 690,78 710,100 740,112
-      C 765,122 790,108 820,82
-      C 842,64 860,62 890,75
-    " stroke="url(#ropeGrad)" stroke-width="10" stroke-linecap="round" fill="none"/>
-    <!-- Texture -->
-    <path d="
-      M 15,108
-      C 50,78 80,62 130,70
-      C 165,76 185,100 215,115
-      C 245,130 275,118 310,92
-      C 340,68 365,58 400,68
-      C 430,76 450,100 480,115
-      C 510,130 540,115 570,88
-      C 600,62 625,55 660,68
-      C 690,78 710,100 740,112
-      C 765,122 790,108 820,82
-      C 842,64 860,62 890,75
-    " stroke="url(#ropeTexture)" stroke-width="10" stroke-linecap="round" fill="none" opacity="0.5"/>
-    <!-- Highlight -->
-    <path d="
-      M 15,104
-      C 50,74 80,58 130,66
-      C 165,72 185,96 215,111
-      C 245,126 275,114 310,88
-      C 340,64 365,54 400,64
-      C 430,72 450,96 480,111
-      C 510,126 540,111 570,84
-      C 600,58 625,51 660,64
-      C 690,74 710,96 740,108
-      C 765,118 790,104 820,78
-      C 842,60 860,58 890,71
-    " stroke="#a5b4fc" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.4"/>
-    <!-- Second strand -->
-    <path d="
-      M 10,113
-      C 45,83 78,68 128,75
-      C 163,81 188,105 218,120
-      C 248,134 278,122 313,96
-      C 343,72 368,63 403,72
-      C 433,80 453,105 483,120
-      C 513,134 543,120 573,93
-      C 603,67 628,60 663,72
-      C 693,82 713,105 743,117
-      C 768,126 793,113 823,87
-      C 845,69 863,67 893,79
-    " stroke="#7c3aed" stroke-width="5" stroke-linecap="round" fill="none" opacity="0.4"/>
+  <text x="236" y="122" fill="#f2f5f2" font-family="Fraunces, Georgia, serif" font-size="70" font-weight="700" letter-spacing="-2">Paracord</text>
+  <text x="240" y="158" fill="#aebbb2" font-family="Inter, system-ui, sans-serif" font-size="19" font-weight="500" letter-spacing=".3">A home for your people, on your terms.</text>
+
+  <g transform="translate(741 92)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0 22h22m-11-11v22" stroke="#708078" stroke-width="2"/>
+    <path d="M58 13a13 13 0 1 0 0 18m0-18a13 13 0 1 1 0 18" stroke="#24d196" stroke-width="3"/>
+    <circle cx="117" cy="22" r="6" fill="#2bbbad" stroke="none"/>
   </g>
-
-  <!-- ============================================================ -->
-  <!-- LAYER 2: The text itself                                     -->
-  <!-- ============================================================ -->
-  <text x="450" y="125" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="88" font-weight="800" letter-spacing="10" fill="#e8e6f0" filter="url(#textGlow)">PARACORD</text>
-
-  <!-- ============================================================ -->
-  <!-- LAYER 3: Rope segments that go IN FRONT of the text          -->
-  <!-- ============================================================ -->
-  <g clip-path="url(#inFrontOfLetters)" filter="url(#ropeShadow)">
-    <!-- Main rope -->
-    <path d="
-      M 15,108
-      C 50,78 80,62 130,70
-      C 165,76 185,100 215,115
-      C 245,130 275,118 310,92
-      C 340,68 365,58 400,68
-      C 430,76 450,100 480,115
-      C 510,130 540,115 570,88
-      C 600,62 625,55 660,68
-      C 690,78 710,100 740,112
-      C 765,122 790,108 820,82
-      C 842,64 860,62 890,75
-    " stroke="url(#ropeGrad)" stroke-width="10" stroke-linecap="round" fill="none"/>
-    <!-- Texture -->
-    <path d="
-      M 15,108
-      C 50,78 80,62 130,70
-      C 165,76 185,100 215,115
-      C 245,130 275,118 310,92
-      C 340,68 365,58 400,68
-      C 430,76 450,100 480,115
-      C 510,130 540,115 570,88
-      C 600,62 625,55 660,68
-      C 690,78 710,100 740,112
-      C 765,122 790,108 820,82
-      C 842,64 860,62 890,75
-    " stroke="url(#ropeTexture)" stroke-width="10" stroke-linecap="round" fill="none" opacity="0.5"/>
-    <!-- Highlight -->
-    <path d="
-      M 15,104
-      C 50,74 80,58 130,66
-      C 165,72 185,96 215,111
-      C 245,126 275,114 310,88
-      C 340,64 365,54 400,64
-      C 430,72 450,96 480,111
-      C 510,126 540,111 570,84
-      C 600,58 625,51 660,64
-      C 690,74 710,96 740,108
-      C 765,118 790,104 820,78
-      C 842,60 860,58 890,71
-    " stroke="#a5b4fc" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.45"/>
-    <!-- Second strand -->
-    <path d="
-      M 10,113
-      C 45,83 78,68 128,75
-      C 163,81 188,105 218,120
-      C 248,134 278,122 313,96
-      C 343,72 368,63 403,72
-      C 433,80 453,105 483,120
-      C 513,134 543,120 573,93
-      C 603,67 628,60 663,72
-      C 693,82 713,105 743,117
-      C 768,126 793,113 823,87
-      C 845,69 863,67 893,79
-    " stroke="#7c3aed" stroke-width="5" stroke-linecap="round" fill="none" opacity="0.4"/>
-  </g>
-
-  <!-- Frayed end (left, in front) -->
-  <g opacity="0.7">
-    <line x1="15" y1="108" x2="2" y2="116" stroke="#6f8aff" stroke-width="2" stroke-linecap="round"/>
-    <line x1="15" y1="108" x2="4" y2="100" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round"/>
-    <line x1="15" y1="108" x2="6" y2="109" stroke="#a5b4fc" stroke-width="1.5" stroke-linecap="round"/>
-  </g>
-
-  <!-- Frayed end (right) -->
-  <g opacity="0.7">
-    <line x1="890" y1="75" x2="898" y2="82" stroke="#6f8aff" stroke-width="2" stroke-linecap="round"/>
-    <line x1="890" y1="75" x2="897" y2="68" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round"/>
-    <line x1="890" y1="75" x2="896" y2="76" stroke="#a5b4fc" stroke-width="1.5" stroke-linecap="round"/>
-  </g>
-
-  <!-- Subtle border -->
-  <rect x="0.5" y="0.5" width="899" height="199" rx="16" fill="none" stroke="#6f8aff" stroke-opacity="0.1"/>
 </svg>
