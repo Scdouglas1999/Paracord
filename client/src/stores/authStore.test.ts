@@ -20,6 +20,8 @@ vi.mock('../lib/authToken', () => ({
   clearLegacyPersistedAuth: vi.fn(),
 }));
 
+const mockRefreshSharedSession = vi.hoisted(() => vi.fn());
+
 const mockToast = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock('./toastStore', () => ({ toast: mockToast }));
 vi.mock('../api/auth', () => ({ authApi: mockAuthApi }));
 
 vi.mock('../api/client', () => ({
+  refreshSharedSession: mockRefreshSharedSession,
   extractApiError: vi.fn(
     (err: { response?: { data?: { message?: string; error?: string } }; message?: string } | unknown) => {
       const e = err as { response?: { data?: { message?: string; error?: string } }; message?: string };
@@ -46,7 +49,7 @@ vi.mock('../api/client', () => ({
 }));
 
 import { useAuthStore } from './authStore';
-import { setRefreshToken } from '../lib/authToken';
+import { getAccessToken, setRefreshToken } from '../lib/authToken';
 
 const fakeUser = {
   id: 'u1',
@@ -268,7 +271,7 @@ describe('authStore', () => {
 
   describe('initializeSession', () => {
     it('sets token from refresh on success', async () => {
-      mockAuthApi.refresh.mockResolvedValue({ data: { token: 'refreshed-tok' } });
+      mockRefreshSharedSession.mockResolvedValue('refreshed-tok');
 
       await useAuthStore.getState().initializeSession();
       const state = useAuthStore.getState();
@@ -277,7 +280,7 @@ describe('authStore', () => {
     });
 
     it('clears token and marks complete on refresh failure', async () => {
-      mockAuthApi.refresh.mockRejectedValue(new Error('no cookie'));
+      mockRefreshSharedSession.mockRejectedValue(new Error('no cookie'));
 
       await useAuthStore.getState().initializeSession();
       const state = useAuthStore.getState();
@@ -287,13 +290,32 @@ describe('authStore', () => {
     });
 
     it('clears the stored refresh token when refresh is unauthorized', async () => {
-      mockAuthApi.refresh.mockRejectedValue({ response: { status: 401 } });
+      mockRefreshSharedSession.mockRejectedValue({ response: { status: 401 } });
 
       await useAuthStore.getState().initializeSession();
 
       expect(useAuthStore.getState().token).toBeNull();
       expect(useAuthStore.getState().sessionBootstrapComplete).toBe(true);
       expect(setRefreshToken).toHaveBeenCalledWith(null);
+    });
+
+    // Regression: the server rotates the refresh token on every use, so two
+    // concurrent refreshes meant one always lost with a 401. Bootstrap used to
+    // refresh on its own path and, on losing, null the token even though the
+    // winning refresh had already established a valid session — kicking the
+    // user to /login at random on page load.
+    it('keeps a session another caller established when its own refresh rejects', async () => {
+      mockRefreshSharedSession.mockRejectedValue({ response: { status: 401 } });
+      vi.mocked(getAccessToken).mockReturnValue('token-from-winning-refresh');
+
+      await useAuthStore.getState().initializeSession();
+
+      expect(useAuthStore.getState().token).toBe('token-from-winning-refresh');
+      expect(useAuthStore.getState().sessionBootstrapComplete).toBe(true);
+      expect(setRefreshToken).not.toHaveBeenCalledWith(null);
+
+      // clearAllMocks keeps implementations, so restore the default explicitly.
+      vi.mocked(getAccessToken).mockReturnValue(null);
     });
   });
 

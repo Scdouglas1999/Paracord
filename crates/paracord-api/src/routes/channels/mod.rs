@@ -1548,9 +1548,9 @@ pub async fn add_channel_follow(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::BadRequest("Target channel does not exist".into()))?;
 
-    let target_guild_id = target.guild_id().ok_or_else(|| {
-        ApiError::BadRequest("Target channel must be a guild channel".into())
-    })?;
+    let target_guild_id = target
+        .guild_id()
+        .ok_or_else(|| ApiError::BadRequest("Target channel must be a guild channel".into()))?;
 
     // Authorize the follow against the TARGET (where messages land), NOT the
     // attacker-controlled source. MANAGE_WEBHOOKS is the Discord gate for adding a

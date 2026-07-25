@@ -181,8 +181,8 @@ export function SuccessNote({ children }: { children: ReactNode }) {
 const BRAND_POINTS = [
   {
     icon: ShieldCheck,
-    title: 'Sealed to your keys, not ours',
-    body: 'Messages and calls are end-to-end encrypted by default — the server relays ciphertext it can never read.',
+    title: 'Your server, your data',
+    body: 'Everything lives on the server you or a friend runs — no third party in the middle. Direct messages can be end-to-end encrypted, and calls always are.',
   },
   {
     icon: Server,

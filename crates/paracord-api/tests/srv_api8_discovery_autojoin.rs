@@ -145,7 +145,11 @@ async fn banned_user_cannot_self_join_public_guild() -> anyhow::Result<()> {
         )?,
     )
     .await?;
-    assert_eq!(status, StatusCode::CREATED, "guild create failed: {created}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "guild create failed: {created}"
+    );
     let guild_id_str = created["id"].as_str().expect("guild id").to_string();
     let guild_id: i64 = guild_id_str.parse()?;
 

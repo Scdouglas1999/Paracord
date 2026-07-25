@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 import type { User, UserSettings } from '../types';
 import { authApi } from '../api/auth';
-import { extractApiError } from '../api/client';
+import { extractApiError, refreshSharedSession } from '../api/client';
 import {
   clearLegacyPersistedAuth,
-  getRefreshToken,
+  getAccessToken,
   hydrateRefreshTokenStorage,
   setAccessToken,
   setRefreshToken,
@@ -108,13 +108,23 @@ export const useAuthStore = create<AuthState>()((set) => ({
     clearLegacyPersistedAuth();
     await hydrateRefreshTokenStorage();
     try {
-      const refreshToken = getRefreshToken();
-      const { data } = await authApi.refresh(refreshToken || undefined);
-      setAccessToken(data.token);
-      if (data.refresh_token) setRefreshToken(data.refresh_token);
-      set({ token: data.token, sessionBootstrapComplete: true });
+      // Go through the shared single-flight refresh: the app fires other
+      // requests while bootstrapping, and their 401 retry path refreshes the
+      // same rotating token. Two independent refreshes meant one of them
+      // always lost and logged the user out at random on reload.
+      const token = await refreshSharedSession();
+      set({ token, sessionBootstrapComplete: true });
       startDownloadTicketLifecycle();
     } catch (err) {
+      // Never tear down a session another caller just established: the shared
+      // refresh may have succeeded on a concurrent path even though this
+      // await rejected.
+      const live = getAccessToken();
+      if (live) {
+        set({ token: live, sessionBootstrapComplete: true });
+        startDownloadTicketLifecycle();
+        return;
+      }
       setAccessToken(null);
       if (isUnauthorizedError(err)) {
         setRefreshToken(null);

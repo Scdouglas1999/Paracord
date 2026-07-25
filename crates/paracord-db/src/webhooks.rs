@@ -392,10 +392,12 @@ mod tests {
             .await
             .expect("lookup ok")
             .is_some());
-        assert!(get_webhook_by_id_and_token(&pool, 4, &sha256_hex(RAW_TOKEN))
-            .await
-            .expect("lookup ok")
-            .is_none());
+        assert!(
+            get_webhook_by_id_and_token(&pool, 4, &sha256_hex(RAW_TOKEN))
+                .await
+                .expect("lookup ok")
+                .is_none()
+        );
     }
 
     // Legacy v1 bare-hash: a row whose token column holds sha256(non-hex legacy

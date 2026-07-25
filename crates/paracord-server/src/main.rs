@@ -550,6 +550,15 @@ async fn main() -> Result<()> {
             ai_api_key: config.ai.api_key.clone(),
             ai_model: config.ai.model.clone(),
             ai_timeout_seconds: config.ai.timeout_seconds,
+            bind_address: config.server.bind_address.clone(),
+            tls_enabled: config.tls.enabled,
+            tls_self_signed: config.tls.enabled
+                && config.tls.auto_generate
+                && !config.tls.acme.enabled,
+            auto_backup_enabled: config.backup.auto_backup_enabled,
+            auto_backup_interval_seconds: config.backup.auto_backup_interval_seconds,
+            federation_enabled: config.federation.enabled,
+            started_at: chrono::Utc::now(),
         },
         voice,
         storage,

@@ -971,6 +971,10 @@ pub async fn handle_connection(
             .ok()
             .flatten();
 
+        // This is the connecting user's own account, so account-scoped fields
+        // belong here. `flags` in particular gates admin UI: without it a cold
+        // start that applies READY before the REST profile leaves an admin
+        // looking like a normal user.
         let user_json = if let Some(u) = &user {
             json!({
                 "id": u.id.to_string(),
@@ -978,6 +982,7 @@ pub async fn handle_connection(
                 "discriminator": u.discriminator,
                 "avatar_hash": u.avatar_hash,
                 "display_name": u.display_name,
+                "flags": u.flags,
             })
         } else {
             json!({"id": session.user_id.to_string()})

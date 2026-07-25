@@ -1410,14 +1410,19 @@ async fn federation_cross_origin_reaction_sender_is_rejected() -> anyhow::Result
         state_key: None,
         signatures: json!({}),
     };
-    let request =
-        signed_event_request(&mut spoofed_reaction, &attacker_key, attacker_server, key_id)?;
+    let request = signed_event_request(
+        &mut spoofed_reaction,
+        &attacker_key,
+        attacker_server,
+        key_id,
+    )?;
     let (status, _) = harness.request(request).await?;
     // Ingest accepts (the room namespace belongs to the attacker); the spoof must
     // be blocked at dispatch, so no reaction and no victim user mapping appear.
     assert_eq!(status, StatusCode::ACCEPTED);
 
-    let reactions = paracord_db::reactions::get_message_reactions(&harness.db, local_msg_id).await?;
+    let reactions =
+        paracord_db::reactions::get_message_reactions(&harness.db, local_msg_id).await?;
     assert!(
         reactions.is_empty(),
         "reaction with cross-origin sender must not be applied"
@@ -1446,11 +1451,13 @@ async fn federation_cross_origin_reaction_sender_is_rejected() -> anyhow::Result
         state_key: None,
         signatures: json!({}),
     };
-    let request = signed_event_request(&mut legit_reaction, &attacker_key, attacker_server, key_id)?;
+    let request =
+        signed_event_request(&mut legit_reaction, &attacker_key, attacker_server, key_id)?;
     let (status, _) = harness.request(request).await?;
     assert_eq!(status, StatusCode::ACCEPTED);
 
-    let reactions = paracord_db::reactions::get_message_reactions(&harness.db, local_msg_id).await?;
+    let reactions =
+        paracord_db::reactions::get_message_reactions(&harness.db, local_msg_id).await?;
     assert!(
         !reactions.is_empty(),
         "same-origin reaction should be applied normally"

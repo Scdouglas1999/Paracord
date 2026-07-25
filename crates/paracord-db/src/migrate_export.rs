@@ -69,6 +69,7 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     // Depend on users/spaces (guilds).
     "application_commands",
     "audit_log_entries",
+    "automod_hits",
     "automod_rules",
     "bans",
     "bot_guild_installs",

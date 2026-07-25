@@ -513,7 +513,7 @@ impl MediaRoomManager {
         let participant = room
             .participants
             .get_mut(&user_id)
-            .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id))?;
+            .ok_or(RoomError::UserNotInRoom(user_id, room_id))?;
         participant.can_publish = can_publish;
         self.bump_generation();
         Ok(())

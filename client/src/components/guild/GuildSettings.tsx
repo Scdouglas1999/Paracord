@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { X, Shield, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Calendar, Bot, ArrowLeft, HardDrive, LayoutTemplate, MessageSquare, TrendingUp } from 'lucide-react';
+import { X, Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Calendar, Bot, ArrowLeft, HardDrive, LayoutTemplate, MessageSquare, TrendingUp } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { guildApi } from '../../api/guilds';
 import { inviteApi } from '../../api/invites';
 import { webhookApi } from '../../api/webhooks';
 import { botApi, type BotApplication, type GuildBotEntry } from '../../api/bots';
 import { emojiApi } from '../../api/emojis';
+import { AutomodSection } from './AutomodSection';
 import { useGuildStore } from '../../stores/guildStore';
 import { useAuthStore } from '../../stores/authStore';
 import { invalidateGuildPermissionCache, usePermissions } from '../../hooks/usePermissions';
@@ -54,7 +55,7 @@ interface GuildSettingsProps {
   initialChannelId?: string | null;
 }
 
-type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'economy';
+type SettingsSection = 'overview' | 'server-hub' | 'bot-store' | 'roles' | 'members' | 'channels' | 'invites' | 'emojis' | 'webhooks' | 'bots' | 'events' | 'onboarding' | 'bans' | 'reports' | 'audit-log' | 'file-storage' | 'mod-templates' | 'automod' | 'economy';
 
 export function getGuildSettingsErrorMessage(err: unknown, fallback: string): string {
   const responseData = (err as { response?: { data?: { message?: string; error?: string } } }).response?.data;
@@ -80,6 +81,7 @@ const NAV_ITEMS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: 'economy', label: 'Economy', icon: <TrendingUp size={16} /> },
   { id: 'file-storage', label: 'File Storage', icon: <HardDrive size={16} /> },
   { id: 'bans', label: 'Bans', icon: <Gavel size={16} /> },
+  { id: 'automod', label: 'AutoMod', icon: <ShieldAlert size={16} /> },
   { id: 'mod-templates', label: 'Mod Templates', icon: <Shield size={16} /> },
   { id: 'reports', label: 'Reports', icon: <MessageSquare size={16} /> },
   { id: 'audit-log', label: 'Audit Log', icon: <ScrollText size={16} /> },
@@ -415,6 +417,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
         case 'economy':
         case 'file-storage':
         case 'mod-templates':
+        case 'automod':
         case 'reports':
           return canManageRoleSettings;
         case 'roles':
@@ -474,6 +477,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
       requested === 'onboarding' ||
       requested === 'bans' ||
       requested === 'mod-templates' ||
+      requested === 'automod' ||
       requested === 'reports' ||
       requested === 'audit-log' ||
       requested === 'file-storage' ||
@@ -1450,6 +1454,9 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
 
             {activeSection === 'bans' && (
               <BansSection bans={bans} onUnban={(userId) => unban(userId)} />
+            )}
+            {activeSection === 'automod' && (
+              <AutomodSection guildId={guildId} channels={channels} roles={roles} />
             )}
             {activeSection === 'mod-templates' && (
               <ModerationTemplatesSection

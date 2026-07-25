@@ -424,6 +424,23 @@ pub fn build_router() -> Router<AppState> {
             "/api/v1/guilds/{guild_id}/moderation/templates/{template_id}/apply",
             post(routes::moderation_templates::apply_template),
         )
+        // AutoMod
+        .route(
+            "/api/v1/guilds/{guild_id}/automod/rules",
+            get(routes::automod::list_rules).post(routes::automod::create_rule),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/automod/rules/{rule_id}",
+            patch(routes::automod::update_rule).delete(routes::automod::delete_rule),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/automod/hits",
+            get(routes::automod::list_hits),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/automod/test",
+            post(routes::automod::test_rule),
+        )
         // Channels
         .route(
             "/api/v1/channels/{channel_id}",
@@ -817,6 +834,7 @@ pub fn build_router() -> Router<AppState> {
         )
         // Admin
         .route("/api/v1/admin/stats", get(routes::admin::get_stats))
+        .route("/api/v1/admin/health", get(routes::admin::get_health))
         .route(
             "/api/v1/admin/security-events",
             get(routes::admin::list_security_events),

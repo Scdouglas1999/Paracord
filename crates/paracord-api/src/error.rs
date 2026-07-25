@@ -18,6 +18,10 @@ pub enum ApiError {
     BadRequest(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    /// An AutoMod rule rejected the content. The message is operator-authored
+    /// and shown verbatim to the author.
+    #[error("{0}")]
+    AutomodBlocked(String),
     #[error("upgrade required: {0}")]
     UpgradeRequired(String),
     /// Rate limited. The i64 value is retry_after in seconds (0 = generic rate limit).
@@ -38,6 +42,7 @@ impl ApiError {
             ApiError::Forbidden => "FORBIDDEN",
             ApiError::BadRequest(_) => "BAD_REQUEST",
             ApiError::Conflict(_) => "CONFLICT",
+            ApiError::AutomodBlocked(_) => "AUTOMOD_BLOCKED",
             ApiError::UpgradeRequired(_) => "UPGRADE_REQUIRED",
             ApiError::RateLimited(_) => "RATE_LIMITED",
             ApiError::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
@@ -52,6 +57,7 @@ impl ApiError {
             ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::Conflict(_) => StatusCode::CONFLICT,
+            ApiError::AutomodBlocked(_) => StatusCode::FORBIDDEN,
             ApiError::UpgradeRequired(_) => StatusCode::UPGRADE_REQUIRED,
             ApiError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
@@ -106,6 +112,7 @@ impl From<paracord_core::error::CoreError> for ApiError {
             paracord_core::error::CoreError::BadRequest(msg) => ApiError::BadRequest(msg),
             paracord_core::error::CoreError::Conflict(msg) => ApiError::Conflict(msg),
             paracord_core::error::CoreError::RateLimited(secs) => ApiError::RateLimited(secs),
+            paracord_core::error::CoreError::AutomodBlocked(msg) => ApiError::AutomodBlocked(msg),
             paracord_core::error::CoreError::Database(_) => {
                 ApiError::Internal(anyhow::anyhow!("database error"))
             }

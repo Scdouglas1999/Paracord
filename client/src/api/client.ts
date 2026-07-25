@@ -191,6 +191,20 @@ const clearPersistedAuth = () => {
 // user out mid-session.
 let legacyRefreshPromise: Promise<string> | null = null;
 
+/**
+ * Shared single-flight session refresh for the active server.
+ *
+ * Every caller that refreshes the *same* credential must go through here.
+ * The server rotates the refresh token on each use, so two concurrent
+ * refreshes present the same (now-stale) token and the loser 401s — which
+ * previously logged the user out at random on page load, because session
+ * bootstrap refreshed on its own path while the request interceptor
+ * refreshed on this one.
+ */
+export function refreshSharedSession(): Promise<string> {
+  return refreshLegacyToken();
+}
+
 async function refreshLegacyToken(): Promise<string> {
   if (!legacyRefreshPromise) {
     legacyRefreshPromise = (async () => {

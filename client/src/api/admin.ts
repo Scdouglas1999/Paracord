@@ -45,7 +45,50 @@ export interface FederationModerationSubscription {
   updated_at_ms: number;
 }
 
+
+export type HealthSeverity = 'critical' | 'warning' | 'info';
+
+export interface HealthCheck {
+  id: string;
+  severity: HealthSeverity;
+  title: string;
+  detail: string;
+}
+
+export interface HealthReport {
+  version: string;
+  uptime_seconds: number;
+  database: { engine: string; size_bytes: number | null };
+  storage: { uploads_bytes: number; media_bytes: number };
+  backups: {
+    auto_enabled: boolean;
+    interval_seconds: number;
+    count: number;
+    latest_at: string | null;
+    latest_age_hours: number | null;
+    total_bytes: number;
+  };
+  network: {
+    bind_address: string;
+    public_url: string | null;
+    tls_enabled: boolean;
+    tls_self_signed: boolean;
+    registration_open: boolean;
+    federation_enabled: boolean;
+  };
+  media: { native_enabled: boolean; native_port: number; livekit_available: boolean };
+  counts: {
+    users: number;
+    guilds: number;
+    messages: number;
+    channels: number;
+    online_users: number;
+  };
+  checks: HealthCheck[];
+}
+
 export const adminApi = {
+  getHealth: () => getApi().get<HealthReport>('/admin/health'),
   getStats: () => getApi().get<{
     total_users: number;
     total_guilds: number;

@@ -95,9 +95,16 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       // and mention badges reconcile after any events missed while offline.
       void useReadStateStore.getState().refresh();
 
-      // Update auth store for backward compat
+      // READY carries the *public* projection of the account (id, username,
+      // avatar, display name) — not private fields like `flags` or `email`.
+      // Replacing the store's user therefore used to wipe `flags`, which is how
+      // a real server admin lost the admin panel the moment the gateway
+      // connected. Merge so the authoritative REST profile survives.
       if (data.user) {
-        useAuthStore.setState({ user: data.user });
+        const current = useAuthStore.getState().user;
+        useAuthStore.setState({
+          user: current ? { ...current, ...data.user } : data.user,
+        });
       }
 
       const readyGuildIds: string[] = [];

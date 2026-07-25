@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  Current release: <strong>v1.0.0</strong>
+  Current release: <strong>v2.0.0</strong>
 </p>
 
 ---
@@ -40,7 +40,8 @@ The client is built around a unified Home view and presence-first Rooms. Mention
 - **Own the media path.** Voice, video, and screen share use Paracord's native QUIC/WebTransport stack by default. LiveKit is an optional fallback, not a required dependency.
 - **Start without a configuration ceremony.** First run generates the config, JWT secret, SQLite database, and—in the standalone-binary path—a self-signed TLS certificate.
 - **Use one client across communities.** Connect to multiple Paracord servers and move between their spaces, conversations, and notifications from the same interface.
-- **Shape the community.** Roles, permissions, onboarding, moderation, bots, webhooks, storage policies, events, economy tools, and audit logs are managed in the app.
+- **Shape the community.** Roles, permissions, onboarding, moderation, AutoMod, bots, webhooks, storage policies, events, economy tools, and audit logs are managed in the app.
+- **See what the server is doing.** A built-in health view reports backups, database size, transport security, and capacity — and tells you what to fix, not just what's broken.
 
 ## The current experience
 
@@ -85,6 +86,7 @@ Desktop VP9 video and screen sharing require **libvpx** at build time. The `vpx`
 - Text, voice, stage, and forum channels
 - Roles and granular permissions
 - Invites, discovery, templates, welcome screens, and member onboarding
+- AutoMod content rules — keywords, patterns, links/invites, mention floods, and spam, with block, timeout, and moderator-alert actions
 - Member management, bans, reports, moderation templates, and audit logs
 - Events, custom emoji, file-storage policy, and configurable community economy
 - Server hub settings and public-community discovery
@@ -274,6 +276,7 @@ npx tauri build
 | [Getting Started](docs/getting-started.md) | First run, owner registration, invites, and media choices |
 | [Deployment](docs/deployment.md) | TLS, networking, PostgreSQL, backups, and production hardening |
 | [Docker Setup](docs/docker-setup.md) | Compose services, volumes, and reverse proxy setup |
+| [AutoMod](docs/automod.md) | Content rules, triggers, actions, exemptions, and the rule API |
 | [Known Limitations](docs/known-limitations.md) | Platform and operational support boundaries |
 | [Bot Development](docs/bot-development.md) | Bots, commands, interactions, and webhooks |
 | [Federation Protocol](docs/federation-protocol.md) | Signed federation envelopes and trust model |

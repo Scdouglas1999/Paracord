@@ -751,3 +751,15 @@ mod tests {
         assert!(validate_setting("max_guilds_per_user", "100").is_ok());
     }
 }
+
+/// Operator health check: capacity, backups, transport safety, and a list of
+/// actionable findings. Replaces the four bare counters v1 offered.
+pub async fn get_health(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<Value>, ApiError> {
+    let report = paracord_core::health::build_report(&state).await?;
+    Ok(Json(serde_json::to_value(report).map_err(|e| {
+        ApiError::Internal(anyhow::anyhow!(e.to_string()))
+    })?))
+}

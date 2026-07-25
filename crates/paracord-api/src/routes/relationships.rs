@@ -308,10 +308,9 @@ pub async fn remove_relationship(
     // of a mutual unfriend / decline / cancel. A block the target placed on us
     // (type=2) must be preserved: a blocked user must not be able to clear the
     // blocker's block by "removing" the relationship.
-    let reverse =
-        paracord_db::relationships::get_relationship(&state.db, target_id, auth.user_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let reverse = paracord_db::relationships::get_relationship(&state.db, target_id, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let reverse_removed = matches!(reverse.as_ref().map(|r| r.rel_type), Some(1) | Some(4));
     if reverse_removed {
         paracord_db::relationships::delete_relationship(&state.db, target_id, auth.user_id)

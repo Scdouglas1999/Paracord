@@ -81,7 +81,11 @@ async fn create_guild(ctx: &TestContext, token: &str, name: &str) -> anyhow::Res
             token,
         )
         .await?;
-    assert_eq!(status, StatusCode::CREATED, "create guild failed: {payload}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create guild failed: {payload}"
+    );
     Ok(payload["id"]
         .as_str()
         .context("guild id should be a string")?
@@ -109,7 +113,11 @@ async fn create_channel(
             token,
         )
         .await?;
-    assert_eq!(status, StatusCode::CREATED, "create channel failed: {payload}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create channel failed: {payload}"
+    );
     Ok(payload["id"]
         .as_str()
         .context("channel id should be a string")?

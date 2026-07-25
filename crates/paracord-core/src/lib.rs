@@ -2,12 +2,15 @@
 
 pub mod admin;
 pub mod auth;
+pub mod automod;
+pub mod automod_enforce;
 #[cfg(feature = "backup")]
 pub mod backup;
 pub mod channel;
 pub mod error;
 pub mod events;
 pub mod guild;
+pub mod health;
 pub mod identity;
 pub mod interactions;
 pub mod member_index;
@@ -194,4 +197,76 @@ pub struct AppConfig {
     pub ai_model: Option<String>,
     /// Timeout for AI requests in seconds.
     pub ai_timeout_seconds: u64,
+
+    // --- Operational metadata -------------------------------------------
+    // Surfaced by the admin health check so operators can see how the server
+    // is actually running without reading the config file.
+    /// Address the HTTP server is bound to.
+    pub bind_address: String,
+    /// Whether the server terminates TLS itself.
+    pub tls_enabled: bool,
+    /// Whether TLS is using a self-generated certificate.
+    pub tls_self_signed: bool,
+    /// Whether scheduled automatic backups are running.
+    pub auto_backup_enabled: bool,
+    /// Interval between automatic backups, in seconds.
+    pub auto_backup_interval_seconds: u64,
+    /// Whether server-to-server federation is enabled.
+    pub federation_enabled: bool,
+    /// Process start time, for uptime reporting.
+    pub started_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[cfg(test)]
+impl AppConfig {
+    /// Minimal config for unit tests that only read a handful of fields.
+    pub(crate) fn test_default() -> Self {
+        Self {
+            jwt_secret: "test-secret".into(),
+            jwt_expiry_seconds: 86_400,
+            registration_enabled: true,
+            allow_username_login: true,
+            require_email: false,
+            storage_path: "./data/uploads".into(),
+            max_upload_size: 1024,
+            livekit_api_key: String::new(),
+            livekit_api_secret: String::new(),
+            livekit_url: String::new(),
+            livekit_http_url: String::new(),
+            livekit_public_url: String::new(),
+            livekit_available: false,
+            public_url: None,
+            media_storage_path: "./data/files".into(),
+            media_max_file_size: 1024,
+            media_p2p_threshold: 1024,
+            file_cryptor: None,
+            totp_cryptor: None,
+            backup_dir: "./data/backups".into(),
+            database_url: "sqlite://./data/paracord.db".into(),
+            federation_max_events_per_peer_per_minute: None,
+            federation_max_user_creates_per_peer_per_hour: None,
+            native_media_enabled: true,
+            native_media_port: 8443,
+            native_media_max_participants: 50,
+            native_media_e2ee_required: false,
+            max_guild_storage_quota: 0,
+            federation_file_cache_enabled: false,
+            federation_file_cache_max_size: 0,
+            federation_file_cache_ttl_hours: 0,
+            tenor_api_key: None,
+            require_email_verification: false,
+            ai_provider: None,
+            ai_base_url: None,
+            ai_api_key: None,
+            ai_model: None,
+            ai_timeout_seconds: 30,
+            bind_address: "0.0.0.0:8443".into(),
+            tls_enabled: true,
+            tls_self_signed: false,
+            auto_backup_enabled: true,
+            auto_backup_interval_seconds: 86_400,
+            federation_enabled: false,
+            started_at: chrono::Utc::now(),
+        }
+    }
 }

@@ -1239,6 +1239,30 @@ pub async fn count_channel_messages_since(
     count_channel_messages_since_typed(pool, ChannelId::new(channel_id), since).await
 }
 
+/// How many messages one author has posted in a channel since `since`.
+/// Backs AutoMod's message-spam trigger.
+pub async fn count_user_messages_since(
+    pool: &DbPool,
+    channel_id: i64,
+    author_id: i64,
+    since: DateTime<Utc>,
+) -> Result<i64, DbError> {
+    let since_text = datetime_to_db_text(since);
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)
+         FROM messages
+         WHERE channel_id = $1
+           AND author_id = $2
+           AND created_at >= $3",
+    )
+    .bind(channel_id)
+    .bind(author_id)
+    .bind(since_text)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
 pub async fn delete_messages_by_ids(pool: &DbPool, ids: &[i64]) -> Result<u64, DbError> {
     if ids.is_empty() {
         return Ok(0);

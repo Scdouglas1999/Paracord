@@ -386,9 +386,10 @@ describe('HomePage', () => {
     expect(screen.getByLabelText('Your spaces')).toBeInTheDocument();
     expect(screen.getByLabelText('Jump in')).toBeInTheDocument();
     expect(screen.getByText('Start something')).toBeInTheDocument();
-    // Header + Jump-in both expose New message.
+    // Header + Jump-in both expose New message; the Get-set-up checklist adds a
+    // second "Add a friend" affordance while that step is still open.
     expect(screen.getAllByRole('button', { name: /New message/ }).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByRole('button', { name: /Add a friend/ })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Add a friend/ }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole('button', { name: /Explore spaces/ })).toBeInTheDocument();
 
     // Quiet status copy names the primary space.

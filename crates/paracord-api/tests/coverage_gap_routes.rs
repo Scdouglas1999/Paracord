@@ -1685,9 +1685,16 @@ async fn webhook_rate_budget_only_consumed_after_token_auth() -> anyhow::Result<
             Some(json!({ "name": "RateLimit Hook", "channel_id": channel_id })),
         )
         .await?;
-    assert_eq!(status, StatusCode::CREATED, "create webhook failed: {webhook}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create webhook failed: {webhook}"
+    );
     let webhook_id = webhook["id"].as_str().context("webhook id")?.to_string();
-    let real_token = webhook["token"].as_str().context("webhook token")?.to_string();
+    let real_token = webhook["token"]
+        .as_str()
+        .context("webhook token")?
+        .to_string();
 
     // WEBHOOK_RATE_LIMIT is 30 requests / 60s. Fire that many bogus-token
     // requests against the known webhook_id. Each must be rejected as NotFound
@@ -1743,9 +1750,16 @@ async fn webhook_token_digest_is_not_accepted_as_credential() -> anyhow::Result<
             Some(json!({ "name": "Token Hook", "channel_id": channel_id })),
         )
         .await?;
-    assert_eq!(status, StatusCode::CREATED, "create webhook failed: {webhook}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create webhook failed: {webhook}"
+    );
     let webhook_id = webhook["id"].as_str().context("webhook id")?.to_string();
-    let raw_token = webhook["token"].as_str().context("webhook token")?.to_string();
+    let raw_token = webhook["token"]
+        .as_str()
+        .context("webhook token")?
+        .to_string();
 
     // Legit path: the RAW token returned by create must authenticate.
     let (status, payload) = ctx

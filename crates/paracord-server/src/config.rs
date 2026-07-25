@@ -483,7 +483,7 @@ impl Default for BackupConfig {
     fn default() -> Self {
         Self {
             backup_dir: default_backup_dir(),
-            auto_backup_enabled: false,
+            auto_backup_enabled: true,
             auto_backup_interval_seconds: default_auto_backup_interval(),
             include_media: true,
             max_backups: default_max_backups(),

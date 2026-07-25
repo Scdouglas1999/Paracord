@@ -16,6 +16,7 @@ import { usePresenceStore } from '../stores/presenceStore';
 import { useChannelStore } from '../stores/channelStore';
 import { useServerListStore } from '../stores/serverListStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { useUIStore } from '../stores/uiStore';
 import { useMutedGuilds } from '../hooks/useMutedGuilds';
 import { useUnifiedConversations } from '../hooks/useUnifiedConversations';
 import { useVoice } from '../hooks/useVoice';
@@ -29,6 +30,7 @@ import { HomeJumpInRow } from '../components/home/HomeJumpInRow';
 import { HomePickUpRow } from '../components/home/HomePickUpRow';
 import { HomeResumeHero } from '../components/home/HomeResumeHero';
 import { HomeServersRail, type HomeServerAttention } from '../components/home/HomeServersRail';
+import { HomeSetupChecklist, type SetupStep } from '../components/home/HomeSetupChecklist';
 import { HomeSectionHeader } from '../components/home/HomeSectionHeader';
 import { Button } from '../components/ui/Button';
 import { toast } from '../stores/toastStore';
@@ -279,6 +281,47 @@ export function HomePage() {
   /** Quiet = no live rooms and no online friends — still compose a full canvas. */
   const isQuiet = liveRooms.length === 0 && aroundFriends.length === 0;
 
+  // Onboarding progress, derived live from store state rather than a stored
+  // flag — a step un-checks itself if the underlying thing goes away, and the
+  // whole block vanishes once every step is done (see HomeSetupChecklist).
+  const setupSteps = useMemo<SetupStep[]>(
+    () => [
+      {
+        key: 'space',
+        label: 'Create or join a space',
+        hint: 'Spaces hold your channels, rooms, and people.',
+        done: spaces.length > 0,
+        action: () => setShowCreateModal(true),
+        actionLabel: 'Create',
+      },
+      {
+        key: 'profile',
+        label: 'Set a display name and avatar',
+        hint: 'How people recognize you across every server.',
+        done: Boolean(user?.display_name || user?.avatar_hash),
+        action: () => useUIStore.getState().setUserSettingsOpen(true, 'identity'),
+        actionLabel: 'Edit profile',
+      },
+      {
+        key: 'friend',
+        label: 'Add a friend',
+        hint: 'Send a request by username to start a DM.',
+        done: friends.length > 0,
+        action: () => navigate('/app/friends'),
+        actionLabel: 'Add',
+      },
+      {
+        key: 'conversation',
+        label: 'Start a conversation',
+        hint: 'Message someone directly, or post in a channel.',
+        done: pickUp.length > 0,
+        action: () => setShowDmPicker(true),
+        actionLabel: 'Message',
+      },
+    ],
+    [spaces.length, user?.display_name, user?.avatar_hash, friends.length, pickUp.length, navigate],
+  );
+
   const handleMessageFriend = useCallback(
     async (userId: string) => {
       try {
@@ -475,6 +518,9 @@ export function HomePage() {
 
         {/* (2) Around now — omit when empty. */}
         <HomeAroundStrip friends={aroundFriends} onMessage={handleMessageFriend} />
+
+        {/* (2b) Get set up — only while the account still has open steps. */}
+        <HomeSetupChecklist steps={setupSteps} />
 
         {/* (3) Resume the primary space — continuity must not disappear when Home is active. */}
         {primarySpace && (

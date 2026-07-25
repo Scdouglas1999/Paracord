@@ -5372,7 +5372,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-api"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5416,7 +5416,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-codec"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "aec-rs-sys",
  "aes-gcm",
@@ -5439,7 +5439,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-core"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "argon2",
  "chrono",
@@ -5456,6 +5456,7 @@ dependencies = [
  "paracord-transport",
  "paracord-util",
  "rand 0.8.6",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5468,7 +5469,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-db"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "paracord-models",
@@ -5484,7 +5485,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-desktop"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -5531,7 +5532,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-federation"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -5551,7 +5552,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-media"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -5579,7 +5580,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-media-dev"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5605,7 +5606,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-models"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "bitflags 2.11.0",
  "chrono",
@@ -5616,7 +5617,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-relay"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5634,7 +5635,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-server"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5677,7 +5678,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-transport"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5702,7 +5703,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-util"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -5717,7 +5718,7 @@ dependencies = [
 
 [[package]]
 name = "paracord-ws"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "axum",

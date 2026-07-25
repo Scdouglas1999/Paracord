@@ -402,3 +402,44 @@ describe('dispatch INTERACTION_CREATE / slash feedback', () => {
 // Keep voiceStore import referenced (READY loads voice states) so tree-shaking
 // of the mock graph doesn't drop the module the dispatcher touches.
 void useVoiceStore;
+
+describe('READY user projection', () => {
+  // Regression: READY carries only the public projection of the account
+  // (no `flags`, no `email`). Replacing the stored user wiped `flags`, which
+  // silently revoked the admin panel from real server admins as soon as the
+  // gateway connected.
+  it('merges READY user into the stored profile instead of replacing it', () => {
+    useAuthStore.setState({
+      user: {
+        id: 'u1',
+        username: 'owner',
+        flags: 1,
+        email: 'owner@example.com',
+      } as unknown as User,
+    });
+
+    dispatchGatewayEvent(SERVER, GatewayEvents.READY, {
+      user: { id: 'u1', username: 'owner', display_name: 'Owner', avatar_hash: null },
+      guilds: [],
+      session_id: 's1',
+    } as never);
+
+    const user = useAuthStore.getState().user as unknown as Record<string, unknown>;
+    expect(user.flags).toBe(1);
+    expect(user.email).toBe('owner@example.com');
+    // Fields READY does carry are still applied.
+    expect(user.display_name).toBe('Owner');
+  });
+
+  it('accepts the READY user when nothing is stored yet', () => {
+    useAuthStore.setState({ user: null });
+
+    dispatchGatewayEvent(SERVER, GatewayEvents.READY, {
+      user: { id: 'u2', username: 'fresh', flags: 0 },
+      guilds: [],
+      session_id: 's2',
+    } as never);
+
+    expect(useAuthStore.getState().user?.id).toBe('u2');
+  });
+});

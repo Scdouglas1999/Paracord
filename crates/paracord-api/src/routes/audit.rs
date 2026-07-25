@@ -27,6 +27,11 @@ pub const ACTION_BOT_ADD: i16 = 80;
 pub const ACTION_BOT_REMOVE: i16 = 81;
 pub const ACTION_REPORT_CREATE: i16 = 90;
 pub const ACTION_REPORT_RESOLVE: i16 = 91;
+pub const ACTION_AUTOMOD_RULE_CREATE: i16 = 100;
+pub const ACTION_AUTOMOD_RULE_UPDATE: i16 = 101;
+pub const ACTION_AUTOMOD_RULE_DELETE: i16 = 102;
+/// Recorded when AutoMod itself acts on a message (actor is the offending user).
+pub const ACTION_AUTOMOD_ACTION: i16 = 103;
 
 pub async fn log_action(
     state: &AppState,

@@ -572,6 +572,15 @@ pub async fn send_message(
         }
     }
 
+    // AutoMod. Scoped to human sends through the REST API — the operator-authored
+    // paths (bots, webhooks, scheduled delivery) are deliberately not filtered.
+    // Runs before creation so a blocked message is never persisted.
+    let automod = if let Some(guild_id) = channel.guild_id() {
+        run_automod(&state, guild_id, channel_id, auth.user_id, &body.content).await?
+    } else {
+        paracord_core::automod_enforce::AutomodVerdict::default()
+    };
+
     let msg_id = paracord_util::snowflake::generate(1);
 
     let dm_e2ee = body
@@ -687,6 +696,15 @@ pub async fn send_message(
 
     if created_new {
         dispatch_channel_event(&state, &channel, "MESSAGE_CREATE", msg_json.clone()).await;
+
+        if !automod.alerts.is_empty() {
+            dispatch_automod_alerts(&state, automod.alerts).await;
+        }
+        // Applied after the triggering message is stored so the author's own
+        // message posts as configured; the timeout starts from the next send.
+        if !automod.timeouts.is_empty() {
+            paracord_core::automod_enforce::apply_timeouts(&state.db, &automod.timeouts).await;
+        }
 
         // Mention count increment for @user, @everyone, @here
         if !body.content.is_empty() {
@@ -1025,4 +1043,108 @@ pub async fn delete_message(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// AutoMod
+// ---------------------------------------------------------------------------
+
+/// Evaluate the space's AutoMod rules against an outgoing message.
+///
+/// Returns the alerts to post once the message is stored. A blocking rule is
+/// surfaced as `ApiError::AutomodBlocked`, which the client renders as the
+/// operator's own reason text.
+async fn run_automod(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: i64,
+    author_id: i64,
+    content: &str,
+) -> Result<paracord_core::automod_enforce::AutomodVerdict, ApiError> {
+    use paracord_core::automod_enforce::AutomodVerdict;
+    if content.trim().is_empty() {
+        return Ok(AutomodVerdict::default());
+    }
+
+    // Permissions were already computed for the send check; recompute here so
+    // the helper stays self-contained (the result is cached by paracord-core).
+    let guild = match paracord_db::guilds::get_guild(&state.db, guild_id).await {
+        Ok(Some(guild)) => guild,
+        _ => return Ok(AutomodVerdict::default()),
+    };
+    let perms = match paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        author_id,
+    )
+    .await
+    {
+        Ok(perms) => perms,
+        Err(_) => return Ok(AutomodVerdict::default()),
+    };
+
+    let mut verdict = paracord_core::automod_enforce::evaluate_message(
+        &state.db, guild_id, channel_id, author_id, content, perms,
+    )
+    .await;
+
+    if let Some(reason) = verdict.blocked_reason.take() {
+        // The message is rejected, so nothing downstream will apply the
+        // queued timeouts — do it here before returning.
+        paracord_core::automod_enforce::apply_timeouts(&state.db, &verdict.timeouts).await;
+        return Err(ApiError::AutomodBlocked(reason));
+    }
+    Ok(verdict)
+}
+
+/// Post AutoMod moderator alerts. Best-effort: a failed alert never affects the
+/// message that triggered it.
+async fn dispatch_automod_alerts(
+    state: &AppState,
+    alerts: Vec<paracord_core::automod_enforce::AutomodAlert>,
+) {
+    for alert in alerts {
+        let username = paracord_db::users::get_user_by_id(&state.db, alert.user_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|u| u.username)
+            .unwrap_or_else(|| alert.user_id.to_string());
+
+        let body = paracord_core::automod_enforce::alert_message(&alert, &username);
+        let alert_channel =
+            match paracord_db::channels::get_channel(&state.db, alert.channel_id).await {
+                Ok(Some(channel)) => channel,
+                _ => {
+                    tracing::warn!(
+                        channel_id = alert.channel_id,
+                        "automod: alert channel no longer exists"
+                    );
+                    continue;
+                }
+            };
+
+        let alert_id = paracord_util::snowflake::generate(1);
+        match paracord_db::messages::create_message(
+            &state.db,
+            alert_id,
+            alert.channel_id,
+            alert.user_id,
+            &body,
+            0,
+            None,
+        )
+        .await
+        {
+            Ok(row) => {
+                let payload = message_to_json(state, &row, alert.user_id).await;
+                dispatch_channel_event(state, &alert_channel, "MESSAGE_CREATE", payload).await;
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "automod: failed to post alert");
+            }
+        }
+    }
 }

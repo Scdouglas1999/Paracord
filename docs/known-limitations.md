@@ -1,6 +1,20 @@
 # Known Limitations
 
-This page documents support boundaries for the v1.0.0 release. Items here are not security exceptions; they are product or platform limitations that should be visible before publishing public artifacts.
+This page documents support boundaries for the v2.0.0 release. Items here are not security exceptions; they are product or platform limitations that should be visible before publishing public artifacts.
+
+## AutoMod
+
+- AutoMod evaluates **human messages sent through the REST API**. Operator-authored paths — bots, webhooks, and scheduled-message delivery — are deliberately not filtered.
+- Members holding `ADMINISTRATOR` or `MANAGE_GUILD` are never filtered by their own space's rules.
+- Evaluation **fails open**: if a rule cannot be parsed, or evaluation errors, the message is delivered and the problem is logged. A broken filter must not take chat down.
+- Regular expressions are compiled with Rust's `regex` crate (no backtracking, so no catastrophic-backtracking class of attack), with pattern length and compiled program size bounded. Patterns are validated at write time, not on the send path.
+- A rule is capped at 200 keywords, and a space at 50 rules.
+- Message-spam triggers count a member's messages **in the triggering channel**, not across the whole space.
+
+## Server Health
+
+- The health report is a point-in-time read of local configuration and filesystem state. It does not probe the server from the public internet, so it cannot confirm that port forwarding or DNS actually work from outside your network.
+- Database size is reported for SQLite only (summing the database and its WAL/SHM sidecars). PostgreSQL deployments report no size; use your database tooling.
 
 ## Native Media
 

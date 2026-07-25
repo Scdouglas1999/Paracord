@@ -4,6 +4,7 @@ pub mod anonymous_messages;
 pub mod application_commands;
 pub mod attachments;
 pub mod audit_log;
+pub mod automod;
 pub mod bans;
 pub mod bot_applications;
 pub mod bot_reviews;
