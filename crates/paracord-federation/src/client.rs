@@ -291,6 +291,51 @@ impl FederationClient {
             .map_err(|e| FederationError::RemoteError(format!("invalid file token response: {e}")))
     }
 
+    /// Fetch a peer's discoverable guilds over the signed federation transport.
+    ///
+    /// The user-facing `/api/v1/discovery/guilds` endpoint requires an
+    /// authenticated user, so peer-to-peer discovery must not go through it —
+    /// an unauthenticated fetch simply 401s. This targets the peer-facing
+    /// `/_paracord/federation/v1/discovery/guilds` route, which is authorized by
+    /// the same Ed25519 transport signature (and the same trust/block checks) as
+    /// every other federation read.
+    ///
+    /// Returns the raw `guilds` array; the caller maps it into its own shape.
+    pub async fn fetch_peer_discoverable_guilds(
+        &self,
+        federation_endpoint: &str,
+        search: Option<&str>,
+        tag: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>, FederationError> {
+        let mut url = format!(
+            "{}/discovery/guilds?limit={}",
+            federation_endpoint.trim_end_matches('/'),
+            limit.clamp(1, 50)
+        );
+        // The query string is part of the signed canonical path, so it must be
+        // built before signing — hence encoding it into the URL rather than
+        // attaching it with `RequestBuilder::query`.
+        if let Some(search) = search.map(str::trim).filter(|v| !v.is_empty()) {
+            url.push_str("&search=");
+            url.push_str(&urlencode(search));
+        }
+        if let Some(tag) = tag.map(str::trim).filter(|v| !v.is_empty()) {
+            url.push_str("&tag=");
+            url.push_str(&urlencode(tag));
+        }
+
+        let resp = self.get_with_retry_with_headers(&url, &[]).await?;
+        let payload: serde_json::Value = resp.json().await.map_err(|e| {
+            FederationError::RemoteError(format!("invalid peer discovery response: {e}"))
+        })?;
+        Ok(payload
+            .get("guilds")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default())
+    }
+
     /// Download a federated file, rejecting responses larger than the default
     /// cap ([`DEFAULT_MAX_DOWNLOAD_BYTES`]). Prefer
     /// [`Self::download_federated_file_with_limit`] to enforce the
@@ -323,8 +368,14 @@ impl FederationClient {
             let pinned_addrs = resolve_and_check_dns(&current_url).await?;
             let download_client = self.client_for(&current_url, &pinned_addrs)?;
 
-            let resp = download_client
-                .get(&current_url)
+            // Federated file tokens are bound to the peer that requested them,
+            // so the download must identify which peer is presenting the token.
+            // Without this the bearer token alone would authorize any holder.
+            let mut request = download_client.get(&current_url);
+            if let Some(signer) = self.transport_signer.as_ref() {
+                request = request.header("X-Paracord-Origin", signer.origin.as_str());
+            }
+            let resp = request
                 .send()
                 .await
                 .map_err(|e| FederationError::Http(e.to_string()))?;
@@ -589,6 +640,22 @@ impl FederationClient {
             .header("X-Paracord-Destination", destination)
             .header("X-Paracord-Fed-Version", protocol_version)
     }
+}
+
+/// Percent-encode a query-string value. Deliberately conservative: anything
+/// outside the unreserved set is escaped, so the encoded value can never alter
+/// the request path that gets folded into the transport signature.
+fn urlencode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
 }
 
 /// Build an HTTP client for requests whose URL is protected by the federation

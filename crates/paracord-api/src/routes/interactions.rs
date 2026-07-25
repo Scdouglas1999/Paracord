@@ -596,6 +596,25 @@ async fn ensure_channel_access(
     Ok(())
 }
 
+/// Strip the raw interaction token from a payload before it is returned over
+/// HTTP to the member who triggered the interaction.
+///
+/// The token is a bearer credential: `interaction_callback`,
+/// `create_followup_message`, `edit_original_response` and
+/// `delete_original_response` take no `AuthUser` — the path token *is* the sole
+/// credential, and it authorizes acting **as the bot**. Handing it back to the
+/// invoker gave any member who could run a slash command a 15-minute licence to
+/// post, edit and delete messages under the bot's identity, bypassing their own
+/// SEND_MESSAGES. The bot still receives the complete payload (token included)
+/// over the gateway via the INTERACTION_CREATE dispatch inside
+/// `paracord_core::interactions::create_interaction`.
+fn without_interaction_token(mut payload: Value) -> Value {
+    if let Some(map) = payload.as_object_mut() {
+        map.remove("token");
+    }
+    payload
+}
+
 // ── Endpoints ───────────────────────────────────────────────────────────────
 
 /// POST /api/v1/interactions
@@ -674,7 +693,10 @@ pub async fn invoke_interaction(
             .await
             .map_err(ApiError::from)?;
 
-            Ok((StatusCode::CREATED, Json(interaction)))
+            Ok((
+                StatusCode::CREATED,
+                Json(without_interaction_token(interaction)),
+            ))
         }
         // MessageComponent (3)
         3 => {
@@ -780,7 +802,10 @@ pub async fn invoke_interaction(
             .await
             .map_err(ApiError::from)?;
 
-            Ok((StatusCode::CREATED, Json(interaction)))
+            Ok((
+                StatusCode::CREATED,
+                Json(without_interaction_token(interaction)),
+            ))
         }
         // ApplicationCommandAutocomplete (4)
         4 => {
@@ -829,7 +854,10 @@ pub async fn invoke_interaction(
             .await
             .map_err(ApiError::from)?;
 
-            Ok((StatusCode::CREATED, Json(interaction)))
+            Ok((
+                StatusCode::CREATED,
+                Json(without_interaction_token(interaction)),
+            ))
         }
         // ModalSubmit (5)
         5 => {
@@ -957,7 +985,10 @@ pub async fn invoke_interaction(
             .await
             .map_err(ApiError::from)?;
 
-            Ok((StatusCode::CREATED, Json(interaction)))
+            Ok((
+                StatusCode::CREATED,
+                Json(without_interaction_token(interaction)),
+            ))
         }
         _ => Err(ApiError::BadRequest(format!(
             "unsupported interaction type: {}",
@@ -1180,6 +1211,24 @@ pub async fn create_followup_message(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+
+    // The followup path writes a message straight into the interaction's
+    // channel. Unlike the callback path
+    // (`paracord_core::interactions::process_interaction_response`), it
+    // performed no permission check at all, so a valid token let a bot post
+    // into a channel it can neither see nor send to. Enforce the bot's own
+    // channel permissions — `compute_channel_permissions` also caps the result
+    // by the bot's install-time grant for this guild.
+    if let Some(guild_id) = token_row.guild_id {
+        ensure_channel_access(
+            &state,
+            guild_id,
+            token_row.channel_id,
+            bot_app.bot_user_id,
+            Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES,
+        )
+        .await?;
+    }
 
     let content = body.content.as_deref().unwrap_or("");
 

@@ -18,6 +18,7 @@ import { VoiceLobby } from './VoiceLobby';
 import { VoiceChatSidebar } from './VoiceChatSidebar';
 import { Button } from '../../components/ui/Button';
 import { displayName } from '../../lib/displayName';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 type VideoLayout = 'top' | 'side' | 'pip' | 'hidden';
 
@@ -539,7 +540,10 @@ export function VoiceStageChannel({
     return map;
   }, [participants]);
 
+  // The call surface drives WebGL/native video. A throw in here must not take
+  // the channel (or the app) down — the user needs the controls to leave.
   const streamViewerElement = watchedStreamerId ? (
+    <ErrorBoundary variant="section" label="the stream">
     <StreamViewer
       streamerId={watchedStreamerId}
       streamerName={watchedStreamerName}
@@ -559,6 +563,7 @@ export function VoiceStageChannel({
         stopStream();
       }}
     />
+    </ErrorBoundary>
   ) : null;
 
   return (
@@ -692,7 +697,7 @@ export function VoiceStageChannel({
                 <div data-native-underlay-clear="" className="relative min-h-0 flex-1 overflow-hidden">
                   {streamViewerElement}
                   <div className="absolute bottom-3 right-3 z-10">
-                    <VideoGrid layout="pip" />
+                    <ErrorBoundary variant="section" label="the video tiles"><VideoGrid layout="pip" /></ErrorBoundary>
                   </div>
                 </div>
               ) : videoLayout === 'hidden' ? (
@@ -701,7 +706,7 @@ export function VoiceStageChannel({
                 </div>
               ) : (
                 <>
-                  <VideoGrid layout="compact" />
+                  <ErrorBoundary variant="section" label="the video tiles"><VideoGrid layout="compact" /></ErrorBoundary>
                   <div data-native-underlay-clear="" className="min-h-0 flex-1 overflow-hidden">
                     {streamViewerElement}
                   </div>
@@ -709,7 +714,7 @@ export function VoiceStageChannel({
               )
             ) : (
               <>
-                <VideoGrid layout="grid" />
+                <ErrorBoundary variant="section" label="the video tiles"><VideoGrid layout="grid" /></ErrorBoundary>
                 <div className="min-h-0 flex-1 overflow-hidden">
                   <div className="flex h-full min-h-[240px] items-center bg-bg-primary px-6 sm:min-h-[300px] sm:px-10">
                     <div className="w-full max-w-md">

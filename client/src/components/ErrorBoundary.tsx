@@ -6,6 +6,16 @@ import { Button } from './ui/Button';
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  /**
+   * `page` (default) renders the full-viewport recovery screen — correct at the
+   * app root and for whole route surfaces. `section` renders a compact inline
+   * panel sized to its container, for boundaries around a single region (the
+   * message feed, the sidebar, a call tile) where the rest of the app is still
+   * usable and must stay on screen.
+   */
+  variant?: 'page' | 'section';
+  /** Region name used in the section fallback, e.g. "message feed". */
+  label?: string;
 }
 interface State {
   hasError: boolean;
@@ -56,6 +66,39 @@ export class ErrorBoundary extends Component<Props, State> {
     }
 
     const remainingRetries = Math.max(0, MAX_RETRIES - this.state.retryCount);
+
+    if (this.props.variant === 'section') {
+      const label = this.props.label ?? 'this section';
+      return (
+        <div
+          className="flex h-full w-full min-w-0 flex-col items-start justify-center gap-3 p-6"
+          role="alert"
+        >
+          <div className="flex h-9 w-9 items-center justify-center rounded-sm bg-danger-tint text-accent-danger">
+            <Bug size={18} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-label font-semibold text-text-primary">
+              Couldn&apos;t display {label}
+            </p>
+            <p className="mt-1 max-w-prose text-meta text-text-secondary">
+              The rest of the app is still working. Retry this panel, or reload if it
+              keeps failing.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" onClick={this.resetBoundary} disabled={remainingRetries === 0}>
+              <RotateCcw size={14} className="mr-1.5" />
+              {remainingRetries > 0 ? 'Retry' : 'Retry limit reached'}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => window.location.reload()}>
+              <RefreshCw size={14} className="mr-1.5" />
+              Reload app
+            </Button>
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div

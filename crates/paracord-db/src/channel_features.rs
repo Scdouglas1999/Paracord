@@ -129,7 +129,7 @@ pub async fn upsert_for_channel(
             adaptive_slowmode_step_seconds,
             thread_rate_limit_per_user,
             updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, datetime('now'))
          ON CONFLICT(channel_id) DO UPDATE SET
             disappearing_seconds = EXCLUDED.disappearing_seconds,
             anonymous_posting_enabled = EXCLUDED.anonymous_posting_enabled,
@@ -139,7 +139,7 @@ pub async fn upsert_for_channel(
             adaptive_slowmode_threshold = EXCLUDED.adaptive_slowmode_threshold,
             adaptive_slowmode_step_seconds = EXCLUDED.adaptive_slowmode_step_seconds,
             thread_rate_limit_per_user = EXCLUDED.thread_rate_limit_per_user,
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = datetime('now')
          RETURNING channel_id, disappearing_seconds, CASE WHEN anonymous_posting_enabled THEN 1 ELSE 0 END AS anonymous_posting_enabled, slowmode_exempt_role_ids,
                    CASE WHEN adaptive_slowmode_enabled THEN 1 ELSE 0 END AS adaptive_slowmode_enabled, adaptive_slowmode_window_seconds, adaptive_slowmode_threshold,
                    adaptive_slowmode_step_seconds, thread_rate_limit_per_user",

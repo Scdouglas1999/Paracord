@@ -139,6 +139,59 @@ describe('apiBaseUrl', () => {
     });
   });
 
+  describe('resolveResourceUrl download ticket', () => {
+    // The ticket is a multi-use bearer credential for attachment/emoji/sticker/
+    // avatar/federated-file endpoints. It may only ever reach the user's own
+    // API server — never a host named by attacker-controlled data such as an
+    // `avatar_hash` that happens to be an absolute URL.
+    async function loadWithServer(serverUrl: string) {
+      vi.stubEnv('VITE_API_URL', '');
+      localStorage.setItem('paracord:server-url', serverUrl);
+      vi.resetModules();
+      return import('./apiBaseUrl');
+    }
+
+    it('attaches the ticket for the resolved API origin', async () => {
+      const mod = await loadWithServer('https://myserver.com');
+      const resolved = mod.resolveResourceUrl('https://myserver.com/api/v1/files/1', 'TICKET');
+      expect(resolved).toContain('ticket=TICKET');
+    });
+
+    it('attaches the ticket to absolute paths resolved against the API origin', async () => {
+      const mod = await loadWithServer('https://myserver.com');
+      const resolved = mod.resolveResourceUrl('/api/v1/users/1/avatar', 'TICKET');
+      expect(resolved).toBe('https://myserver.com/api/v1/users/1/avatar?ticket=TICKET');
+    });
+
+    it('never attaches the ticket to a foreign origin', async () => {
+      const mod = await loadWithServer('https://myserver.com');
+      expect(mod.resolveResourceUrl('https://evil.tld/p.png', 'TICKET')).toBe(
+        'https://evil.tld/p.png',
+      );
+      expect(mod.resolveResourceUrl('https://myserver.com.evil.tld/p.png', 'TICKET')).toBe(
+        'https://myserver.com.evil.tld/p.png',
+      );
+      // Same host, different port/scheme is a different origin.
+      expect(mod.resolveResourceUrl('https://myserver.com:8443/p.png', 'TICKET')).toBe(
+        'https://myserver.com:8443/p.png',
+      );
+      expect(mod.resolveResourceUrl('http://myserver.com/p.png', 'TICKET')).toBe(
+        'http://myserver.com/p.png',
+      );
+    });
+
+    it('does not attach the ticket when the API base is same-origin', async () => {
+      // Cookies already authenticate same-origin subresource loads.
+      vi.stubEnv('VITE_API_URL', '');
+      localStorage.clear();
+      vi.resetModules();
+      const mod = await import('./apiBaseUrl');
+      expect(mod.resolveResourceUrl(`${window.location.origin}/api/v1/files/1`, 'TICKET')).toBe(
+        `${window.location.origin}/api/v1/files/1`,
+      );
+    });
+  });
+
   describe('resolveServerRootUrl', () => {
     it('uses the stored server origin without the /api/v1 suffix', async () => {
       vi.stubEnv('VITE_API_URL', '');

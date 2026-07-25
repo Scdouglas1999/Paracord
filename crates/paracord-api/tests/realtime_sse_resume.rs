@@ -426,3 +426,137 @@ async fn sse_ready_event_id_tracks_resume_cursor() {
         "READY event_id must equal the resume cursor, got {ready:?}",
     );
 }
+
+// ── Regression: HTTP presence_update is validated and normalized ────────────
+//
+// The HTTP command bus wrote `status`/`custom_status`/`activities` verbatim into
+// the process-global `state.user_presences` map — the same map the WS gateway
+// normalizes (status enum, <=8 activities, 256-char truncation) before writing.
+// Values from that map are fanned out to every guild co-member and friend and
+// re-served in every READY, so one caller could park a multi-megabyte blob in
+// server memory and force it onto every peer.
+#[tokio::test]
+async fn http_presence_update_rejects_oversized_payload() {
+    let app = build_test_app(TestAppOptions::default())
+        .await
+        .expect("test app");
+    let token =
+        create_authenticated_user_token(&app.db, &app.jwt_secret, "presencebig", "S3curePassw0rd!")
+            .await
+            .expect("token");
+
+    // 64 KiB custom status: comfortably under the global request-body limit
+    // (which answers 413 on its own) but well past this handler's payload cap,
+    // so it exercises the handler's check rather than the transport's.
+    let huge = "A".repeat(64 * 1024);
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v2/rt/commands")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "command_id": "c1",
+                "type": "presence_update",
+                "payload": { "status": "online", "custom_status": huge },
+            })
+            .to_string(),
+        ))
+        .expect("build request");
+    let (status, _) = common::dispatch_json(&app.app, request)
+        .await
+        .expect("dispatch");
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "an oversized presence payload must be refused, not stored"
+    );
+}
+
+#[tokio::test]
+async fn http_presence_update_normalizes_status_and_caps_activities() {
+    let app = build_test_app(TestAppOptions::default())
+        .await
+        .expect("test app");
+    let token = create_authenticated_user_token(
+        &app.db,
+        &app.jwt_secret,
+        "presencenorm",
+        "S3curePassw0rd!",
+    )
+    .await
+    .expect("token");
+
+    let activities: Vec<Value> = (0..20)
+        .map(|i| json!({ "name": format!("{}{}", "n".repeat(300), i), "type": 0 }))
+        .collect();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v2/rt/commands")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "command_id": "c2",
+                "type": "presence_update",
+                "payload": {
+                    "status": "totally-not-a-status",
+                    "custom_status": "x".repeat(1000),
+                    "activities": activities,
+                },
+            })
+            .to_string(),
+        ))
+        .expect("build request");
+    let (status, _) = common::dispatch_json(&app.app, request)
+        .await
+        .expect("dispatch");
+    assert!(
+        status.is_success(),
+        "normalized presence should be accepted"
+    );
+
+    let user_id = *app
+        .state
+        .user_presences
+        .iter()
+        .map(|entry| *entry.key())
+        .collect::<Vec<_>>()
+        .first()
+        .expect("a presence was stored");
+    let stored = app
+        .state
+        .user_presences
+        .get(&user_id)
+        .map(|v| v.clone())
+        .expect("presence stored");
+
+    assert_eq!(
+        stored.get("status").and_then(|v| v.as_str()),
+        Some("online"),
+        "an unknown status must be normalized, not stored verbatim"
+    );
+    assert_eq!(
+        stored
+            .get("activities")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len()),
+        Some(8),
+        "activities must be capped to the gateway's limit"
+    );
+    let custom = stored
+        .get("custom_status")
+        .and_then(|v| v.as_str())
+        .expect("custom_status");
+    assert_eq!(
+        custom.chars().count(),
+        256,
+        "custom_status must be truncated to the gateway's limit"
+    );
+    let first_activity_name = stored["activities"][0]["name"].as_str().expect("name");
+    assert_eq!(
+        first_activity_name.chars().count(),
+        256,
+        "activity text must be truncated to the gateway's limit"
+    );
+}

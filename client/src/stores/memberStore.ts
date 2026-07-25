@@ -3,6 +3,7 @@ import type { Member, User } from '../types';
 import { guildApi } from '../api/guilds';
 import { extractApiError } from '../api/client';
 import { toast } from './toastStore';
+import { registerSessionReset } from './sessionReset';
 
 interface MemberState {
   // Members indexed by guild ID
@@ -18,6 +19,8 @@ interface MemberState {
   removeMember: (guildId: string, userId: string) => void;
   updateMember: (guildId: string, member: Partial<Member> & { user: { id: string } }) => void;
   updateUserIdentity: (user: User) => void;
+  /** Drop every cached member list. Called on logout. */
+  reset: () => void;
 }
 
 const _fetchInFlight = new Set<string>();
@@ -99,4 +102,15 @@ export const useMemberStore = create<MemberState>()((set, get) => ({
       }
       return { members };
     }),
+
+  reset: () => {
+    // Clear the in-flight guard too, or the first fetch after the next login is
+    // dropped as a duplicate of one that will never resolve into this store.
+    _fetchInFlight.clear();
+    set({ members: new Map(), membersLoaded: {}, isLoading: false });
+  },
 }));
+
+// Cleared on logout; see `sessionReset` for why this is a registration
+// rather than a direct import from `authStore`.
+registerSessionReset('members', () => useMemberStore.getState().reset());

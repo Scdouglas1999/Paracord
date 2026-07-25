@@ -11,6 +11,36 @@ export interface WebcamTile {
 }
 
 /**
+ * Tiles are recomputed on a 1s interval on the native path. Committing a fresh
+ * array every tick gave every consumer a new reference each second, which made
+ * downstream debounces that key on this value re-arm forever — the 1200ms
+ * dead-stream cleanup in VoiceStageChannel could never fire, so stale panes
+ * were never removed. Return the previous array when nothing actually changed.
+ */
+function sameTiles(a: WebcamTile[], b: WebcamTile[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i].participantId !== b[i].participantId ||
+      a[i].username !== b[i].username ||
+      a[i].isLocal !== b[i].isLocal
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** setState wrapper that preserves identity for an unchanged tile list. */
+function commitTiles(
+  setTiles: (updater: (prev: WebcamTile[]) => WebcamTile[]) => void,
+  next: WebcamTile[],
+): void {
+  setTiles((prev) => (sameTiles(prev, next) ? prev : next));
+}
+
+/**
  * Returns the list of participants with active camera tracks.
  * Extracted from VideoGrid's recompute logic so multiple components
  * (VideoGrid, SplitPaneSourcePicker) can share the same data.
@@ -69,7 +99,7 @@ export function useWebcamTiles(): WebcamTile[] {
         }
       }
 
-      setTiles(next);
+      commitTiles(setTiles, next);
     };
 
     recompute();
@@ -104,7 +134,7 @@ export function useWebcamTiles(): WebcamTile[] {
   useEffect(() => {
     if (room || !mediaEngine || !connected) {
       if (!room && !mediaEngine) {
-        setTiles([]);
+        commitTiles(setTiles, []);
       }
       return;
     }
@@ -158,7 +188,7 @@ export function useWebcamTiles(): WebcamTile[] {
       }
 
       if (!cancelled) {
-        setTiles(next);
+        commitTiles(setTiles, next);
       }
     };
 

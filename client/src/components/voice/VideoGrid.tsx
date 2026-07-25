@@ -140,18 +140,31 @@ function VideoTileView({
 
   // LiveKit path
   useEffect(() => {
-    if (!room || !videoRef.current) return;
+    const el = videoRef.current;
+    if (!room || !el) return;
 
     let trackEndedCleanup: (() => void) | null = null;
+    // LiveKit's `attach()` registers the element on the track AND installs a
+    // document `visibilitychange` listener. Nulling `srcObject` reverses
+    // neither, so every layout switch leaked a registered element plus a
+    // listener and left adaptive-stream sizing believing the tile was still
+    // visible (defeating downscaling). Only `detach()` undoes it.
+    let attachedTrack: { detach: (el: HTMLMediaElement) => unknown } | null = null;
+
+    const detachAttachedTrack = () => {
+      if (attachedTrack && el) {
+        attachedTrack.detach(el);
+      }
+      attachedTrack = null;
+    };
 
     const attachTrack = () => {
-      const el = videoRef.current;
-      if (!el) return;
-
       if (trackEndedCleanup) {
         trackEndedCleanup();
         trackEndedCleanup = null;
       }
+      // Re-running on a room event must not stack attachments.
+      detachAttachedTrack();
 
       let mediaTrack: MediaStreamTrack | null = null;
 
@@ -184,6 +197,7 @@ function VideoTileView({
         if (cameraTrack?.track) {
           mediaTrack = cameraTrack.track.mediaStreamTrack ?? null;
           cameraTrack.track.attach(el);
+          attachedTrack = cameraTrack.track;
           setHasTrack(true);
         } else {
           setHasTrack(false);
@@ -193,9 +207,7 @@ function VideoTileView({
       if (mediaTrack) {
         const onEnded = () => {
           setHasTrack(false);
-          if (videoRef.current) {
-            videoRef.current.srcObject = null;
-          }
+          el.srcObject = null;
         };
         mediaTrack.addEventListener('ended', onEnded);
         trackEndedCleanup = () => {
@@ -220,9 +232,8 @@ function VideoTileView({
         trackEndedCleanup();
         trackEndedCleanup = null;
       }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
+      detachAttachedTrack();
+      el.srcObject = null;
     };
   }, [room, tile.participantId, tile.isLocal]);
 

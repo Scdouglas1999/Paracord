@@ -29,6 +29,7 @@ const TemplateGalleryPage = lazy(() => import('./pages/TemplateGalleryPage').the
 // in production (import.meta.env.DEV is statically false), so Rollup drops the
 // dynamic import and the harness never ships to end users.
 const MediaTest = import.meta.env.DEV ? lazy(() => import('./pages/MediaTest')) : null;
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAccountStore } from './stores/accountStore';
 import { useServerListStore } from './stores/serverListStore';
 import { useAuthStore } from './stores/authStore';
@@ -246,31 +247,49 @@ function LazyFallback() {
   );
 }
 
+/**
+ * Every lazily-loaded route surface gets its own boundary.
+ *
+ * The app previously had exactly one ErrorBoundary, at the root in `main.tsx`.
+ * Any render throw anywhere therefore replaced the ENTIRE UI with the recovery
+ * screen and dropped all in-memory state — an unrecoverable page-level failure
+ * for what was often a single bad row. Per-route boundaries keep the shell,
+ * the sidebar and the gateway connection alive while one surface recovers.
+ */
 function lazyRoute(children: React.ReactNode) {
-  return <Suspense fallback={<LazyFallback />}>{children}</Suspense>;
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={<LazyFallback />}>{children}</Suspense>
+    </ErrorBoundary>
+  );
+}
+
+/** Same per-route isolation for the eagerly-imported auth/legal surfaces. */
+function route(children: React.ReactNode) {
+  return <ErrorBoundary>{children}</ErrorBoundary>;
 }
 
 export default function App() {
   return (
     <Routes>
       {/* Optional device crypto identity */}
-      <Route path="/setup" element={<AccountSetupPage />} />
-      <Route path="/unlock" element={<AccountUnlockPage />} />
-      <Route path="/recover" element={<AccountRecoverPage />} />
+      <Route path="/setup" element={route(<AccountSetupPage />)} />
+      <Route path="/unlock" element={route(<AccountUnlockPage />)} />
+      <Route path="/recover" element={route(<AccountRecoverPage />)} />
       {/* Legacy unlock-screen link; import lives in User Settings → Identity. */}
       <Route path="/import" element={<Navigate to="/app?settings=identity" replace />} />
 
       {/* Server connection */}
-      <Route path="/connect" element={<ServerConnectPage />} />
+      <Route path="/connect" element={route(<ServerConnectPage />)} />
 
       {/* Password auth */}
-      <Route path="/login" element={<AuthRoute><LoginPage /></AuthRoute>} />
-      <Route path="/register" element={<AuthRoute><RegisterPage /></AuthRoute>} />
+      <Route path="/login" element={route(<AuthRoute><LoginPage /></AuthRoute>)} />
+      <Route path="/register" element={route(<AuthRoute><RegisterPage /></AuthRoute>)} />
 
       {/* Invites, legal */}
       <Route path="/invite/:code" element={lazyRoute(<InvitePage />)} />
-      <Route path="/terms" element={<TermsPage />} />
-      <Route path="/privacy" element={<PrivacyPage />} />
+      <Route path="/terms" element={route(<TermsPage />)} />
+      <Route path="/privacy" element={route(<PrivacyPage />)} />
 
       {/* Main app */}
       <Route path="/app" element={<ProtectedRoute>{lazyRoute(<AppShell />)}</ProtectedRoute>}>

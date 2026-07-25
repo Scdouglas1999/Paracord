@@ -809,6 +809,27 @@ pub async fn message_to_json(
     build_message_json(msg, viewer_id, &batch)
 }
 
+/// Reject permission-overwrite writes aimed at a thread or forum post.
+///
+/// Thread permissions are resolved entirely from the parent channel (see
+/// `paracord_core::permissions::compute_channel_permissions`), so an overwrite
+/// stored on a thread row has no effect whatsoever. Accepting one would report
+/// success while silently doing nothing — exactly the kind of quiet no-op this
+/// project's fail-loudly stance forbids. Forum posts share `channel_type == 6`,
+/// so this covers both.
+fn ensure_overwrites_supported(
+    channel: &paracord_db::channels::ChannelRow,
+) -> Result<(), ApiError> {
+    if channel.channel_type == paracord_core::permissions::CHANNEL_TYPE_THREAD {
+        return Err(ApiError::BadRequest(
+            "Threads and forum posts inherit permissions from their parent channel; \
+             set the overwrite on the parent instead"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Returns the IDs of channels the requesting user can see in a guild.
 pub async fn get_visible_channels(
     State(state): State<AppState>,
@@ -1197,6 +1218,7 @@ pub async fn upsert_channel_overwrite(
         &[Permissions::VIEW_CHANNEL, Permissions::MANAGE_CHANNELS],
     )
     .await?;
+    ensure_overwrites_supported(&channel)?;
     if body.target_type != paracord_core::permissions::OVERWRITE_TARGET_ROLE
         && body.target_type != paracord_core::permissions::OVERWRITE_TARGET_MEMBER
     {
@@ -1260,6 +1282,7 @@ pub async fn delete_channel_overwrite(
         &[Permissions::VIEW_CHANNEL, Permissions::MANAGE_CHANNELS],
     )
     .await?;
+    ensure_overwrites_supported(&channel)?;
     paracord_db::channel_overwrites::delete_channel_overwrite(&state.db, channel_id, target_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;

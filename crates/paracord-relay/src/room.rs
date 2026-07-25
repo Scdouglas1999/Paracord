@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -66,11 +67,19 @@ pub enum RoomError {
 /// Thread-safe manager for media rooms.
 pub struct MediaRoomManager {
     rooms: DashMap<String, MediaRoom>,
-    /// Monotonic counter bumped on every mutation that can change relay
-    /// routing (membership, publish/subscribe, layer, session metadata). The
-    /// relay uses it to invalidate its per-`(sender, ssrc)` recipient snapshot
-    /// cache without recomputing on every forwarded datagram.
-    generation: AtomicU64,
+    /// Per-room monotonic counter bumped on every mutation that can change that
+    /// room's relay routing (membership, publish/subscribe, layer, session
+    /// metadata). The relay uses it to invalidate its per-`(sender, ssrc)`
+    /// recipient snapshot cache without recomputing on every forwarded datagram.
+    ///
+    /// This is deliberately **per room**, not one server-wide counter. A single
+    /// global generation meant any control message from any participant in any
+    /// room — `ReceiverReport` and `SubscribeStream` are reachable from the
+    /// control channel with no rate limit — invalidated the recipient cache for
+    /// every sender in every room on the server, forcing a full rebuild (and,
+    /// before this change, a deep clone of the entire room) for every media
+    /// packet server-wide.
+    room_generations: DashMap<String, Arc<AtomicU64>>,
 }
 
 impl MediaRoomManager {
@@ -81,20 +90,38 @@ impl MediaRoomManager {
     pub fn new() -> Self {
         Self {
             rooms: DashMap::new(),
-            generation: AtomicU64::new(0),
+            room_generations: DashMap::new(),
         }
     }
 
-    /// Current routing generation. Changes whenever room state that affects
-    /// fan-out is mutated. Cheap (one relaxed atomic load) so the relay hot
-    /// path can gate its recipient cache on it.
-    pub fn generation(&self) -> u64 {
-        self.generation.load(Ordering::Acquire)
+    /// Current routing generation for one room. Changes whenever that room's
+    /// state affecting fan-out is mutated. Cheap (one map read plus an atomic
+    /// load) so the relay hot path can gate its recipient cache on it.
+    pub fn generation(&self, room_id: &str) -> u64 {
+        self.room_generations
+            .get(room_id)
+            .map(|g| g.load(Ordering::Acquire))
+            .unwrap_or(0)
     }
 
-    /// Bump the routing generation after a mutation.
-    fn bump_generation(&self) {
-        self.generation.fetch_add(1, Ordering::Release);
+    /// Bump one room's routing generation after a mutation.
+    fn bump_generation(&self, room_id: &str) {
+        self.room_generations
+            .entry(room_id.to_string())
+            .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+            .fetch_add(1, Ordering::Release);
+    }
+
+    /// Run `f` against a room **without cloning it**.
+    ///
+    /// [`get_room`] deep-clones the entire `MediaRoom` (every participant, its
+    /// published tracks, subscriptions and stored key ciphertexts). That is
+    /// acceptable for the cold, occasional callers but not for the relay's
+    /// recipient-snapshot rebuild, which a hostile peer can drive at control
+    /// message rate. The closure must not re-enter the room map (it holds a
+    /// `DashMap` read guard) and must not `.await`.
+    pub fn with_room<R>(&self, room_id: &str, f: impl FnOnce(&MediaRoom) -> R) -> Option<R> {
+        self.rooms.get(room_id).map(|room| f(room.value()))
     }
 
     /// Get or create a room for the given guild/channel combination.
@@ -149,7 +176,7 @@ impl MediaRoomManager {
 
         let participants = room.participants.values().cloned().collect();
         drop(room);
-        self.bump_generation();
+        self.bump_generation(&room_id);
         Ok(participants)
     }
 
@@ -179,13 +206,17 @@ impl MediaRoomManager {
             }
         };
 
-        // If the room is empty, remove it from the map.
+        // If the room is empty, remove it from the map. Drop its generation
+        // counter with it so the per-room map cannot grow without bound across
+        // the lifetime of the process.
         if result.is_none() {
             self.rooms.remove(&room_id);
+            self.room_generations.remove(&room_id);
             tracing::info!(room_id = %room_id, "room destroyed (last participant left)");
+        } else {
+            self.bump_generation(&room_id);
         }
 
-        self.bump_generation();
         result
     }
 
@@ -210,7 +241,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.publish_track(track);
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(())
     }
 
@@ -272,7 +303,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.unpublish_track(stream_id, track_id);
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(())
     }
 
@@ -294,7 +325,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.subscribe(target_user_id);
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(())
     }
 
@@ -314,7 +345,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.unsubscribe(target_user_id);
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(())
     }
 
@@ -345,7 +376,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.subscribe_track(subscription);
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(())
     }
 
@@ -366,7 +397,7 @@ impl MediaRoomManager {
             .get_mut(&user_id)
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.unsubscribe_track(stream_id, track_id);
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(())
     }
 
@@ -414,7 +445,7 @@ impl MediaRoomManager {
                 subscription.active_layer = resolved_active_layer;
             }
         });
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(updated)
     }
 
@@ -442,7 +473,7 @@ impl MediaRoomManager {
         let updated = participant.update_track_subscription(stream_id, track_id, |subscription| {
             subscription.viewport = viewport.clone();
         });
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(updated)
     }
 
@@ -470,7 +501,7 @@ impl MediaRoomManager {
         let updated = participant.update_track_subscription(stream_id, track_id, |subscription| {
             subscription.active_layer = Some(active_layer);
         });
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(updated)
     }
 
@@ -491,7 +522,7 @@ impl MediaRoomManager {
             .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.to_string()))?;
         participant.session_id = session_id;
         participant.set_video_capabilities(video_capabilities);
-        self.bump_generation();
+        self.bump_generation(room_id);
         Ok(())
     }
 
@@ -513,9 +544,10 @@ impl MediaRoomManager {
         let participant = room
             .participants
             .get_mut(&user_id)
-            .ok_or(RoomError::UserNotInRoom(user_id, room_id))?;
+            .ok_or_else(|| RoomError::UserNotInRoom(user_id, room_id.clone()))?;
         participant.can_publish = can_publish;
-        self.bump_generation();
+        drop(room);
+        self.bump_generation(&room_id);
         Ok(())
     }
 
@@ -590,6 +622,68 @@ mod tests {
         for p in &remaining {
             assert!(!p.subscriptions.contains(&2));
         }
+    }
+
+    /// The routing generation must be per room. With one server-wide counter,
+    /// a single peer spamming `ReceiverReport`/`SubscribeStream` invalidated the
+    /// relay's recipient cache for every sender in every other call on the
+    /// server, forcing a full fan-out rebuild per media packet server-wide.
+    #[test]
+    fn routing_generation_is_scoped_to_one_room() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(1, 100, make_participant(1)).unwrap();
+        mgr.join_room(1, 100, make_participant(2)).unwrap();
+        mgr.join_room(2, 200, make_participant(3)).unwrap();
+
+        let room_a = "1:100".to_string();
+        let room_b = "2:200".to_string();
+        let a_before = mgr.generation(&room_a);
+        let b_before = mgr.generation(&room_b);
+
+        // A control-channel-reachable mutation in room A.
+        mgr.subscribe_participant(&room_a, 1, 2).unwrap();
+
+        assert!(
+            mgr.generation(&room_a) > a_before,
+            "room A's own generation must advance"
+        );
+        assert_eq!(
+            mgr.generation(&room_b),
+            b_before,
+            "a mutation in room A must not invalidate room B's routing cache"
+        );
+    }
+
+    /// The per-room generation map must not outlive its rooms.
+    #[test]
+    fn destroying_a_room_drops_its_generation_entry() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(1, 100, make_participant(1)).unwrap();
+        let room_id = "1:100".to_string();
+        assert!(mgr.generation(&room_id) > 0);
+
+        assert!(mgr.leave_room(1, 100, 1).is_none());
+        assert_eq!(mgr.room_count(), 0);
+        assert_eq!(
+            mgr.generation(&room_id),
+            0,
+            "the destroyed room's generation entry must be reclaimed"
+        );
+    }
+
+    /// `with_room` is the hot-path accessor; it must observe the same state
+    /// `get_room` clones, without cloning.
+    #[test]
+    fn with_room_observes_live_state_without_cloning() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(1, 100, make_participant(7)).unwrap();
+        let room_id = "1:100".to_string();
+
+        let seen = mgr
+            .with_room(&room_id, |room| room.participants.contains_key(&7))
+            .unwrap();
+        assert!(seen);
+        assert!(mgr.with_room("nope", |_| true).is_none());
     }
 
     #[test]

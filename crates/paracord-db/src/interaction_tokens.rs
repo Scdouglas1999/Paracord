@@ -171,19 +171,16 @@ pub async fn consume_modal(
 }
 
 pub async fn delete_expired_tokens(pool: &DbPool) -> Result<u64, DbError> {
-    let result = match crate::active_database_engine() {
-        crate::DatabaseEngine::Sqlite => {
-            let now_text = crate::datetime_to_db_text(chrono::Utc::now());
-            sqlx::query("DELETE FROM interaction_tokens WHERE expires_at <= $1")
-                .bind(now_text)
-                .execute(pool)
-                .await?
-        }
-        crate::DatabaseEngine::Postgres => {
-            sqlx::query("DELETE FROM interaction_tokens WHERE expires_at <= NOW()")
-                .execute(pool)
-                .await?
-        }
-    };
+    // `interaction_tokens.expires_at` is TEXT on both engines, holding the
+    // fixed-width UTC form `datetime_to_db_text` writes, so one bound string
+    // compares correctly everywhere. The old PostgreSQL branch compared that
+    // TEXT column against `NOW()` (a timestamptz) and failed with
+    // `operator does not exist: text <= timestamp with time zone`, so expired
+    // interaction tokens were never reaped there.
+    let now_text = crate::datetime_to_db_text(chrono::Utc::now());
+    let result = sqlx::query("DELETE FROM interaction_tokens WHERE expires_at <= $1")
+        .bind(now_text)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected())
 }

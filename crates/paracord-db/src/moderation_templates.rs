@@ -50,7 +50,7 @@ pub async fn create_template(
         "INSERT INTO moderation_action_templates (
             id, guild_id, name, action_type, duration_minutes, reason_template, dm_template, created_by, updated_at
          ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP
+            $1, $2, $3, $4, $5, $6, $7, $8, datetime('now')
          )
          RETURNING id, guild_id, name, action_type, duration_minutes, reason_template, dm_template, created_by, created_at, updated_at",
     )

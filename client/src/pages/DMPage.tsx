@@ -25,6 +25,7 @@ import { Input } from '../components/ui/Input';
 import { cn } from '../lib/utils';
 import { ChannelType, type Channel, type Message, type ReadState } from '../types';
 import { displayName } from '../lib/displayName';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 const EMPTY_CHANNELS: Channel[] = [];
 
@@ -342,6 +343,7 @@ export function DMPage() {
         )}
         {inThisDmCall && watchedStreamerId && (
           <div className="relative max-h-[40vh] min-h-[180px] shrink-0 border-b border-border-subtle bg-black">
+            <ErrorBoundary variant="section" label="the stream">
             <StreamViewer
               streamerId={watchedStreamerId}
               streamerName={watchedStreamerName}
@@ -359,18 +361,21 @@ export function DMPage() {
                   : undefined
               }
             />
+            </ErrorBoundary>
           </div>
         )}
-        <MessageList
-          channelId={channelId}
-          onReply={(msg: Message) =>
-            setReplyingTo({
-              id: msg.id,
-              author: displayName(msg.author),
-              content: msg.content || '',
-            })
-          }
-        />
+        <ErrorBoundary variant="section" label="the message feed">
+          <MessageList
+            channelId={channelId}
+            onReply={(msg: Message) =>
+              setReplyingTo({
+                id: msg.id,
+                author: displayName(msg.author),
+                content: msg.content || '',
+              })
+            }
+          />
+        </ErrorBoundary>
         <MessageInput channelId={channelId} replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} />
         {inThisDmCall && <VoiceControlBar />}
       </div>

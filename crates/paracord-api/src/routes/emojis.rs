@@ -36,26 +36,20 @@ async fn ensure_emoji_permission(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let perms = paracord_core::permissions::compute_channel_permissions(
+    // MANAGE_EMOJIS is a guild-scoped gate. This used to call
+    // `compute_channel_permissions` with the *guild* id in the channel slot;
+    // no channel has id == guild_id, so the call always errored and the handler
+    // silently fell through to `compute_permissions_from_roles`, which cannot
+    // apply the bot install-permission cap -- an installed bot with
+    // `permissions=0` still passed if any of its guild roles carried the bit.
+    // `compute_guild_permissions` is the correct primitive and applies the cap.
+    let perms = paracord_core::permissions::compute_guild_permissions(
         &state.db,
         guild_id,
-        guild_id, // use guild_id as channel_id for guild-level permission check
         guild.owner_id,
         user_id,
     )
-    .await;
-    // If channel-level check fails (no such channel), fall back to role-level check
-    let perms = match perms {
-        Ok(p) => p,
-        Err(_) => {
-            let roles = paracord_db::roles::get_member_roles(&state.db, user_id, guild_id).await?;
-            paracord_core::permissions::compute_permissions_from_roles(
-                &roles,
-                guild.owner_id,
-                user_id,
-            )
-        }
-    };
+    .await?;
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_EMOJIS)?;
     Ok(())
 }

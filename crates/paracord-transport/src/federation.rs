@@ -94,7 +94,18 @@ pub enum FederationError {
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("handshake message too large: {0} bytes (max {MAX_HANDSHAKE_MESSAGE_SIZE})")]
+    HandshakeTooLarge(u32),
 }
+
+/// Upper bound on a federation handshake frame (`FederationHello` /
+/// `FederationAccept`).
+///
+/// Both are small JSON documents — an origin, a hex public key, a timestamp and
+/// a hex signature — so 8 KiB is orders of magnitude of headroom. The bound
+/// exists because the length prefix is read *before* the peer has been
+/// authenticated, so it must never size an allocation on its own authority.
+pub const MAX_HANDSHAKE_MESSAGE_SIZE: u32 = 8 * 1024;
 
 impl FederationConnection {
     /// Send a datagram to the federated server.
@@ -179,12 +190,17 @@ pub async fn initiate_federation(
     send.write_all(&len).await?;
     send.write_all(&hello_bytes).await?;
 
-    // Read FederationAccept
+    // Read FederationAccept. Bounded before allocation for the same reason as
+    // the hello above: `verify_accept` runs after this buffer already exists.
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf)
         .await
         .map_err(FederationError::Read)?;
-    let msg_len = u32::from_be_bytes(len_buf) as usize;
+    let msg_len = u32::from_be_bytes(len_buf);
+    if msg_len == 0 || msg_len > MAX_HANDSHAKE_MESSAGE_SIZE {
+        return Err(FederationError::HandshakeTooLarge(msg_len));
+    }
+    let msg_len = msg_len as usize;
 
     let mut msg_buf = vec![0u8; msg_len];
     recv.read_exact(&mut msg_buf)
@@ -227,12 +243,19 @@ pub async fn accept_federation(
     // Accept bidirectional stream
     let (mut send, mut recv) = conn.accept_bi().await?;
 
-    // Read FederationHello
+    // Read FederationHello. The length prefix arrives BEFORE `verify_hello`
+    // has authenticated anything, so it must be bounded before it sizes an
+    // allocation — otherwise any host that can open a QUIC stream to the
+    // federation listener can demand a 4 GB buffer.
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf)
         .await
         .map_err(FederationError::Read)?;
-    let msg_len = u32::from_be_bytes(len_buf) as usize;
+    let msg_len = u32::from_be_bytes(len_buf);
+    if msg_len == 0 || msg_len > MAX_HANDSHAKE_MESSAGE_SIZE {
+        return Err(FederationError::HandshakeTooLarge(msg_len));
+    }
+    let msg_len = msg_len as usize;
 
     let mut msg_buf = vec![0u8; msg_len];
     recv.read_exact(&mut msg_buf)

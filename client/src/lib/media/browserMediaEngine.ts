@@ -2611,7 +2611,7 @@ export class BrowserMediaEngine implements MediaEngine {
     payload: Uint8Array,
     rawData: Uint8Array,
   ): void {
-    let subscription = this.screenAudioSubscriptions.get(userId);
+    const subscription = this.screenAudioSubscriptions.get(userId);
     if (!subscription) {
       return;
     }

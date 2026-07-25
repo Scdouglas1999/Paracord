@@ -48,12 +48,12 @@ pub async fn upsert_review(
 ) -> Result<BotReviewRow, DbError> {
     let row = sqlx::query_as::<_, BotReviewRow>(
         "INSERT INTO bot_reviews (id, bot_app_id, user_id, rating, title, body, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+         VALUES ($1, $2, $3, $4, $5, $6, datetime('now'))
          ON CONFLICT(bot_app_id, user_id) DO UPDATE SET
              rating = EXCLUDED.rating,
              title = EXCLUDED.title,
              body = EXCLUDED.body,
-             updated_at = CURRENT_TIMESTAMP
+             updated_at = datetime('now')
          RETURNING id, bot_app_id, user_id, rating, title, body, created_at, updated_at",
     )
     .bind(id)

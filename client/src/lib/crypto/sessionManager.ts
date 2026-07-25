@@ -10,8 +10,16 @@ import type {
 } from './types';
 import { OPK_BATCH_SIZE } from './types';
 
-const SESSION_PREFIX = 'signal:session:';
-const PREKEY_STORE_KEY = 'signal:prekeys';
+// The native secure store rejects any key without the `paracord:` prefix
+// (`validate_secure_store_key` in src-tauri/src/commands.rs). These keys used to
+// lack it, so every ratchet-state and prekey-private write failed, silently fell
+// back to encrypted localStorage, and raised a "secure storage unavailable"
+// warning on every launch. The legacy names are still read once, so existing
+// material migrates into the OS keychain instead of being lost.
+const SESSION_PREFIX = 'paracord:signal:session:';
+const PREKEY_STORE_KEY = 'paracord:signal:prekeys';
+const LEGACY_SESSION_PREFIX = 'signal:session:';
+const LEGACY_PREKEY_STORE_KEY = 'signal:prekeys';
 
 // ── Ratchet State serialization ──────────────────────────────────
 
@@ -57,23 +65,57 @@ export function deserializeState(s: SerializedRatchetState): RatchetState {
 
 // ── Session persistence ──────────────────────────────────────────
 
-function sessionKey(myPubHex: string, peerPubHex: string): string {
+function sessionSuffix(myPubHex: string, peerPubHex: string): string {
   // Deterministic ordering so both sides use the same key
   const sorted = [myPubHex, peerPubHex].sort();
-  return `${SESSION_PREFIX}${sorted[0]}:${sorted[1]}`;
+  return `${sorted[0]}:${sorted[1]}`;
+}
+
+function sessionKey(myPubHex: string, peerPubHex: string): string {
+  return `${SESSION_PREFIX}${sessionSuffix(myPubHex, peerPubHex)}`;
+}
+
+function legacySessionKey(myPubHex: string, peerPubHex: string): string {
+  return `${LEGACY_SESSION_PREFIX}${sessionSuffix(myPubHex, peerPubHex)}`;
+}
+
+/**
+ * Read a value written under a legacy (unprefixed) key. Those writes never
+ * reached the OS keychain, so the value can only be in localStorage or the
+ * in-memory web store — both of which `secureGet` still consults.
+ */
+async function readLegacy(key: string): Promise<string | null> {
+  try {
+    return await secureGet(key);
+  } catch {
+    return null;
+  }
 }
 
 export async function loadSession(
   myPubHex: string,
   peerPubHex: string,
 ): Promise<RatchetState | null> {
-  const raw = await secureGet(sessionKey(myPubHex, peerPubHex));
+  let raw = await secureGet(sessionKey(myPubHex, peerPubHex));
+  let migrated = false;
+  if (!raw) {
+    raw = await readLegacy(legacySessionKey(myPubHex, peerPubHex));
+    migrated = raw !== null;
+  }
   if (!raw) return null;
+  let state: RatchetState;
   try {
-    return deserializeState(JSON.parse(raw));
+    state = deserializeState(JSON.parse(raw));
   } catch {
     return null;
   }
+  if (migrated) {
+    // Move the ratchet state under the accepted key so it lands in the OS
+    // keychain, then drop the legacy copy.
+    await secureSet(sessionKey(myPubHex, peerPubHex), raw).catch(() => undefined);
+    await secureDelete(legacySessionKey(myPubHex, peerPubHex)).catch(() => undefined);
+  }
+  return state;
 }
 
 export async function saveSession(
@@ -90,6 +132,7 @@ export async function deleteSession(
   peerPubHex: string,
 ): Promise<void> {
   await secureDelete(sessionKey(myPubHex, peerPubHex));
+  await secureDelete(legacySessionKey(myPubHex, peerPubHex));
 }
 
 // ── Prekey Store ─────────────────────────────────────────────────
@@ -143,13 +186,24 @@ function deserializePrekeyStore(s: SerializedLocalPrekeyStore): LocalPrekeyStore
 }
 
 export async function loadPrekeyStore(): Promise<LocalPrekeyStore | null> {
-  const raw = await secureGet(PREKEY_STORE_KEY);
+  let raw = await secureGet(PREKEY_STORE_KEY);
+  let migrated = false;
+  if (!raw) {
+    raw = await readLegacy(LEGACY_PREKEY_STORE_KEY);
+    migrated = raw !== null;
+  }
   if (!raw) return null;
+  let store: LocalPrekeyStore;
   try {
-    return deserializePrekeyStore(JSON.parse(raw));
+    store = deserializePrekeyStore(JSON.parse(raw));
   } catch {
     return null;
   }
+  if (migrated) {
+    await secureSet(PREKEY_STORE_KEY, raw).catch(() => undefined);
+    await secureDelete(LEGACY_PREKEY_STORE_KEY).catch(() => undefined);
+  }
+  return store;
 }
 
 export async function savePrekeyStore(store: LocalPrekeyStore): Promise<void> {

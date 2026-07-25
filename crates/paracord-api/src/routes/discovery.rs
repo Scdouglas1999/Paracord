@@ -2,15 +2,24 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use futures_util::TryStreamExt;
 use paracord_core::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::time::Duration;
 
 use crate::error::ApiError;
+use crate::middleware::AuthUser;
 
-const FEDERATED_DISCOVERY_RESPONSE_BODY_LIMIT: usize = 512 * 1024;
+/// Upper bound on the candidate set scanned per request.
+///
+/// There is no paginated discovery query in `paracord-db`, so the handler filters
+/// public guilds in Rust. Without this cap the cost of a single request scaled
+/// with the total number of public guilds on the instance — which is what made
+/// the previously-unauthenticated endpoint an amplification vector.
+const MAX_DISCOVERY_CANDIDATES: usize = 200;
+
+/// Deepest page offset accepted. Paging beyond the candidate cap cannot return
+/// anything, so a larger offset is only ever wasted work.
+const MAX_DISCOVERY_OFFSET: i64 = 200;
 
 #[derive(Deserialize)]
 pub struct DiscoveryQuery {
@@ -32,39 +41,6 @@ fn bool_query_enabled(raw: Option<&str>) -> bool {
     )
 }
 
-fn discovery_base_from_federation_endpoint(endpoint: &str) -> String {
-    let trimmed = endpoint.trim_end_matches('/');
-    let without_suffix = trimmed
-        .strip_suffix("/_paracord/federation/v1")
-        .or_else(|| trimmed.strip_suffix("/_paracord/federation"))
-        .unwrap_or(trimmed);
-    format!("{without_suffix}/api/v1/discovery/guilds")
-}
-
-async fn read_federated_discovery_json_response(response: reqwest::Response) -> Result<Value, ()> {
-    if response.content_length().is_some_and(|len| {
-        len > u64::try_from(FEDERATED_DISCOVERY_RESPONSE_BODY_LIMIT).unwrap_or(u64::MAX)
-    }) {
-        return Err(());
-    }
-
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    loop {
-        let chunk = match stream.try_next().await {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) => break,
-            Err(_) => return Err(()),
-        };
-        if body.len().saturating_add(chunk.len()) > FEDERATED_DISCOVERY_RESPONSE_BODY_LIMIT {
-            return Err(());
-        }
-        body.extend_from_slice(&chunk);
-    }
-
-    serde_json::from_slice(&body).map_err(|_| ())
-}
-
 async fn fetch_federated_discoverable_guilds(
     state: &AppState,
     params: &DiscoveryQuery,
@@ -78,57 +54,43 @@ async fn fetch_federated_discoverable_guilds(
         return Vec::new();
     }
 
+    // Peer discovery is fetched over the *signed* federation path, not the
+    // public REST endpoint. `/api/v1/discovery/guilds` now requires an
+    // authenticated user (it was an anonymous N+1 amplification vector), so an
+    // unauthenticated cross-server GET would simply 401 and federated discovery
+    // would silently return nothing. `fetch_peer_discoverable_guilds` signs the
+    // request with this server's Ed25519 key and performs the same SSRF
+    // validation + DNS pinning the raw client used to do here.
+    let service = crate::routes::federation::build_federation_service();
+    let Some(client) = crate::routes::federation::build_signed_federation_client(&service) else {
+        tracing::warn!("federated discovery skipped: no federation signing key configured");
+        return Vec::new();
+    };
+
     let mut results = Vec::new();
     for peer in peers {
-        let url = discovery_base_from_federation_endpoint(&peer.federation_endpoint);
-        // Resolve + validate the peer host and pin the connection to the
-        // validated address. Building the client per peer (rather than once,
-        // unpinned) closes the DNS-rebinding TOCTOU: reqwest connects only to
-        // the exact IP that passed the SSRF check.
-        let http = match paracord_federation::client::ssrf_checked_pinned_client_for_url(
-            "Paracord-Discovery/1.0",
-            Duration::from_secs(4),
-            &url,
-        )
-        .await
+        let guilds = match client
+            .fetch_peer_discoverable_guilds(
+                &peer.federation_endpoint,
+                params.search.as_deref(),
+                params.tag.as_deref(),
+                limit,
+            )
+            .await
         {
-            Ok(client) => client,
-            Err(_) => {
+            Ok(guilds) => guilds,
+            Err(err) => {
                 tracing::warn!(
                     server = %peer.server_name,
                     endpoint = %peer.federation_endpoint,
-                    "skipping federated discovery for unsafe peer endpoint"
+                    error = %err,
+                    "federated discovery request failed"
                 );
                 continue;
             }
         };
-        let mut request = http
-            .get(url)
-            .query(&[("limit", limit.to_string()), ("offset", "0".to_string())]);
-        if let Some(search) = params.search.as_deref() {
-            request = request.query(&[("search", search)]);
-        }
-        if let Some(tag) = params.tag.as_deref() {
-            request = request.query(&[("tag", tag)]);
-        }
 
-        let response = match request.send().await {
-            Ok(resp) => resp,
-            Err(_) => continue,
-        };
-        if !response.status().is_success() {
-            continue;
-        }
-
-        let payload: Value = match read_federated_discovery_json_response(response).await {
-            Ok(payload) => payload,
-            Err(_) => continue,
-        };
-        let Some(guilds) = payload.get("guilds").and_then(|v| v.as_array()) else {
-            continue;
-        };
-
-        for guild in guilds {
+        for guild in &guilds {
             let Some(remote_id) = guild.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
@@ -153,12 +115,21 @@ async fn fetch_federated_discoverable_guilds(
     results
 }
 
+/// GET /discovery/guilds
+///
+/// Authenticated: the handler still has to scan the guild table in Rust (there
+/// is no paginated discovery query in `paracord-db`), so leaving it open let an
+/// anonymous client burn a full table scan plus two queries per public guild at
+/// the per-IP rate limit. The candidate set is capped and the expensive
+/// per-guild membership read now runs only for the page that is actually
+/// returned.
 pub async fn list_discoverable_guilds(
     State(state): State<AppState>,
+    _auth: AuthUser,
     Query(params): Query<DiscoveryQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let limit = params.limit.unwrap_or(20).clamp(1, 50);
-    let offset = params.offset.unwrap_or(0).max(0);
+    let offset = params.offset.unwrap_or(0).clamp(0, MAX_DISCOVERY_OFFSET);
     let include_federated = bool_query_enabled(
         params
             .include_federated
@@ -197,61 +168,80 @@ pub async fn list_discoverable_guilds(
         });
     }
 
-    let mut result = Vec::with_capacity(discoverable.len());
+    // Bound the work: without a paginated DB read this is the only thing
+    // keeping the request cost independent of how many public guilds exist.
+    discoverable.truncate(MAX_DISCOVERY_CANDIDATES);
+
+    // Each entry is tagged with its local guild id (None for federated results)
+    // so the expensive online-member read can be deferred until after paging.
+    let mut result: Vec<(Option<i64>, Value)> = Vec::with_capacity(discoverable.len());
     for guild in discoverable {
         let member_count = paracord_db::members::get_member_count(&state.db, guild.id)
             .await
             .unwrap_or(0);
         let tags = parse_discovery_tags(&guild.discovery_tags);
 
-        // Count online members for this guild
-        let guild_members = paracord_db::members::get_guild_member_user_ids(&state.db, guild.id)
-            .await
-            .unwrap_or_default();
-        let online_count = guild_members
-            .iter()
-            .filter(|uid| state.online_users.contains(uid))
-            .count();
-
-        result.push(json!({
-            "id": guild.id.to_string(),
-            "name": guild.name,
-            "description": guild.description,
-            "icon_hash": guild.icon_hash,
-            "member_count": member_count,
-            "online_count": online_count,
-            "tags": tags,
-            "created_at": guild.created_at.to_rfc3339(),
-            "federated": false,
-        }));
+        result.push((
+            Some(guild.id),
+            json!({
+                "id": guild.id.to_string(),
+                "name": guild.name,
+                "description": guild.description,
+                "icon_hash": guild.icon_hash,
+                "member_count": member_count,
+                "online_count": 0,
+                "tags": tags,
+                "created_at": guild.created_at.to_rfc3339(),
+                "federated": false,
+            }),
+        ));
     }
 
     if include_federated {
-        let mut federated =
+        let federated =
             fetch_federated_discoverable_guilds(&state, &params, limit.saturating_mul(3)).await;
-        result.append(&mut federated);
+        result.extend(federated.into_iter().map(|entry| (None, entry)));
     }
 
     result.sort_by(|a, b| {
-        let left = a
-            .get("member_count")
-            .and_then(|v| v.as_i64())
-            .unwrap_or_default();
-        let right = b
-            .get("member_count")
-            .and_then(|v| v.as_i64())
-            .unwrap_or_default();
+        let left =
+            a.1.get("member_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+        let right =
+            b.1.get("member_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
         right.cmp(&left)
     });
 
     let total = result.len() as i64;
     let start = offset as usize;
     let end = (start + limit as usize).min(result.len());
-    let page = if start < result.len() {
+    let mut page = if start < result.len() {
         result[start..end].to_vec()
     } else {
         Vec::new()
     };
+
+    // `get_guild_member_user_ids` is unbounded per guild, so it runs only for
+    // the <=50 entries actually being returned rather than for every public
+    // guild on the instance.
+    for (guild_id, entry) in page.iter_mut() {
+        let Some(guild_id) = *guild_id else {
+            continue;
+        };
+        let guild_members = paracord_db::members::get_guild_member_user_ids(&state.db, guild_id)
+            .await
+            .unwrap_or_default();
+        let online_count = guild_members
+            .iter()
+            .filter(|uid| state.online_users.contains(uid))
+            .count();
+        entry["online_count"] = json!(online_count);
+    }
+
+    let page: Vec<Value> = page.into_iter().map(|(_, entry)| entry).collect();
 
     Ok(Json(json!({
         "guilds": page,
@@ -272,19 +262,7 @@ fn parse_discovery_tags(raw: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bool_query_enabled, discovery_base_from_federation_endpoint};
-
-    #[test]
-    fn discovery_base_from_federation_endpoint_normalizes_known_suffixes() {
-        assert_eq!(
-            discovery_base_from_federation_endpoint("https://peer.example/_paracord/federation/v1"),
-            "https://peer.example/api/v1/discovery/guilds"
-        );
-        assert_eq!(
-            discovery_base_from_federation_endpoint("https://peer.example/_paracord/federation/"),
-            "https://peer.example/api/v1/discovery/guilds"
-        );
-    }
+    use super::bool_query_enabled;
 
     #[test]
     fn bool_query_enabled_accepts_only_explicit_truthy_values() {

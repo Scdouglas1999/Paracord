@@ -2,6 +2,7 @@ import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { concatBytes, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { withUnlockedPrivateKey } from '../accountSession';
+import { assertPinnedIdentityKey, IdentityPinError } from '../keyVerification';
 import { fromBase64, toArrayBuffer, toBase64 } from '../crypto/util';
 import { useAuthStore } from '../../stores/authStore';
 import { useChannelStore } from '../../stores/channelStore';
@@ -83,6 +84,24 @@ export async function wrapMediaSenderKeyForRecipient(
     return null;
   }
 
+  // The recipient key above comes straight out of server-supplied member /
+  // channel objects. Without the pin, a malicious server substitutes its own
+  // identity key, receives the wrapped sender key, and decrypts all call media.
+  // Fail closed: no envelope is produced for an unverified key change, so the
+  // peer visibly fails to receive media rather than the server silently getting
+  // a copy.
+  try {
+    await assertPinnedIdentityKey(recipientUserId, recipientPublicKey);
+  } catch (err) {
+    if (err instanceof IdentityPinError) {
+      console.warn(
+        `[media-e2ee] refusing to wrap sender key for ${recipientUserId}: ${err.message}`,
+      );
+      return null;
+    }
+    throw err;
+  }
+
   return withUnlockedPrivateKey(async (privateKey) => {
     const keyMaterial = deriveMediaEnvelopeKeyMaterial(scope, privateKey, recipientPublicKey);
     const envelopeKey = await importEnvelopeAesKey(keyMaterial);
@@ -113,6 +132,9 @@ export async function unwrapDeliveredMediaSenderKey(
   if (!senderPublicKey) {
     throw new Error(`missing sender public key for user ${senderUserId}`);
   }
+  // Same substitution risk in reverse: unwrapping against a swapped key would
+  // accept a sender key the server chose. Let the pin error propagate.
+  await assertPinnedIdentityKey(senderUserId, senderPublicKey);
 
   return withUnlockedPrivateKey(async (privateKey) => {
     const envelope = decodeEnvelopePayload(payload);

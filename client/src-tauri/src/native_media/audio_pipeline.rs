@@ -21,6 +21,15 @@ const LOSS_FEEDBACK_INTERVAL: StdDuration = StdDuration::from_secs(1);
 /// Upper clamp for the encoder packet-loss percentage fed from measured loss.
 const MAX_ENCODER_LOSS_PERC: u8 = 20;
 
+/// Maximum keyframe uni streams read concurrently from the relay.
+///
+/// Each in-flight read buffers up to [`MAX_STREAM_FRAME_SIZE`] (16 MiB) before
+/// anything is dispatched, and QUIC lets the peer open many concurrent uni
+/// streams, so this is the only bound on that path's memory. A publisher has at
+/// most one keyframe stream per simulcast layer in flight, so four covers a full
+/// ladder plus a straggler; past that the accept loop simply waits.
+const MAX_CONCURRENT_UNI_STREAM_READS: usize = 4;
+
 pub struct StreamRemoteAudioState {
     /// Which participant published this screen-audio track. Retained for
     /// diagnostics/routing context; the mixer keys purely on SSRC.
@@ -547,6 +556,13 @@ pub fn spawn_uni_stream_recv_task(session: &mut NativeMediaSession, app: tauri::
     let frame_decryptor = session.frame_decryptor.clone();
 
     let handle = tokio::spawn(async move {
+        // Bound concurrent in-flight keyframe reads. `read_to_end` caps a single
+        // stream at MAX_STREAM_FRAME_SIZE (16 MiB), but the relay may open many
+        // concurrent uni streams toward this client, so without this the
+        // buffering ceiling was 16 MiB x the connection's concurrent-uni-stream
+        // limit. The permit is held across the whole read + dispatch.
+        let inflight =
+            std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UNI_STREAM_READS));
         loop {
             let recv = tokio::select! {
                 _ = shutdown.notified() => break,
@@ -556,6 +572,10 @@ pub fn spawn_uni_stream_recv_task(session: &mut NativeMediaSession, app: tauri::
                 }
             };
 
+            let Ok(permit) = std::sync::Arc::clone(&inflight).acquire_owned().await else {
+                break;
+            };
+
             // One read+dispatch task per stream so a large or slow keyframe never
             // blocks accepting a newer one; the video pipeline then culls the
             // stale keyframe by frame_id (L1 stale-stream backpressure).
@@ -563,6 +583,7 @@ pub fn spawn_uni_stream_recv_task(session: &mut NativeMediaSession, app: tauri::
             let frame_decryptor = frame_decryptor.clone();
             let conn = conn_inner.clone();
             tokio::spawn(async move {
+                let _permit = permit;
                 let mut recv = recv;
                 match recv.read_to_end(MAX_STREAM_FRAME_SIZE).await {
                     Ok(body) => {

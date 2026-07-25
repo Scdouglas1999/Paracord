@@ -446,6 +446,81 @@ pub async fn delete_webhook(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ---------------------------------------------------------------------------
+// Caller-supplied payload bounds
+// ---------------------------------------------------------------------------
+//
+// `content` was capped at 2000 chars but `embeds` was not bounded at all: an
+// arbitrarily large array of arbitrarily deep JSON was persisted into the
+// message row and rebroadcast verbatim to every session in the guild.
+
+/// Maximum number of embeds accepted on a webhook execute/edit.
+const MAX_WEBHOOK_EMBEDS: usize = 10;
+/// Maximum serialized size of the whole embeds array.
+const MAX_WEBHOOK_EMBEDS_BYTES: usize = 24 * 1024;
+/// Maximum JSON nesting depth inside an embed.
+const MAX_WEBHOOK_EMBED_DEPTH: usize = 12;
+/// Maximum length of a caller-supplied `avatar_url`.
+const MAX_AVATAR_URL_LEN: usize = 2_048;
+
+fn json_depth(value: &Value) -> usize {
+    match value {
+        Value::Array(items) => 1 + items.iter().map(json_depth).max().unwrap_or(0),
+        Value::Object(map) => 1 + map.values().map(json_depth).max().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Validate and serialize a caller-supplied embeds array.
+fn validate_webhook_embeds(embeds: &[Value]) -> Result<String, ApiError> {
+    if embeds.len() > MAX_WEBHOOK_EMBEDS {
+        return Err(ApiError::BadRequest(format!(
+            "at most {MAX_WEBHOOK_EMBEDS} embeds are allowed"
+        )));
+    }
+    for embed in embeds {
+        if json_depth(embed) > MAX_WEBHOOK_EMBED_DEPTH {
+            return Err(ApiError::BadRequest(format!(
+                "embeds must not nest deeper than {MAX_WEBHOOK_EMBED_DEPTH} levels"
+            )));
+        }
+    }
+    let serialized = serde_json::to_string(embeds)
+        .map_err(|_| ApiError::BadRequest("Invalid embeds payload".into()))?;
+    if serialized.len() > MAX_WEBHOOK_EMBEDS_BYTES {
+        return Err(ApiError::BadRequest(format!(
+            "embeds payload exceeds {MAX_WEBHOOK_EMBEDS_BYTES} bytes"
+        )));
+    }
+    Ok(serialized)
+}
+
+/// Validate a caller-supplied avatar URL.
+///
+/// Mirrors the interaction-component URL rules (`interactions.rs`): absolute
+/// http(s) only, no embedded credentials, bounded length. Without this a webhook
+/// token holder could push `javascript:`/`data:` URLs into a field clients
+/// render.
+fn validate_avatar_url(raw: &str) -> Result<String, ApiError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_AVATAR_URL_LEN {
+        return Err(ApiError::BadRequest("avatar_url is invalid".into()));
+    }
+    let parsed = url::Url::parse(trimmed)
+        .map_err(|_| ApiError::BadRequest("avatar_url is invalid".into()))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(ApiError::BadRequest(
+            "avatar_url must use http or https".into(),
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(ApiError::BadRequest(
+            "avatar_url must not include userinfo".into(),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
 #[derive(Deserialize)]
 pub struct ExecuteWebhookRequest {
     pub content: Option<String>,
@@ -658,6 +733,38 @@ fn format_github_event(event_type: &str, payload: &Value) -> String {
     }
 }
 
+/// Re-authorize a webhook's recorded creator against the target channel.
+///
+/// `execute_webhook` does this on every send precisely so a webhook cannot post
+/// as a creator who has left the guild or lost channel access. The edit and
+/// delete endpoints skipped it entirely, so a token holder kept driving
+/// guild-wide `MESSAGE_UPDATE`/`MESSAGE_DELETE` long after the creator was gone.
+/// Returns the creator's channel permissions.
+async fn reauthorize_webhook_creator(
+    state: &AppState,
+    webhook: &paracord_db::webhooks::WebhookRow,
+) -> Result<Permissions, ApiError> {
+    let Some(author_id) = webhook.creator_id else {
+        return Err(ApiError::Forbidden);
+    };
+    let guild = paracord_db::guilds::get_guild(&state.db, webhook.space_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    paracord_core::permissions::ensure_guild_member(&state.db, webhook.space_id, author_id).await?;
+    let perms = paracord_core::permissions::compute_channel_permissions_cached(
+        &state.permission_cache,
+        &state.db,
+        webhook.space_id,
+        webhook.channel_id,
+        guild.owner_id,
+        author_id,
+    )
+    .await?;
+    paracord_core::permissions::require_permission(perms, Permissions::SEND_MESSAGES)?;
+    Ok(perms)
+}
+
 /// Execute a webhook - no auth required, uses token in path.
 pub async fn execute_webhook(
     State(state): State<AppState>,
@@ -750,8 +857,19 @@ pub async fn execute_webhook(
                     "username must be between 1 and 80 characters".into(),
                 ));
             }
-            (content, name, req.avatar_url, embeds)
+            let avatar_url = match req.avatar_url.as_deref() {
+                Some(raw) => Some(validate_avatar_url(raw)?),
+                None => None,
+            };
+            (content, name, avatar_url, embeds)
         };
+
+    // Bound the embeds before anything is persisted or broadcast.
+    let embeds_json = if embeds.is_empty() {
+        None
+    } else {
+        Some(validate_webhook_embeds(&embeds)?)
+    };
 
     // Re-authorize the webhook creator at execution time. A webhook must never
     // be able to post as a creator who has since left the guild or lost access
@@ -777,6 +895,26 @@ pub async fn execute_webhook(
     .await?;
     paracord_core::permissions::require_permission(creator_perms, Permissions::SEND_MESSAGES)?;
 
+    // Run automod. This path calls `paracord_db::messages::create_message`
+    // directly, so without this a webhook token was an unfiltered write channel
+    // into a guild that enforces automod on every human send.
+    if !content.trim().is_empty() {
+        let verdict = paracord_core::automod_enforce::evaluate_message(
+            &state.db,
+            webhook.space_id,
+            webhook.channel_id,
+            author_id,
+            &content,
+            creator_perms,
+        )
+        .await;
+        if let Some(reason) = verdict.blocked_reason {
+            return Err(ApiError::BadRequest(format!(
+                "Message blocked by automod: {reason}"
+            )));
+        }
+    }
+
     // Create the message using the webhook creator as the author
     let msg_id = paracord_util::snowflake::generate(1);
 
@@ -792,10 +930,8 @@ pub async fn execute_webhook(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    if !embeds.is_empty() {
-        let embeds_json = serde_json::to_string(&embeds)
-            .map_err(|_| ApiError::BadRequest("Invalid embeds payload".into()))?;
-        paracord_db::messages::update_message_embeds(&state.db, msg.id, &embeds_json)
+    if let Some(embeds_json) = embeds_json.as_deref() {
+        paracord_db::messages::update_message_embeds(&state.db, msg.id, embeds_json)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
@@ -836,6 +972,12 @@ pub async fn edit_webhook_message(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+
+    // Same limiter and creator re-auth `execute_webhook` applies: without them a
+    // token holder could drive guild-wide MESSAGE_UPDATE at the global rate and
+    // keep editing after the creator left the guild.
+    check_webhook_rate_limit(webhook_id)?;
+    reauthorize_webhook_creator(&state, &webhook).await?;
 
     let owns_message =
         paracord_db::webhooks::webhook_owns_message(&state.db, webhook.id, message_id)
@@ -882,8 +1024,7 @@ pub async fn edit_webhook_message(
     }
 
     if let Some(embeds) = body.embeds.as_ref() {
-        let embeds_json = serde_json::to_string(embeds)
-            .map_err(|_| ApiError::BadRequest("Invalid embeds payload".into()))?;
+        let embeds_json = validate_webhook_embeds(embeds)?;
         paracord_db::messages::update_message_embeds(&state.db, message_id, &embeds_json)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -916,6 +1057,10 @@ pub async fn delete_webhook_message(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
+
+    // Same limiter and creator re-auth `execute_webhook` applies.
+    check_webhook_rate_limit(webhook_id)?;
+    reauthorize_webhook_creator(&state, &webhook).await?;
 
     let owns_message =
         paracord_db::webhooks::webhook_owns_message(&state.db, webhook.id, message_id)

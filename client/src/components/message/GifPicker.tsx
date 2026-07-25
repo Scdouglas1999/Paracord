@@ -5,6 +5,9 @@ import { safeExternalUrl } from '../../lib/security';
 import { EmptyState } from '../ui/Feedback';
 import { Skeleton } from '../ui/Skeleton';
 
+/** Keystroke settle time before a Tenor search is issued. */
+const GIF_SEARCH_DEBOUNCE_MS = 300;
+
 interface TenorGif {
   id: string;
   title: string;
@@ -69,17 +72,23 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
     }
   }, []);
 
-  // Initial load: trending
+  // Debounced search, and the initial trending load.
+  //
+  // These were two effects: one firing `fetchGifs('')` on mount and one firing
+  // the debounced `fetchGifs(query)`, which also runs on mount with an empty
+  // query. Opening the picker therefore hit Tenor twice for the same trending
+  // list. One effect, with the first run resolving immediately, covers both.
+  const hasLoadedRef = useRef(false);
   useEffect(() => {
-    fetchGifs('');
-  }, [fetchGifs]);
-
-  // Debounced search
-  useEffect(() => {
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true;
+      fetchGifs(query);
+      return;
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       fetchGifs(query);
-    }, 300);
+    }, GIF_SEARCH_DEBOUNCE_MS);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };

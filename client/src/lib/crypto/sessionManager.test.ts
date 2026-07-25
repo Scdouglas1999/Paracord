@@ -134,6 +134,30 @@ describe('crypto/sessionManager', () => {
       const loaded = await loadSession('alice', 'bob');
       expect(loaded).toBeNull();
     });
+
+    it('writes under the paracord: prefix the native secure store requires', async () => {
+      // `validate_secure_store_key` (src-tauri/src/commands.rs) rejects any key
+      // without this prefix, so an unprefixed key means every ratchet write
+      // silently failed into localStorage.
+      await saveSession('alice', 'bob', makeTestRatchetState());
+      const keys = Array.from(mockStore.keys());
+      expect(keys).toHaveLength(1);
+      expect(keys[0].startsWith('paracord:signal:session:')).toBe(true);
+    });
+
+    it('migrates a session written under the legacy unprefixed key', async () => {
+      const state = makeTestRatchetState();
+      await saveSession('alice', 'bob', state);
+      const [prefixedKey, value] = Array.from(mockStore.entries())[0];
+      mockStore.clear();
+      mockStore.set(prefixedKey.replace(/^paracord:/, ''), value);
+
+      const loaded = await loadSession('alice', 'bob');
+      expect(loaded).not.toBeNull();
+      expect(loaded!.Ns).toBe(state.Ns);
+      expect(mockStore.has(prefixedKey)).toBe(true);
+      expect(mockStore.has(prefixedKey.replace(/^paracord:/, ''))).toBe(false);
+    });
   });
 
   describe('generatePrekeyBundle', () => {
@@ -270,6 +294,22 @@ describe('crypto/sessionManager', () => {
         expect(loaded!.oneTimePrekeys[i].publicKey).toEqual(store.oneTimePrekeys[i].publicKey);
         expect(loaded!.oneTimePrekeys[i].privateKey).toEqual(store.oneTimePrekeys[i].privateKey);
       }
+    });
+
+    it('stores prekeys under the prefixed key and migrates the legacy one', async () => {
+      const edPriv = ed25519.utils.randomSecretKey();
+      const store = generatePrekeyBundle(edPriv);
+      await savePrekeyStore(store);
+      expect(mockStore.has('paracord:signal:prekeys')).toBe(true);
+
+      const value = mockStore.get('paracord:signal:prekeys')!;
+      mockStore.clear();
+      mockStore.set('signal:prekeys', value);
+
+      const loaded = await loadPrekeyStore();
+      expect(loaded!.signedPrekey.id).toBe(store.signedPrekey.id);
+      expect(mockStore.has('paracord:signal:prekeys')).toBe(true);
+      expect(mockStore.has('signal:prekeys')).toBe(false);
     });
   });
 });

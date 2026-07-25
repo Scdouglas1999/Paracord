@@ -370,18 +370,34 @@ pub async fn edit_message_with_options(
         paracord_util::validation::validate_message_content(content).map_err(|_| {
             CoreError::BadRequest("Content must be between 1 and 2000 characters".into())
         })?;
+
+        // Authorization applies to the author too. Gating these checks on
+        // "editing someone else's message" let a kicked, banned or timed-out user
+        // with a still-valid session keep rewriting their own history and fan a
+        // MESSAGE_UPDATE out to the whole guild.
+        permissions::ensure_guild_member(pool, guild_id, user_id).await?;
+        if let Some(member) = paracord_db::members::get_member(pool, user_id, guild_id).await? {
+            if let Some(until) = member.communication_disabled_until {
+                if until > chrono::Utc::now() {
+                    return Err(CoreError::BadRequest(
+                        "You are timed out and cannot edit messages".into(),
+                    ));
+                }
+            }
+        }
+        let guild = paracord_db::guilds::get_guild(pool, guild_id)
+            .await?
+            .ok_or(CoreError::NotFound)?;
+        let perms = permissions::compute_channel_permissions(
+            pool,
+            guild_id,
+            channel_id,
+            guild.owner_id,
+            user_id,
+        )
+        .await?;
+        permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
         if msg.author_id != user_id {
-            let guild = paracord_db::guilds::get_guild(pool, guild_id)
-                .await?
-                .ok_or(CoreError::NotFound)?;
-            let perms = permissions::compute_channel_permissions(
-                pool,
-                guild_id,
-                channel_id,
-                guild.owner_id,
-                user_id,
-            )
-            .await?;
             can_manage = perms.contains(Permissions::MANAGE_MESSAGES);
         }
     } else {
@@ -456,27 +472,32 @@ pub async fn delete_message(
         return Err(CoreError::NotFound);
     }
 
+    let channel = paracord_db::channels::get_channel(pool, channel_id)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+
     // For the non-author (moderator) case, decide MANAGE_MESSAGES authority via
     // compute_channel_permissions so channel permission overwrites are honored.
     // Trusting base role bits here would let a role denied MANAGE_MESSAGES on this
     // channel still delete other users' messages.
     let mut can_manage = false;
-    if msg.author_id != user_id {
-        if let Some(guild_id) = paracord_db::channels::get_channel(pool, channel_id)
+    if let Some(guild_id) = channel.guild_id() {
+        // Membership and visibility are required of the author too: a kicked or
+        // banned user with a live session must not keep mutating guild history.
+        permissions::ensure_guild_member(pool, guild_id, user_id).await?;
+        let guild = paracord_db::guilds::get_guild(pool, guild_id)
             .await?
-            .and_then(|c| c.guild_id())
-        {
-            let guild = paracord_db::guilds::get_guild(pool, guild_id)
-                .await?
-                .ok_or(CoreError::NotFound)?;
-            let perms = permissions::compute_channel_permissions(
-                pool,
-                guild_id,
-                channel_id,
-                guild.owner_id,
-                user_id,
-            )
-            .await?;
+            .ok_or(CoreError::NotFound)?;
+        let perms = permissions::compute_channel_permissions(
+            pool,
+            guild_id,
+            channel_id,
+            guild.owner_id,
+            user_id,
+        )
+        .await?;
+        permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
+        if msg.author_id != user_id {
             can_manage = perms.contains(Permissions::MANAGE_MESSAGES);
         }
     }
@@ -495,11 +516,148 @@ pub async fn delete_message(
         ));
     }
 
-    let channel = paracord_db::channels::get_channel(pool, channel_id)
-        .await?
-        .ok_or(CoreError::NotFound)?;
     if channel.guild_id().is_none() {
         return Err(CoreError::Forbidden);
     }
     Err(CoreError::MissingPermission)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GUILD_ID: i64 = 100;
+    const OWNER_ID: i64 = 1;
+    const AUTHOR_ID: i64 = 7;
+    const ROLE_ID: i64 = 300;
+    const CHANNEL_ID: i64 = 500;
+    const MESSAGE_ID: i64 = 800;
+
+    /// Guild with one channel and one member (`AUTHOR_ID`) who has already posted
+    /// `MESSAGE_ID`.
+    async fn seed_authored_message() -> DbPool {
+        let pool = paracord_db::create_pool("sqlite::memory:", 1)
+            .await
+            .expect("create in-memory pool");
+        paracord_db::run_migrations(&pool)
+            .await
+            .expect("run migrations");
+
+        paracord_db::users::create_user(&pool, OWNER_ID, "owner", 1, "owner@x", "h")
+            .await
+            .unwrap();
+        paracord_db::users::create_user(&pool, AUTHOR_ID, "author", 2, "author@x", "h")
+            .await
+            .unwrap();
+        paracord_db::guilds::create_guild(&pool, GUILD_ID, "g", OWNER_ID, None)
+            .await
+            .unwrap();
+        paracord_db::members::add_member(&pool, AUTHOR_ID, GUILD_ID)
+            .await
+            .unwrap();
+        paracord_db::roles::create_role(
+            &pool,
+            ROLE_ID,
+            GUILD_ID,
+            "member",
+            (Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES).bits(),
+        )
+        .await
+        .unwrap();
+        paracord_db::roles::add_member_role(&pool, AUTHOR_ID, GUILD_ID, ROLE_ID)
+            .await
+            .unwrap();
+        paracord_db::channels::create_channel(
+            &pool, CHANNEL_ID, GUILD_ID, "general", 0, 0, None, None,
+        )
+        .await
+        .unwrap();
+        paracord_db::messages::create_message(
+            &pool, MESSAGE_ID, CHANNEL_ID, AUTHOR_ID, "original", 0, None,
+        )
+        .await
+        .unwrap();
+        pool
+    }
+
+    async fn stored_content(pool: &DbPool) -> Option<String> {
+        paracord_db::messages::get_message(pool, MESSAGE_ID)
+            .await
+            .unwrap()
+            .and_then(|m| m.content)
+    }
+
+    #[tokio::test]
+    async fn author_can_edit_and_delete_own_message() {
+        let pool = seed_authored_message().await;
+        let updated = edit_message(&pool, CHANNEL_ID, MESSAGE_ID, AUTHOR_ID, "edited")
+            .await
+            .unwrap();
+        assert_eq!(updated.content.as_deref(), Some("edited"));
+        delete_message(&pool, MESSAGE_ID, CHANNEL_ID, AUTHOR_ID)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn kicked_author_cannot_edit_or_delete() {
+        let pool = seed_authored_message().await;
+        // A kick or ban removes the member row, but the session token stays valid
+        // until it expires, so authorization has to be re-checked on every
+        // mutation -- including the author's own.
+        paracord_db::members::remove_member(&pool, AUTHOR_ID, GUILD_ID)
+            .await
+            .unwrap();
+
+        let edit = edit_message(&pool, CHANNEL_ID, MESSAGE_ID, AUTHOR_ID, "edited").await;
+        assert!(matches!(edit, Err(CoreError::Forbidden)));
+        assert_eq!(stored_content(&pool).await.as_deref(), Some("original"));
+
+        let delete = delete_message(&pool, MESSAGE_ID, CHANNEL_ID, AUTHOR_ID).await;
+        assert!(matches!(delete, Err(CoreError::Forbidden)));
+        assert!(paracord_db::messages::get_message(&pool, MESSAGE_ID)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn author_denied_view_channel_cannot_edit_or_delete() {
+        let pool = seed_authored_message().await;
+        paracord_db::channel_overwrites::upsert_channel_overwrite(
+            &pool,
+            CHANNEL_ID,
+            ROLE_ID,
+            permissions::OVERWRITE_TARGET_ROLE,
+            Permissions::empty().bits(),
+            Permissions::VIEW_CHANNEL.bits(),
+        )
+        .await
+        .unwrap();
+
+        let edit = edit_message(&pool, CHANNEL_ID, MESSAGE_ID, AUTHOR_ID, "edited").await;
+        assert!(matches!(edit, Err(CoreError::MissingPermission)));
+        assert_eq!(stored_content(&pool).await.as_deref(), Some("original"));
+
+        let delete = delete_message(&pool, MESSAGE_ID, CHANNEL_ID, AUTHOR_ID).await;
+        assert!(matches!(delete, Err(CoreError::MissingPermission)));
+    }
+
+    #[tokio::test]
+    async fn timed_out_author_cannot_edit_but_can_delete() {
+        let pool = seed_authored_message().await;
+        let until = chrono::Utc::now() + chrono::Duration::hours(1);
+        paracord_db::members::set_member_timeout(&pool, AUTHOR_ID, GUILD_ID, Some(until))
+            .await
+            .unwrap();
+
+        let edit = edit_message(&pool, CHANNEL_ID, MESSAGE_ID, AUTHOR_ID, "edited").await;
+        assert!(matches!(edit, Err(CoreError::BadRequest(_))));
+        assert_eq!(stored_content(&pool).await.as_deref(), Some("original"));
+
+        // A timeout silences the member; it does not freeze their existing posts.
+        delete_message(&pool, MESSAGE_ID, CHANNEL_ID, AUTHOR_ID)
+            .await
+            .unwrap();
+    }
 }

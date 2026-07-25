@@ -26,6 +26,45 @@ pub fn is_supported_protocol_version(version: &str) -> bool {
         .any(|supported| supported.eq_ignore_ascii_case(version))
 }
 
+/// How far into the future an inbound envelope's `origin_ts` may sit before it
+/// is rejected. Matches the transport clock-skew allowance.
+pub const MAX_INBOUND_EVENT_FUTURE_SKEW_MS: i64 = transport::DEFAULT_MAX_SKEW_MS;
+
+/// How far into the past an inbound envelope's `origin_ts` may sit before it is
+/// rejected as stale.
+///
+/// This is the *freshness* half of the replay defence. Envelope replay
+/// protection is the `(event_id, origin_server)` dedup row in
+/// `federation_events`; without a freshness bound that table can never be
+/// pruned, because dropping a dedup row would re-open the replay window for the
+/// event it covered. Bounding acceptance to a fixed window makes the dedup set
+/// finite: an envelope older than this is refused on freshness grounds whether
+/// or not its dedup row still exists.
+///
+/// Invariant: [`FEDERATION_EVENT_RETENTION_MS`] must be strictly greater than
+/// this, so a dedup row is only pruned well after the event it covers has
+/// already become unacceptably stale.
+pub const MAX_INBOUND_EVENT_AGE_MS: i64 = 7 * 86_400_000; // 7 days
+
+/// How long accepted federation events are retained (and therefore how long the
+/// replay-dedup index is kept) before pruning. Strictly greater than
+/// [`MAX_INBOUND_EVENT_AGE_MS`] — see that constant for the invariant.
+pub const FEDERATION_EVENT_RETENTION_MS: i64 = 30 * 86_400_000; // 30 days
+
+const _: () = assert!(FEDERATION_EVENT_RETENTION_MS > MAX_INBOUND_EVENT_AGE_MS);
+
+/// Returns `true` when `origin_ts` falls inside the accepted freshness window
+/// relative to `now_ms`.
+pub fn event_origin_ts_is_fresh(origin_ts: i64, now_ms: i64) -> bool {
+    if origin_ts <= 0 {
+        return false;
+    }
+    if origin_ts > now_ms.saturating_add(MAX_INBOUND_EVENT_FUTURE_SKEW_MS) {
+        return false;
+    }
+    origin_ts >= now_ms.saturating_sub(MAX_INBOUND_EVENT_AGE_MS)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FederationError {
     #[error("federation is disabled")]
@@ -219,6 +258,28 @@ impl FederationService {
         .await?
         .rows_affected();
         Ok(rows > 0)
+    }
+
+    /// Delete accepted federation events whose `origin_ts` is older than
+    /// [`FEDERATION_EVENT_RETENTION_MS`], bounding the table (and with it the
+    /// replay-dedup index) instead of letting it grow forever.
+    ///
+    /// This is only safe because ingest refuses envelopes older than
+    /// [`MAX_INBOUND_EVENT_AGE_MS`]: by the time a dedup row is pruned, a replay
+    /// of the event it covered is already rejected on freshness grounds, so
+    /// pruning cannot re-open the replay window. Do not change the retention/
+    /// freshness relationship without preserving that invariant.
+    pub async fn prune_expired_events(&self, pool: &DbPool) -> Result<u64, FederationError> {
+        if !self.config.enabled {
+            return Ok(0);
+        }
+        let cutoff_ms = chrono::Utc::now().timestamp_millis() - FEDERATION_EVENT_RETENTION_MS;
+        let rows = sqlx::query("DELETE FROM federation_events WHERE origin_ts < $1")
+            .bind(cutoff_ms)
+            .execute(pool)
+            .await?
+            .rows_affected();
+        Ok(rows)
     }
 
     pub async fn fetch_event(
@@ -619,6 +680,23 @@ impl FederationService {
             }
             _ => {}
         }
+
+        // Bound the inbound event / replay-dedup table on the same cadence.
+        // Safe only because ingest refuses envelopes older than
+        // `MAX_INBOUND_EVENT_AGE_MS` (see `prune_expired_events`).
+        match self.prune_expired_events(pool).await {
+            Ok(pruned) if pruned > 0 => {
+                tracing::info!("federation: pruned {} expired federation events", pruned);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "federation: failed to prune expired federation events: {}",
+                    e
+                );
+            }
+            _ => {}
+        }
+
         let due =
             match paracord_db::federation::fetch_due_outbound_events(pool, now_ms, limit).await {
                 Ok(rows) => rows,

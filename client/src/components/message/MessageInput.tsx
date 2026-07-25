@@ -35,6 +35,7 @@ import { formatFileSize, toDatetimeLocalValue } from '../../lib/formatters';
 import { toast } from '../../stores/toastStore';
 import { extractApiError } from '../../api/client';
 import { displayName } from '../../lib/displayName';
+import { fetchChannelOverwrites } from '../../lib/permissionDataCache';
 
 const EmojiPicker = lazy(() =>
   import('../ui/EmojiPicker').then((m) => ({ default: m.EmojiPicker })),
@@ -334,9 +335,8 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
       return;
     }
     let cancelled = false;
-    channelApi
-      .getOverwrites(channelId)
-      .then(({ data }) => {
+    fetchChannelOverwrites(channelId)
+      .then((data) => {
         if (!cancelled) setChannelOverwrites(data);
       })
       .catch(() => {
@@ -381,6 +381,17 @@ export function MessageInput({ channelId, guildId, channelName, replyingTo, onCa
   const clearAutocompleteChoices = useInteractionStore((s) => s.clearAutocompleteChoices);
   const autocompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autocompleteRequestIdRef = useRef(0);
+
+  // The autocomplete debounce is scheduled from a keystroke handler and was
+  // only ever cleared by the next keystroke. Typing `/cmd ` and immediately
+  // closing the composer left a pending timer that fired into an unmounted
+  // component and issued a request nobody was waiting for.
+  useEffect(() => () => {
+    if (autocompleteTimerRef.current) {
+      clearTimeout(autocompleteTimerRef.current);
+      autocompleteTimerRef.current = null;
+    }
+  }, []);
 
   // @mention autocomplete — subscribe only to this guild's member list
   const guildMembers = useMemberStore((s) => (guildId ? s.members.get(guildId) : undefined));

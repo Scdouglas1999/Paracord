@@ -82,7 +82,7 @@ pub async fn upsert_mfa_secret(
          ON CONFLICT (user_id) DO UPDATE SET
             totp_secret = $2,
             enabled = FALSE,
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = datetime('now')
          WHERE mfa_configs.enabled = FALSE",
     )
     .bind(user_id)
@@ -97,7 +97,7 @@ pub async fn enable_mfa(pool: &DbPool, user_id: i64) -> Result<(), DbError> {
     let mut tx = pool.begin().await?;
 
     sqlx::query(
-        "UPDATE mfa_configs SET enabled = TRUE, updated_at = CURRENT_TIMESTAMP
+        "UPDATE mfa_configs SET enabled = TRUE, updated_at = datetime('now')
          WHERE user_id = $1",
     )
     .bind(user_id)
@@ -191,7 +191,7 @@ pub async fn consume_backup_code(
 ) -> Result<bool, DbError> {
     let result = sqlx::query(
         "UPDATE mfa_backup_codes
-         SET used_at = CURRENT_TIMESTAMP
+         SET used_at = datetime('now')
          WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL",
     )
     .bind(user_id)

@@ -47,6 +47,52 @@ const MAX_SENDER_PACKETS_PER_SECOND: f64 = 13_000.0;
 /// still bounded by [`MAX_SENDER_PACKETS_PER_SECOND`].
 const SENDER_RATE_BURST_PACKETS: f64 = 26_000.0;
 
+/// Sustained control-message rate one authenticated participant may drive.
+///
+/// The datagram token bucket above covers only media. Control messages are the
+/// expensive ones: `ReceiverReport` and `SubscribeStream` mutate room state and
+/// bump the routing generation (invalidating cached fan-out plans and forcing a
+/// rebuild), `StreamKeyAnnounce` fans a message out to every named recipient,
+/// and each arrives on its own QUIC bidi stream. Legitimate clients send a
+/// handful per second (receiver reports are on a ~2s cadence, subscription
+/// churn is user-driven), so this is generous.
+const MAX_CONTROL_MESSAGES_PER_SECOND: f64 = 50.0;
+
+/// Burst allowance for the control-message limiter. Sized to absorb a join
+/// storm: session state, initial subscriptions and key announces for a full
+/// 50-participant room arrive back to back.
+const CONTROL_RATE_BURST_MESSAGES: f64 = 300.0;
+
+/// Largest `encrypted_keys` vector accepted on a single `StreamKeyAnnounce` /
+/// `KeyAnnounce`.
+///
+/// Each entry causes a control message to be delivered to the named recipient,
+/// so an uncapped vector is an amplification primitive: one 256 KB control
+/// message could inject thousands of `KeyDeliver` messages. A room holds at most
+/// `MAX_PARTICIPANTS` (50) members, so a legitimate announce never names more
+/// recipients than that; the cap leaves headroom for a client that includes
+/// itself or re-announces during churn.
+const MAX_KEY_ANNOUNCE_RECIPIENTS: usize = 64;
+
+/// Largest `layers` vector accepted on a `TrackPublish` / `TrackLayers`.
+///
+/// The simulcast ladder is three rungs. Every layer a receiver accepts installs
+/// an `Aes128Gcm` instance and (for audio) an Opus decoder plus jitter buffer,
+/// so an unbounded vector from the wire is a memory-amplification primitive
+/// against every subscriber in the room, not just the relay.
+const MAX_TRACK_LAYERS: usize = 8;
+
+/// Maximum keyframe uni streams the relay will read from one publisher at once.
+///
+/// Each in-flight read buffers up to [`MAX_STREAM_FRAME_SIZE`] (16 MiB) before
+/// anything is forwarded, and QUIC lets a peer open many concurrent uni streams,
+/// so the effective per-connection buffering ceiling is this many times 16 MiB.
+/// Keyframes are deliberately exempt from the datagram rate limiter, which makes
+/// this the only bound on that path. A publisher legitimately has one keyframe
+/// stream per simulcast layer in flight, so four leaves room for a full ladder
+/// plus one straggler; beyond that the accept loop simply waits.
+const MAX_CONCURRENT_UNI_STREAM_READS: usize = 4;
+
 /// Interval between QUIC path-stat samples for one connection.
 const BANDWIDTH_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -488,6 +534,10 @@ pub struct RelayForwarder {
     speaker_detector: Arc<SpeakerDetector>,
     /// Per-sender packet-rate limiter guarding the forwarding hot path.
     sender_rate_limiter: SenderRateLimiter,
+    /// Per-sender control-message rate limiter. The datagram bucket above does
+    /// not cover the control channel, which is where the state-mutating and
+    /// fan-out-amplifying messages live.
+    control_rate_limiter: SenderRateLimiter,
     /// Publisher-ingress bandwidth estimates driving uplink adaptation feedback.
     bandwidth_estimator: BandwidthEstimator,
     /// Per-viewer downlink (relay→viewer egress) estimates driving simulcast
@@ -567,6 +617,10 @@ impl RelayForwarder {
                 MAX_SENDER_PACKETS_PER_SECOND,
                 SENDER_RATE_BURST_PACKETS,
             ),
+            control_rate_limiter: SenderRateLimiter::new(
+                MAX_CONTROL_MESSAGES_PER_SECOND,
+                CONTROL_RATE_BURST_MESSAGES,
+            ),
             bandwidth_estimator: BandwidthEstimator::new(),
             downlink_estimator: DownlinkEstimator::new(),
             layer_selection: DashMap::new(),
@@ -594,6 +648,8 @@ impl RelayForwarder {
         }
         self.forget_sender_cache(user_id);
         self.forget_keyframe_state(user_id);
+        self.sender_rate_limiter.forget(user_id);
+        self.control_rate_limiter.forget(user_id);
         self.invalidate_connection_cache();
     }
 
@@ -864,6 +920,15 @@ impl RelayForwarder {
 
         tokio::spawn(async move {
             debug!(user_id, room_id = %room_id, "relay: uni-stream task started");
+            // Bound how much this one publisher can have buffered in flight.
+            // `read_to_end(MAX_STREAM_FRAME_SIZE)` caps a *single* stream at
+            // 16 MiB, but a connection may open hundreds of concurrent uni
+            // streams and the keyframe path is deliberately exempt from the
+            // datagram rate limiter — so without this the ceiling was
+            // 16 MiB x the peer's concurrent-uni-stream limit per connection.
+            // The permit is held for the whole read+forward, so a peer that
+            // opens more concurrent streams simply waits.
+            let inflight = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UNI_STREAM_READS));
             loop {
                 let mut recv = tokio::select! {
                     result = handle.accept_uni() => match result {
@@ -876,6 +941,10 @@ impl RelayForwarder {
                     _ = forwarder.shutdown.notified() => break,
                 };
 
+                let Ok(permit) = Arc::clone(&inflight).acquire_owned().await else {
+                    break;
+                };
+
                 // One whole frame per stream, read to FIN with a hard size cap.
                 // Read + forward on a per-stream task so a large or slow keyframe
                 // never blocks accepting the next (newer) one — a viewer can then
@@ -883,6 +952,7 @@ impl RelayForwarder {
                 let task_forwarder = Arc::clone(&forwarder);
                 let task_room_id = room_id.clone();
                 tokio::spawn(async move {
+                    let _permit = permit;
                     let body = match recv.read_to_end(MAX_STREAM_FRAME_SIZE).await {
                         Ok(body) => body,
                         Err(err) => {
@@ -1050,6 +1120,20 @@ impl RelayForwarder {
                     continue;
                 }
 
+                // Throttle the control channel before parsing or acting on the
+                // message. `ReceiverReport`/`SubscribeStream` mutate room state
+                // and invalidate routing caches; `StreamKeyAnnounce` fans out to
+                // named recipients. None of that was rate limited — the token
+                // bucket on the datagram path covers media only.
+                if !forwarder.control_rate_limiter.try_acquire(user_id) {
+                    debug!(
+                        user_id,
+                        room_id = %room_id,
+                        "relay: control message rate limit exceeded, dropping"
+                    );
+                    continue;
+                }
+
                 let message = match serde_json::from_slice::<ControlMessage>(&msg_buf) {
                     Ok(message) => message,
                     Err(err) => {
@@ -1126,7 +1210,9 @@ impl RelayForwarder {
         room_id: &str,
         header: &MediaHeader,
     ) -> Arc<CachedRecipients> {
-        let room_generation = self.room_manager.generation();
+        // Per-room, not server-wide: one peer spamming ReceiverReport must not
+        // invalidate the fan-out plan for every sender in every other call.
+        let room_generation = self.room_manager.generation(room_id);
         let conn_generation = self.conn_generation.load(Ordering::Acquire);
         let key = (sender_id, header.ssrc);
 
@@ -1149,8 +1235,14 @@ impl RelayForwarder {
     }
 
     /// Build a fresh fan-out plan for `(sender_id, ssrc)` from current room and
-    /// connection state. This is the cold path (one room clone) run only on a
-    /// cache miss or after a generation change.
+    /// connection state. This is the cold path, run only on a cache miss or
+    /// after a generation change for this room.
+    ///
+    /// It reads the room in place (`with_room`) rather than taking
+    /// `get_room`'s deep clone of every participant, published track,
+    /// subscription and stored key ciphertext: a peer that can bump the routing
+    /// generation from the control channel would otherwise turn every media
+    /// packet into a whole-room clone.
     fn build_recipient_snapshot(
         &self,
         sender_id: i64,
@@ -1159,52 +1251,52 @@ impl RelayForwarder {
         room_generation: u64,
         conn_generation: u64,
     ) -> CachedRecipients {
-        let Some(room) = self.room_manager.get_room(room_id) else {
-            return CachedRecipients {
-                room_generation,
-                conn_generation,
-                published_track: None,
-                recipients: Vec::new(),
-            };
-        };
-
-        // SPEAK gate: a participant who joined without publish rights (SPEAK
-        // denied) is a listen-only subscriber. Drop their media before fan-out
-        // rather than trusting the client not to transmit — this closes the raw
-        // audio path that `MediaParticipant::publish_track` does not cover.
-        if room
-            .participants
-            .get(&sender_id)
-            .is_some_and(|p| !p.can_publish)
-        {
-            return CachedRecipients {
-                room_generation,
-                conn_generation,
-                published_track: None,
-                recipients: Vec::new(),
-            };
-        }
-
-        let published_track = resolve_published_track_for_ssrc(&room, sender_id, header.ssrc);
-        let recipients = room
-            .participants
-            .values()
-            .filter(|participant| {
-                should_relay_packet_to(participant, sender_id, header, published_track.as_ref())
-            })
-            .filter_map(|participant| {
-                self.connections
-                    .get(&participant.user_id)
-                    .map(|entry| entry.clone())
-            })
-            .collect();
-
-        CachedRecipients {
+        let empty = || CachedRecipients {
             room_generation,
             conn_generation,
-            published_track,
-            recipients,
-        }
+            published_track: None,
+            recipients: Vec::new(),
+        };
+
+        // The closure holds a read guard on the room map; it only touches
+        // `self.connections` (a different map) and never awaits.
+        let built = self.room_manager.with_room(room_id, |room| {
+            // SPEAK gate: a participant who joined without publish rights
+            // (SPEAK denied) is a listen-only subscriber. Drop their media
+            // before fan-out rather than trusting the client not to transmit —
+            // this closes the raw audio path that
+            // `MediaParticipant::publish_track` does not cover.
+            if room
+                .participants
+                .get(&sender_id)
+                .is_some_and(|p| !p.can_publish)
+            {
+                return empty();
+            }
+
+            let published_track = resolve_published_track_for_ssrc(room, sender_id, header.ssrc);
+            let recipients = room
+                .participants
+                .values()
+                .filter(|participant| {
+                    should_relay_packet_to(participant, sender_id, header, published_track.as_ref())
+                })
+                .filter_map(|participant| {
+                    self.connections
+                        .get(&participant.user_id)
+                        .map(|entry| entry.clone())
+                })
+                .collect();
+
+            CachedRecipients {
+                room_generation,
+                conn_generation,
+                published_track,
+                recipients,
+            }
+        });
+
+        built.unwrap_or_else(empty)
     }
 
     /// Compute the set of recipients a packet from `sender_id` in `room_id`
@@ -1345,6 +1437,20 @@ impl RelayForwarder {
                 .await;
             }
             ControlMessage::TrackPublish { track } => {
+                // `layers` arrives verbatim from the publisher and is
+                // re-broadcast to every subscriber, each of which installs an
+                // AES-GCM instance (and, for audio, an Opus decoder + jitter
+                // buffer) per layer. Cap it at the relay so the announcement
+                // cannot be used to amplify against the whole room.
+                if track.layers.len() > MAX_TRACK_LAYERS {
+                    warn!(
+                        user_id,
+                        room_id = %room_id,
+                        layers = track.layers.len(),
+                        "relay: rejecting track publish with an implausible layer count"
+                    );
+                    return;
+                }
                 if let Err(err) = self
                     .room_manager
                     .publish_track(room_id, user_id, track.clone())
@@ -1387,6 +1493,17 @@ impl RelayForwarder {
                 track_id,
                 layers,
             } => {
+                // Same cap as TrackPublish: this replaces a track's layer list
+                // and is re-broadcast to every subscriber.
+                if layers.len() > MAX_TRACK_LAYERS {
+                    warn!(
+                        user_id,
+                        room_id = %room_id,
+                        layers = layers.len(),
+                        "relay: rejecting track layer update with an implausible layer count"
+                    );
+                    return;
+                }
                 if let Some(mut track) =
                     self.resolve_published_track(room_id, user_id, &stream_id, &track_id)
                 {
@@ -1591,7 +1708,37 @@ impl RelayForwarder {
                 epoch,
                 encrypted_keys,
             } => {
+                // `encrypted_keys` is a client-supplied vector of arbitrary
+                // recipient ids. Bound its length (each entry is a control
+                // message the relay emits on the caller's behalf) and scope
+                // every delivery to this room, so an announce cannot be used to
+                // fan out at users in other calls.
+                if encrypted_keys.len() > MAX_KEY_ANNOUNCE_RECIPIENTS {
+                    warn!(
+                        user_id,
+                        room_id = %room_id,
+                        recipients = encrypted_keys.len(),
+                        "relay: rejecting oversized StreamKeyAnnounce recipient list"
+                    );
+                    return;
+                }
                 for (recipient_user_id, ciphertext) in encrypted_keys {
+                    let delivered = self
+                        .send_control_to_user_in_room(
+                            room_id,
+                            recipient_user_id,
+                            &ControlMessage::StreamKeyDeliver {
+                                stream_id: stream_id.clone(),
+                                track_id: track_id.clone(),
+                                sender_user_id: user_id,
+                                epoch,
+                                ciphertext: ciphertext.clone(),
+                            },
+                        )
+                        .await;
+                    if !delivered {
+                        continue;
+                    }
                     if let Err(err) = self.room_manager.store_track_key(
                         room_id,
                         user_id,
@@ -1599,7 +1746,7 @@ impl RelayForwarder {
                         &track_id,
                         epoch,
                         recipient_user_id,
-                        ciphertext.clone(),
+                        ciphertext,
                     ) {
                         warn!(
                             user_id,
@@ -1609,17 +1756,6 @@ impl RelayForwarder {
                             "relay: failed to store published track key"
                         );
                     }
-                    self.send_control_to_user(
-                        recipient_user_id,
-                        &ControlMessage::StreamKeyDeliver {
-                            stream_id: stream_id.clone(),
-                            track_id: track_id.clone(),
-                            sender_user_id: user_id,
-                            epoch,
-                            ciphertext,
-                        },
-                    )
-                    .await;
                 }
                 if let Some(track) =
                     self.resolve_any_published_track(room_id, &stream_id, &track_id)
@@ -1638,8 +1774,20 @@ impl RelayForwarder {
                 epoch,
                 encrypted_keys,
             } => {
+                // Same reasoning as StreamKeyAnnounce above: bounded length,
+                // room-scoped recipients.
+                if encrypted_keys.len() > MAX_KEY_ANNOUNCE_RECIPIENTS {
+                    warn!(
+                        user_id,
+                        room_id = %room_id,
+                        recipients = encrypted_keys.len(),
+                        "relay: rejecting oversized KeyAnnounce recipient list"
+                    );
+                    return;
+                }
                 for (recipient_user_id, ciphertext) in encrypted_keys {
-                    self.send_control_to_user(
+                    self.send_control_to_user_in_room(
+                        room_id,
                         recipient_user_id,
                         &ControlMessage::KeyDeliver {
                             sender_user_id: user_id,
@@ -1796,6 +1944,38 @@ impl RelayForwarder {
         if let Err(err) = handle.send_control(message).await {
             debug!(recipient = user_id, error = %err, "relay: failed to send control message");
         }
+    }
+
+    /// Send a control message to `user_id` **only if that user is a participant
+    /// of `room_id`**.
+    ///
+    /// [`send_control_to_user`] resolves against the global connection map with
+    /// no room scoping. That is correct for recipients the relay itself derived
+    /// from room state, but not for a recipient id a client put in a message:
+    /// `StreamKeyAnnounce`/`KeyAnnounce` carry a caller-supplied
+    /// `recipient_user_id`, so without this check a participant in any room
+    /// could inject `KeyDeliver`/`StreamKeyDeliver` at arbitrary users in every
+    /// other call on the server.
+    async fn send_control_to_user_in_room(
+        &self,
+        room_id: &str,
+        user_id: i64,
+        message: &ControlMessage,
+    ) -> bool {
+        let in_room = self
+            .room_manager
+            .with_room(room_id, |room| room.participants.contains_key(&user_id))
+            .unwrap_or(false);
+        if !in_room {
+            debug!(
+                recipient = user_id,
+                room_id = %room_id,
+                "relay: refusing to deliver control message to a non-member"
+            );
+            return false;
+        }
+        self.send_control_to_user(user_id, message).await;
+        true
     }
 
     /// Rate-gate keyframe-request forwarding for one `(stream, track)`.
@@ -2781,6 +2961,200 @@ mod tests {
             .await;
 
         assert!(forwarder.active_sessions.is_empty());
+    }
+
+    /// `encrypted_keys` is a client-supplied `(recipient_user_id, ciphertext)`
+    /// list with no length bound, and `send_control_to_user` resolves against
+    /// the GLOBAL connection map. One 256 KB control message could therefore
+    /// inject `StreamKeyDeliver` at thousands of users across every other call
+    /// on the server. The announce must be rejected outright when oversized, and
+    /// nothing may be stored for it.
+    #[tokio::test]
+    async fn oversized_stream_key_announce_is_rejected_wholesale() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "s1".into()),
+        )
+        .unwrap();
+        let room_id = mgr.get_or_create_room(1, 100);
+        let mgr = Arc::new(mgr);
+        let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+
+        let stream_id = StreamId::new("stream-1");
+        let track_id = TrackId::new("screen");
+        let encrypted_keys: Vec<(i64, Vec<u8>)> = (0..(MAX_KEY_ANNOUNCE_RECIPIENTS as i64 + 1))
+            .map(|uid| (uid + 1_000, vec![0u8; 16]))
+            .collect();
+
+        forwarder
+            .handle_control_message(
+                1,
+                &room_id,
+                ControlMessage::StreamKeyAnnounce {
+                    stream_id: stream_id.clone(),
+                    track_id: track_id.clone(),
+                    codec: None,
+                    epoch: 1,
+                    encrypted_keys,
+                },
+            )
+            .await;
+
+        // No key was stored for any of the named recipients.
+        for uid in 1_000..1_000 + MAX_KEY_ANNOUNCE_RECIPIENTS as i64 + 1 {
+            assert!(
+                mgr.latest_track_key_for_recipient(&room_id, 1, &stream_id, &track_id, uid)
+                    .unwrap()
+                    .is_none(),
+                "recipient {uid} must not have received a key from a rejected announce"
+            );
+        }
+    }
+
+    /// A recipient named in an announce must be a member of the announcing
+    /// participant's room. Without the scoping, `recipient_user_id` reached the
+    /// global connection map and could target users in unrelated calls.
+    #[tokio::test]
+    async fn key_announce_recipients_outside_the_room_are_not_stored() {
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "s1".into()),
+        )
+        .unwrap();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(2, "s2".into()),
+        )
+        .unwrap();
+        // User 3 is in a completely different room.
+        mgr.join_room(
+            9,
+            900,
+            crate::participant::MediaParticipant::new(3, "s3".into()),
+        )
+        .unwrap();
+
+        let room_id = mgr.get_or_create_room(1, 100);
+        let mgr = Arc::new(mgr);
+        let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+
+        let stream_id = StreamId::new("stream-1");
+        let track_id = TrackId::new("screen");
+        forwarder
+            .handle_control_message(
+                1,
+                &room_id,
+                ControlMessage::StreamKeyAnnounce {
+                    stream_id: stream_id.clone(),
+                    track_id: track_id.clone(),
+                    codec: None,
+                    epoch: 1,
+                    encrypted_keys: vec![(2, vec![0xAA; 16]), (3, vec![0xBB; 16])],
+                },
+            )
+            .await;
+
+        // The in-room recipient is served.
+        assert!(mgr
+            .latest_track_key_for_recipient(&room_id, 1, &stream_id, &track_id, 2)
+            .unwrap()
+            .is_some());
+        // The cross-room recipient is not.
+        assert!(
+            mgr.latest_track_key_for_recipient(&room_id, 1, &stream_id, &track_id, 3)
+                .unwrap()
+                .is_none(),
+            "a user outside the announcing participant's room must not be targeted"
+        );
+    }
+
+    /// Track announcements are re-broadcast to the whole room, and every layer a
+    /// subscriber accepts costs it an AES-GCM instance (plus, for audio, an Opus
+    /// decoder and jitter buffer). The layer list must be capped at the relay.
+    #[tokio::test]
+    async fn track_publish_with_absurd_layer_count_is_rejected() {
+        use paracord_transport::control::TrackKind;
+        use paracord_transport::stream::{PublishedLayer, VideoCodec as WireVideoCodec};
+
+        let mgr = MediaRoomManager::new();
+        mgr.join_room(
+            1,
+            100,
+            crate::participant::MediaParticipant::new(1, "s1".into()),
+        )
+        .unwrap();
+        let room_id = mgr.get_or_create_room(1, 100);
+        let mgr = Arc::new(mgr);
+        let forwarder = RelayForwarder::new(Arc::clone(&mgr), Arc::new(SpeakerDetector::new()));
+
+        let layers: Vec<PublishedLayer> = (0..(MAX_TRACK_LAYERS as u32 + 1))
+            .map(|i| PublishedLayer {
+                layer_id: 0,
+                ssrc: 5_000 + i,
+                width: Some(320),
+                height: Some(180),
+                max_bitrate_kbps: Some(150),
+                active: true,
+            })
+            .collect();
+
+        forwarder
+            .handle_control_message(
+                1,
+                &room_id,
+                ControlMessage::TrackPublish {
+                    track: PublishedTrack {
+                        stream_id: StreamId::new("stream-1"),
+                        track_id: TrackId::new("screen"),
+                        publisher_user_id: 1,
+                        kind: TrackKind::Video,
+                        codec: Some(WireVideoCodec::Vp9),
+                        layers,
+                    },
+                },
+            )
+            .await;
+
+        let published = mgr
+            .with_room(&room_id, |room| {
+                room.participants
+                    .get(&1)
+                    .map(|p| p.published_tracks.len())
+                    .unwrap_or(0)
+            })
+            .unwrap();
+        assert_eq!(
+            published, 0,
+            "the oversized announcement must not be stored"
+        );
+    }
+
+    /// The control channel had no rate limit at all — the token bucket on the
+    /// datagram path covers media only, while the state-mutating and
+    /// fan-out-amplifying messages all arrive here.
+    #[test]
+    fn control_messages_are_rate_limited_per_sender() {
+        let limiter =
+            SenderRateLimiter::new(MAX_CONTROL_MESSAGES_PER_SECOND, CONTROL_RATE_BURST_MESSAGES);
+        let now = Instant::now();
+        let user = 42i64;
+
+        let mut allowed = 0;
+        for _ in 0..(CONTROL_RATE_BURST_MESSAGES as usize * 2) {
+            if limiter.try_acquire_at(user, now) {
+                allowed += 1;
+            }
+        }
+        assert_eq!(allowed, CONTROL_RATE_BURST_MESSAGES as usize);
+        assert!(!limiter.try_acquire_at(user, now));
+
+        // A different sender has its own bucket.
+        assert!(limiter.try_acquire_at(user + 1, now));
     }
 
     #[test]

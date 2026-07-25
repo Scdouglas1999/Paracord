@@ -72,6 +72,12 @@ fn federation_service_from_state(state: &AppState) -> FederationService {
         .unwrap_or_else(build_federation_service)
 }
 
+/// Upper bound on how long a key discovered over plain HTTPS is honored. The
+/// remote asserts its own `valid_until` and that value is the only expiry gate
+/// on the signature-verification path, so it is clamped here (30 days) and the
+/// operator must re-discover to extend it.
+const MAX_DISCOVERED_KEY_VALIDITY_MS: i64 = 30 * 86_400_000;
+
 /// Maximum serialized content size for inbound federation events (1 MB).
 const MAX_CONTENT_SIZE_BYTES: usize = 1_048_576;
 /// Maximum JSON nesting depth for inbound federation event content.
@@ -330,6 +336,68 @@ async fn ensure_identity_matches_origin_or_alias(
     }
 }
 
+/// Resolve a peer-presented server identifier to the exact `server_name` under
+/// which that peer is registered in `federated_servers`.
+///
+/// `paracord_db::federation::is_federated_server_trusted` matches
+/// `federated_servers.server_name` *exactly* and joins
+/// `federation_peer_trust_state` on that same exact string, while the rest of
+/// this module compares peer identities with `eq_ignore_ascii_case` and also
+/// accepts a peer's `domain` as an alias. That mismatch is how a peer
+/// registered as `Peer.Example` and then blocked as `peer.example` kept
+/// ingesting: the trust row never joined. Every trust *lookup* and every trust
+/// *write* now funnels through this function so both sides of that exact-match
+/// join agree on one canonical key.
+///
+/// Returns `None` when no registered peer matches; callers then keep the
+/// candidate unchanged so the trust lookup still fails closed.
+async fn resolve_registered_peer_name(
+    state: &AppState,
+    candidate: &str,
+) -> Result<Option<String>, ApiError> {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return Ok(None);
+    }
+    let peers = paracord_db::federation::list_federated_servers(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    // Exact server_name first, then a case-insensitive server_name, then the
+    // `domain` alias — the same precedence the alias-resolving helpers use.
+    if let Some(peer) = peers.iter().find(|peer| peer.server_name == candidate) {
+        return Ok(Some(peer.server_name.clone()));
+    }
+    if let Some(peer) = peers
+        .iter()
+        .find(|peer| peer.server_name.eq_ignore_ascii_case(candidate))
+    {
+        return Ok(Some(peer.server_name.clone()));
+    }
+    Ok(peers
+        .iter()
+        .find(|peer| peer.domain.eq_ignore_ascii_case(candidate))
+        .map(|peer| peer.server_name.clone()))
+}
+
+/// Canonical registered name for a presented peer identifier, falling back to
+/// the trimmed input when no peer is registered under it (so downstream exact
+/// matches still fail closed).
+async fn canonical_peer_name(state: &AppState, candidate: &str) -> Result<String, ApiError> {
+    Ok(resolve_registered_peer_name(state, candidate)
+        .await?
+        .unwrap_or_else(|| candidate.trim().to_string()))
+}
+
+/// Trust check that canonicalizes the presented peer identifier first (see
+/// [`resolve_registered_peer_name`]). Always prefer this over calling
+/// `is_federated_server_trusted` directly.
+async fn is_peer_trusted(state: &AppState, candidate: &str, now_ms: i64) -> Result<bool, ApiError> {
+    let canonical = canonical_peer_name(state, candidate).await?;
+    paracord_db::federation::is_federated_server_trusted(&state.db, &canonical, now_ms)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))
+}
+
 /// Returns true when `origin_server` is authoritative for the namespace domain
 /// embedded in `room_id` — i.e. the room's home domain equals the origin (or a
 /// trusted alias of it). Rooms whose id is unparseable are treated as
@@ -490,20 +558,28 @@ async fn verify_transport_request(
     }
 
     // Destination binding: a request signed for another server must not be
-    // replayed/forwarded to us. When the sender bound a destination, require it
-    // to match one of this server's own stable identities (server_name/domain).
-    // Legacy peers that omit the header fall back to the unbound canonical form
-    // for backward compatibility.
-    if let Some(destination) = transport.destination.as_deref() {
-        let is_self = destination.eq_ignore_ascii_case(service.server_name())
-            || destination.eq_ignore_ascii_case(service.domain());
-        if !is_self {
-            return Err(ApiError::Forbidden);
-        }
+    // replayed/forwarded to us. The header is REQUIRED. An omitted destination
+    // used to fall back to the unbound canonical form, which meant a signature
+    // produced without destination binding verified at *every* server trusting
+    // that origin, and any hostile peer holding one could forward it onward.
+    // Peers predating destination binding are refused rather than silently
+    // downgraded to the unbound form.
+    let destination = transport
+        .destination
+        .as_deref()
+        .ok_or(ApiError::Unauthorized)?;
+    let is_self = destination.eq_ignore_ascii_case(service.server_name())
+        || destination.eq_ignore_ascii_case(service.domain());
+    if !is_self {
+        return Err(ApiError::Forbidden);
     }
 
+    // Resolve the presented origin to its registered `server_name` once, and use
+    // that single canonical key for BOTH the trust lookup and the key lookup —
+    // each of which matches `server_name` exactly.
+    let canonical_origin = canonical_peer_name(state, &transport.origin).await?;
     let trusted =
-        paracord_db::federation::is_federated_server_trusted(&state.db, &transport.origin, now_ms)
+        paracord_db::federation::is_federated_server_trusted(&state.db, &canonical_origin, now_ms)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     if !trusted {
@@ -511,7 +587,7 @@ async fn verify_transport_request(
     }
 
     let keys = service
-        .list_server_keys(&state.db, &transport.origin)
+        .list_server_keys(&state.db, &canonical_origin)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let trusted_key = keys
@@ -519,23 +595,14 @@ async fn verify_transport_request(
         .find(|k| k.key_id == transport.key_id && k.valid_until >= now_ms)
         .ok_or(ApiError::Forbidden)?;
 
-    let canonical = match transport.destination.as_deref() {
-        Some(destination) => {
-            paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
-                method,
-                path,
-                transport.timestamp_ms,
-                body_bytes,
-                destination,
-            )
-        }
-        None => paracord_federation::transport::canonical_transport_bytes_with_body(
+    let canonical =
+        paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
             method,
             path,
             transport.timestamp_ms,
             body_bytes,
-        ),
-    };
+            destination,
+        );
     service
         .verify_payload(
             &canonical,
@@ -628,14 +695,26 @@ async fn ensure_remote_user_mapping(
             let now = chrono::Utc::now().timestamp();
             let hour = now / 3600;
             let bucket_key = format!("fed:user_create:{}", identity.server);
-            let count = paracord_db::rate_limits::increment_window_counter(
+            // Fail CLOSED: a DB error used to yield `0`, silently disabling the
+            // per-peer creation limit exactly when the database is unhealthy.
+            let count = match paracord_db::rate_limits::increment_window_counter(
                 &state.db,
                 &bucket_key,
                 hour,
                 3600,
             )
             .await
-            .unwrap_or(0);
+            {
+                Ok(count) => count,
+                Err(err) => {
+                    tracing::error!(
+                        "federation: refusing remote user creation for {} because the rate-limit counter failed: {}",
+                        identity.server,
+                        err
+                    );
+                    return Err(ApiError::RateLimited(0));
+                }
+            };
             if count > limit as i64 {
                 return Err(ApiError::RateLimited(0));
             }
@@ -723,18 +802,16 @@ async fn verify_envelope_origin_signature(
         extract_signature_for_origin(&payload.signatures, &payload.origin_server)
             .ok_or(ApiError::Unauthorized)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let payload_origin_trusted = paracord_db::federation::is_federated_server_trusted(
-        &state.db,
-        &payload.origin_server,
-        now_ms,
-    )
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let canonical_origin = canonical_peer_name(state, &payload.origin_server).await?;
+    let payload_origin_trusted =
+        paracord_db::federation::is_federated_server_trusted(&state.db, &canonical_origin, now_ms)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     if !payload_origin_trusted {
         return Err(ApiError::Forbidden);
     }
     let keys = service
-        .list_server_keys(&state.db, &payload.origin_server)
+        .list_server_keys(&state.db, &canonical_origin)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let trusted_key = keys
@@ -755,7 +832,45 @@ async fn ingest_verified_payload(
     mut payload: FederationEventEnvelope,
     transport_origin: Option<&str>,
 ) -> Result<bool, ApiError> {
-    if payload.depth <= 0 {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // Per-event freshness. The transport timestamp is bounded to ±60s, but the
+    // envelope's own `origin_ts` was previously unchecked, so a peer — or an
+    // allowed relay (see below) — could re-inject arbitrarily old signed
+    // envelopes under a fresh transport signature. Bounding acceptance here is
+    // also what makes `federation_events` prunable without re-opening replay;
+    // see `FederationService::prune_expired_events`.
+    if !paracord_federation::event_origin_ts_is_fresh(payload.origin_ts, now_ms) {
+        tracing::warn!(
+            "federation: rejected event {} from {} with out-of-window origin_ts {} (now {})",
+            payload.event_id,
+            payload.origin_server,
+            payload.origin_ts,
+            now_ms
+        );
+        return Err(ApiError::BadRequest(
+            "federation event origin_ts is outside the accepted freshness window".to_string(),
+        ));
+    }
+
+    // `depth` orders room history (`list_room_events`). Left unbounded a peer
+    // could pin `i64::MAX` and permanently sit at the head of every backfill,
+    // so bound it to the same window `origin_ts` is bound to.
+    if payload.depth < 0
+        || payload.depth
+            > now_ms.saturating_add(paracord_federation::MAX_INBOUND_EVENT_FUTURE_SKEW_MS)
+    {
+        tracing::warn!(
+            "federation: rejected event {} from {} with out-of-range depth {}",
+            payload.event_id,
+            payload.origin_server,
+            payload.depth
+        );
+        return Err(ApiError::BadRequest(
+            "federation event depth is out of range".to_string(),
+        ));
+    }
+    if payload.depth == 0 {
         payload.depth = payload.origin_ts.max(1);
     }
 
@@ -766,11 +881,7 @@ async fn ingest_verified_payload(
     // events attributed to an origin it has no relationship with.
     if let Some(origin) = transport_origin {
         if !origin.eq_ignore_ascii_case(&payload.origin_server) {
-            let now_ms = chrono::Utc::now().timestamp_millis();
-            let relay_trusted =
-                paracord_db::federation::is_federated_server_trusted(&state.db, origin, now_ms)
-                    .await
-                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            let relay_trusted = is_peer_trusted(state, origin, now_ms).await?;
             if !relay_trusted {
                 tracing::warn!(
                     "federation: rejected event {} relayed by untrusted server {} for origin {}",
@@ -962,14 +1073,26 @@ pub async fn ingest_event(
             let now = chrono::Utc::now().timestamp();
             let minute = now / 60;
             let bucket_key = format!("fed:ingest:{}", transport.origin);
-            let count = paracord_db::rate_limits::increment_window_counter(
+            // Fail CLOSED: a DB error used to yield `0`, silently removing the
+            // per-peer ingest limit exactly when the database is unhealthy.
+            let count = match paracord_db::rate_limits::increment_window_counter(
                 &state.db,
                 &bucket_key,
                 minute,
                 60,
             )
             .await
-            .unwrap_or(0);
+            {
+                Ok(count) => count,
+                Err(err) => {
+                    tracing::error!(
+                        "federation: refusing ingest from {} because the rate-limit counter failed: {}",
+                        transport.origin,
+                        err
+                    );
+                    return Err(ApiError::RateLimited(0));
+                }
+            };
             if count > limit as i64 {
                 return Err(ApiError::RateLimited(0));
             }
@@ -1035,6 +1158,21 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
         Value::String(s) => s.clone(),
         other => other.to_string(),
     };
+
+    // Federated bodies previously went into `create_message` capped only by the
+    // 1 MiB `validate_federation_content` envelope limit, then fanned out to
+    // every session in the mirrored guild — while a local send is capped at
+    // 2000 chars. Apply the same local limit to peer-supplied content.
+    if let Err(err) = paracord_util::validation::validate_message_content(&body_text) {
+        tracing::warn!(
+            "federation: dropped m.message event {} from {}: body fails local message validation: {}",
+            payload.event_id,
+            payload.origin_server,
+            err
+        );
+        return;
+    }
+
     let federated_msg_id_str = payload
         .content
         .get("message_id")
@@ -1085,7 +1223,7 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
                     return;
                 };
                 let Some(local_guild_id) =
-                    ensure_federated_space_exists(state, payload, remote_gid).await
+                    ensure_federated_space_allowed(state, payload, remote_gid).await
                 else {
                     tracing::warn!(
                         "federation: m.message event {} could not materialize remote guild {}",
@@ -1136,7 +1274,7 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
             );
             return;
         };
-        let Some(local_guild_id) = ensure_federated_space_exists(state, payload, remote_gid).await
+        let Some(local_guild_id) = ensure_federated_space_allowed(state, payload, remote_gid).await
         else {
             tracing::warn!(
                 "federation: m.message event {} could not materialize remote guild {}",
@@ -1466,6 +1604,55 @@ async fn ensure_federated_space_exists(
     }
 
     Some(local_guild_id)
+}
+
+/// Resolve (and, when permitted, materialize) the local guild backing a
+/// federated event — enforcing the operator's federation guild allowlist
+/// *before* any local rows are created.
+///
+/// `ensure_federated_space_exists` creates a guild row, an `@everyone` role, a
+/// system member and a role grant on first sight of a remote space id. Calling
+/// it without an allowlist check let a trusted peer mint unbounded guilds by
+/// varying `room_id`/`content.guild_id` per event. The allowlist is a list of
+/// *local* guild ids, so:
+///
+/// * an already-mirrored space is checked against its resolved local guild id;
+/// * an unmapped space can only be materialized when the operator opted every
+///   guild in (`PARACORD_FEDERATION_ALLOWED_GUILD_IDS=*`), because a freshly
+///   generated snowflake can never appear on an explicit allowlist.
+///
+/// That is the documented default-deny behaviour.
+async fn ensure_federated_space_allowed(
+    state: &AppState,
+    payload: &FederationEventEnvelope,
+    remote_guild_id: i64,
+) -> Option<i64> {
+    let mapping_namespace = mapping_namespace_from_room(&payload.room_id, &payload.origin_server);
+    match resolve_local_guild_id(state, &mapping_namespace, remote_guild_id).await {
+        Some(existing) => {
+            if ensure_federation_guild_allowed(existing).is_err() {
+                tracing::warn!(
+                    "federation: dropped event {} from {} for guild {} (not in PARACORD_FEDERATION_ALLOWED_GUILD_IDS)",
+                    payload.event_id,
+                    payload.origin_server,
+                    existing
+                );
+                return None;
+            }
+        }
+        None => {
+            if !all_federation_guilds_allowed() {
+                tracing::warn!(
+                    "federation: refused to materialize unmapped remote guild {} from {} (event {}): federation guild allowlist is default-deny",
+                    remote_guild_id,
+                    payload.origin_server,
+                    payload.event_id
+                );
+                return None;
+            }
+        }
+    }
+    ensure_federated_space_exists(state, payload, remote_guild_id).await
 }
 
 async fn ensure_federated_channel_exists(
@@ -1882,11 +2069,11 @@ async fn dispatch_federated_member_join(state: &AppState, payload: &FederationEv
     else {
         return;
     };
-    let Some(guild_id) = ensure_federated_space_exists(state, payload, remote_guild_id).await
+    // Allowlist BEFORE materialization: `ensure_federated_space_exists` creates
+    // guild/role/member/role-grant rows, so checking afterwards left a denied
+    // join with all of that state already written.
+    let Some(guild_id) = ensure_federated_space_allowed(state, payload, remote_guild_id).await
     else {
-        return;
-    };
-    if ensure_federation_guild_allowed(guild_id).is_err() {
         return;
     };
     let Ok(Some(guild)) = paracord_db::guilds::get_guild(&state.db, guild_id).await else {
@@ -2094,6 +2281,132 @@ pub async fn list_events(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     Ok(Json(json!({ "events": events })))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FederationDiscoveryQuery {
+    pub search: Option<String>,
+    pub tag: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// Hard ceiling on how many local guilds one peer discovery request will
+/// consider, mirroring the user-facing discovery handler.
+const MAX_PEER_DISCOVERY_CANDIDATES: usize = 200;
+/// Maximum entries returned on one peer discovery page.
+const MAX_PEER_DISCOVERY_PAGE: i64 = 50;
+
+fn parse_discovery_tags_value(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+}
+
+/// `GET /_paracord/federation/v1/discovery/guilds` — peer-facing discovery.
+///
+/// The user-facing `/api/v1/discovery/guilds` now requires `AuthUser` (it was an
+/// anonymous N+1 amplification vector), which silently broke peer-to-peer
+/// federated discovery: peers fetched it with no credentials and started getting
+/// 401. Rather than punching an auth hole in the user-facing route, peer traffic
+/// moves here, onto the path that already has Ed25519 transport-signature
+/// verification, origin/trust checks and per-peer bounds.
+///
+/// Only guilds the operator has explicitly opted into federation
+/// (`PARACORD_FEDERATION_ALLOWED_GUILD_IDS`) are advertised, and the whole
+/// handler runs with zero per-guild database queries: member counts come from
+/// the in-memory `member_index`, so the anonymous-amplification shape that
+/// motivated the original fix is not reintroduced here.
+pub async fn peer_discovery_guilds(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Query(query): Query<FederationDiscoveryQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let service = federation_service_from_state(&state);
+    if !service.is_enabled() || !service.allow_discovery() {
+        return Err(ApiError::NotFound);
+    }
+
+    let path_and_query = uri
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| uri.path().to_string());
+    // Signature-verified: rejects unsigned callers, untrusted peers, and peers
+    // that are blocked or quarantined (`verify_transport_request` ->
+    // `is_peer_trusted`).
+    let _auth =
+        authorize_federation_read_request(&state, &service, &headers, &path_and_query).await?;
+
+    let limit = query.limit.unwrap_or(20).clamp(1, MAX_PEER_DISCOVERY_PAGE);
+
+    let all_guilds = paracord_db::guilds::list_all_guilds(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let search = query.search.as_deref().map(str::to_lowercase);
+    let tag = query.tag.as_deref().map(str::to_lowercase);
+
+    let mut discoverable: Vec<_> = all_guilds
+        .into_iter()
+        .filter(|g| g.visibility.eq_ignore_ascii_case("public"))
+        // Federation allowlist: a guild the operator has not opted into
+        // federation must not be advertised to peers at all.
+        .filter(|g| ensure_federation_guild_allowed(g.id).is_ok())
+        .filter(|g| {
+            search.as_deref().is_none_or(|needle| {
+                g.name.to_lowercase().contains(needle)
+                    || g.description
+                        .as_deref()
+                        .is_some_and(|d| d.to_lowercase().contains(needle))
+            })
+        })
+        .filter(|g| {
+            tag.as_deref().is_none_or(|needle| {
+                parse_discovery_tags_value(&g.discovery_tags)
+                    .iter()
+                    .any(|t| t.to_lowercase() == needle)
+            })
+        })
+        .collect();
+    discoverable.truncate(MAX_PEER_DISCOVERY_CANDIDATES);
+
+    // Member counts come from the in-memory index the presence path already
+    // maintains — no per-guild query, bounded or otherwise.
+    let mut entries: Vec<(usize, Value)> = discoverable
+        .into_iter()
+        .map(|guild| {
+            let members = state.member_index.members_of(guild.id);
+            let online_count = members
+                .iter()
+                .filter(|uid| state.online_users.contains(uid))
+                .count();
+            (
+                members.len(),
+                json!({
+                    "id": guild.id.to_string(),
+                    "name": guild.name,
+                    "description": guild.description,
+                    "icon_hash": guild.icon_hash,
+                    "member_count": members.len(),
+                    "online_count": online_count,
+                    "tags": parse_discovery_tags_value(&guild.discovery_tags),
+                    "created_at": guild.created_at.to_rfc3339(),
+                    "federated": false,
+                }),
+            )
+        })
+        .collect();
+
+    entries.sort_by_key(|(member_count, _)| std::cmp::Reverse(*member_count));
+    let total = entries.len() as i64;
+    let guilds: Vec<Value> = entries
+        .into_iter()
+        .take(limit as usize)
+        .map(|(_, entry)| entry)
+        .collect();
+
+    Ok(Json(json!({
+        "guilds": guilds,
+        "total": total,
+    })))
 }
 
 pub async fn run_federation_catchup_once(
@@ -2829,12 +3142,19 @@ pub async fn add_server(
         return Err(ApiError::BadRequest("federation is disabled".to_string()));
     }
 
-    if body.server_name.is_empty() || body.domain.is_empty() || body.federation_endpoint.is_empty()
+    if body.server_name.trim().is_empty()
+        || body.domain.trim().is_empty()
+        || body.federation_endpoint.is_empty()
     {
         return Err(ApiError::BadRequest(
             "server_name, domain, and federation_endpoint are required".to_string(),
         ));
     }
+    // Server names and domains are hostnames: store them lowercased so the
+    // exact-match join in `is_federated_server_trusted` lines up with the
+    // lowercased key a moderation list writes for a not-yet-registered peer.
+    let server_name = body.server_name.trim().to_ascii_lowercase();
+    let domain = body.domain.trim().to_ascii_lowercase();
     paracord_federation::client::validate_public_federation_url_with_dns(&body.federation_endpoint)
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
@@ -2842,35 +3162,87 @@ pub async fn add_server(
     let mut public_key = body.public_key_hex.clone();
     let mut key_id = body.key_id.clone();
 
-    // If discover is set, try to fetch keys from the remote server
+    // If discover is set, fetch keys from the remote server over plain HTTPS.
+    // Everything in that response is remote self-assertion, so it is pinned and
+    // bounded before it is trusted:
+    //   * when the admin supplied a `public_key_hex` it acts as a pin — a
+    //     mismatch is a hard failure, never a silent overwrite;
+    //   * `key_id`, when supplied, selects the key instead of blindly taking
+    //     `keys.first()`;
+    //   * `server_name` on the key must be the peer being registered;
+    //   * `valid_until` is clamped to `MAX_DISCOVERED_KEY_VALIDITY_MS`, because
+    //     it is the *only* expiry gate on the verification path and a peer could
+    //     otherwise assert `i64::MAX` and pin the key forever;
+    //   * a discovery request that yields no usable key fails the call rather
+    //     than quietly registering a keyless peer.
     if body.discover {
         let client = paracord_federation::client::FederationClient::new()
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-        match client.fetch_server_keys(&body.federation_endpoint).await {
-            Ok(keys_resp) => {
-                if let Some(first_key) = keys_resp.keys.first() {
-                    public_key = Some(first_key.public_key.clone());
-                    key_id = Some(first_key.key_id.clone());
-                    // Also store it in the server_keys table for signature verification
-                    let _ = service.upsert_server_key(&state.db, first_key).await;
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to discover keys from {}: {}",
-                    body.federation_endpoint,
-                    e
-                );
+        let keys_resp = client
+            .fetch_server_keys(&body.federation_endpoint)
+            .await
+            .map_err(|e| {
+                ApiError::BadRequest(format!(
+                    "key discovery from {} failed: {e}",
+                    body.federation_endpoint
+                ))
+            })?;
+
+        let selected = match key_id.as_deref() {
+            Some(pinned_id) => keys_resp.keys.iter().find(|k| k.key_id == pinned_id),
+            None => keys_resp.keys.first(),
+        }
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "key discovery from {} returned no usable key",
+                body.federation_endpoint
+            ))
+        })?;
+
+        if !selected.server_name.eq_ignore_ascii_case(&server_name)
+            && !selected.server_name.eq_ignore_ascii_case(&domain)
+        {
+            return Err(ApiError::BadRequest(format!(
+                "discovered key is issued for '{}', not '{}'",
+                selected.server_name, server_name
+            )));
+        }
+        if let Some(pinned_key) = public_key.as_deref() {
+            if !pinned_key.eq_ignore_ascii_case(&selected.public_key) {
+                return Err(ApiError::BadRequest(
+                    "discovered public key does not match the pinned public_key_hex".to_string(),
+                ));
             }
         }
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if selected.valid_until <= now_ms {
+            return Err(ApiError::BadRequest(
+                "discovered key is already expired".to_string(),
+            ));
+        }
+        let bounded = paracord_federation::FederationServerKey {
+            server_name: server_name.clone(),
+            key_id: selected.key_id.clone(),
+            public_key: selected.public_key.clone(),
+            valid_until: selected
+                .valid_until
+                .min(now_ms.saturating_add(MAX_DISCOVERED_KEY_VALIDITY_MS)),
+        };
+        public_key = Some(bounded.public_key.clone());
+        key_id = Some(bounded.key_id.clone());
+        service
+            .upsert_server_key(&state.db, &bounded)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     }
 
     let id = paracord_util::snowflake::generate(1);
     paracord_db::federation::upsert_federated_server(
         &state.db,
         id,
-        &body.server_name,
-        &body.domain,
+        &server_name,
+        &domain,
         &body.federation_endpoint,
         public_key.as_deref(),
         key_id.as_deref(),
@@ -2889,8 +3261,8 @@ pub async fn add_server(
         Some(&headers),
         Some(peer_ip.as_str()),
         Some(json!({
-            "server_name": body.server_name,
-            "domain": body.domain,
+            "server_name": server_name,
+            "domain": domain,
             "trusted": body.trusted,
         })),
     )
@@ -2900,8 +3272,8 @@ pub async fn add_server(
         StatusCode::CREATED,
         Json(json!({
             "id": id,
-            "server_name": body.server_name,
-            "domain": body.domain,
+            "server_name": server_name,
+            "domain": domain,
             "trusted": body.trusted,
         })),
     ))
@@ -3005,10 +3377,27 @@ async fn apply_moderation_entries(
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut applied = 0usize;
     for entry in entries {
-        let server = entry.server_name.trim().to_ascii_lowercase();
-        if server.is_empty() {
+        let raw = entry.server_name.trim();
+        if raw.is_empty() {
             continue;
         }
+        // Write the trust row under the exact `federated_servers.server_name`
+        // the peer is registered as. `is_federated_server_trusted` joins the two
+        // tables on an exact string match, so lowercasing here (while
+        // `upsert_federated_server` stores the name verbatim) produced trust
+        // rows that never joined: blocking `Peer.Example` did nothing at all.
+        // `ModerationListEntry` also accepts a `domain` alias, which never
+        // matched `server_name` either; `resolve_registered_peer_name` resolves
+        // both presentations to the one canonical key.
+        //
+        // An entry naming a server that is not registered yet is still recorded
+        // (lowercased) so a pre-emptive block survives until that server is
+        // added, and `add_server` normalizes new registrations to lowercase so
+        // the two meet.
+        let server = match resolve_registered_peer_name(state, raw).await? {
+            Some(canonical) => canonical,
+            None => raw.to_ascii_lowercase(),
+        };
         let Some(mode) = normalize_moderation_action(&entry.action, allow_unblock) else {
             continue;
         };
@@ -3350,9 +3739,25 @@ fn federation_file_hmac(key: &str, message: &str) -> Result<Vec<u8>, ApiError> {
 /// ([`file_download`]) is a plain, unsigned `GET` that has no verifiable caller
 /// identity to bind against. Mitigation is the short lifetime plus treating the
 /// download URL as a secret: never log, cache, or otherwise expose it.
-fn mint_federation_file_token(jwt_secret: &str, attachment_id: i64) -> (String, i64) {
+/// Mint a download token BOUND to the peer that requested it.
+///
+/// The token travels in a query string and is a bearer credential, so without
+/// the `audience` component any party that observed the URL (proxy log,
+/// referrer, another peer the URL was forwarded to) could fetch the attachment.
+/// `file_download` requires the presenting peer to identify itself and match
+/// this audience.
+fn mint_federation_file_token(
+    jwt_secret: &str,
+    attachment_id: i64,
+    audience_server: &str,
+) -> (String, i64) {
     let exp = chrono::Utc::now().timestamp() + 300;
-    let payload = format!("{}:{}", attachment_id, exp);
+    let payload = format!(
+        "v2:{}:{}:{}",
+        attachment_id,
+        exp,
+        audience_server.trim().to_ascii_lowercase()
+    );
     let mac = federation_file_hmac(jwt_secret, &payload).unwrap_or_default();
     let mac = paracord_federation::hex_encode(&mac);
     let token = format!("{}.{}", payload, mac);
@@ -3363,6 +3768,7 @@ fn validate_federation_file_token(
     jwt_secret: &str,
     token: &str,
     expected_attachment_id: i64,
+    presented_origin: &str,
 ) -> Result<(), ApiError> {
     let dot_pos = token.rfind('.').ok_or(ApiError::Unauthorized)?;
     let payload = &token[..dot_pos];
@@ -3381,17 +3787,25 @@ fn validate_federation_file_token(
             .map_err(|_| ApiError::Unauthorized)?;
     }
 
-    let parts: Vec<&str> = payload.splitn(2, ':').collect();
-    if parts.len() != 2 {
+    // `v2:<attachment_id>:<exp>:<audience>` — the only accepted shape. The
+    // unbound v1 form (`<attachment_id>:<exp>`) is deliberately not honored:
+    // accepting it would leave the peer binding optional and therefore
+    // bypassable.
+    let parts: Vec<&str> = payload.split(':').collect();
+    if parts.len() != 4 || parts[0] != "v2" {
         return Err(ApiError::Unauthorized);
     }
-    let attachment_id: i64 = parts[0].parse().map_err(|_| ApiError::Unauthorized)?;
-    let exp: i64 = parts[1].parse().map_err(|_| ApiError::Unauthorized)?;
+    let attachment_id: i64 = parts[1].parse().map_err(|_| ApiError::Unauthorized)?;
+    let exp: i64 = parts[2].parse().map_err(|_| ApiError::Unauthorized)?;
+    let audience = parts[3];
 
     if attachment_id != expected_attachment_id {
         return Err(ApiError::Unauthorized);
     }
     if chrono::Utc::now().timestamp() > exp {
+        return Err(ApiError::Unauthorized);
+    }
+    if !audience.eq_ignore_ascii_case(presented_origin.trim()) {
         return Err(ApiError::Unauthorized);
     }
 
@@ -3488,7 +3902,8 @@ pub async fn file_token(
     paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
     paracord_core::permissions::require_permission(perms, Permissions::READ_MESSAGE_HISTORY)?;
 
-    let (token, _exp) = mint_federation_file_token(&state.config.jwt_secret, attachment_id);
+    let (token, _exp) =
+        mint_federation_file_token(&state.config.jwt_secret, attachment_id, &body.origin_server);
     let download_url = format!(
         "/_paracord/federation/v1/file/{}?token={}",
         attachment_id, token
@@ -3510,8 +3925,35 @@ pub async fn file_download(
     State(state): State<AppState>,
     Path(attachment_id): Path<i64>,
     Query(query): Query<FileDownloadQuery>,
+    headers: HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, ApiError> {
-    validate_federation_file_token(&state.config.jwt_secret, &query.token, attachment_id)?;
+    // This endpoint used to serve any holder of the query-string token with
+    // federation switched off entirely. Gate it on the service being enabled and
+    // on the presenting peer matching the audience the token was minted for.
+    let service = federation_service_from_state(&state);
+    if !service.is_enabled() {
+        return Err(ApiError::NotFound);
+    }
+
+    let presented_origin = headers
+        .get("x-paracord-origin")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(ApiError::Unauthorized)?;
+    validate_federation_file_token(
+        &state.config.jwt_secret,
+        &query.token,
+        attachment_id,
+        presented_origin,
+    )?;
+    // The audience match above proves the token was minted for this peer; this
+    // additionally refuses a peer that has since been blocked/quarantined or
+    // untrusted, so a live 5-minute token cannot outlive a block.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if !is_peer_trusted(&state, presented_origin, now_ms).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     let attachment = paracord_db::attachments::get_attachment(&state.db, attachment_id)
         .await

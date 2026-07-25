@@ -232,13 +232,43 @@ pub async fn create_template_from_guild(
     Ok((StatusCode::CREATED, Json(result)))
 }
 
-/// GET /templates  --  list all available templates
+/// GET /templates  --  list the templates the caller is allowed to see.
+///
+/// A template embeds `template_data`: the full channel tree plus every role of
+/// the source guild *including raw permission bitmasks*, alongside
+/// `source_guild_id` and `creator_id`. Returning the instance-wide list handed
+/// any authenticated user a complete structural and privilege map of every
+/// guild that had ever been snapshotted.
+///
+/// The schema carries no public/private flag, so visibility is derived from
+/// what the caller already legitimately knows: templates they created, and
+/// templates snapshotted from a guild they are currently a member of. (A
+/// follow-up migration adding an explicit visibility column would let a guild
+/// publish a template deliberately; that column is owned elsewhere.)
 pub async fn list_templates(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     let templates = paracord_db::guild_templates::list_all(&state.db).await?;
-    let arr: Vec<Value> = templates.iter().map(template_to_json).collect();
+
+    let member_guild_ids: std::collections::HashSet<i64> =
+        paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into())
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .into_iter()
+            .map(|guild| guild.id)
+            .collect();
+
+    let arr: Vec<Value> = templates
+        .iter()
+        .filter(|tmpl| {
+            tmpl.creator_id == auth.user_id
+                || tmpl
+                    .source_guild_id
+                    .is_some_and(|guild_id| member_guild_ids.contains(&guild_id))
+        })
+        .map(template_to_json)
+        .collect();
     Ok(Json(json!(arr)))
 }
 
@@ -259,6 +289,10 @@ pub async fn apply_template(
             "Guild name contains unsafe markup".into(),
         ));
     }
+
+    // Applying a template creates a guild, so it is subject to the same
+    // per-account guild quota as POST /guilds.
+    crate::routes::guilds::ensure_guild_creation_allowed(&state, auth.user_id).await?;
 
     let tmpl = paracord_db::guild_templates::get_by_id(&state.db, template_id)
         .await?

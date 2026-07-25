@@ -55,8 +55,19 @@ fn lookup_download_ticket(ticket: &str) -> Option<(i64, Option<String>, Option<S
 /// token is still active, so logout / session revocation drops any outstanding
 /// tickets. Bot-minted tickets (no session) skip the active-session check. The
 /// ticket remains valid for subsequent requests (multi-use).
-pub async fn validate_download_ticket(state: &AppState, ticket: &str) -> Option<i64> {
-    let (user_id, session_id, jti) = lookup_download_ticket(ticket)?;
+///
+/// `Ok(None)` means "this ticket does not authenticate anyone" (unknown, expired,
+/// or its session was revoked). A database failure is reported as
+/// `Err(ApiError::Internal)` instead of being folded into `None`: the ticket is
+/// still never honored, but the caller must answer 5xx rather than tell the
+/// client its credential was rejected.
+pub async fn validate_download_ticket(
+    state: &AppState,
+    ticket: &str,
+) -> Result<Option<i64>, ApiError> {
+    let Some((user_id, session_id, jti)) = lookup_download_ticket(ticket) else {
+        return Ok(None);
+    };
 
     if let (Some(session_id), Some(jti)) = (session_id.as_deref(), jti.as_deref()) {
         let active = paracord_db::sessions::is_access_token_active(
@@ -68,14 +79,14 @@ pub async fn validate_download_ticket(state: &AppState, ticket: &str) -> Option<
         )
         .await
         // Fail closed on a database error rather than honoring the ticket.
-        .ok()?;
+        .map_err(|_| ApiError::Internal(anyhow::anyhow!("database error")))?;
         if !active {
             download_tickets().remove(ticket);
-            return None;
+            return Ok(None);
         }
     }
 
-    Some(user_id)
+    Ok(Some(user_id))
 }
 
 /// Mint a short-lived multi-use ticket the client appends to image/federated-file

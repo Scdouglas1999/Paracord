@@ -10,10 +10,13 @@ import {
   setRefreshToken,
 } from '../lib/authToken';
 import { clearDownloadTicketCache, startDownloadTicketLifecycle } from '../lib/downloadTicket';
+import { clearPermissionDataCache } from '../lib/permissionDataCache';
+import { invalidateGuildPermissionCache } from '../hooks/usePermissions';
 import { toast } from './toastStore';
 import { useTypingStore } from './typingStore';
 import { useReadStateStore } from './readStateStore';
 import { useSavedMessageStore } from './savedMessageStore';
+import { resetSessionStores } from './sessionReset';
 
 function isUnauthorizedError(err: unknown): boolean {
   return (err as { response?: { status?: number } } | null)?.response?.status === 401;
@@ -40,7 +43,12 @@ interface AuthState {
   clearError: () => void;
 }
 
-function clearAuthState(set: (partial: Partial<AuthState>) => void): void {
+/**
+ * Tear down the local session. Returns the store-reset promise so `logout` can
+ * await it — voice teardown is async, and a caller that navigates immediately
+ * must not race a half-disconnected room.
+ */
+function clearAuthState(set: (partial: Partial<AuthState>) => void): Promise<void> {
   setAccessToken(null);
   setRefreshToken(null);
   clearLegacyPersistedAuth();
@@ -50,12 +58,30 @@ function clearAuthState(set: (partial: Partial<AuthState>) => void): void {
   useTypingStore.getState().reset();
   useReadStateStore.getState().reset();
   useSavedMessageStore.getState().reset();
+  // Every store that caches another user's data must be cleared here too.
+  // Only the three above were, so logging out and back in as someone else left
+  // the previous account's guilds, channels, messages, members and presences
+  // on screen — there is no reload to save us.
+  //
+  // Dispatched through the reset registry rather than importing each store:
+  // `messageStore` imports `authStore` (a cycle), and `authStore` is in the
+  // eager startup chain, so importing `voiceStore` here would pull
+  // `livekit-client` into the login-screen bundle. See `sessionReset`.
+  //
+  // Voice teardown is async (room disconnect, mic release); every synchronous
+  // reset has already run by the time this returns, and `logout` awaits the
+  // rest. `resetSessionStores` swallows individual failures so one store
+  // cannot leave the user half-signed-out.
+  const pending = resetSessionStores();
+  clearPermissionDataCache();
+  invalidateGuildPermissionCache();
   set({
     token: null,
     user: null,
     settings: null,
     hasFetchedSettings: false,
   });
+  return pending;
 }
 
 export const useAuthStore = create<AuthState>()((set) => ({
@@ -144,7 +170,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     } catch {
       // Best effort: local session should always clear.
     }
-    clearAuthState(set);
+    await clearAuthState(set);
   },
 
   fetchUser: async () => {

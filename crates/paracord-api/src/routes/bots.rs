@@ -588,6 +588,18 @@ pub async fn remove_guild_bot(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
+    // The uninstall never checked that the bot was installed here, so any
+    // MANAGE_GUILD holder could name an arbitrary application id and have the
+    // server write a `guild_uninstall` metric row and broadcast a fabricated
+    // GUILD_MEMBER_REMOVE for a bot that was never in the guild.
+    let is_installed =
+        paracord_db::bot_applications::is_bot_in_guild(&state.db, bot_app_id, guild_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if !is_installed {
+        return Err(ApiError::NotFound);
+    }
+
     paracord_db::bot_applications::remove_bot_from_guild(&state.db, bot_app_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;

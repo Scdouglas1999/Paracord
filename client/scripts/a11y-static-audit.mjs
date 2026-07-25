@@ -21,6 +21,22 @@ function lineNumberFor(source, index) {
   return source.slice(0, index).split(/\r?\n/).length;
 }
 
+/**
+ * True when a JSX attribute is bound to a bare identifier expression rather than
+ * a literal — `role={role}`, `tabIndex={tabIndex}`, `onClick={onClick}`.
+ *
+ * A component that forwards its accessibility semantics straight from props is a
+ * generic wrapper (e.g. `StreamOverlayPortal`), and the value it will receive is
+ * not knowable from this file. The *caller* owns the semantics, so the wrapper
+ * itself must not be reported — otherwise the only way to pass the audit is to
+ * hard-code a role into a component whose whole job is to be role-agnostic.
+ * Call sites still carry literal attributes and are audited normally.
+ */
+function isForwardedAttr(openingTag, attrName) {
+  const escaped = attrName.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+  return new RegExp(`\\s${escaped}\\s*=\\s*\\{\\s*[A-Za-z_$][\\w$]*\\s*\\}`).test(openingTag);
+}
+
 function hasExplicitAccessibleName(openingTag) {
   return /\saria-label\s*=/.test(openingTag) ||
     /\saria-labelledby\s*=/.test(openingTag);
@@ -38,7 +54,7 @@ function hasLikelyIconButtonClass(openingTag) {
 
 function hasDialogRole(openingTag) {
   return /\srole\s*=\s*(?:"(?:dialog|alertdialog)"|'(?:dialog|alertdialog)'|\{\s*["'](?:dialog|alertdialog)["']\s*\})/.test(openingTag) ||
-    /\srole\s*=\s*\{\s*role\s*\}/.test(openingTag);
+    isForwardedAttr(openingTag, "role");
 }
 
 function hasDialogAccessibleName(openingTag) {
@@ -47,7 +63,8 @@ function hasDialogAccessibleName(openingTag) {
 
 function hasFocusableDialogContainer(openingTag) {
   return /\stabIndex\s*=\s*\{\s*-1\s*\}/.test(openingTag) ||
-    /\stabindex\s*=\s*(?:"-1"|'-1')/.test(openingTag);
+    /\stabindex\s*=\s*(?:"-1"|'-1')/.test(openingTag) ||
+    isForwardedAttr(openingTag, "tabIndex");
 }
 
 function literalAriaLabelledBy(openingTag) {
@@ -81,6 +98,19 @@ function hasInteractiveRole(openingTag) {
 
 function hasTabIndex(openingTag) {
   return /\stabIndex\s*=/.test(openingTag) || /\stabindex\s*=/.test(openingTag);
+}
+
+/**
+ * A pass-through wrapper forwards BOTH the click handler and the interactive
+ * semantics (`role`, `tabIndex`) from its own props. Nothing about the element's
+ * accessibility is decided here — the caller decides it — so audit the call
+ * sites instead. Requiring all three to be forwarded keeps this narrow: a div
+ * that hard-codes `onClick` still has to declare a role and a tab stop.
+ */
+function isPassThroughWrapper(openingTag) {
+  return isForwardedAttr(openingTag, "onClick") &&
+    isForwardedAttr(openingTag, "role") &&
+    isForwardedAttr(openingTag, "tabIndex");
 }
 
 function hasElementId(source, id) {
@@ -166,6 +196,7 @@ async function auditFile(filePath) {
     if (!hasClickHandler(openingTag)) continue;
     if (hasBackdropClass(openingTag) || hasStopPropagationClick(openingTag) || /stopPropagation\s*\(/.test(localSource)) continue;
     if (hasInteractiveRole(openingTag) && hasTabIndex(openingTag)) continue;
+    if (isPassThroughWrapper(openingTag)) continue;
     failures.push({
       filePath,
       line: lineNumberFor(source, match.index ?? 0),

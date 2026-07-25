@@ -35,6 +35,11 @@ pub enum CryptoError {
     DecryptionFailed,
     #[error("ciphertext too short")]
     CiphertextTooShort,
+    #[error(
+        "refusing to encrypt: sequence {sequence} was already used for ssrc {ssrc} epoch {epoch} \
+         — this would reuse an AES-GCM (key, nonce) pair"
+    )]
+    SequenceReuse { ssrc: u32, epoch: u8, sequence: u16 },
 }
 
 /// Build a 12-byte AES-128-GCM nonce from packet metadata.
@@ -165,6 +170,24 @@ impl KeyRing {
 /// incremented whenever the 16-bit sequence number wraps, widening the effective
 /// packet counter to 48 bits and preventing (key, nonce) reuse. See `build_nonce`
 /// for the nonce layout and the max-frames-per-epoch invariant.
+///
+/// # Nonce-uniqueness invariant
+///
+/// The nonce is a pure function of `(ssrc, epoch, roc, sequence)`. Uniqueness
+/// therefore rests on two conditions, and both are enforced here as far as this
+/// type can see:
+///
+/// 1. **Within one encryptor**, a sequence is never submitted twice for the same
+///    `(ssrc, epoch)`. `encrypt` rejects a repeat with
+///    [`CryptoError::SequenceReuse`] instead of silently emitting a duplicate
+///    nonce — retransmission must reuse the *ciphertext*, never re-encrypt.
+/// 2. **Across encryptor instances**, a `(ssrc, epoch)` pair is never reused
+///    with the same key. A freshly constructed `FrameEncryptor` restarts its ROC
+///    at 0, so a reconnect that re-installed an old key at an old epoch and
+///    restarted its sequence would silently reuse nonces. This is upheld by the
+///    key schedule, not by this type: every session generates fresh random
+///    per-track keys, so no key outlives the encryptor that used it. Any change
+///    that makes keys persist across sessions MUST also carry the epoch forward.
 pub struct FrameEncryptor {
     ring: KeyRing,
 }
@@ -202,22 +225,35 @@ impl FrameEncryptor {
     /// The ROC increments each time the 16-bit sequence wraps (i.e. the new
     /// sequence is not greater than the previously observed one for this
     /// stream). The first packet of a stream establishes the baseline at ROC 0.
-    fn next_roc(&mut self, ssrc: u32, epoch: u8, sequence: u16) -> u32 {
+    /// Returns [`CryptoError::SequenceReuse`] when `sequence` repeats the last
+    /// one used for this `(ssrc, epoch)`. The nonce is a pure function of
+    /// `(ssrc, epoch, roc, sequence)`, and the ROC only advances on a wrap, so a
+    /// repeated sequence produces a byte-identical nonce under the same key.
+    /// Under AES-GCM that is catastrophic (it leaks the XOR of the two
+    /// plaintexts and, worse, the authentication subkey), so it must fail loudly
+    /// rather than be treated as a benign retransmit.
+    fn next_roc(&mut self, ssrc: u32, epoch: u8, sequence: u16) -> Result<u32, CryptoError> {
         match self.ring.roc_state.get_mut(&(ssrc, epoch)) {
             None => {
                 // First packet of this stream establishes ROC 0.
                 self.ring.roc_state.insert((ssrc, epoch), (0, sequence));
-                0
+                Ok(0)
             }
             Some((roc, last_seq)) => {
+                if sequence == *last_seq {
+                    return Err(CryptoError::SequenceReuse {
+                        ssrc,
+                        epoch,
+                        sequence,
+                    });
+                }
                 // A wrap has occurred when the sequence goes backwards relative
-                // to the last one sent. `<=` is not used because retransmitting
-                // the same sequence in send order should not bump the ROC.
+                // to the last one sent.
                 if sequence < *last_seq {
                     *roc = roc.wrapping_add(1);
                 }
                 *last_seq = sequence;
-                *roc
+                Ok(*roc)
             }
         }
     }
@@ -247,7 +283,7 @@ impl FrameEncryptor {
             return Err(CryptoError::NoKeyForEpoch(epoch));
         }
 
-        let roc = self.next_roc(ssrc, epoch, sequence);
+        let roc = self.next_roc(ssrc, epoch, sequence)?;
 
         let cipher = self.ring.cipher(ssrc, epoch)?;
 
@@ -1038,5 +1074,39 @@ mod tests {
         assert_ne!(n1, n4);
         assert_ne!(n1, n5);
         assert_ne!(n2, n3);
+    }
+
+    /// The nonce is a pure function of `(ssrc, epoch, roc, sequence)` and the
+    /// ROC only advances on a wrap, so re-submitting a sequence for the same
+    /// `(ssrc, epoch)` would produce a byte-identical nonce under the same key —
+    /// catastrophic under GCM. The encryptor must refuse rather than silently
+    /// emit the reused nonce.
+    #[test]
+    fn encrypt_refuses_to_reuse_a_sequence() {
+        let key = [0x11u8; KEY_SIZE];
+        let mut enc = FrameEncryptor::new();
+        enc.set_peer_key(7, 0, &key);
+        let header = [0u8; HEADER_SIZE];
+
+        assert!(enc.encrypt(&header, 7, 0, 100, b"a").is_ok());
+        assert!(matches!(
+            enc.encrypt(&header, 7, 0, 100, b"b"),
+            Err(CryptoError::SequenceReuse {
+                ssrc: 7,
+                epoch: 0,
+                sequence: 100
+            })
+        ));
+
+        // A fresh sequence still works, forward and (as a wrap) backward.
+        assert!(enc.encrypt(&header, 7, 0, 101, b"c").is_ok());
+        assert!(enc.encrypt(&header, 7, 0, 1, b"d").is_ok());
+
+        // The guard is per (ssrc, epoch): the same sequence on another stream or
+        // another epoch is a different nonce and stays legal.
+        enc.set_peer_key(8, 0, &key);
+        enc.set_peer_key(7, 1, &key);
+        assert!(enc.encrypt(&header, 8, 0, 100, b"e").is_ok());
+        assert!(enc.encrypt(&header, 7, 1, 100, b"f").is_ok());
     }
 }

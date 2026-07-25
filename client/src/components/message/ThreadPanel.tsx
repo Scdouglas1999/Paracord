@@ -13,6 +13,7 @@ import { confirm } from '../../stores/confirmStore';
 import { useAuthStore } from '../../stores/authStore';
 import { usePermissions } from '../../hooks/usePermissions';
 import { hasPermission, Permissions } from '../../types';
+import { ErrorBoundary } from '../ErrorBoundary';
 
 interface ThreadPanelProps {
   guildId: string;
@@ -150,16 +151,18 @@ export function ThreadPanel({
               : 'This thread is archived. Its owner or a moderator can restore it.'}
           </div>
         )}
-        <MessageList
-          channelId={threadChannelId}
-          onReply={(msg: Message) =>
-            setReplyingTo({
-              id: msg.id,
-              author: displayName(msg.author),
-              content: msg.content || '',
-            })
-          }
-        />
+        <ErrorBoundary variant="section" label="this thread">
+          <MessageList
+            channelId={threadChannelId}
+            onReply={(msg: Message) =>
+              setReplyingTo({
+                id: msg.id,
+                author: displayName(msg.author),
+                content: msg.content || '',
+              })
+            }
+          />
+        </ErrorBoundary>
         {!isArchived && (
           <MessageInput
             channelId={threadChannelId}

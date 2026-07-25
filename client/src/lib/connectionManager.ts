@@ -927,6 +927,14 @@ class ConnectionManager {
         logVoiceDiagnostic('[gateway] SSE EventSource opening', { url: logUrl });
 
         const es = await openRealtimeEventSource(streamUrl);
+        // `openRealtimeEventSource` awaits, so the connection may have been
+        // superseded or torn down while it was in flight. Assigning
+        // `conn.eventSource` unconditionally re-armed a dead connection with a
+        // live stream that nothing would ever close.
+        if (!this.isCurrentConnection(conn) || !conn.allowReconnect) {
+          es.close();
+          return;
+        }
         conn.eventSource = es;
 
         es.onopen = () => {

@@ -401,6 +401,9 @@ async fn followup_blocked_after_uninstall() -> anyhow::Result<()> {
         .await?;
     assert_eq!(status, StatusCode::CREATED, "create command failed");
 
+    // The token is delivered to the bot over the gateway, never to the invoker
+    // in the HTTP response, so subscribe before invoking.
+    let mut events = ctx._test_app.event_bus.subscribe_system();
     let (status, interaction) = ctx
         .request(
             Method::POST,
@@ -416,10 +419,19 @@ async fn followup_blocked_after_uninstall() -> anyhow::Result<()> {
         )
         .await?;
     assert_eq!(status, StatusCode::CREATED, "invoke failed: {interaction}");
-    let interaction_token = interaction["token"]
-        .as_str()
-        .context("interaction token")?
-        .to_string();
+    let interaction_token = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .context("timed out waiting for INTERACTION_CREATE")??;
+        if event.event_type == "INTERACTION_CREATE" {
+            break event
+                .payload
+                .get("token")
+                .and_then(Value::as_str)
+                .context("interaction token")?
+                .to_string();
+        }
+    };
 
     // Uninstall the bot.
     let (status, _) = ctx

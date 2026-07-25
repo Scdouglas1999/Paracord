@@ -129,7 +129,33 @@ export function usePermissions(
     new Map()
   );
   const [isLoading, setIsLoading] = useState(false);
+  /**
+   * Bumped whenever the gateway reports a role change for this guild, to force
+   * the fetch effect below to re-run after the cache has been invalidated.
+   */
+  const [rolesRevision, setRolesRevision] = useState(0);
   const currentUserId = user?.id ?? getUserIdFromToken(token);
+
+  // `rolePermissionCache` is module-level with no TTL, and the only thing that
+  // ever invalidated it was GuildSettings — a screen a demoted moderator has no
+  // reason to open. Everyone else kept their old permission bits, and their
+  // Delete/Pin/Manage controls, until the app was restarted. Subscribe to the
+  // gateway's role events here so every consumer of this hook re-derives.
+  useEffect(() => {
+    if (!guildId) return;
+    const onRolesChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ guild_id?: string }>).detail;
+      // Role events carry the guild they belong to; a missing id means the
+      // emitter could not attribute it, so invalidate defensively.
+      if (detail?.guild_id && String(detail.guild_id) !== String(guildId)) return;
+      invalidateGuildPermissionCache(guildId);
+      setRolesRevision((current) => current + 1);
+    };
+    window.addEventListener('paracord:roles-changed', onRolesChanged);
+    return () => {
+      window.removeEventListener('paracord:roles-changed', onRolesChanged);
+    };
+  }, [guildId]);
 
   useEffect(() => {
     if (!guildId || !currentUserId) {
@@ -172,7 +198,7 @@ export function usePermissions(
     return () => {
       cancelled = true;
     };
-  }, [guildId, currentUserId]);
+  }, [guildId, currentUserId, rolesRevision]);
 
   return useMemo(() => {
     const channelOverwrites = options?.channelOverwrites;

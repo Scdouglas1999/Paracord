@@ -505,6 +505,25 @@ export function StreamViewer({
   // When a native surface reports occluded/hidden it hides itself, revealing the
   // canvas's bg-tertiary backdrop (and, before any track is live, the poster
   // below) — the DOM poster/backdrop is what shows through (spec §3.6).
+  // Display-only projection of the native path's identity. Split out of the
+  // subscription effect below on purpose: `streamerName` arrives late (the
+  // username resolves after the tile mounts) and `selfStream` toggles
+  // independently. Both were dependencies of the subscription, so either one
+  // changing tore down the QUIC subscription and re-established it — the tile
+  // went blank for several seconds just because a name resolved.
+  useEffect(() => {
+    if (room || !mediaEngine) return;
+    const watchingSelf = localUserId != null && streamerId === localUserId;
+    if (watchingSelf) {
+      setActiveStreamerName('You');
+      setIsOwnStream(true);
+      setHasActiveTrack(selfStream);
+    } else {
+      setActiveStreamerName(streamerName ?? null);
+      setIsOwnStream(false);
+    }
+  }, [room, mediaEngine, streamerId, localUserId, streamerName, selfStream]);
+
   useEffect(() => {
     if (room || !mediaEngine) return;
     const canvas = canvasRef.current;
@@ -512,9 +531,6 @@ export function StreamViewer({
 
     const watchingSelf = localUserId != null && streamerId === localUserId;
     if (watchingSelf && hideSelfPreview) {
-      setActiveStreamerName('You');
-      setIsOwnStream(true);
-      setHasActiveTrack(selfStream);
       // No canvas clear here: the CanvasRenderer owns a WebGL context on this
       // element, so getContext('2d') returns null (W11). The hidden preview is
       // masked by opacity/positioning, and the renderer is torn down on unmount.
@@ -534,13 +550,8 @@ export function StreamViewer({
     let unsubscribe = () => {};
     if (watchingSelf) {
       unsubscribe = mediaEngine.subscribeLocalPublishedScreen(canvas, onFrame);
-      setActiveStreamerName('You');
-      setIsOwnStream(true);
-      setHasActiveTrack(selfStream);
     } else {
       unsubscribe = mediaEngine.subscribeVideo(streamerId, canvas, onFrame);
-      setActiveStreamerName(streamerName ?? null);
-      setIsOwnStream(false);
       setHasActiveTrack(false);
     }
 
@@ -554,7 +565,7 @@ export function StreamViewer({
         setHasActiveTrack(false);
       }
     };
-  }, [room, mediaEngine, streamerId, localUserId, selfStream, streamerName, hideSelfPreview]);
+  }, [room, mediaEngine, streamerId, localUserId, hideSelfPreview]);
 
   // Native media path: subscribe to screen-share audio separately from voice.
   useEffect(() => {
@@ -622,44 +633,73 @@ export function StreamViewer({
     });
   }, [room, mediaEngine, streamerId, localUserId, quality, qualityToLayer]);
 
-  // LiveKit room path: subscribe to room events for track attachment
+  // `attachTrack` is re-created whenever `quality`, `hideSelfPreview` or
+  // `previewStreamerId` change. Reach it through a ref so the room-listener
+  // effect below can key on `[room]` alone.
+  const attachTrackRef = useRef(attachTrack);
+  useEffect(() => {
+    attachTrackRef.current = attachTrack;
+  }, [attachTrack]);
+
+  // LiveKit room path: subscribe to room events for track attachment.
+  //
+  // This effect used to depend on `attachTrack` while performing unmount-shaped
+  // teardown (blanking srcObject, dropping every screen-share subscription).
+  // Changing the quality selector or resolving a username therefore blanked the
+  // tile and forced a multi-second re-subscribe. The listeners now key on the
+  // room only; re-attaching and teardown are handled separately below.
   useEffect(() => {
     if (!room) return;
 
-    attachTrack();
-    room.on(RoomEvent.TrackSubscribed, attachTrack);
-    room.on(RoomEvent.TrackUnsubscribed, attachTrack);
-    room.on(RoomEvent.TrackPublished, attachTrack);
-    room.on(RoomEvent.TrackUnpublished, attachTrack);
-    room.on(RoomEvent.TrackMuted, attachTrack);
-    room.on(RoomEvent.TrackUnmuted, attachTrack);
-    room.on(RoomEvent.ParticipantConnected, attachTrack);
-    room.on(RoomEvent.ParticipantDisconnected, attachTrack);
-    room.on(RoomEvent.LocalTrackPublished, attachTrack);
-    room.on(RoomEvent.LocalTrackUnpublished, attachTrack);
+    const onRoomEvent = () => attachTrackRef.current();
+    onRoomEvent();
+    room.on(RoomEvent.TrackSubscribed, onRoomEvent);
+    room.on(RoomEvent.TrackUnsubscribed, onRoomEvent);
+    room.on(RoomEvent.TrackPublished, onRoomEvent);
+    room.on(RoomEvent.TrackUnpublished, onRoomEvent);
+    room.on(RoomEvent.TrackMuted, onRoomEvent);
+    room.on(RoomEvent.TrackUnmuted, onRoomEvent);
+    room.on(RoomEvent.ParticipantConnected, onRoomEvent);
+    room.on(RoomEvent.ParticipantDisconnected, onRoomEvent);
+    room.on(RoomEvent.LocalTrackPublished, onRoomEvent);
+    room.on(RoomEvent.LocalTrackUnpublished, onRoomEvent);
 
     return () => {
-      room.off(RoomEvent.TrackSubscribed, attachTrack);
-      room.off(RoomEvent.TrackUnsubscribed, attachTrack);
-      room.off(RoomEvent.TrackPublished, attachTrack);
-      room.off(RoomEvent.TrackUnpublished, attachTrack);
-      room.off(RoomEvent.TrackMuted, attachTrack);
-      room.off(RoomEvent.TrackUnmuted, attachTrack);
-      room.off(RoomEvent.ParticipantConnected, attachTrack);
-      room.off(RoomEvent.ParticipantDisconnected, attachTrack);
-      room.off(RoomEvent.LocalTrackPublished, attachTrack);
-      room.off(RoomEvent.LocalTrackUnpublished, attachTrack);
-      setHasActiveTrack(false);
-      const videoEl = videoRef.current;
-      if (videoEl) videoEl.srcObject = null;
-      cleanupScreenShareAudio();
-      if (!skipSubRef.current) {
-        setScreenShareSubscriptions(new Set<string>());
-      }
-      subscriptionSignatureRef.current = '__init__';
-      lastMissingAudioWarningAtRef.current = 0;
+      room.off(RoomEvent.TrackSubscribed, onRoomEvent);
+      room.off(RoomEvent.TrackUnsubscribed, onRoomEvent);
+      room.off(RoomEvent.TrackPublished, onRoomEvent);
+      room.off(RoomEvent.TrackUnpublished, onRoomEvent);
+      room.off(RoomEvent.TrackMuted, onRoomEvent);
+      room.off(RoomEvent.TrackUnmuted, onRoomEvent);
+      room.off(RoomEvent.ParticipantConnected, onRoomEvent);
+      room.off(RoomEvent.ParticipantDisconnected, onRoomEvent);
+      room.off(RoomEvent.LocalTrackPublished, onRoomEvent);
+      room.off(RoomEvent.LocalTrackUnpublished, onRoomEvent);
     };
-  }, [room, attachTrack, cleanupScreenShareAudio, setScreenShareSubscriptions]);
+  }, [room]);
+
+  // Re-attach (not re-subscribe) when the attachment inputs change. Cheap, and
+  // it leaves the room listeners and screen-share subscriptions untouched.
+  useEffect(() => {
+    if (!room) return;
+    attachTrack();
+  }, [room, attachTrack]);
+
+  // Real teardown, on unmount only. Held in a ref so this effect can have an
+  // empty dependency list and therefore genuinely run once.
+  const streamTeardownRef = useRef<() => void>(() => {});
+  streamTeardownRef.current = () => {
+    setHasActiveTrack(false);
+    const videoEl = videoRef.current;
+    if (videoEl) videoEl.srcObject = null;
+    cleanupScreenShareAudio();
+    if (!skipSubRef.current) {
+      setScreenShareSubscriptions(new Set<string>());
+    }
+    subscriptionSignatureRef.current = '__init__';
+    lastMissingAudioWarningAtRef.current = 0;
+  };
+  useEffect(() => () => streamTeardownRef.current(), []);
 
   const toggleMaximized = () => setIsMaximized((prev) => !prev);
 

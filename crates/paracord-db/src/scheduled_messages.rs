@@ -87,7 +87,7 @@ pub async fn create_scheduled_message(
         "INSERT INTO scheduled_messages
             (id, channel_id, author_id, content, e2ee_payload, nonce, reference_id, send_at, status, updated_at)
          VALUES
-            ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+            ($1, $2, $3, $4, $5, $6, $7, $8, $9, datetime('now'))
          RETURNING {}",
         select_cols
     ))
@@ -159,7 +159,7 @@ pub async fn cancel_scheduled_message(
     let row = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
         "UPDATE scheduled_messages
          SET status = $2,
-             updated_at = CURRENT_TIMESTAMP
+             updated_at = datetime('now')
          WHERE id = $1
            AND status = $3
          RETURNING {}",
@@ -191,7 +191,7 @@ pub async fn update_scheduled_message(
              e2ee_payload = $3,
              nonce = $4,
              send_at = $5,
-             updated_at = CURRENT_TIMESTAMP
+             updated_at = datetime('now')
          WHERE id = $1
            AND status = $6
          RETURNING {}",
@@ -244,7 +244,7 @@ pub async fn mark_scheduled_message_sent(
          SET status = $2,
              delivered_message_id = $3,
              error = NULL,
-             updated_at = CURRENT_TIMESTAMP
+             updated_at = datetime('now')
          WHERE id = $1",
     )
     .bind(id)
@@ -264,7 +264,7 @@ pub async fn mark_scheduled_message_failed(
         "UPDATE scheduled_messages
          SET status = $2,
              error = $3,
-             updated_at = CURRENT_TIMESTAMP
+             updated_at = datetime('now')
          WHERE id = $1",
     )
     .bind(id)

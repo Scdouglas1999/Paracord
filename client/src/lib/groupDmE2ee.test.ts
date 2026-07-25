@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { bytesToHex } from './crypto/util';
 import { decryptGroupDmMessage, encryptGroupDmMessage } from './groupDmE2ee';
+import {
+  formatIdentityFingerprint,
+  IdentityPinError,
+  markIdentityVerified,
+} from './keyVerification';
 
 const mocks = vi.hoisted(() => {
   const profiles = new Map<string, Map<string, string>>();
@@ -380,6 +385,22 @@ describe('groupDmE2ee', () => {
 
     mocks.profiles.set(newBob.id, new Map());
     setActiveUser(alice.id);
+
+    // The rotated key is server-supplied, so distributing the group key to it
+    // must fail closed until Alice verifies it out of band.
+    await expect(
+      encryptGroupDmMessage(
+        channelId,
+        'after identity rotation',
+        alice.id,
+        alice.privateKey,
+        rotatedRecipients,
+      ),
+    ).rejects.toBeInstanceOf(IdentityPinError);
+
+    // Recovery path: Alice accepts the new fingerprint from the profile card.
+    await markIdentityVerified(newBob.id, formatIdentityFingerprint(newBob.publicKey));
+
     const secondPayload = await encryptGroupDmMessage(
       channelId,
       'after identity rotation',

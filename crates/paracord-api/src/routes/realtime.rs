@@ -38,20 +38,26 @@ pub struct RealtimeEventsQuery {
 const STREAM_TICKET_TTL: Duration = Duration::from_secs(45);
 const MAX_PENDING_STREAM_TICKETS: usize = 100_000;
 
-/// Single-use SSE stream tickets: `ticket -> (user_id, minted_at)`. A ticket is
-/// removed on redemption (so it cannot be replayed) and expired tickets are
-/// swept opportunistically on each mint.
-fn stream_tickets() -> &'static DashMap<String, (i64, Instant)> {
-    static STREAM_TICKETS: OnceLock<DashMap<String, (i64, Instant)>> = OnceLock::new();
+/// Single-use SSE stream tickets: `ticket -> (user_id, auth_session_id,
+/// minted_at)`. A ticket is removed on redemption (so it cannot be replayed) and
+/// expired tickets are swept opportunistically on each mint.
+///
+/// The login-session id is carried so an established stream can periodically
+/// re-check that the session has not been logged out or revoked; the stream
+/// itself authenticates only once, at attach time.
+type StreamTicket = (i64, Option<String>, Instant);
+
+fn stream_tickets() -> &'static DashMap<String, StreamTicket> {
+    static STREAM_TICKETS: OnceLock<DashMap<String, StreamTicket>> = OnceLock::new();
     STREAM_TICKETS.get_or_init(DashMap::new)
 }
 
-/// Consume a stream ticket, returning the bound user id if it exists and has not
-/// expired. The ticket is always removed (single use); an expired ticket yields
-/// `None` even though it is evicted.
-fn consume_stream_ticket(ticket: &str) -> Option<i64> {
-    let (_, (user_id, minted_at)) = stream_tickets().remove(ticket)?;
-    (minted_at.elapsed() < STREAM_TICKET_TTL).then_some(user_id)
+/// Consume a stream ticket, returning the bound user id and login-session id if
+/// it exists and has not expired. The ticket is always removed (single use); an
+/// expired ticket yields `None` even though it is evicted.
+fn consume_stream_ticket(ticket: &str) -> Option<(i64, Option<String>)> {
+    let (_, (user_id, auth_session_id, minted_at)) = stream_tickets().remove(ticket)?;
+    (minted_at.elapsed() < STREAM_TICKET_TTL).then_some((user_id, auth_session_id))
 }
 
 #[derive(Deserialize)]
@@ -79,6 +85,95 @@ struct TypingStartCommandPayload {
 
 fn parse_i64_id(raw: Option<&str>) -> Option<i64> {
     raw.and_then(|v| v.parse::<i64>().ok())
+}
+
+// ── Presence normalization (mirrors `paracord_ws::handler`) ────────────────
+//
+// The HTTP command bus writes into the SAME process-global `state.user_presences`
+// map the WS gateway does, and that value is fanned out to every guild co-member
+// and friend and re-served in every READY. The WS path normalizes `status`, caps
+// activities at 8 entries and truncates every string to 256 chars; this path
+// previously stored `status`, `custom_status` and `activities` verbatim, so one
+// caller could park a multi-megabyte blob in server memory and force it onto
+// every peer. Keep these limits in lock-step with the gateway's.
+
+/// Maximum activity entries retained from a presence update.
+const MAX_ACTIVITY_ITEMS: usize = 8;
+/// Maximum characters retained for any single presence text field.
+const MAX_ACTIVITY_TEXT_LEN: usize = 256;
+/// Hard cap on the serialized size of an inbound presence payload. Anything
+/// larger is refused outright rather than truncated, so an oversized blob is a
+/// visible client error instead of silent data loss.
+const MAX_PRESENCE_PAYLOAD_BYTES: usize = 16 * 1024;
+
+fn truncate_for_presence(value: &str, max: usize) -> String {
+    value.chars().take(max).collect()
+}
+
+fn normalize_status(raw: Option<&str>) -> &'static str {
+    match raw.unwrap_or("online") {
+        "online" => "online",
+        "idle" => "idle",
+        "dnd" => "dnd",
+        "offline" => "offline",
+        "invisible" => "offline",
+        _ => "online",
+    }
+}
+
+fn extract_activities(raw: Option<&Value>) -> Vec<Value> {
+    let mut activities = Vec::new();
+    let Some(Value::Array(list)) = raw else {
+        return activities;
+    };
+
+    for entry in list.iter().take(MAX_ACTIVITY_ITEMS) {
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
+        let name = obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_for_presence(s, MAX_ACTIVITY_TEXT_LEN))
+            .unwrap_or_else(|| "Unknown".to_string());
+        let activity_type = obj
+            .get("type")
+            .or_else(|| obj.get("activity_type"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let text_field = |key: &str| {
+            obj.get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_presence(s, MAX_ACTIVITY_TEXT_LEN))
+        };
+
+        activities.push(json!({
+            "name": name,
+            "type": activity_type,
+            "details": text_field("details"),
+            "state": text_field("state"),
+            "started_at": text_field("started_at"),
+            "application_id": text_field("application_id"),
+        }));
+    }
+
+    activities
+}
+
+/// Build the stored/broadcast presence value from a caller-supplied payload,
+/// applying the same normalization the gateway applies.
+fn build_presence_payload(
+    user_id: i64,
+    status: Option<&str>,
+    activities: Option<&Value>,
+    custom_status: Option<&str>,
+) -> Value {
+    json!({
+        "user_id": user_id.to_string(),
+        "status": normalize_status(status),
+        "custom_status": custom_status.map(|v| truncate_for_presence(v, MAX_ACTIVITY_TEXT_LEN)),
+        "activities": extract_activities(activities),
+    })
 }
 
 // ── SSE resume: honest per-session event replay ────────────────────────────
@@ -109,6 +204,136 @@ const REPLAY_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 /// session id), so this only caps genuinely distinct sessions and prevents a
 /// single account from spawning unbounded pumps / event-bus registrations.
 const MAX_SESSION_CHANNELS_PER_USER: usize = 32;
+/// Upper bound on concurrent SSE *attachments* per user.
+///
+/// `MAX_SESSION_CHANNELS_PER_USER` caps channels, not attachments: many streams
+/// may attach to one channel, and every attach deep-clones up to
+/// `MAX_REPLAY_EVENTS` rendered frames into the connection's replay queue. Cap
+/// the attachments too.
+const MAX_SSE_ATTACHMENTS_PER_USER: usize = 8;
+/// Hard lifetime of an established SSE stream.
+///
+/// The stream authenticates once (single-use ticket) and then tails events
+/// forever; nothing re-checks the token, the login session, or a ban. Bounding
+/// the lifetime forces a re-authenticated reconnect, so logout / token
+/// revocation / ban take effect within this window instead of never.
+const MAX_STREAM_LIFETIME: Duration = Duration::from_secs(15 * 60);
+/// How often an attached stream re-validates that its login session is still
+/// active. Cheap (one indexed lookup) relative to the stream's lifetime.
+const STREAM_REVALIDATE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Per-user count of attached SSE connections, enforcing
+/// `MAX_SSE_ATTACHMENTS_PER_USER`.
+fn user_attachment_counts() -> &'static DashMap<i64, usize> {
+    static USER_ATTACHMENT_COUNTS: OnceLock<DashMap<i64, usize>> = OnceLock::new();
+    USER_ATTACHMENT_COUNTS.get_or_init(DashMap::new)
+}
+
+/// Reserve an attachment slot for `user_id`, or return `false` when the cap is
+/// already reached. Released by `AttachmentGuard::drop`.
+fn try_acquire_attachment_slot(user_id: i64) -> bool {
+    let mut count = user_attachment_counts().entry(user_id).or_insert(0);
+    if *count >= MAX_SSE_ATTACHMENTS_PER_USER {
+        return false;
+    }
+    *count += 1;
+    true
+}
+
+fn release_attachment_slot(user_id: i64) {
+    if let Some(mut count) = user_attachment_counts().get_mut(&user_id) {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            drop(count);
+            user_attachment_counts().remove(&user_id);
+        }
+    }
+}
+
+/// RAII release of a per-user SSE attachment slot.
+struct AttachmentGuard {
+    user_id: i64,
+}
+
+impl Drop for AttachmentGuard {
+    fn drop(&mut self) {
+        release_attachment_slot(self.user_id);
+    }
+}
+
+// ── Command-bus rate limiting ──────────────────────────────────────────────
+//
+// The WS gateway meters presence (60/min), typing (120/min) and voice (60/min)
+// per user. The HTTP command bus reaches the same handlers with no limiter at
+// all, so a client could just move to HTTP to bypass them. Mirror the gateway's
+// budgets here, keyed by user id.
+const HTTP_MAX_COMMANDS_PER_MINUTE: u32 = 240;
+const HTTP_MAX_PRESENCE_UPDATES_PER_MINUTE: u32 = 60;
+const HTTP_MAX_TYPING_EVENTS_PER_MINUTE: u32 = 120;
+const HTTP_MAX_VOICE_UPDATES_PER_MINUTE: u32 = 60;
+
+struct CommandRateLimits {
+    commands: governor::DefaultKeyedRateLimiter<i64>,
+    presence: governor::DefaultKeyedRateLimiter<i64>,
+    typing: governor::DefaultKeyedRateLimiter<i64>,
+    voice: governor::DefaultKeyedRateLimiter<i64>,
+}
+
+fn command_rate_limits() -> &'static CommandRateLimits {
+    static COMMAND_RATE_LIMITS: OnceLock<CommandRateLimits> = OnceLock::new();
+    COMMAND_RATE_LIMITS.get_or_init(|| {
+        fn limiter(per_minute: u32) -> governor::DefaultKeyedRateLimiter<i64> {
+            governor::RateLimiter::keyed(governor::Quota::per_minute(
+                std::num::NonZeroU32::new(per_minute).expect("non-zero command quota"),
+            ))
+        }
+        let limits = CommandRateLimits {
+            commands: limiter(HTTP_MAX_COMMANDS_PER_MINUTE),
+            presence: limiter(HTTP_MAX_PRESENCE_UPDATES_PER_MINUTE),
+            typing: limiter(HTTP_MAX_TYPING_EVENTS_PER_MINUTE),
+            voice: limiter(HTTP_MAX_VOICE_UPDATES_PER_MINUTE),
+        };
+        tokio::spawn(async {
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let rl = command_rate_limits();
+                for limiter in [&rl.commands, &rl.presence, &rl.typing, &rl.voice] {
+                    limiter.retain_recent();
+                    limiter.shrink_to_fit();
+                }
+            }
+        });
+        limits
+    })
+}
+
+/// Charge the shared and per-command-type budgets for `user_id`.
+fn check_command_rate_limit(user_id: i64, command_type: &str) -> Result<(), ApiError> {
+    use governor::clock::{Clock, DefaultClock};
+
+    let limits = command_rate_limits();
+    let clock = DefaultClock::default();
+    let now = clock.now();
+    let retry_after = |not_until: governor::NotUntil<_>| {
+        ApiError::RateLimited(not_until.wait_time_from(now).as_secs().max(1) as i64)
+    };
+
+    if let Err(not_until) = limits.commands.check_key(&user_id) {
+        return Err(retry_after(not_until));
+    }
+    let per_type = match command_type {
+        "presence_update" => limits.presence.check_key(&user_id).err(),
+        "typing_start" => limits.typing.check_key(&user_id).err(),
+        "voice_state_update" => limits.voice.check_key(&user_id).err(),
+        _ => None,
+    };
+    match per_type {
+        Some(not_until) => Err(retry_after(not_until)),
+        None => Ok(()),
+    }
+}
 
 /// A fully-rendered gateway frame retained for replay. `data` is the exact SSE
 /// `data:` body (with `s`/`event_id` already embedded) so replayed and live
@@ -699,6 +924,19 @@ struct RealtimeStreamState {
     /// Keeps `active_connections` incremented for this connection's lifetime so
     /// the sweep does not reclaim the channel while the stream is attached.
     _conn_guard: ConnectionGuard,
+    /// Releases this user's SSE attachment slot when the stream ends.
+    _attach_guard: AttachmentGuard,
+    /// Used for the periodic login-session revalidation below.
+    app_state: AppState,
+    user_id: i64,
+    /// Login-session id this stream was authorized under. `None` for callers
+    /// that presented a credential without one (e.g. a bot token), which then
+    /// rely solely on `MAX_STREAM_LIFETIME`.
+    auth_session_id: Option<String>,
+    /// When the stream attached, for the `MAX_STREAM_LIFETIME` bound.
+    started_at: Instant,
+    /// Next scheduled login-session revalidation.
+    next_revalidate: Instant,
     /// READY payload sent once at the start of the connection.
     ready_payload: Option<String>,
     /// Buffered frames to replay (seq > cursor) before tailing live events.
@@ -708,6 +946,37 @@ struct RealtimeStreamState {
     /// Highest sequence already emitted to this connection, to suppress
     /// duplicates between the replay snapshot and the live tail.
     last_emitted: u64,
+}
+
+/// Decide whether an attached SSE stream must be torn down.
+///
+/// Enforces the hard `MAX_STREAM_LIFETIME` and, at most once per
+/// `STREAM_REVALIDATE_INTERVAL`, re-checks that the login session the stream was
+/// authorized under is still live (not logged out, revoked, or expired). A
+/// transient DB error does NOT kill a live stream — the lifetime cap still
+/// bounds it.
+async fn stream_should_terminate(st: &mut RealtimeStreamState) -> bool {
+    if st.started_at.elapsed() >= MAX_STREAM_LIFETIME {
+        return true;
+    }
+    if Instant::now() < st.next_revalidate {
+        return false;
+    }
+    st.next_revalidate = Instant::now() + STREAM_REVALIDATE_INTERVAL;
+
+    let Some(session_id) = st.auth_session_id.as_deref() else {
+        return false;
+    };
+    match paracord_db::sessions::get_session_by_id(&st.app_state.db, session_id).await {
+        Ok(Some(row)) => {
+            row.user_id != st.user_id || row.revoked_at.is_some() || row.expires_at <= Utc::now()
+        }
+        Ok(None) => true,
+        Err(err) => {
+            tracing::warn!("sse: session revalidation failed for {session_id}: {err}");
+            false
+        }
+    }
 }
 
 /// Extract the channel_id from a guild event payload, checking both
@@ -782,13 +1051,16 @@ pub async fn create_stream_ticket(
     let tickets = stream_tickets();
     // Opportunistic sweep of expired tickets so the map cannot grow unbounded
     // from tickets that are minted but never redeemed.
-    tickets.retain(|_, (_, minted_at)| minted_at.elapsed() < STREAM_TICKET_TTL);
+    tickets.retain(|_, (_, _, minted_at)| minted_at.elapsed() < STREAM_TICKET_TTL);
     if tickets.len() >= MAX_PENDING_STREAM_TICKETS {
         return Err(ApiError::RateLimited(1));
     }
 
     let ticket = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    tickets.insert(ticket.clone(), (auth.user_id, Instant::now()));
+    tickets.insert(
+        ticket.clone(),
+        (auth.user_id, auth.session_id.clone(), Instant::now()),
+    );
 
     Ok(Json(json!({ "ticket": ticket })))
 }
@@ -836,13 +1108,21 @@ pub async fn stream_events(
     // The stream authenticates solely via a single-use ticket (minted by
     // `POST /api/v1/stream/ticket`), never the raw access token in the query
     // string. Reject missing/expired/reused tickets.
-    let user_id = query
+    let (user_id, auth_session_id) = query
         .ticket
         .as_deref()
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .and_then(consume_stream_ticket)
         .ok_or(ApiError::Unauthorized)?;
+
+    // Cap concurrent attachments per user. `MAX_SESSION_CHANNELS_PER_USER` only
+    // caps channels; many streams can attach to one channel and each attach
+    // deep-clones up to MAX_REPLAY_EVENTS rendered frames.
+    if !try_acquire_attachment_slot(user_id) {
+        return Err(ApiError::RateLimited(1));
+    }
+    let attach_guard = AttachmentGuard { user_id };
 
     let session_id = query
         .session_id
@@ -916,6 +1196,12 @@ pub async fn stream_events(
     let stream_state = RealtimeStreamState {
         channel,
         _conn_guard: conn_guard,
+        _attach_guard: attach_guard,
+        app_state: state.clone(),
+        user_id,
+        auth_session_id,
+        started_at: Instant::now(),
+        next_revalidate: Instant::now() + STREAM_REVALIDATE_INTERVAL,
         ready_payload: Some(ready_payload),
         replay_queue,
         live_rx,
@@ -963,7 +1249,19 @@ pub async fn stream_events(
 
         // 4. Tail live events, skipping any the replay snapshot already sent.
         loop {
-            match st.live_rx.recv().await {
+            // An established stream authenticates exactly once, at attach time.
+            // Without this check logout, token revocation and bans never
+            // terminate it. The select also wakes an idle stream so the
+            // lifetime/revalidation bound applies even with no traffic.
+            if stream_should_terminate(&mut st).await {
+                return None;
+            }
+            let recv = tokio::time::timeout(STREAM_REVALIDATE_INTERVAL, st.live_rx.recv()).await;
+            let Ok(recv) = recv else {
+                // Idle tick: loop back into the revalidation check above.
+                continue;
+            };
+            match recv {
                 Ok(buffered) => {
                     if buffered.sequence <= st.last_emitted {
                         continue;
@@ -1016,29 +1314,29 @@ pub async fn post_command(
         return Err(ApiError::BadRequest("command_id is required".into()));
     }
 
+    // Mirror the gateway's per-user governors; without this the HTTP bus was an
+    // unmetered path to the same presence/typing/voice handlers.
+    check_command_rate_limit(auth.user_id, req.command_type.as_str())?;
+
     match req.command_type.as_str() {
         "presence_update" => {
-            let status = req
-                .payload
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("online");
-            let activities = req
-                .payload
-                .get("activities")
-                .cloned()
-                .unwrap_or_else(|| json!([]));
-            let custom_status = req
-                .payload
-                .get("custom_status")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-            let presence_payload = json!({
-                "user_id": auth.user_id.to_string(),
-                "status": status,
-                "custom_status": custom_status,
-                "activities": activities,
-            });
+            // Refuse an oversized payload up front: this value is retained in
+            // process-global state and re-broadcast, so silently truncating a
+            // multi-megabyte blob would hide a misbehaving client.
+            if serde_json::to_vec(&req.payload)
+                .map(|v| v.len())
+                .unwrap_or(0)
+                > MAX_PRESENCE_PAYLOAD_BYTES
+            {
+                return Err(ApiError::BadRequest(format!(
+                    "presence payload exceeds {MAX_PRESENCE_PAYLOAD_BYTES} bytes"
+                )));
+            }
+            let status = req.payload.get("status").and_then(|v| v.as_str());
+            let activities = req.payload.get("activities");
+            let custom_status = req.payload.get("custom_status").and_then(|v| v.as_str());
+            let presence_payload =
+                build_presence_payload(auth.user_id, status, activities, custom_status);
             state
                 .user_presences
                 .insert(auth.user_id, presence_payload.clone());

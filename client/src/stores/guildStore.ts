@@ -4,6 +4,7 @@ import { guildApi } from '../api/guilds';
 import { extractApiError } from '../api/client';
 import { toast } from './toastStore';
 import { resolveApiBaseUrl } from '../lib/config/apiBaseUrl';
+import { registerSessionReset } from './sessionReset';
 
 interface GuildState {
   guilds: Guild[];
@@ -20,6 +21,8 @@ interface GuildState {
   addGuild: (guild: Guild) => void;
   removeGuild: (id: string) => void;
   updateGuildData: (id: string, data: Partial<Guild>) => void;
+  /** Drop every cached guild and selection. Called on logout. */
+  reset: () => void;
 }
 
 export const useGuildStore = create<GuildState>()((set, _get) => ({
@@ -105,4 +108,10 @@ export const useGuildStore = create<GuildState>()((set, _get) => ({
     set((state) => ({
       guilds: state.guilds.map((g) => (g.id === id ? { ...g, ...data } : g)),
     })),
+
+  reset: () => set({ guilds: [], selectedGuildId: null, isLoading: false }),
 }));
+
+// Cleared on logout; see `sessionReset` for why this is a registration
+// rather than a direct import from `authStore`.
+registerSessionReset('guilds', () => useGuildStore.getState().reset());

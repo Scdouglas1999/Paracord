@@ -12,13 +12,13 @@ import { useAuthStore } from '../../stores/authStore';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { formatActivityLabel, getPrimaryActivity } from '../../lib/activityPresence';
 import { SkeletonMember } from '../ui/Skeleton';
-import { guildApi } from '../../api/guilds';
 import { extractApiError } from '../../api/client';
 import { writeClipboardText } from '../../lib/clipboard';
 import { getHighestRoleColor } from '../../lib/colors';
 import { toast } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
 import { displayName } from '../../lib/displayName';
+import { fetchGuildRoles } from '../../lib/permissionDataCache';
 
 interface MemberWithUser {
   user_id: string;
@@ -74,25 +74,33 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
   const fetchMembers = useMemberStore(s => s.fetchMembers);
   // Fingerprint presence writes for visible members only (any scope), so
   // unrelated presence Map updates don't re-render the whole list.
-  const memberIdsKey = useMemo(() => {
-    if (!storeMembers?.length) return '';
-    return storeMembers.map((m) => String(m.user.id)).sort().join(',');
+  //
+  // This selector runs on EVERY presence write. It used to rebuild a Set from a
+  // joined-and-split id string and then walk the entire presenceOrder Map each
+  // time — O(members + all presences) per tick, with a string split thrown in.
+  // Build the id set once, and use the store's per-user key index so the walk
+  // is proportional to this guild's members instead of every presence known to
+  // the client.
+  const memberIdSet = useMemo(() => {
+    const ids = new Set<string>();
+    for (const member of storeMembers ?? []) ids.add(String(member.user.id));
+    return ids;
   }, [storeMembers]);
   const presenceFingerprint = usePresenceStore(
     useCallback(
       (s) => {
-        if (!memberIdsKey) return 0;
-        const ids = new Set(memberIdsKey.split(','));
+        if (memberIdSet.size === 0) return 0;
         let hash = 0;
-        for (const [key, order] of s.presenceOrder) {
-          const colon = key.indexOf(':');
-          const uid = colon >= 0 ? key.slice(colon + 1) : key;
-          if (!ids.has(uid)) continue;
-          hash = (hash * 31 + order) | 0;
+        for (const id of memberIdSet) {
+          const keys = s.keysByUser.get(id);
+          if (!keys) continue;
+          for (const key of keys) {
+            hash = (hash * 31 + (s.presenceOrder.get(key) ?? 0)) | 0;
+          }
         }
         return hash;
       },
-      [memberIdsKey],
+      [memberIdSet],
     ),
   );
   const getPresence = usePresenceStore((s) => s.getPresence);
@@ -104,19 +112,28 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
   // Use prop roles if provided, otherwise use fetched roles
   const roles = propRoles.length > 0 ? propRoles : fetchedRoles;
 
+  // `storeMembers` is deliberately read through the store rather than listed as
+  // a dependency: this effect only ever needs to fire the initial fetch for a
+  // guild, and depending on the list would re-run it on every member update.
   useEffect(() => {
-    if (selectedGuildId && !storeMembers) {
-      fetchMembers(selectedGuildId);
-    }
-  }, [selectedGuildId]);
+    if (!selectedGuildId) return;
+    if (useMemberStore.getState().members.get(selectedGuildId)) return;
+    void fetchMembers(selectedGuildId);
+  }, [selectedGuildId, fetchMembers]);
 
   useEffect(() => {
     if (!selectedGuildId || propRoles.length > 0) return;
-    guildApi.getRoles(selectedGuildId).then(({ data }) => {
-      setFetchedRoles(data);
+    // Guild switches outrun this request; without the guard the previous
+    // guild's roles land afterwards and colour the new guild's member names.
+    let cancelled = false;
+    fetchGuildRoles(selectedGuildId).then((data) => {
+      if (!cancelled) setFetchedRoles(data);
     }).catch(() => {
       // non-fatal
     });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedGuildId, propRoles.length]);
 
   const members: MemberWithUser[] = useMemo(() => {
@@ -147,6 +164,10 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
         streaming: Boolean(voiceState?.self_stream),
       };
     });
+    // `presenceFingerprint` is the change signal for `getPresence`, which is a
+    // stable store action the linter cannot see through. Dropping it would
+    // freeze member status at whatever it was on first render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [propMembers, storeMembers, presenceFingerprint, getPresence, activeServerId, voiceParticipants, selectedGuildId, isAuthenticated, selfUserId]);
   const [showOffline, setShowOffline] = useState(false);
   const [selectedMember, setSelectedMember] = useState<MemberWithUser | null>(null);
@@ -162,25 +183,36 @@ export function MemberList({ members: propMembers, roles: propRoles = [], compac
     }
   }, []);
 
-  const onlineMems = members.filter(m => m.status !== 'offline');
-  const offlineMems = members.filter(m => m.status === 'offline');
+  // Grouping is memoized as one unit: previously `roleGroups` and
+  // `noRoleGroup` were rebuilt on every render, which gave the `virtualRows`
+  // memo below fresh dependency identities every time and made it useless —
+  // the whole row list was recomputed on each hover, scroll and presence tick.
+  const { roleGroups, noRoleGroup, offlineMems } = useMemo(() => {
+    const groups = new Map<string, MemberWithUser[]>();
+    const ungrouped: MemberWithUser[] = [];
+    const offline: MemberWithUser[] = [];
 
-  const roleGroups = new Map<string, MemberWithUser[]>();
-  const noRoleGroup: MemberWithUser[] = [];
-
-  onlineMems.forEach(m => {
-    if (m.roles.length > 0 && roles.length > 0) {
-      const highestRole = roles
-        .filter(r => m.roles.includes(r.id))
-        .sort((a, b) => b.position - a.position)[0];
-      if (highestRole) {
-        if (!roleGroups.has(highestRole.id)) roleGroups.set(highestRole.id, []);
-        roleGroups.get(highestRole.id)!.push(m);
-        return;
+    for (const m of members) {
+      if (m.status === 'offline') {
+        offline.push(m);
+        continue;
       }
+      if (m.roles.length > 0 && roles.length > 0) {
+        const highestRole = roles
+          .filter(r => m.roles.includes(r.id))
+          .sort((a, b) => b.position - a.position)[0];
+        if (highestRole) {
+          const bucket = groups.get(highestRole.id);
+          if (bucket) bucket.push(m);
+          else groups.set(highestRole.id, [m]);
+          continue;
+        }
+      }
+      ungrouped.push(m);
     }
-    noRoleGroup.push(m);
-  });
+
+    return { roleGroups: groups, noRoleGroup: ungrouped, offlineMems: offline };
+  }, [members, roles]);
 
   const handleMemberClick = (e: React.MouseEvent, member: MemberWithUser) => {
     const rect = e.currentTarget.getBoundingClientRect();

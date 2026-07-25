@@ -36,6 +36,32 @@ pub async fn create_backup(
     media_storage_path: &str,
     include_media: bool,
 ) -> Result<String, CoreError> {
+    create_backup_with_sqlite_key(
+        db_url,
+        backup_dir,
+        storage_path,
+        media_storage_path,
+        include_media,
+        None,
+    )
+    .await
+}
+
+/// [`create_backup`], but able to snapshot a SQLCipher-encrypted SQLite
+/// database.
+///
+/// `sqlite_key_hex` is the same hex key the server hands to
+/// `paracord_db::create_pool_with_sqlite_key`. Without it an encrypted database
+/// cannot be opened at all, and the snapshot fails outright rather than
+/// producing anything usable.
+pub async fn create_backup_with_sqlite_key(
+    db_url: &str,
+    backup_dir: &str,
+    storage_path: &str,
+    media_storage_path: &str,
+    include_media: bool,
+    sqlite_key_hex: Option<String>,
+) -> Result<String, CoreError> {
     let backup_dir = Path::new(backup_dir);
     tokio::fs::create_dir_all(backup_dir)
         .await
@@ -66,12 +92,9 @@ pub async fn create_backup(
             .map_err(|e| CoreError::Internal(format!("pg_dump task failed: {e}")))?
             .map_err(|e| CoreError::Internal(format!("pg_dump failed: {e}")))?;
     } else {
-        let db_path = parse_sqlite_path(db_url)?;
-        let db_path_clone = db_path.clone();
-        tokio::task::spawn_blocking(move || vacuum_into(&db_path_clone, &snapshot_path_str))
+        sqlite_snapshot(db_url, &snapshot_path_str, sqlite_key_hex)
             .await
-            .map_err(|e| CoreError::Internal(format!("VACUUM INTO task failed: {e}")))?
-            .map_err(|e| CoreError::Internal(format!("VACUUM INTO failed: {e}")))?;
+            .map_err(CoreError::Internal)?;
     }
 
     // Build the tar.gz archive
@@ -158,6 +181,27 @@ pub async fn restore_backup(
     storage_path: &str,
     media_storage_path: &str,
 ) -> Result<(), CoreError> {
+    restore_backup_with_sqlite_key(
+        backup_name,
+        backup_dir,
+        db_url,
+        storage_path,
+        media_storage_path,
+        None,
+    )
+    .await
+}
+
+/// [`restore_backup`], but able to take the pre-restore safety snapshot of a
+/// SQLCipher-encrypted SQLite database.
+pub async fn restore_backup_with_sqlite_key(
+    backup_name: &str,
+    backup_dir: &str,
+    db_url: &str,
+    storage_path: &str,
+    media_storage_path: &str,
+    sqlite_key_hex: Option<String>,
+) -> Result<(), CoreError> {
     let backup_path = Path::new(backup_dir).join(backup_name);
     if !backup_path.exists() {
         return Err(CoreError::NotFound);
@@ -212,17 +256,48 @@ pub async fn restore_backup(
         .map_err(CoreError::Internal)?;
     } else {
         let db_path = parse_sqlite_path(db_url)?;
+
+        // The safety copy must be a snapshot, not a file copy. The live
+        // database runs in WAL mode, so `std::fs::copy` of the main file alone
+        // captures a torn state: everything still sitting in `-wal` is missing,
+        // and the result is typically unopenable. `VACUUM INTO` writes a
+        // self-consistent database, and goes through the keyed pool so it also
+        // works when the database is SQLCipher-encrypted.
+        let pre_restore = format!("{db_path}.pre-restore");
+        if Path::new(&db_path).exists() {
+            // VACUUM INTO refuses to overwrite an existing file.
+            match std::fs::remove_file(&pre_restore) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(CoreError::Internal(format!(
+                        "Failed to clear previous pre-restore snapshot: {e}"
+                    )))
+                }
+            }
+            sqlite_snapshot(db_url, &pre_restore, sqlite_key_hex.clone())
+                .await
+                .map_err(|e| CoreError::Internal(format!("Pre-restore snapshot failed: {e}")))?;
+        }
+
         let db_path_clone = db_path.clone();
         let extracted_db_clone = extracted_db.clone();
         tokio::task::spawn_blocking(move || {
-            // Backup the current DB file before replacing
-            let current_backup = format!("{}.pre-restore", db_path_clone);
-            if Path::new(&db_path_clone).exists() {
-                std::fs::copy(&db_path_clone, &current_backup)
-                    .map_err(|e| format!("Failed to backup current DB: {e}"))?;
+            // Stage next to the target so a failed copy cannot leave a
+            // half-written file where the database is supposed to be, then move
+            // it into place in one step.
+            let staging = format!("{db_path_clone}.restore-incoming");
+            std::fs::copy(&extracted_db_clone, &staging)
+                .map_err(|e| format!("Failed to stage restored database: {e}"))?;
+            if let Err(e) = std::fs::rename(&staging, &db_path_clone) {
+                let _ = std::fs::remove_file(&staging);
+                return Err(format!("Failed to replace database: {e}"));
             }
-            std::fs::copy(&extracted_db_clone, &db_path_clone)
-                .map_err(|e| format!("Failed to replace database: {e}"))?;
+
+            // The sidecars belong to the database we just replaced. Left in
+            // place, SQLite would replay the old `-wal` against the restored
+            // file on the next open and corrupt or silently un-restore it.
+            remove_sqlite_sidecars(&db_path_clone)?;
             Ok::<(), String>(())
         })
         .await
@@ -287,17 +362,104 @@ fn is_postgres_url(url: &str) -> bool {
     normalized.starts_with("postgres://") || normalized.starts_with("postgresql://")
 }
 
-fn vacuum_into(db_path: &str, dest_path: &str) -> Result<(), String> {
-    let conn =
-        rusqlite::Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
-    conn.execute_batch(&format!("VACUUM INTO '{dest_path}';"))
-        .map_err(|e| format!("VACUUM INTO failed: {e}"))?;
+/// Delete the `-wal` / `-shm` sidecars belonging to `db_path`.
+fn remove_sqlite_sidecars(db_path: &str) -> Result<(), String> {
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = format!("{db_path}{suffix}");
+        match std::fs::remove_file(&sidecar) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Failed to remove stale {sidecar}: {e}")),
+        }
+    }
     Ok(())
 }
 
+/// Snapshot a SQLite database to `dest_path` with `VACUUM INTO`.
+async fn sqlite_snapshot(
+    db_url: &str,
+    dest_path: &str,
+    sqlite_key_hex: Option<String>,
+) -> Result<(), String> {
+    paracord_db::vacuum_sqlite_into(db_url, sqlite_key_hex, dest_path)
+        .await
+        .map_err(|e| format!("VACUUM INTO failed: {e}"))
+}
+
+/// Split a PostgreSQL URL into a password-free URL and the decoded password.
+///
+/// The password must never reach the child process's argv: everything in
+/// `/proc/<pid>/cmdline` is world-readable, so `pg_dump --dbname
+/// postgres://user:secret@host/db` leaks the database password to every local
+/// account for as long as the dump runs. libpq reads `PGPASSWORD` from the
+/// environment instead, which is not exposed the same way.
+fn split_pg_password(db_url: &str) -> (String, Option<String>) {
+    let Some(scheme_end) = db_url.find("://") else {
+        return (db_url.to_string(), None);
+    };
+    let authority_start = scheme_end + 3;
+    let rest = &db_url[authority_start..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    // The last `@` inside the authority separates userinfo from host, so a
+    // password that itself contains `@` is still split correctly.
+    let Some(at) = authority.rfind('@') else {
+        return (db_url.to_string(), None);
+    };
+    let userinfo = &authority[..at];
+    let Some(colon) = userinfo.find(':') else {
+        return (db_url.to_string(), None);
+    };
+    let password = percent_decode(&userinfo[colon + 1..]);
+    let sanitized = format!(
+        "{}://{}@{}{}",
+        &db_url[..scheme_end],
+        &userinfo[..colon],
+        &authority[at + 1..],
+        &rest[authority_end..]
+    );
+    (sanitized, Some(password))
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn pg_command(program: &str, db_url: &str) -> (std::process::Command, String) {
+    let (sanitized_url, password) = split_pg_password(db_url);
+    let mut cmd = std::process::Command::new(program);
+    if let Some(password) = password {
+        cmd.env("PGPASSWORD", password);
+    }
+    (cmd, sanitized_url)
+}
+
 fn pg_dump_into(db_url: &str, dest_path: &str) -> Result<(), String> {
-    let status = std::process::Command::new("pg_dump")
-        .args(["--format=custom", "--file", dest_path, "--dbname", db_url])
+    let (mut cmd, sanitized_url) = pg_command("pg_dump", db_url);
+    let status = cmd
+        .args([
+            "--format=custom",
+            "--file",
+            dest_path,
+            "--dbname",
+            &sanitized_url,
+        ])
         .status()
         .map_err(|e| format!("Failed to run pg_dump: {e}"))?;
     if !status.success() {
@@ -307,7 +469,8 @@ fn pg_dump_into(db_url: &str, dest_path: &str) -> Result<(), String> {
 }
 
 fn pg_restore_from_dump(db_url: &str, dump_path: &str) -> Result<(), String> {
-    let status = std::process::Command::new("pg_restore")
+    let (mut cmd, sanitized_url) = pg_command("pg_restore", db_url);
+    let status = cmd
         .args([
             "--clean",
             "--if-exists",
@@ -315,7 +478,7 @@ fn pg_restore_from_dump(db_url: &str, dump_path: &str) -> Result<(), String> {
             "--no-privileges",
             "--single-transaction",
             "--dbname",
-            db_url,
+            &sanitized_url,
             dump_path,
         ])
         .status()
@@ -501,5 +664,107 @@ mod tests {
         assert!(Path::new(&format!("{}.pre-restore", db_path.display())).exists());
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_snapshots_wal_state_and_clears_stale_sidecars() -> TestResult {
+        let temp = tempfile::tempdir()?;
+        let db_path = temp.path().join("paracord.db");
+        let backups = temp.path().join("backups");
+        let uploads = temp.path().join("uploads");
+        let media = temp.path().join("files");
+        std::fs::create_dir_all(&uploads)?;
+        std::fs::create_dir_all(&media)?;
+
+        {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            conn.execute_batch(
+                "PRAGMA journal_mode = WAL;
+                 CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO marker (id, value) VALUES (1, 'archived');",
+            )?;
+        }
+
+        let db_url = format!("sqlite://{}", db_path.display());
+        let backup_name = create_backup(
+            &db_url,
+            backups.to_str().unwrap(),
+            uploads.to_str().unwrap(),
+            media.to_str().unwrap(),
+            false,
+        )
+        .await?;
+
+        {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            conn.execute("UPDATE marker SET value = 'live' WHERE id = 1", [])?;
+        }
+
+        // A `-wal` left over from the database being replaced would be replayed
+        // against the restored file on the next open.
+        let wal = format!("{}-wal", db_path.display());
+        let shm = format!("{}-shm", db_path.display());
+        std::fs::write(&wal, b"stale-wal")?;
+        std::fs::write(&shm, b"stale-shm")?;
+
+        restore_backup(
+            &backup_name,
+            backups.to_str().unwrap(),
+            &db_url,
+            uploads.to_str().unwrap(),
+            media.to_str().unwrap(),
+        )
+        .await?;
+
+        assert!(!Path::new(&wal).exists(), "stale -wal survived the restore");
+        assert!(!Path::new(&shm).exists(), "stale -shm survived the restore");
+
+        // The safety copy must be a real, openable database holding the state
+        // that was live at restore time. A plain file copy of a WAL database
+        // produces a torn file instead.
+        let pre_restore = format!("{}.pre-restore", db_path.display());
+        let snapshot = rusqlite::Connection::open(&pre_restore)?;
+        let preserved: String =
+            snapshot.query_row("SELECT value FROM marker WHERE id = 1", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(preserved, "live");
+
+        let restored = rusqlite::Connection::open(&db_path)?;
+        let value: String =
+            restored.query_row("SELECT value FROM marker WHERE id = 1", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(value, "archived");
+
+        Ok(())
+    }
+
+    #[test]
+    fn split_pg_password_moves_the_secret_out_of_argv() {
+        let (url, password) = split_pg_password("postgres://user:s3cret@db.internal:5432/paracord");
+        assert_eq!(url, "postgres://user@db.internal:5432/paracord");
+        assert_eq!(password.as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn split_pg_password_handles_at_signs_and_percent_encoding() {
+        let (url, password) =
+            split_pg_password("postgresql://admin:p%40ss%3Aw%2Frd@host/db?sslmode=require");
+        assert_eq!(url, "postgresql://admin@host/db?sslmode=require");
+        assert_eq!(password.as_deref(), Some("p@ss:w/rd"));
+    }
+
+    #[test]
+    fn split_pg_password_leaves_password_free_urls_alone() {
+        for url in [
+            "postgres://user@host/db",
+            "postgres://host/db",
+            "sqlite:///var/lib/paracord.db",
+        ] {
+            let (out, password) = split_pg_password(url);
+            assert_eq!(out, url);
+            assert!(password.is_none());
+        }
     }
 }

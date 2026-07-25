@@ -9,8 +9,46 @@ use sqlx::Row;
 const USER_FLAG_BOT: i32 = 1 << 1;
 const FEDERATED_PLACEHOLDER_PASSWORD: &str = "!federated!";
 
+/// Stable identity that inherits content authored by deleted accounts.
+///
+/// Negative, so `count_local_human_users_for_first_admin` (`WHERE id > 0`)
+/// never sees it. Its username and email contain `!`, which
+/// `paracord_util::validation::validate_username` rejects, so no real account
+/// can ever collide with the tombstone's unique constraints.
+pub const DELETED_USER_ID: i64 = -1;
+const DELETED_USER_NAME: &str = "!deleted!";
+const DELETED_USER_EMAIL: &str = "!deleted!@invalid";
+const DELETED_USER_PASSWORD: &str = "!deleted!";
+
+/// Marker row claimed by whichever registration wins the race to become the
+/// server's first administrator.
+const FIRST_ADMIN_CLAIM_KEY: &str = "first_admin_claimed";
+
 fn normalize_email(email: &str) -> String {
     email.trim().to_ascii_lowercase()
+}
+
+/// Atomically claim the "first administrator" slot; returns true only for the
+/// caller whose INSERT actually created the marker.
+///
+/// Counting users and then handing out the admin flag is a TOCTOU: at
+/// PostgreSQL's READ COMMITTED two concurrent registrations both observe
+/// `COUNT(*) = 0` and both become administrators (reproducible with two
+/// parallel `POST /auth/register` calls against an empty server). The claim is
+/// written before the count is read so that, on SQLite, the transaction is
+/// already a writer and the loser blocks on the write lock instead of failing
+/// with a non-retryable `SQLITE_BUSY_SNAPSHOT`.
+async fn claim_first_admin_slot(executor: &mut sqlx::AnyConnection) -> Result<bool, sqlx::Error> {
+    let affected = sqlx::query(
+        "INSERT INTO server_settings (key, value)
+         VALUES ($1, '1')
+         ON CONFLICT(key) DO NOTHING",
+    )
+    .bind(FIRST_ADMIN_CLAIM_KEY)
+    .execute(executor)
+    .await?
+    .rows_affected();
+    Ok(affected == 1)
 }
 
 async fn count_local_human_users_for_first_admin(
@@ -247,8 +285,13 @@ pub async fn create_user_as_first_admin_typed(
 ) -> Result<UserRow, DbError> {
     let normalized_email = normalize_email(email);
     let mut tx = pool.begin().await?;
+    let claimed_first_admin = claim_first_admin_slot(&mut tx).await?;
     let count = count_local_human_users_for_first_admin(&mut tx).await?;
-    let flags = if count == 0 { admin_flag } else { 0 };
+    let flags = if claimed_first_admin && count == 0 {
+        admin_flag
+    } else {
+        0
+    };
 
     let row = sqlx::query_as::<_, UserRow>(
         "INSERT INTO users (id, username, discriminator, email, password_hash, flags)
@@ -542,12 +585,109 @@ pub async fn list_users_by_cursor(
     Ok(rows)
 }
 
-/// Core implementation using newtype ID.
+/// Ensure the tombstone identity exists so authored content has somewhere to go.
+async fn ensure_deleted_user_tombstone(
+    executor: &mut sqlx::AnyConnection,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO users (id, username, discriminator, email, password_hash, display_name, flags)
+         VALUES ($1, $2, 0, $3, $4, 'Deleted User', 0)
+         ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(DELETED_USER_ID)
+    .bind(DELETED_USER_NAME)
+    .bind(DELETED_USER_EMAIL)
+    .bind(DELETED_USER_PASSWORD)
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// Erase an account, transactionally.
+///
+/// A bare `DELETE FROM users` does not work on either engine. Fourteen foreign
+/// keys onto `users(id)` are `NO ACTION`, not `CASCADE` -- among them
+/// `messages.author_id`, `audit_log_entries.user_id`, `scheduled_events.creator_id`
+/// and `spaces.owner_id` -- so the delete aborted with a foreign-key violation
+/// and GDPR self-delete, admin delete and bot deletion were all broken.
+///
+/// The account is therefore anonymised rather than cascaded away:
+/// * rows that are personal data and carry no shared meaning (poll votes, event
+///   RSVPs) are deleted outright;
+/// * authored content is reassigned to the [`DELETED_USER_ID`] tombstone so
+///   conversations, audit trails and scheduled events stay coherent;
+/// * nullable attribution columns are cleared;
+/// * everything wired with `ON DELETE CASCADE` (sessions, settings, DM
+///   membership, reactions, read states, prekeys, relationships, ...) is removed
+///   by the final delete.
+///
+/// Space ownership is not silently transferred: an account that still owns a
+/// space is refused, so the caller has to transfer or delete those spaces first
+/// rather than leaving an unadministrable space behind.
 pub async fn delete_user_typed(pool: &DbPool, id: UserId) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(id)
-        .execute(pool)
+    let user_id = id.get();
+    if user_id == DELETED_USER_ID {
+        return Err(DbError::LimitReached(
+            "the deleted-user tombstone identity cannot itself be deleted".to_string(),
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+
+    let (owned_spaces,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM spaces WHERE owner_id = $1")
+        .bind(user_id)
+        .fetch_one(&mut *tx)
         .await?;
+    if owned_spaces > 0 {
+        return Err(DbError::LimitReached(format!(
+            "user still owns {owned_spaces} space(s); transfer or delete them before deleting the account"
+        )));
+    }
+
+    ensure_deleted_user_tombstone(&mut tx).await?;
+
+    // Personal rows that cannot be meaningfully reattributed. Both are part of a
+    // composite primary key that includes user_id, so reassigning them to the
+    // tombstone would either collide or silently corrupt a tally.
+    for sql in [
+        "DELETE FROM poll_votes WHERE user_id = $1",
+        "DELETE FROM event_rsvps WHERE user_id = $1",
+    ] {
+        sqlx::query(sql).bind(user_id).execute(&mut *tx).await?;
+    }
+
+    // NOT NULL attribution: reassign to the tombstone.
+    for sql in [
+        "UPDATE messages SET author_id = $2 WHERE author_id = $1",
+        "UPDATE audit_log_entries SET user_id = $2 WHERE user_id = $1",
+        "UPDATE scheduled_events SET creator_id = $2 WHERE creator_id = $1",
+    ] {
+        sqlx::query(sql)
+            .bind(user_id)
+            .bind(DELETED_USER_ID)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    // Nullable attribution: clear it.
+    for sql in [
+        "UPDATE automod_rules SET creator_id = NULL WHERE creator_id = $1",
+        "UPDATE bans SET banned_by = NULL WHERE banned_by = $1",
+        "UPDATE bot_guild_installs SET added_by = NULL WHERE added_by = $1",
+        "UPDATE emojis SET creator_id = NULL WHERE creator_id = $1",
+        "UPDATE invites SET inviter_id = NULL WHERE inviter_id = $1",
+        "UPDATE stickers SET creator_id = NULL WHERE creator_id = $1",
+        "UPDATE webhooks SET creator_id = NULL WHERE creator_id = $1",
+    ] {
+        sqlx::query(sql).bind(user_id).execute(&mut *tx).await?;
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
     Ok(())
 }
 
@@ -926,8 +1066,13 @@ pub async fn create_user_from_pubkey_as_first_admin_typed(
     admin_flag: i32,
 ) -> Result<UserRow, DbError> {
     let mut tx = pool.begin().await?;
+    let claimed_first_admin = claim_first_admin_slot(&mut tx).await?;
     let count = count_local_human_users_for_first_admin(&mut tx).await?;
-    let flags = if count == 0 { admin_flag } else { 0 };
+    let flags = if claimed_first_admin && count == 0 {
+        admin_flag
+    } else {
+        0
+    };
     let placeholder_email = format!("{}@pubkey", public_key);
 
     let row = sqlx::query_as::<_, UserRow>(
@@ -1379,6 +1524,99 @@ mod tests {
         delete_user_typed(&pool, UserId::new(50)).await.unwrap();
         let user = get_user_by_id_typed(&pool, UserId::new(50)).await.unwrap();
         assert!(user.is_none());
+    }
+
+    /// `messages.author_id` is a NO ACTION foreign key, so a bare
+    /// `DELETE FROM users` aborted with a foreign-key violation and account
+    /// deletion was impossible for anyone who had ever posted.
+    #[tokio::test]
+    async fn delete_user_reassigns_authored_content_to_the_tombstone() {
+        let pool = test_pool().await;
+        create_user_typed(&pool, UserId::new(70), "owner", 1, "o@example.com", "h")
+            .await
+            .unwrap();
+        create_user_typed(&pool, UserId::new(71), "author", 1, "a@example.com", "h")
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO spaces (id, name, owner_id) VALUES (900, 'S', 70)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO channels (id, space_id, name, channel_type) VALUES (901, 900, 'g', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (id, channel_id, author_id, content) VALUES (902, 901, 71, 'hi')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO invites (code, channel_id, inviter_id) VALUES ('abcd', 901, 71)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        delete_user_typed(&pool, UserId::new(71)).await.unwrap();
+
+        assert!(get_user_by_id_typed(&pool, UserId::new(71))
+            .await
+            .unwrap()
+            .is_none());
+
+        let (author_id,): (i64,) = sqlx::query_as("SELECT author_id FROM messages WHERE id = 902")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(author_id, DELETED_USER_ID, "message was not reattributed");
+
+        let inviter: Option<i64> = sqlx::query_scalar("SELECT inviter_id FROM invites")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(inviter.is_none(), "nullable attribution was not cleared");
+    }
+
+    /// Space ownership is refused rather than silently transferred, so an
+    /// unadministrable space is never left behind.
+    #[tokio::test]
+    async fn delete_user_refuses_while_the_account_still_owns_a_space() {
+        let pool = test_pool().await;
+        create_user_typed(&pool, UserId::new(80), "owner", 1, "own@example.com", "h")
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO spaces (id, name, owner_id) VALUES (910, 'S', 80)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let err = delete_user_typed(&pool, UserId::new(80))
+            .await
+            .expect_err("owning a space must block deletion");
+        assert!(err.to_string().contains("still owns"), "got: {err}");
+        assert!(get_user_by_id_typed(&pool, UserId::new(80))
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    /// The tombstone must not be counted as a candidate for the first-admin
+    /// election, or deleting the only human would hand admin to a ghost.
+    #[tokio::test]
+    async fn tombstone_is_not_a_first_admin_candidate() {
+        let pool = test_pool().await;
+        create_user_typed(&pool, UserId::new(90), "gone", 1, "g@example.com", "h")
+            .await
+            .unwrap();
+        delete_user_typed(&pool, UserId::new(90)).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let count = count_local_human_users_for_first_admin(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "tombstone leaked into the first-admin count");
     }
 
     #[tokio::test]

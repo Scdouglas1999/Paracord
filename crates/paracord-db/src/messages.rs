@@ -177,12 +177,14 @@ pub async fn create_message_with_payload_typed(
         Err(err) => return Err(DbError::Sqlx(err)),
     };
 
-    // Update last_message_id on the channel
-    let _ = sqlx::query("UPDATE channels SET last_message_id = $1 WHERE id = $2")
+    // Update last_message_id on the channel. This is not optional bookkeeping:
+    // the channel list, unread badges and read-state maths all key off it, so a
+    // dropped error here leaves the UI silently stale. Propagate it.
+    sqlx::query("UPDATE channels SET last_message_id = $1 WHERE id = $2")
         .bind(row.id)
         .bind(channel_id)
         .execute(pool)
-        .await;
+        .await?;
 
     Ok(row)
 }
@@ -1167,10 +1169,13 @@ pub async fn count_guild_messages_by_author(
     author_id: i64,
 ) -> Result<i64, DbError> {
     let row: (i64,) = sqlx::query_as(
+        // `channels` has no `guild_id`: 20260211000001 renamed it to `space_id`.
+        // The old text failed on both engines, and the only caller swallowed the
+        // error with `.unwrap_or(0)`, so this count was permanently zero.
         "SELECT COUNT(*)
          FROM messages m
          INNER JOIN channels c ON c.id = m.channel_id
-         WHERE c.guild_id = $1
+         WHERE c.space_id = $1
            AND m.author_id = $2",
     )
     .bind(guild_id)

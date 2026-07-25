@@ -109,14 +109,14 @@ pub async fn upsert_guild_onboarding_settings(
     let row = sqlx::query_as::<_, GuildOnboardingSettingsRow>(
         "INSERT INTO guild_onboarding_settings (
             guild_id, welcome_title, welcome_body, rules_text, role_prompt, progressive_channel_min_messages, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+         ) VALUES ($1, $2, $3, $4, $5, $6, datetime('now'))
          ON CONFLICT(guild_id) DO UPDATE SET
             welcome_title = EXCLUDED.welcome_title,
             welcome_body = EXCLUDED.welcome_body,
             rules_text = EXCLUDED.rules_text,
             role_prompt = EXCLUDED.role_prompt,
             progressive_channel_min_messages = EXCLUDED.progressive_channel_min_messages,
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = datetime('now')
          RETURNING guild_id, welcome_title, welcome_body, rules_text, role_prompt, progressive_channel_min_messages, updated_at",
     )
     .bind(guild_id)
@@ -151,9 +151,13 @@ pub async fn replace_guild_onboarding_role_options(
     guild_id: i64,
     options: &[(i64, i64, Option<String>, Option<String>, i32)],
 ) -> Result<(), DbError> {
+    // Delete-then-insert must be one unit: run outside a transaction, a failure
+    // partway through the inserts (or a concurrent read) leaves the guild with a
+    // truncated or empty set of onboarding role options.
+    let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM guild_onboarding_role_options WHERE guild_id = $1")
         .bind(guild_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     for (id, role_id, label, description, position) in options {
         sqlx::query(
@@ -166,9 +170,10 @@ pub async fn replace_guild_onboarding_role_options(
         .bind(label)
         .bind(description)
         .bind(*position)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -205,12 +210,12 @@ pub async fn upsert_member_onboarding_state(
     let row = sqlx::query_as::<_, MemberOnboardingStateRow>(
         "INSERT INTO member_onboarding_state (
             guild_id, user_id, accepted_rules, selected_role_ids, completed_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+         ) VALUES ($1, $2, $3, $4, $5, datetime('now'))
          ON CONFLICT(guild_id, user_id) DO UPDATE SET
             accepted_rules = EXCLUDED.accepted_rules,
             selected_role_ids = EXCLUDED.selected_role_ids,
             completed_at = COALESCE(EXCLUDED.completed_at, member_onboarding_state.completed_at),
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = datetime('now')
          RETURNING guild_id, user_id, CASE WHEN accepted_rules THEN 1 ELSE 0 END AS accepted_rules, selected_role_ids, completed_at, created_at, updated_at",
     )
     .bind(guild_id)

@@ -970,7 +970,15 @@ pub async fn upsert_room_sync_cursor(
         "INSERT INTO federation_room_sync_cursors (server_name, room_id, last_depth, updated_at_ms)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (server_name, room_id) DO UPDATE SET
-             last_depth = MAX(federation_room_sync_cursors.last_depth, EXCLUDED.last_depth),
+             -- Written as a CASE rather than a two-argument MAX/GREATEST: the
+             -- scalar two-argument MAX exists only on SQLite (PostgreSQL failed
+             -- with `function max(bigint, bigint) does not exist`) and GREATEST
+             -- exists only on PostgreSQL. CASE is the one form both accept.
+             last_depth = CASE
+                 WHEN EXCLUDED.last_depth > federation_room_sync_cursors.last_depth
+                     THEN EXCLUDED.last_depth
+                 ELSE federation_room_sync_cursors.last_depth
+             END,
              updated_at_ms = EXCLUDED.updated_at_ms",
     )
     .bind(server_name)

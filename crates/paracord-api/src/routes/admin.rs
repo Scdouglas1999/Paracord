@@ -732,6 +732,18 @@ pub async fn delete_backup(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Operator health check: capacity, backups, transport safety, and a list of
+/// actionable findings. Replaces the four bare counters v1 offered.
+pub async fn get_health(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<Value>, ApiError> {
+    let report = paracord_core::health::build_report(&state).await?;
+    Ok(Json(serde_json::to_value(report).map_err(|e| {
+        ApiError::Internal(anyhow::anyhow!(e.to_string()))
+    })?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::validate_setting;
@@ -750,16 +762,4 @@ mod tests {
     fn validate_setting_accepts_valid_numeric_limits() {
         assert!(validate_setting("max_guilds_per_user", "100").is_ok());
     }
-}
-
-/// Operator health check: capacity, backups, transport safety, and a list of
-/// actionable findings. Replaces the four bare counters v1 offered.
-pub async fn get_health(
-    State(state): State<AppState>,
-    _admin: AdminUser,
-) -> Result<Json<Value>, ApiError> {
-    let report = paracord_core::health::build_report(&state).await?;
-    Ok(Json(serde_json::to_value(report).map_err(|e| {
-        ApiError::Internal(anyhow::anyhow!(e.to_string()))
-    })?))
 }

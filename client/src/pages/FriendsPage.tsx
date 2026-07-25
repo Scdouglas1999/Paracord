@@ -150,6 +150,10 @@ export function FriendsPage() {
       friends.filter(
         (r) => (getPresence(r.user.id, scope)?.status || 'offline') !== 'offline'
       ).length,
+    // `getPresence` is a stable store action, so it never signals a change on
+    // its own; `presences` is the value it actually reads and is what must
+    // invalidate this memo. The linter cannot see through the store accessor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [friends, presences, getPresence, scope]
   );
 
@@ -290,7 +294,6 @@ export function FriendsPage() {
     return friendListSource.filter((r) =>
       r.user.username.toLowerCase().includes(q) || displayName(r.user).toLowerCase().includes(q)
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [friendListSource, searchQuery]);
 
   const sectionLabel = activeTab === 'all' ? 'All' : activeTab === 'blocked' ? 'Blocked' : 'Online';

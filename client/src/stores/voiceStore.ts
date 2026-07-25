@@ -41,6 +41,7 @@ import { useToastStore } from './toastStore';
 import { logVoiceDiagnostic } from '../lib/desktopDiagnostics';
 import type { MediaEngine } from '../lib/media/mediaEngine';
 import { createMediaEngine } from '../lib/media/mediaEngine';
+import { registerSessionReset } from './sessionReset';
 /** Direct stderr logging that bypasses the async diagnostics buffer. */
 function voiceTimingLog(msg: string): void {
   try {
@@ -1963,6 +1964,12 @@ interface VoiceStoreState {
   loadVoiceStates: (guildId: string, states: VoiceState[]) => void;
   // Speaking state from LiveKit
   setSpeakingUsers: (userIds: string[]) => void;
+  /**
+   * Tear down any live call and drop all cached voice state. Called on logout —
+   * without it the next account inherited the previous account's participant
+   * lists and, if a call was active, kept the microphone open.
+   */
+  reset: () => Promise<void>;
 }
 
 export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
@@ -2110,7 +2117,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         : await voiceApi.joinChannel(channelId);
       // Defensively unwrap payloads wrapped as { data: {...} }.
       const maybeWrapped = joinResponse.data as unknown;
-      let data =
+      const data =
         maybeWrapped
           && typeof maybeWrapped === 'object'
           && 'data' in maybeWrapped
@@ -2976,6 +2983,48 @@ export const useVoiceStore = create<VoiceStoreState>()((set, get) => ({
         });
       }
     }
+  },
+
+  reset: async () => {
+    // Route through leaveChannel so the room, media engine, mic analyser and
+    // screen share are torn down properly rather than merely forgotten.
+    try {
+      await get().leaveChannel();
+    } catch (err) {
+      console.warn('[voice] reset: leaveChannel failed, clearing state anyway:', err);
+    }
+    set({
+      connected: false,
+      joining: false,
+      joiningChannelId: null,
+      connectionError: null,
+      connectionErrorChannelId: null,
+      channelId: null,
+      guildId: null,
+      selfMute: false,
+      selfDeaf: false,
+      selfStream: false,
+      selfVideo: false,
+      participants: new Map(),
+      channelParticipants: new Map(),
+      speakingUsers: new Set(),
+      livekitToken: null,
+      livekitUrl: null,
+      roomName: null,
+      voiceSessionId: null,
+      room: null,
+      mediaEngine: null,
+      micInputActive: false,
+      micInputLevel: 0,
+      micServerDetected: false,
+      streamAudioWarning: null,
+      systemAudioCaptureActive: false,
+      showSystemAudioPrivacyWarning: false,
+      voiceSuppressedForStream: false,
+      watchedStreamerId: null,
+      previewStreamerId: null,
+      pttEngaged: false,
+    });
   },
 
   toggleMute: async () => {
@@ -3935,3 +3984,7 @@ if (typeof window !== 'undefined') {
     }
   });
 }
+
+// Cleared on logout; see `sessionReset` for why this is a registration
+// rather than a direct import from `authStore`.
+registerSessionReset('voice', () => useVoiceStore.getState().reset());

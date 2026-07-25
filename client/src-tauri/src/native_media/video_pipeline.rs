@@ -66,6 +66,42 @@ const AUDIO_PACING_FRAGMENT_THRESHOLD: usize = 32;
 const AUDIO_PACING_INTERVAL: Duration = Duration::from_micros(1000);
 #[cfg(feature = "vpx")]
 const VIDEO_REASSEMBLY_TTL: Duration = Duration::from_secs(3);
+/// How often the reassembly pool is swept for expired partial frames.
+///
+/// The sweep is an O(n) `retain`; running it on every fragment made fragment
+/// handling quadratic in the pool size, and the pool key is entirely
+/// attacker-chosen. A periodic sweep bounds that work while the hard entry cap
+/// below bounds the pool itself.
+#[cfg(feature = "vpx")]
+const VIDEO_REASSEMBLY_SWEEP_INTERVAL: Duration = Duration::from_millis(500);
+/// Maximum number of partially-reassembled frames held at once, across all
+/// remote tracks.
+///
+/// Every entry is keyed by `stream_id:track_id:frame_id` — all sender-chosen —
+/// so without a cap a peer can mint unbounded entries by never completing a
+/// frame. A 60 fps sender with three simulcast layers has at most a handful in
+/// flight at any instant; 128 is generous.
+#[cfg(feature = "vpx")]
+const MAX_INFLIGHT_REASSEMBLY_FRAMES: usize = 128;
+/// Largest `fragment_count` a datagram-delivered frame may declare.
+///
+/// `fragment_count` sizes the slot vector before any payload is validated, so
+/// one ~1200-byte datagram declaring 65535 fragments allocated 1.5 MB. This
+/// bounds a partial frame by what a *whole* frame is allowed to be
+/// ([`MAX_STREAM_FRAME_SIZE`]) at the smallest datagram a sender can be using.
+/// Senders move anything past `STREAM_FRAGMENT_THRESHOLD` fragments onto the
+/// uni-stream path, so this leaves orders of magnitude of headroom.
+#[cfg(feature = "vpx")]
+const MAX_REASSEMBLY_FRAGMENTS: usize =
+    paracord_transport::protocol::MAX_STREAM_FRAME_SIZE / FALLBACK_MAX_DATAGRAM_SIZE;
+/// Maximum concurrently-running per-track decode workers.
+///
+/// Workers are keyed by the sender-chosen `stream_id:track_id`, and each owns a
+/// decoder plus a blocking-pool task, so the map must not grow on unauthenticated
+/// input. The identity cross-check already confines keys to announced tracks;
+/// this is the belt-and-braces bound.
+#[cfg(feature = "vpx")]
+const MAX_DECODE_WORKERS: usize = 64;
 /// Periodic keyframe cadence in seconds — a safety net only. Every encoder
 /// backend now honors on-demand keyframes instantly (the in-process libavcodec
 /// engine stamps AV_PICTURE_TYPE_I on the exact requested frame; libvpx forces
@@ -182,6 +218,25 @@ struct VideoDispatchState {
     /// in `remote_track_prefer_encoded` (webcodecs passthrough), or has no
     /// video consumer.
     remote_track_surfaces: HashMap<String, TrackSurfaceBinding>,
+    /// Authoritative SSRC → track-key binding, taken from the relay's
+    /// `TrackPublish`/`TrackLayers` announcements (every simulcast layer's
+    /// SSRC) plus the SSRC named at subscription time.
+    ///
+    /// This is the ONLY field of an incoming media packet whose ownership the
+    /// relay actually authorizes: it resolves the SSRC to a published track
+    /// before forwarding, and the decryption key is installed per SSRC. The
+    /// `stream_id`/`track_id` inside the (encrypted) metadata are just labels
+    /// the sender chose, so they must be cross-checked against this map before
+    /// they are allowed to select a reassembly pool, decoder, surface or webview
+    /// channel — otherwise a hostile peer you are subscribed to can label its
+    /// frames with another participant's identity and render its video on that
+    /// participant's tile. AEAD success proves only "encrypted under a key we
+    /// installed for this SSRC", never "this is that track's content".
+    remote_ssrc_track_bindings: HashMap<u32, String>,
+    /// Largest resolution each remote track announced across its layers, used to
+    /// cap decode allocations at what the peer actually negotiated rather than
+    /// at the decoder's global 8K ceiling.
+    remote_track_max_dimensions: HashMap<String, (u32, u32)>,
 }
 
 /// A track's binding to its native surface (spec §3.1: the per-track
@@ -238,6 +293,8 @@ impl Default for VideoDispatchState {
             remote_track_stored_at: HashMap::new(),
             remote_track_stream_high_water: HashMap::new(),
             remote_track_surfaces: HashMap::new(),
+            remote_ssrc_track_bindings: HashMap::new(),
+            remote_track_max_dimensions: HashMap::new(),
         }
     }
 }
@@ -269,6 +326,24 @@ pub struct PulledVideoFramePayload {
 fn video_reassembly_pool() -> &'static Mutex<HashMap<String, VideoReassemblyState>> {
     static POOL: OnceLock<Mutex<HashMap<String, VideoReassemblyState>>> = OnceLock::new();
     POOL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Last time the reassembly pool was swept for expired partial frames.
+#[cfg(feature = "vpx")]
+fn last_reassembly_sweep() -> &'static Mutex<Instant> {
+    static LAST: OnceLock<Mutex<Instant>> = OnceLock::new();
+    LAST.get_or_init(|| Mutex::new(Instant::now()))
+}
+
+/// Map a wire `frame_id` onto a decoder presentation timestamp.
+///
+/// `frame_id` is an unauthenticated `u64`; a plain `as i64` wraps any value at
+/// or above 2^63 to a negative number, which then goes straight into libvpx /
+/// libavcodec timestamp state. Saturating keeps the value monotonic and
+/// non-negative for every input.
+#[cfg(feature = "vpx")]
+fn frame_id_to_pts(frame_id: u64) -> i64 {
+    i64::try_from(frame_id).unwrap_or(i64::MAX)
 }
 
 #[cfg(feature = "vpx")]
@@ -307,6 +382,11 @@ fn decoder_handle_for_track(
     use paracord_codec::video::decoder::{create_decoder_with_output, DecodeOutput};
     use paracord_codec::video::DecoderConfig;
 
+    // Read the negotiated resolution BEFORE taking the decoder-pool lock, so the
+    // dispatch-state lock is never nested inside it (every other site takes the
+    // dispatch lock first and releases it before touching the decoder pool).
+    let max_dimensions = track_max_dimensions(track_key);
+
     let mut pool = video_decoder_pool().lock().ok()?;
     if let Some(handle) = pool.get(track_key) {
         return Some(handle.clone());
@@ -324,7 +404,16 @@ fn decoder_handle_for_track(
     let output = DecodeOutput::Gpu;
     #[cfg(not(target_os = "macos"))]
     let output = DecodeOutput::Cpu;
-    let decoder = create_decoder_with_output(codec, DecoderConfig::default(), output).ok()?;
+    // Cap the decoder at the resolution this peer actually announced when it
+    // published the track. Without it the only ceiling is the decoder's global
+    // 8K constant, so a peer publishing a 320x180 layer can still make every
+    // frame allocate 8K planes (and, on the VP9 path, buy a 16-thread decoder)
+    // from a few hundred bytes of crafted bitstream header.
+    let config = DecoderConfig {
+        max_dimensions,
+        ..DecoderConfig::default()
+    };
+    let decoder = create_decoder_with_output(codec, config, output).ok()?;
     let handle = Arc::new(Mutex::new(decoder));
     pool.insert(track_key.to_string(), handle.clone());
     Some(handle)
@@ -486,6 +575,14 @@ fn dispatch_frame_to_worker(track_key: &str, frame: ReassembledVideoFrame, sink:
         Ok(workers) => workers,
         Err(_) => return,
     };
+    if !workers.contains_key(track_key) && workers.len() >= MAX_DECODE_WORKERS {
+        tracing::warn!(
+            track_key,
+            workers = workers.len(),
+            "decode worker cap reached; refusing to spawn another"
+        );
+        return;
+    }
     let worker = workers
         .entry(track_key.to_string())
         .or_insert_with(|| spawn_decode_worker(track_key.to_string(), sink.clone()));
@@ -1562,13 +1659,114 @@ fn store_pulled_video_frame(
     }
 }
 
+/// Record the relay-announced SSRC→track binding for a remote track and the
+/// largest resolution it advertised.
+///
+/// Called whenever the control channel delivers a `TrackPublish`/`TrackLayers`
+/// for a track. Every simulcast layer's SSRC is bound, so layer switching does
+/// not trip [`video_frame_identity_is_authorized`].
 #[cfg(feature = "vpx")]
-fn resolve_video_track_key(ssrc: u32) -> Option<String> {
-    let state = video_dispatch_state().lock().ok()?;
+pub fn bind_remote_video_track(
+    stream_id: &str,
+    track_id: &str,
+    layers: &[paracord_transport::stream::PublishedLayer],
+) {
+    let key = make_track_key(stream_id, track_id);
+    let Ok(mut state) = video_dispatch_state().lock() else {
+        return;
+    };
+    // Drop any previous binding for this track first, so an SSRC that is no
+    // longer part of the track's ladder stops resolving to it.
     state
-        .remote_track_ssrcs
+        .remote_ssrc_track_bindings
+        .retain(|_, bound| bound != &key);
+    for layer in layers {
+        state
+            .remote_ssrc_track_bindings
+            .insert(layer.ssrc, key.clone());
+    }
+    let max_dims = layers
         .iter()
-        .find_map(|(track_key, mapped_ssrc)| (*mapped_ssrc == ssrc).then(|| track_key.clone()))
+        .filter_map(|layer| Some((u32::from(layer.width?), u32::from(layer.height?))))
+        .fold(None, |acc: Option<(u32, u32)>, (w, h)| match acc {
+            Some((aw, ah)) => Some((aw.max(w), ah.max(h))),
+            None => Some((w, h)),
+        });
+    match max_dims {
+        Some(dims) => {
+            state.remote_track_max_dimensions.insert(key, dims);
+        }
+        None => {
+            state.remote_track_max_dimensions.remove(&key);
+        }
+    }
+}
+
+#[cfg(not(feature = "vpx"))]
+pub fn bind_remote_video_track(
+    _stream_id: &str,
+    _track_id: &str,
+    _layers: &[paracord_transport::stream::PublishedLayer],
+) {
+}
+
+/// Forget a remote track's SSRC binding and negotiated resolution (on
+/// `TrackUnpublish` or teardown).
+#[cfg(feature = "vpx")]
+pub fn unbind_remote_video_track(stream_id: &str, track_id: &str) {
+    let key = make_track_key(stream_id, track_id);
+    if let Ok(mut state) = video_dispatch_state().lock() {
+        state
+            .remote_ssrc_track_bindings
+            .retain(|_, bound| bound != &key);
+        state.remote_track_max_dimensions.remove(&key);
+    }
+}
+
+#[cfg(not(feature = "vpx"))]
+pub fn unbind_remote_video_track(_stream_id: &str, _track_id: &str) {}
+
+/// Whether a frame arriving on `ssrc` may claim to belong to `claimed_track_key`.
+///
+/// The relay authorizes only the SSRC (`resolve_published_track_for_ssrc`); the
+/// `stream_id`/`track_id` in the frame metadata are sender-chosen labels. This
+/// rejects a frame whenever the two disagree:
+///
+/// * the SSRC is bound to a *different* track — the hostile-relabel case; or
+/// * the claimed track has known SSRCs and this is not one of them — the same
+///   attack seen from the other side.
+///
+/// When neither side is bound the frame is allowed: that is the local self-view
+/// loopback and the brief window before the first `TrackPublish` lands, neither
+/// of which the check can adjudicate. Both attack directions above require the
+/// victim track to be known, which it is precisely when the attack matters (the
+/// viewer is subscribed to it).
+#[cfg(feature = "vpx")]
+fn video_frame_identity_is_authorized(ssrc: u32, claimed_track_key: &str) -> bool {
+    let Ok(state) = video_dispatch_state().lock() else {
+        return false;
+    };
+    if let Some(bound) = state.remote_ssrc_track_bindings.get(&ssrc) {
+        return bound == claimed_track_key;
+    }
+    if let Some(&subscribed_ssrc) = state.remote_track_ssrcs.get(claimed_track_key) {
+        if subscribed_ssrc == ssrc {
+            return true;
+        }
+    }
+    // This SSRC has no binding. Reject only if the claimed track does have
+    // one — then this SSRC is provably not part of that track's ladder.
+    !state
+        .remote_ssrc_track_bindings
+        .values()
+        .any(|bound| bound == claimed_track_key)
+}
+
+/// Negotiated (`TrackPublish`) resolution cap for a remote track, if announced.
+#[cfg(feature = "vpx")]
+fn track_max_dimensions(track_key: &str) -> Option<(u32, u32)> {
+    let state = video_dispatch_state().lock().ok()?;
+    state.remote_track_max_dimensions.get(track_key).copied()
 }
 
 /// Start the camera video encoder with an explicit capture configuration.
@@ -3419,7 +3617,7 @@ pub fn handle_video_datagram(
         let encoded = EncodedFrame {
             data: encoded_bytes,
             codec,
-            pts: metadata.frame_id as i64,
+            pts: frame_id_to_pts(metadata.frame_id),
             is_keyframe: metadata.is_keyframe,
             layer: None,
             width: 0,
@@ -3430,12 +3628,21 @@ pub fn handle_video_datagram(
             // when it stores the raw I420 result.
             colorspace: paracord_codec::video::ColorSpace::default(),
         };
-        // The reassembled metadata always carries the stream/track identity, so
-        // it is authoritative for keying. The SSRC map is only a fallback for
-        // datagrams whose metadata could not be recovered.
-        let track_key = Some(make_track_key(&metadata.stream_id.0, &metadata.track_id.0))
-            .or_else(|| resolve_video_track_key(header.ssrc));
-        if let Some(track_key) = track_key {
+        // The metadata's stream/track identity is what selects the reassembly
+        // pool, decode worker, decoder instance, surface binding and webview
+        // channel — but it is sender-chosen and unauthenticated. Only `ssrc` is
+        // authorized by the relay, so the two must agree before this frame is
+        // allowed to act as that track.
+        let track_key = make_track_key(&metadata.stream_id.0, &metadata.track_id.0);
+        if !video_frame_identity_is_authorized(header.ssrc, &track_key) {
+            tracing::debug!(
+                ssrc = header.ssrc,
+                claimed = %track_key,
+                "dropping video datagram whose claimed track identity does not match its ssrc"
+            );
+            return;
+        }
+        {
             // Hand the frame to this track's dedicated decode worker: it reorders
             // by frame_id, decodes strictly FIFO on the blocking pool, downscales
             // to the viewport, and stores/pushes the result. Overflow and
@@ -3517,6 +3724,18 @@ pub fn handle_video_stream_frame(
 
         let track_key = make_track_key(&metadata.stream_id.0, &metadata.track_id.0);
 
+        // Same identity cross-check as the datagram path: successful AEAD proves
+        // only that the frame was encrypted under a key installed for this SSRC,
+        // not that its self-declared stream/track identity is genuine.
+        if !video_frame_identity_is_authorized(header.ssrc, &track_key) {
+            tracing::debug!(
+                ssrc = header.ssrc,
+                claimed = %track_key,
+                "dropping keyframe stream whose claimed track identity does not match its ssrc"
+            );
+            return;
+        }
+
         // L1 backpressure / stale-stream culling: a keyframe superseded by a
         // newer one (which a faster or already-drained stream delivered first) is
         // dropped rather than decoded. Only keyframes gate here; a large delta on
@@ -3528,7 +3747,7 @@ pub fn handle_video_stream_frame(
         let encoded = EncodedFrame {
             data: decrypted,
             codec: transport_codec_to_codec(metadata.codec),
-            pts: metadata.frame_id as i64,
+            pts: frame_id_to_pts(metadata.frame_id),
             is_keyframe: metadata.is_keyframe,
             layer: None,
             width: 0,
@@ -3861,7 +4080,41 @@ fn reassemble_video_payload(
     );
     let now = Instant::now();
     let mut pool = video_reassembly_pool().lock().ok()?;
-    pool.retain(|_, state| now.duration_since(state.last_update) <= VIDEO_REASSEMBLY_TTL);
+
+    // The TTL sweep used to be a full O(n) `retain` on EVERY fragment, so a
+    // large pool made fragment handling quadratic — an attacker-controlled cost,
+    // since the pool key (stream:track:frame) is entirely attacker-chosen.
+    // Sweep on a timer instead, and additionally whenever the pool is over its
+    // entry cap (which is the only case where a stale entry actually matters).
+    let due_for_sweep = last_reassembly_sweep()
+        .lock()
+        .ok()
+        .map(|mut last| {
+            if now.duration_since(*last) >= VIDEO_REASSEMBLY_SWEEP_INTERVAL {
+                *last = now;
+                true
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false);
+    if due_for_sweep || pool.len() >= MAX_INFLIGHT_REASSEMBLY_FRAMES {
+        pool.retain(|_, state| now.duration_since(state.last_update) <= VIDEO_REASSEMBLY_TTL);
+    }
+
+    // Hard cap on concurrent partial frames. Each entry holds a slot vector
+    // sized from the wire's `fragment_count`, so without a cap a stream of
+    // single fragments with distinct (attacker-chosen) frame ids grows the pool
+    // without bound. Once at capacity, only fragments for frames already being
+    // reassembled are accepted.
+    if !pool.contains_key(&key) && pool.len() >= MAX_INFLIGHT_REASSEMBLY_FRAMES {
+        tracing::debug!(
+            ssrc = header.ssrc,
+            inflight = pool.len(),
+            "video reassembly pool at capacity; dropping fragment for a new frame"
+        );
+        return None;
+    }
 
     let state = pool
         .entry(key.clone())
@@ -3917,7 +4170,13 @@ fn decode_video_fragment_payload(
 ) -> Option<(VideoFrameMetadata, Vec<u8>)> {
     let mut cursor = decrypted_payload;
     if let Ok(metadata) = VideoFrameMetadata::decode(&mut cursor) {
-        if metadata.fragment_count == 0 || metadata.fragment_index >= metadata.fragment_count {
+        // `VideoFrameMetadata::decode` already enforces
+        // `0 < fragment_count <= MAX_FRAGMENTS_PER_FRAME` and
+        // `fragment_index < fragment_count`. This second cap is tighter still:
+        // it bounds a partial frame by what a whole frame is allowed to be
+        // (MAX_STREAM_FRAME_SIZE) at the smallest datagram a sender can use, so
+        // the slot vector can never exceed what a real frame would need.
+        if metadata.fragment_count as usize > MAX_REASSEMBLY_FRAGMENTS {
             return None;
         }
         return Some((metadata, cursor.to_vec()));
@@ -4270,6 +4529,147 @@ mod tests {
         assert_eq!(decoded.0.frame_id, 42);
         assert_eq!(decoded.0.codec, TransportVideoCodec::H264);
         assert_eq!(decoded.1, vec![1, 2, 3, 4]);
+    }
+
+    fn published_layer(
+        ssrc: u32,
+        width: u16,
+        height: u16,
+    ) -> paracord_transport::stream::PublishedLayer {
+        paracord_transport::stream::PublishedLayer {
+            layer_id: 0,
+            ssrc,
+            width: Some(width),
+            height: Some(height),
+            max_bitrate_kbps: Some(2500),
+            active: true,
+        }
+    }
+
+    /// The relay authorizes only the SSRC. A hostile peer whose own SSRC is
+    /// authorized must not be able to label its frames with another
+    /// participant's `stream_id:track_id` and have them render on that
+    /// participant's tile.
+    #[test]
+    fn frames_may_not_claim_another_tracks_identity() {
+        let victim = make_track_key("stream:victim", "camera");
+        let attacker = make_track_key("stream:attacker", "camera");
+        bind_remote_video_track(
+            "stream:victim",
+            "camera",
+            &[published_layer(1000, 1280, 720)],
+        );
+        bind_remote_video_track(
+            "stream:attacker",
+            "camera",
+            &[published_layer(2000, 1280, 720)],
+        );
+
+        // Each track's own SSRC is accepted.
+        assert!(video_frame_identity_is_authorized(1000, &victim));
+        assert!(video_frame_identity_is_authorized(2000, &attacker));
+
+        // The attacker's authorized SSRC claiming the victim's identity is not.
+        assert!(!video_frame_identity_is_authorized(2000, &victim));
+        // ...and neither is the reverse relabel.
+        assert!(!video_frame_identity_is_authorized(1000, &attacker));
+
+        // An SSRC nobody announced cannot borrow a known track's identity.
+        assert!(!video_frame_identity_is_authorized(3000, &victim));
+
+        unbind_remote_video_track("stream:victim", "camera");
+        unbind_remote_video_track("stream:attacker", "camera");
+    }
+
+    /// Simulcast must keep working: every layer's SSRC belongs to the track, so
+    /// a layer switch must not be read as a spoof.
+    #[test]
+    fn every_simulcast_layer_ssrc_is_authorized_for_its_track() {
+        let key = make_track_key("stream:sim", "screen");
+        bind_remote_video_track(
+            "stream:sim",
+            "screen",
+            &[
+                published_layer(10, 320, 180),
+                published_layer(11, 640, 360),
+                published_layer(12, 1280, 720),
+            ],
+        );
+        for ssrc in [10, 11, 12] {
+            assert!(
+                video_frame_identity_is_authorized(ssrc, &key),
+                "layer ssrc {ssrc} must be accepted for its own track"
+            );
+        }
+        // The negotiated cap is the largest advertised layer.
+        assert_eq!(track_max_dimensions(&key), Some((1280, 720)));
+
+        unbind_remote_video_track("stream:sim", "screen");
+        assert_eq!(track_max_dimensions(&key), None);
+        // With the binding gone the check can no longer adjudicate, so it stops
+        // rejecting rather than silently blackholing a re-publishing track.
+        assert!(video_frame_identity_is_authorized(10, &key));
+    }
+
+    /// `fragment_count` sizes a slot vector straight from the wire. The
+    /// protocol decoder caps it, and the pipeline applies a second, tighter cap
+    /// derived from the largest legal whole frame.
+    #[test]
+    fn implausible_fragment_counts_are_rejected_before_allocating() {
+        let header = MediaHeader {
+            version: 1,
+            track_type: TrackType::Video,
+            simulcast_layer: 0,
+            sequence: 0,
+            timestamp: 0,
+            ssrc: 1,
+            audio_level: 127,
+            key_epoch: 0,
+            payload_length: 0,
+            codec: TransportVideoCodec::Vp9.header_id(),
+        };
+
+        // Hand-build the wire bytes: `encode` cannot express these, which is
+        // exactly why the decoder must not trust them.
+        let build = |index: u16, count: u16| {
+            // stream_len=1 "s", track_len=1 "t"
+            let mut buf = vec![1u8, b's', 1u8, b't'];
+            buf.extend_from_slice(&0u64.to_be_bytes()); // frame_id
+            buf.push(0); // layer_id
+            buf.push(TransportVideoCodec::Vp9.header_id());
+            buf.extend_from_slice(&0u64.to_be_bytes()); // timestamp_us
+            buf.push(0); // is_keyframe
+            buf.extend_from_slice(&index.to_be_bytes());
+            buf.extend_from_slice(&count.to_be_bytes());
+            buf.extend_from_slice(&[0xAA; 16]);
+            buf
+        };
+
+        // The amplification case: one small datagram declaring 65535 fragments.
+        assert!(decode_video_fragment_payload(&header, &build(0, u16::MAX)).is_none());
+        // Degenerate counts.
+        assert!(decode_video_fragment_payload(&header, &build(0, 0)).is_none());
+        // Index outside the declared count would index past the slot vector.
+        assert!(decode_video_fragment_payload(&header, &build(4, 4)).is_none());
+        // A plausible fragmentation still parses.
+        assert!(decode_video_fragment_payload(&header, &build(2, 8)).is_some());
+    }
+
+    /// `frame_id` is an unauthenticated `u64`; `as i64` wrapped anything at or
+    /// above 2^63 to a negative pts and fed it to libvpx/libavcodec.
+    #[test]
+    fn frame_id_never_becomes_a_negative_pts() {
+        assert_eq!(frame_id_to_pts(0), 0);
+        assert_eq!(frame_id_to_pts(1234), 1234);
+        assert_eq!(frame_id_to_pts(i64::MAX as u64), i64::MAX);
+        assert_eq!(frame_id_to_pts(i64::MAX as u64 + 1), i64::MAX);
+        assert_eq!(frame_id_to_pts(u64::MAX), i64::MAX);
+        for id in [u64::MAX, u64::MAX - 1, 1 << 63, (1 << 63) + 77] {
+            assert!(
+                frame_id_to_pts(id) >= 0,
+                "frame_id {id} produced a negative pts"
+            );
+        }
     }
 
     #[test]

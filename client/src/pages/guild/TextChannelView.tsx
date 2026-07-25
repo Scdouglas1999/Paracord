@@ -4,6 +4,7 @@ import { MessageInput } from '../../components/message/MessageInput';
 import { useUIStore } from '../../stores/uiStore';
 import type { Channel, Message } from '../../types';
 import { displayName } from '../../lib/displayName';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 interface TextChannelViewProps {
   guildId: string | undefined;
@@ -61,7 +62,9 @@ export function TextChannelView({
             <span className="text-section uppercase text-text-muted">Parent channel</span>
             <span className="text-label text-text-secondary">#{parentChannel?.name || 'unknown'}</span>
           </div>
-          <MessageList channelId={parentChannel!.id} />
+          <ErrorBoundary variant="section" label="the message feed">
+            <MessageList channelId={parentChannel!.id} />
+          </ErrorBoundary>
         </div>
       </div>
     );
@@ -70,16 +73,19 @@ export function TextChannelView({
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <MessageList
-          channelId={channelId}
-          onReply={(msg: Message) =>
-            setReplyingTo({
-              id: msg.id,
-              author: displayName(msg.author),
-              content: msg.content || '',
-            })
-          }
-        />
+        {/* A single malformed message must degrade this panel, not the app. */}
+        <ErrorBoundary variant="section" label="the message feed">
+          <MessageList
+            channelId={channelId}
+            onReply={(msg: Message) =>
+              setReplyingTo({
+                id: msg.id,
+                author: displayName(msg.author),
+                content: msg.content || '',
+              })
+            }
+          />
+        </ErrorBoundary>
         <MessageInput
           channelId={channelId}
           guildId={guildId}

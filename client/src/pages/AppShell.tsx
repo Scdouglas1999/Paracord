@@ -20,6 +20,7 @@ import { LayoutTour } from '../components/onboarding/LayoutTour';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { InteractionModal } from '../components/message/InteractionModal';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 /**
  * AppShell — the "Rooms + Unified Stream" frame (layout-spec §1, §4, §5, §6).
@@ -197,7 +198,13 @@ export function AppShell() {
         <div className="flex min-h-0 flex-1">
           {/* Left rail — Unified Sidebar. Desktop renders inline (self-collapsing
               to the 64px icon rail); mobile renders it as an overlay below. */}
-          {!isMobile && <UnifiedSidebar />}
+          {/* The sidebar owns navigation; if it throws, the user must still be
+              able to reach the rest of the app rather than lose the whole shell. */}
+          {!isMobile && (
+            <ErrorBoundary variant="section" label="the sidebar">
+              <UnifiedSidebar />
+            </ErrorBoundary>
+          )}
 
           <main
             id="main-content"
@@ -253,7 +260,9 @@ export function AppShell() {
                 transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                 onClick={(e) => e.stopPropagation()}
               >
-                <UnifiedSidebar />
+                <ErrorBoundary variant="section" label="the sidebar">
+                  <UnifiedSidebar />
+                </ErrorBoundary>
               </motion.div>
             </motion.div>
           )}

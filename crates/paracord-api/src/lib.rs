@@ -76,6 +76,16 @@ pub fn build_router() -> Router<AppState> {
             "/_paracord/federation/v1/keys",
             get(routes::federation::get_keys),
         )
+        // Peer-facing discovery. `/api/v1/discovery/guilds` now requires an
+        // authenticated user (it was an anonymous N+1 amplification vector), so
+        // federated discovery moved here: same data, but authorized by the
+        // Ed25519 transport signature and subject to the peer allowlist,
+        // replay protection and per-peer rate limits the rest of federation
+        // ingest already uses.
+        .route(
+            "/_paracord/federation/v1/discovery/guilds",
+            get(routes::federation::peer_discovery_guilds),
+        )
         .route(
             "/_paracord/federation/v1/event",
             post(routes::federation::ingest_event),

@@ -317,6 +317,61 @@ fn event_to_ical(e: &paracord_db::scheduled_events::ScheduledEventRow) -> Option
     Some(lines.join("\r\n"))
 }
 
+/// Reject any channel reference that does not resolve to a channel inside the
+/// guild named on the request path.
+///
+/// Scheduled events carry two channel references: `channel_id` (the event
+/// location) and `event_channel_id` (the auto-provisioned discussion channel a
+/// background worker later deletes by id alone). Both were previously only
+/// integer-parsed, so a member with MANAGE_GUILD in *their own* guild could
+/// point either field at a channel in someone else's guild — and, in the
+/// `event_channel_id` case, have the worker delete that victim channel (and
+/// cascade its messages) once the event ended.
+async fn ensure_channel_in_guild(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: i64,
+    field: &str,
+) -> Result<(), ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or_else(|| ApiError::BadRequest(format!("Unknown {field}")))?;
+    if channel.guild_id() != Some(guild_id) {
+        return Err(ApiError::BadRequest(format!(
+            "{field} must reference a channel in this guild"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate the optional channel reference produced by `parse_optional_id`.
+async fn ensure_optional_channel_in_guild(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: Option<i64>,
+    field: &str,
+) -> Result<(), ApiError> {
+    match channel_id {
+        Some(id) => ensure_channel_in_guild(state, guild_id, id, field).await,
+        None => Ok(()),
+    }
+}
+
+/// Validate the patch-shaped channel reference produced by
+/// `parse_optional_id_patch` (absent / explicit null / explicit id).
+async fn ensure_channel_patch_in_guild(
+    state: &AppState,
+    guild_id: i64,
+    patch: Option<Option<i64>>,
+    field: &str,
+) -> Result<(), ApiError> {
+    match patch {
+        Some(Some(id)) => ensure_channel_in_guild(state, guild_id, id, field).await,
+        _ => Ok(()),
+    }
+}
+
 async fn ensure_manage_events(
     state: &AppState,
     guild_id: i64,
@@ -381,6 +436,9 @@ pub async fn create_event(
 
     let channel_id = parse_optional_id(body.channel_id.as_deref(), "channel_id")?;
     let event_channel_id = parse_optional_id(body.event_channel_id.as_deref(), "event_channel_id")?;
+    ensure_optional_channel_in_guild(&state, guild_id, channel_id, "channel_id").await?;
+    ensure_optional_channel_in_guild(&state, guild_id, event_channel_id, "event_channel_id")
+        .await?;
     let recurrence_rule = normalize_recurrence_rule(body.recurrence_rule.as_deref())?;
     let reminder_minutes = validate_reminder_minutes(body.reminder_minutes)?;
     let image_url = body
@@ -517,6 +575,8 @@ pub async fn update_event(
     let scheduled_end = normalize_optional_datetime_patch(&body.scheduled_end);
     let channel_id = parse_optional_id_patch(&body.channel_id, "channel_id")?;
     let event_channel_id = parse_optional_id_patch(&body.event_channel_id, "event_channel_id")?;
+    ensure_channel_patch_in_guild(&state, guild_id, channel_id, "channel_id").await?;
+    ensure_channel_patch_in_guild(&state, guild_id, event_channel_id, "event_channel_id").await?;
     let recurrence_rule = normalize_recurrence_rule_patch(&body.recurrence_rule)?;
     let reminder_minutes = validate_reminder_minutes_patch(body.reminder_minutes)?;
     let image_url = normalize_event_image_url_patch(&body.image_url)?;
@@ -539,6 +599,26 @@ pub async fn update_event(
     )
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    // `event_channel_created` marks a channel the background worker provisioned
+    // itself — and is the only thing that authorizes the worker to delete that
+    // channel when the event ends. Re-pointing `event_channel_id` at a
+    // pre-existing channel must therefore clear the flag; leaving it set would
+    // let an operator hand the worker an arbitrary channel to destroy.
+    let mut updated = updated;
+    if let Some(Some(new_channel_id)) = event_channel_id {
+        if updated.event_channel_created && existing.event_channel_id != Some(new_channel_id) {
+            paracord_db::scheduled_events::set_event_channel(
+                &state.db,
+                event_id,
+                new_channel_id,
+                false,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            updated.event_channel_created = false;
+        }
+    }
 
     let count = paracord_db::scheduled_events::get_rsvp_count(&state.db, event_id)
         .await

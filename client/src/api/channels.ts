@@ -240,8 +240,8 @@ export const channelApi = {
     getApi().delete(`/channels/${channelId}/followers/${targetChannelId}`),
 
   // Visibility
-  getVisibleChannels: (guildId: string) =>
-    getApi().get<{ channel_ids: string[] }>(`/guilds/${guildId}/channels/visible`),
+  getVisibleChannels: (guildId: string, config?: AxiosRequestConfig) =>
+    getApi().get<{ channel_ids: string[] }>(`/guilds/${guildId}/channels/visible`, config),
 
   // Permission overwrites
   getOverwrites: (channelId: string) =>

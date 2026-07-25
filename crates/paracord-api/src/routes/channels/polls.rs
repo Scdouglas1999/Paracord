@@ -121,8 +121,16 @@ pub async fn get_poll(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    ensure_channel_permissions(&state, &channel, auth.user_id, &[Permissions::VIEW_CHANNEL])
-        .await?;
+    // A poll is channel content: reading it (question, options, tallies) needs
+    // READ_MESSAGE_HISTORY just like every sibling content read, not merely the
+    // ability to see that the channel exists.
+    ensure_channel_permissions(
+        &state,
+        &channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL, Permissions::READ_MESSAGE_HISTORY],
+    )
+    .await?;
 
     let poll = paracord_db::polls::get_poll(&state.db, poll_id, auth.user_id)
         .await

@@ -15,10 +15,11 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration as StdDuration;
 use totp_rs;
 use uuid::Uuid;
@@ -55,6 +56,10 @@ const AUTH_GUARD_ACCOUNT_PREFIX: &str = "acct:";
 const AUTH_GUARD_IP_PREFIX: &str = "ip:";
 const AUTH_GUARD_DEVICE_PREFIX: &str = "device:";
 const AUTH_GUARD_USER_AGENT_PREFIX: &str = "ua:";
+/// How long a shared (`ip:`/`device:`/`ua:`) guard counter must sit idle — no
+/// failure recorded against it — before a successful authentication is allowed
+/// to clear it. See [`decayable_shared_guard_keys`].
+const AUTH_GUARD_SHARED_DECAY_IDLE_SECONDS: i64 = 900;
 const MAX_LOGIN_BODY_BYTES: usize = 16 * 1024;
 
 // In-memory challenge nonce store (nonce -> timestamp).
@@ -62,6 +67,23 @@ static CHALLENGE_STORE: OnceLock<Cache<String, i64>> = OnceLock::new();
 // Superseded refresh hashes (old hash -> session id) for reuse detection between
 // rotations when the DB row has not yet been updated. Durable detection uses
 // auth_sessions.previous_refresh_token_hash; see sessions.rs.
+//
+// LIMITATION (needs a DB-side table to close): durable detection is exactly one
+// generation deep — `previous_refresh_token_hash` is overwritten on every
+// rotation — and this cache is process-local, capped, and lost on restart. A
+// thief who sits on R1 while the victim rotates to R3 therefore gets a plain
+// 401 with no `auth.refresh.reuse` event and no session revocation: the theft
+// goes undetected. Closing it needs a durable table owned by paracord-db:
+//
+//   auth_session_refresh_history(
+//       token_hash  TEXT PRIMARY KEY,
+//       session_id  TEXT NOT NULL REFERENCES auth_sessions(id) ON DELETE CASCADE,
+//       user_id     BIGINT NOT NULL,
+//       superseded_at TEXT NOT NULL,
+//       expires_at  TEXT NOT NULL)   -- the session's own expiry
+//
+// written on every rotation, consulted by `rotate_auth_session` ahead of this
+// cache, and swept by the existing expired-session purge.
 static SUPERSEDED_REFRESH_HASHES: OnceLock<Cache<String, String>> = OnceLock::new();
 static AUTH_GUARD_OP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -344,15 +366,74 @@ async fn auth_guard_record_failure(
     auth_guard_maybe_cleanup(state, now).await;
 }
 
+/// Pick the shared guard keys a success is allowed to clear.
+///
+/// A shared key (`ip:`, `device:`, `ua:`) counts failures from every account
+/// reachable through that client, so one account's success must never zero it:
+/// registration is open by default, so an attacker would simply mint a throwaway
+/// account and log into it after every batch of guesses against the victim,
+/// deleting the `ip:` row and resetting the failure count — the only binding
+/// throttle, since `device:` is a client-supplied header the attacker rotates at
+/// will. That turns the exponential backoff into a no-op and leaves password and
+/// TOTP guessing capped only by the coarse per-IP request limiter.
+///
+/// Instead the shared counters decay: a success clears them only once they have
+/// gone quiet for [`AUTH_GUARD_SHARED_DECAY_IDLE_SECONDS`] and are not under an
+/// active lock. Legitimate clients (a NAT where someone fat-fingered a password
+/// earlier) recover; an attacker cannot, because their own failures keep the
+/// counter's `last_seen` fresh.
+fn decayable_shared_guard_keys(
+    rows: &[paracord_db::rate_limits::AuthGuardStateRow],
+    now: i64,
+) -> Vec<String> {
+    rows.iter()
+        .filter(|row| {
+            row.locked_until <= now
+                && now.saturating_sub(row.last_seen) >= AUTH_GUARD_SHARED_DECAY_IDLE_SECONDS
+        })
+        .map(|row| row.guard_key.clone())
+        .collect()
+}
+
 async fn auth_guard_record_success(
     state: &AppState,
     headers: &HeaderMap,
     peer_ip: Option<&str>,
     account_hint: Option<&str>,
 ) {
-    let keys = auth_guard_keys(headers, peer_ip, account_hint);
-    if let Err(err) = paracord_db::rate_limits::clear_auth_guard_keys(&state.db, &keys).await {
-        tracing::warn!("auth-guard success clear failed: {}", err);
+    let now = Utc::now().timestamp();
+    // Only the keys scoped to the account that just authenticated are cleared
+    // outright; shared keys decay (see `decayable_shared_guard_keys`).
+    let (account_keys, shared_keys): (Vec<String>, Vec<String>) =
+        auth_guard_keys(headers, peer_ip, account_hint)
+            .into_iter()
+            .partition(|key| key.starts_with(AUTH_GUARD_ACCOUNT_PREFIX));
+
+    if !account_keys.is_empty() {
+        if let Err(err) =
+            paracord_db::rate_limits::clear_auth_guard_keys(&state.db, &account_keys).await
+        {
+            tracing::warn!("auth-guard success clear failed: {}", err);
+        }
+    }
+
+    if shared_keys.is_empty() {
+        return;
+    }
+    let rows = match paracord_db::rate_limits::get_auth_guard_states(&state.db, &shared_keys).await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::warn!("auth-guard success decay lookup failed: {}", err);
+            return;
+        }
+    };
+    let decayed = decayable_shared_guard_keys(&rows, now);
+    if decayed.is_empty() {
+        return;
+    }
+    if let Err(err) = paracord_db::rate_limits::clear_auth_guard_keys(&state.db, &decayed).await {
+        tracing::warn!("auth-guard success decay failed: {}", err);
     }
 }
 
@@ -798,6 +879,25 @@ fn resolve_outbound_link_origin(
     Some(format!("{scheme}://{host}"))
 }
 
+// Cookie naming note (`__Host-` prefix):
+//
+// `__Host-` would make these cookies un-settable by a sibling subdomain (the
+// browser rejects any `__Host-` cookie carrying a `Domain`, or a `Path` other
+// than `/`, or missing `Secure`). It is not adopted here yet because:
+//   * the access and refresh cookies are deliberately path-scoped
+//     (`/api/v1`, `/api/v1/auth`), which `__Host-` forbids — adopting it means
+//     widening both to `Path=/`;
+//   * the name is shared with two places outside this module: the CSRF/cookie
+//     -auth checks in `paracord-api/src/lib.rs` and the client's cookie reader
+//     in `client/src/lib/authToken.ts`. A rename must land in all three at once
+//     or CSRF enforcement silently stops recognizing cookie-authenticated
+//     requests;
+//   * `__Host-` requires `Secure`, so plain-HTTP dev servers need a fallback
+//     name anyway.
+//
+// The ordering half of that attack — an injected duplicate cookie being picked
+// over the real one — is closed here regardless: `get_cookie_value` refuses to
+// read a name that appears more than once.
 fn build_refresh_cookie(token: &str, ttl_days: i64, secure: bool) -> String {
     let max_age = ttl_days.saturating_mul(24 * 60 * 60);
     let secure_attr = if secure { "; Secure" } else { "" };
@@ -867,18 +967,107 @@ fn build_csrf_cookie_clear(secure: bool) -> String {
     )
 }
 
+/// Read a single cookie value, refusing to guess when the name appears more
+/// than once.
+///
+/// A cookie planted for a parent domain (an attacker holding a sibling
+/// subdomain) arrives alongside the host's own cookie and the send order is not
+/// something a server may rely on. Taking the first match would let that
+/// attacker choose which refresh token the server rotates — session fixation.
+/// Ambiguity is treated as no credential at all.
 fn get_cookie_value(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
-    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
-    for part in raw.split(';') {
-        let trimmed = part.trim();
-        let Some((name, value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        if name == cookie_name {
-            return Some(value.to_string());
+    let mut found: Option<&str> = None;
+    for raw in headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+    {
+        for part in raw.split(';') {
+            let trimmed = part.trim();
+            let Some((name, value)) = trimmed.split_once('=') else {
+                continue;
+            };
+            if name == cookie_name {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(value);
+            }
         }
     }
-    None
+    found.map(str::to_string)
+}
+
+/// Normalize an origin-ish string to its lowercase `host[:port]` authority.
+///
+/// Scheme is deliberately dropped: cookies are not scheme-scoped, so whether the
+/// browser's cookie jar for this request can hold our `Set-Cookie` depends on
+/// the host, not on http-vs-https (which also differs harmlessly behind a
+/// TLS-terminating proxy we do not trust for headers).
+fn origin_authority(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("null") {
+        return None;
+    }
+    let without_scheme = trimmed
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(trimmed);
+    let authority = without_scheme.split('/').next()?.trim();
+    if authority.is_empty() {
+        return None;
+    }
+    Some(authority.to_ascii_lowercase())
+}
+
+/// True when the request's `Origin` names the same host this request was served
+/// on — i.e. the `HttpOnly` refresh cookie we are about to set is usable by this
+/// client on subsequent `/api/v1/auth` calls.
+fn request_can_use_refresh_cookie(
+    configured_public_url: Option<&str>,
+    headers: &HeaderMap,
+    peer_ip: Option<&str>,
+) -> bool {
+    let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .and_then(origin_authority)
+    else {
+        return false;
+    };
+    let server_origin = resolve_server_origin(configured_public_url, headers, peer_ip);
+    origin_authority(&server_origin)
+        .map(|server| server == origin)
+        .unwrap_or(false)
+}
+
+/// Decide whether the raw refresh token may also be echoed in the JSON body.
+///
+/// It is always delivered as an `HttpOnly` cookie. For a same-site browser
+/// client that cookie *is* the credential, and the body copy is pure downside:
+/// the client parks it in a module-scope variable / storage where any XSS on the
+/// page reads a 30-day credential straight out — exactly what `HttpOnly` exists
+/// to prevent.
+///
+/// Clients that genuinely cannot use the cookie still get it in the body:
+/// cross-origin browser clients (`SameSite=Lax` suppresses the cookie on
+/// cross-site requests — this covers the Vite dev proxy and multi-server
+/// connections) and native clients with no cookie jar bound to this origin
+/// (Tauri desktop, mobile, plain HTTP clients), all of which are identified by
+/// an `Origin` that is absent or names a different host. The capability signal
+/// is the `Origin` header itself, and it is one the client cannot forge: `Origin`
+/// is a forbidden header name in browsers, so script on the served page cannot
+/// spoof "I am cross-origin" to have the token handed back to it.
+fn refresh_token_for_body(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer_ip: Option<&str>,
+    raw_refresh: String,
+) -> Option<String> {
+    if request_can_use_refresh_cookie(state.config.public_url.as_deref(), headers, peer_ip) {
+        return None;
+    }
+    Some(raw_refresh)
 }
 
 fn random_token_hex(bytes: usize) -> String {
@@ -1214,8 +1403,12 @@ pub struct LoginRequest {
 pub struct AuthResponse {
     pub token: String,
     pub user: Value,
-    /// Refresh token returned in the body for cross-origin clients that cannot
-    /// use `HttpOnly` cookies (e.g. Vite dev proxy, Tauri, mobile).
+    /// Refresh token returned in the body **only** for clients that cannot use
+    /// the `HttpOnly` refresh cookie: cross-origin browsers (Vite dev proxy,
+    /// multi-server connections — `SameSite=Lax` drops the cookie there) and
+    /// native clients with no cookie jar for this origin (Tauri, mobile).
+    /// Same-site browser clients get `None` and must rely on the cookie; see
+    /// [`refresh_token_for_body`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
 }
@@ -1247,6 +1440,35 @@ pub async fn auth_options(State(state): State<AppState>) -> Json<AuthOptionsResp
         allow_username_login,
         require_email: state.config.require_email,
     })
+}
+
+/// True when `username` is already registered at discriminator 0 — the slot
+/// every password registration takes, and the one the unique constraint guards.
+/// The lookup is case-insensitive to match how username login resolves accounts.
+async fn username_is_registered(state: &AppState, username: &str) -> Result<bool, ApiError> {
+    paracord_db::users::get_user_auth_by_username(&state.db, username, 0)
+        .await
+        .map(|row| row.is_some())
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))
+}
+
+/// Best-effort check used to classify a failed insert: did the username or email
+/// get claimed underneath us? A lookup failure answers `false` so the caller
+/// falls back to reporting an internal error.
+async fn registration_identity_taken(state: &AppState, username: &str, email: &str) -> bool {
+    if username_is_registered(state, username)
+        .await
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if email.is_empty() {
+        return false;
+    }
+    paracord_db::users::get_user_by_email(&state.db, email)
+        .await
+        .map(|row| row.is_some())
+        .unwrap_or(false)
 }
 
 pub async fn register(
@@ -1355,6 +1577,25 @@ pub async fn register(
         }
     }
 
+    // Same treatment as a duplicate email: registrations always use
+    // discriminator 0, so a taken username violates `UNIQUE(username,
+    // discriminator)` and would otherwise surface as an unmapped DB error — a
+    // 500 for taken names against a 201 for free ones is a clean username
+    // enumeration oracle. The response is byte-identical to the duplicate-email
+    // one so neither field can be probed.
+    if username_is_registered(&state, &body.username).await? {
+        auth_guard_record_failure(
+            &state,
+            &headers,
+            Some(peer_ip.as_str()),
+            Some(&account_hint),
+        )
+        .await;
+        return Err(ApiError::BadRequest(
+            "Unable to complete registration".into(),
+        ));
+    }
+
     let password_hash = paracord_core::auth::hash_password(&body.password)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
@@ -1364,7 +1605,7 @@ pub async fn register(
     } else {
         normalized_email.clone()
     };
-    let mut user = paracord_db::users::create_user_as_first_admin(
+    let mut user = match paracord_db::users::create_user_as_first_admin(
         &state.db,
         id,
         &body.username,
@@ -1374,7 +1615,28 @@ pub async fn register(
         paracord_core::USER_FLAG_ADMIN,
     )
     .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    {
+        Ok(user) => user,
+        Err(err) => {
+            // The checks above are not atomic with the insert: two concurrent
+            // registrations for the same username/email race here. Answer with
+            // the same generic message rather than leaking the collision as a
+            // 500 (or as a distinguishable error at all).
+            if registration_identity_taken(&state, &body.username, &normalized_email).await {
+                auth_guard_record_failure(
+                    &state,
+                    &headers,
+                    Some(peer_ip.as_str()),
+                    Some(&account_hint),
+                )
+                .await;
+                return Err(ApiError::BadRequest(
+                    "Unable to complete registration".into(),
+                ));
+            }
+            return Err(ApiError::Internal(anyhow::anyhow!(err.to_string())));
+        }
+    };
 
     auto_join_public_spaces(&state, user.id).await?;
 
@@ -1496,7 +1758,12 @@ pub async fn register(
         Json(AuthResponse {
             token,
             user: user_json(&user),
-            refresh_token: Some(raw_refresh),
+            refresh_token: refresh_token_for_body(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                raw_refresh,
+            ),
         }),
     ))
 }
@@ -1719,7 +1986,12 @@ pub async fn login(
         Json(AuthResponse {
             token,
             user: user_auth_json(&user),
-            refresh_token: Some(raw_refresh),
+            refresh_token: refresh_token_for_body(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                raw_refresh,
+            ),
         }),
     ))
 }
@@ -1760,13 +2032,18 @@ pub async fn refresh(
         None,
     )
     .await;
+    let body =
+        match refresh_token_for_body(&state, &headers, Some(peer_ip.as_str()), new_raw_refresh) {
+            Some(raw_refresh) => json!({ "token": token, "refresh_token": raw_refresh }),
+            None => json!({ "token": token }),
+        };
     Ok((
         AppendHeaders([
             (header::SET_COOKIE, header_value(&access_cookie)?),
             (header::SET_COOKIE, header_value(&refresh_cookie)?),
             (header::SET_COOKIE, header_value(&csrf_cookie)?),
         ]),
-        Json(json!({ "token": token, "refresh_token": new_raw_refresh })),
+        Json(body),
     ))
 }
 
@@ -2008,7 +2285,12 @@ pub async fn attach_public_key(
         Json(AuthResponse {
             token,
             user: user_json(&user),
-            refresh_token: Some(raw_refresh),
+            refresh_token: refresh_token_for_body(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                raw_refresh,
+            ),
         }),
     ))
 }
@@ -2324,6 +2606,15 @@ pub async fn verify_email(
 
 const MFA_BACKUP_CODE_COUNT: usize = 10;
 const MFA_ISSUER: &str = "Paracord";
+/// TOTP time step, in seconds. Must match the value handed to `totp_rs::TOTP`.
+const TOTP_STEP_SECONDS: u64 = 30;
+/// Accepted clock drift, in steps, in either direction. Must match the skew
+/// handed to `totp_rs::TOTP`.
+const TOTP_SKEW_STEPS: u64 = 1;
+/// How long a consumed TOTP step is remembered. Comfortably longer than the
+/// ±1-step acceptance window so a replay can never outlive the record.
+const TOTP_REPLAY_RETENTION_SECONDS: i64 = 300;
+const TOTP_REPLAY_PRUNE_INTERVAL: u64 = 256;
 
 /// Encrypt a TOTP secret before storing in the database. In production
 /// (public_url configured) at-rest encryption is required; dev may store plaintext.
@@ -2399,14 +2690,101 @@ fn totp_for_secret(secret_base32: &str, account_name: &str) -> Result<totp_rs::T
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("TOTP init error: {}", e)))
 }
 
-fn verify_totp_code(secret_base32: &str, code: &str, account_name: &str) -> Result<bool, ApiError> {
+/// Locate the time step whose code equals `code`, within ±[`TOTP_SKEW_STEPS`]
+/// of `now_secs`. Mirrors what `totp_rs::TOTP::check` accepts, but reports
+/// *which* step matched so the step can be consumed.
+fn matching_totp_step(totp: &totp_rs::TOTP, code: &str, now_secs: u64) -> Option<u64> {
+    let candidate = code.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    let current = now_secs / TOTP_STEP_SECONDS;
+    let first = current.saturating_sub(TOTP_SKEW_STEPS);
+    let last = current.saturating_add(TOTP_SKEW_STEPS);
+    (first..=last).find(|step| {
+        constant_time_equal(
+            &totp.generate(step.saturating_mul(TOTP_STEP_SECONDS)),
+            candidate,
+        )
+    })
+}
+
+/// Per-user high-water mark of accepted TOTP steps: `user_id -> (step, seen_at)`.
+///
+/// RFC 6238 §5.2 requires a one-time-password to be accepted at most once.
+/// Without this, a code observed by an attacker (phishing relay, shoulder-surf,
+/// clipboard or keylogger capture) stays valid for the whole ±1-step window —
+/// roughly 90 seconds — and replaying it completes a login.
+///
+/// Steps advance monotonically with wall-clock time, so a single high-water mark
+/// per user is enough: anything at or below it has already been spent. Entries
+/// are pruned once they age past the acceptance window.
+static TOTP_LAST_ACCEPTED_STEP: OnceLock<Mutex<HashMap<i64, (u64, i64)>>> = OnceLock::new();
+static TOTP_REPLAY_OP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn totp_last_accepted_steps() -> &'static Mutex<HashMap<i64, (u64, i64)>> {
+    TOTP_LAST_ACCEPTED_STEP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Consume `step` for `user_id`, returning false when it has already been used.
+///
+/// This is process-local state: it enforces single-use within the running
+/// server, which covers the whole acceptance window for a single-instance
+/// deployment and degrades safely (a restart mid-window loses at most one
+/// user's high-water mark).
+///
+/// Making it durable — across restarts and across a horizontally scaled
+/// deployment — needs one DB-side addition, deliberately left to the crate that
+/// owns the schema:
+///   * `mfa_configs.last_used_step BIGINT NOT NULL DEFAULT 0`
+///   * `paracord_db::mfa::claim_totp_step(pool, user_id, step) -> Result<bool>`
+///     implemented as a compare-and-set —
+///     `UPDATE mfa_configs SET last_used_step = $2
+///      WHERE user_id = $1 AND last_used_step < $2` — returning
+///     `rows_affected() == 1`.
+///
+/// This function then becomes the fallback used when that call is unavailable.
+fn claim_totp_step(user_id: i64, step: u64, now: i64) -> bool {
+    let mut steps = totp_last_accepted_steps()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let op = TOTP_REPLAY_OP_COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    if op % TOTP_REPLAY_PRUNE_INTERVAL == 0 {
+        steps.retain(|_, (_, seen_at)| {
+            now.saturating_sub(*seen_at) <= TOTP_REPLAY_RETENTION_SECONDS
+        });
+    }
+
+    match steps.get(&user_id) {
+        Some((last_step, _)) if *last_step >= step => false,
+        _ => {
+            steps.insert(user_id, (step, now));
+            true
+        }
+    }
+}
+
+/// Verify a TOTP code for `user_id` and consume its step so the same code cannot
+/// be presented twice inside the acceptance window.
+fn verify_totp_code(
+    user_id: i64,
+    secret_base32: &str,
+    code: &str,
+    account_name: &str,
+) -> Result<bool, ApiError> {
     let totp = totp_for_secret(secret_base32, account_name)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     // Allow 1 step (30s) of drift in either direction
-    Ok(totp.check(code, now))
+    let Some(step) = matching_totp_step(&totp, code, now) else {
+        return Ok(false);
+    };
+    Ok(claim_totp_step(user_id, step, now as i64))
 }
 
 fn generate_backup_codes() -> Vec<String> {
@@ -2520,7 +2898,7 @@ pub async fn mfa_verify(
     }
 
     let totp_secret = decrypt_totp_secret(&state, &mfa_config.totp_secret)?;
-    let valid = verify_totp_code(&totp_secret, &body.code, &user.email)?;
+    let valid = verify_totp_code(user.id, &totp_secret, &body.code, &user.email)?;
     if !valid {
         return Err(ApiError::BadRequest("Invalid TOTP code".into()));
     }
@@ -2587,7 +2965,7 @@ pub async fn mfa_disable(
     let code_hash = sha256_hex(&normalized_code);
 
     let totp_secret = decrypt_totp_secret(&state, &mfa_config.totp_secret)?;
-    let valid_totp = verify_totp_code(&totp_secret, &body.code, &user.email)?;
+    let valid_totp = verify_totp_code(user.id, &totp_secret, &body.code, &user.email)?;
     let valid_backup = if !valid_totp {
         paracord_db::mfa::consume_backup_code(&state.db, user.id, &code_hash, now)
             .await
@@ -2699,7 +3077,7 @@ pub async fn mfa_login(
 
     // Try TOTP code first
     let code = body.code.trim();
-    let valid_totp = verify_totp_code(&totp_secret, code, &user.email)?;
+    let valid_totp = verify_totp_code(user_id, &totp_secret, code, &user.email)?;
 
     if !valid_totp {
         // Try as backup code
@@ -2780,7 +3158,12 @@ pub async fn mfa_login(
         Json(AuthResponse {
             token,
             user: user_json(&user),
-            refresh_token: Some(raw_refresh),
+            refresh_token: refresh_token_for_body(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                raw_refresh,
+            ),
         }),
     ))
 }
@@ -3039,7 +3422,12 @@ pub async fn verify(
         Json(AuthResponse {
             token,
             user: user_json(&user),
-            refresh_token: Some(raw_refresh),
+            refresh_token: refresh_token_for_body(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                raw_refresh,
+            ),
         }),
     ))
 }
@@ -3048,11 +3436,13 @@ pub async fn verify(
 mod tests {
     use super::{
         auth_guard_hard_blocked, auth_guard_keys, build_csrf_cookie, build_refresh_cookie,
-        decrypt_totp_secret_with_cryptor, get_cookie_value, normalize_email_for_auth,
-        parse_login_form_value, parse_login_json_value, parse_login_request,
-        parse_username_with_discriminator, resolve_outbound_link_origin, resolve_server_origin,
-        should_use_secure_cookie_with_public_url, synthesized_local_email,
-        username_login_effective, HeaderMap, LoginRequest,
+        claim_totp_step, decayable_shared_guard_keys, decrypt_totp_secret_with_cryptor,
+        get_cookie_value, matching_totp_step, normalize_email_for_auth, parse_login_form_value,
+        parse_login_json_value, parse_login_request, parse_username_with_discriminator,
+        request_can_use_refresh_cookie, resolve_outbound_link_origin, resolve_server_origin,
+        should_use_secure_cookie_with_public_url, synthesized_local_email, totp_for_secret,
+        username_login_effective, verify_totp_code, HeaderMap, LoginRequest,
+        AUTH_GUARD_SHARED_DECAY_IDLE_SECONDS, TOTP_STEP_SECONDS,
     };
     use axum::http::{header, HeaderValue};
     use paracord_db::rate_limits::AuthGuardStateRow;
@@ -3132,6 +3522,182 @@ mod tests {
         // be used to lock all of them out at once.
         let shared_user_agent = vec![guard_row("ua:shared-browser", now + 300)];
         assert!(!auth_guard_hard_blocked(&shared_user_agent, now));
+    }
+
+    #[test]
+    fn a_fresh_success_never_clears_shared_guard_counters() {
+        let now = 1_000_000;
+        // Failures recorded moments ago: whoever just authenticated does not get
+        // to wipe them. Otherwise an attacker registers a throwaway account,
+        // logs into it after every batch of wrong passwords against the victim,
+        // and the ip: counter — the only key that can hard-block — never
+        // reaches its lockout threshold.
+        let rows = vec![
+            AuthGuardStateRow {
+                guard_key: "ip:203.0.113.4".to_string(),
+                failures: 4,
+                locked_until: 0,
+                last_seen: now - 2,
+            },
+            AuthGuardStateRow {
+                guard_key: "device:abc-123".to_string(),
+                failures: 4,
+                locked_until: 0,
+                last_seen: now - 30,
+            },
+        ];
+        assert!(decayable_shared_guard_keys(&rows, now).is_empty());
+    }
+
+    #[test]
+    fn idle_shared_guard_counters_decay_on_success() {
+        let now = 1_000_000;
+        let idle = AuthGuardStateRow {
+            guard_key: "ip:203.0.113.4".to_string(),
+            failures: 4,
+            locked_until: 0,
+            last_seen: now - AUTH_GUARD_SHARED_DECAY_IDLE_SECONDS,
+        };
+        // Still locked: never cleared, even if the last failure is old enough.
+        let locked = AuthGuardStateRow {
+            guard_key: "device:abc-123".to_string(),
+            failures: 9,
+            locked_until: now + 60,
+            last_seen: now - AUTH_GUARD_SHARED_DECAY_IDLE_SECONDS * 2,
+        };
+        let decayed = decayable_shared_guard_keys(&[idle, locked], now);
+        assert_eq!(decayed, vec!["ip:203.0.113.4".to_string()]);
+    }
+
+    #[test]
+    fn totp_step_is_single_use_within_the_acceptance_window() {
+        // RFC 6238 §5.2: a code may be accepted at most once. An attacker who
+        // observes one has ~90s of ±1-step window to replay it.
+        let user = -9_001;
+        let step = 57_000_000_u64;
+        assert!(claim_totp_step(user, step, 1_710_000_000));
+        assert!(!claim_totp_step(user, step, 1_710_000_010));
+        // An earlier step inside the same window is spent too.
+        assert!(!claim_totp_step(user, step - 1, 1_710_000_010));
+        // The next step still works, and a different user is unaffected.
+        assert!(claim_totp_step(user, step + 1, 1_710_000_030));
+        assert!(claim_totp_step(-9_011, step, 1_710_000_030));
+    }
+
+    #[test]
+    fn totp_code_is_rejected_on_replay() {
+        let secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+        let account = "replay@example.com";
+        let totp = totp_for_secret(secret, account).expect("totp");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+        let code = totp.generate(now);
+        let user = -9_002;
+
+        assert!(verify_totp_code(user, secret, &code, account).expect("first verify"));
+        assert!(
+            !verify_totp_code(user, secret, &code, account).expect("replay verify"),
+            "a TOTP code must not be accepted twice inside its acceptance window"
+        );
+        // Same code, different account: still valid (the guard is per user).
+        assert!(verify_totp_code(-9_003, secret, &code, account).expect("other user"));
+    }
+
+    #[test]
+    fn matching_totp_step_covers_the_skew_window_only() {
+        let secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+        let totp = totp_for_secret(secret, "skew@example.com").expect("totp");
+        let now = 1_710_000_000_u64;
+        let current = now / TOTP_STEP_SECONDS;
+
+        for offset in [-1_i64, 0, 1] {
+            let step = (current as i64 + offset) as u64;
+            let code = totp.generate(step * TOTP_STEP_SECONDS);
+            assert_eq!(
+                matching_totp_step(&totp, &code, now),
+                Some(step),
+                "step offset {offset} must be accepted and reported"
+            );
+        }
+        // Two steps out is outside the window.
+        let stale = totp.generate((current - 2) * TOTP_STEP_SECONDS);
+        assert_eq!(matching_totp_step(&totp, &stale, now), None);
+        assert_eq!(matching_totp_step(&totp, "", now), None);
+    }
+
+    #[test]
+    fn refresh_cookie_is_the_credential_for_same_site_clients() {
+        // Same-site browser client: the HttpOnly cookie works, so the body copy
+        // (which any XSS on the page can read) must be withheld.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://chat.example.com"),
+        );
+        assert!(request_can_use_refresh_cookie(
+            Some("https://chat.example.com"),
+            &headers,
+            None
+        ));
+        // Scheme differences do not matter — cookies are not scheme-scoped.
+        let mut http_origin = HeaderMap::new();
+        http_origin.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://chat.example.com"),
+        );
+        assert!(request_can_use_refresh_cookie(
+            Some("https://chat.example.com"),
+            &http_origin,
+            None
+        ));
+    }
+
+    #[test]
+    fn cross_origin_and_native_clients_still_receive_the_body_refresh_token() {
+        // Cross-origin browser (Vite dev proxy, multi-server): SameSite=Lax
+        // suppresses the cookie, so the body copy is the only usable credential.
+        let mut cross = HeaderMap::new();
+        cross.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://localhost:1420"),
+        );
+        assert!(!request_can_use_refresh_cookie(
+            Some("https://chat.example.com"),
+            &cross,
+            None
+        ));
+
+        // Native client / non-browser: no Origin at all.
+        let native = HeaderMap::new();
+        assert!(!request_can_use_refresh_cookie(
+            Some("https://chat.example.com"),
+            &native,
+            None
+        ));
+
+        // Opaque origin (sandboxed iframe, some webviews).
+        let mut opaque = HeaderMap::new();
+        opaque.insert(header::ORIGIN, HeaderValue::from_static("null"));
+        assert!(!request_can_use_refresh_cookie(
+            Some("https://chat.example.com"),
+            &opaque,
+            None
+        ));
+    }
+
+    #[test]
+    fn cookie_lookup_rejects_duplicate_names() {
+        // An attacker on a sibling subdomain can set `paracord_refresh` for the
+        // parent domain; both copies then arrive and send order is not
+        // dependable. Refuse rather than pick one (session fixation).
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("paracord_refresh=attacker; paracord_refresh=victim"),
+        );
+        assert_eq!(get_cookie_value(&headers, "paracord_refresh"), None);
     }
 
     #[test]

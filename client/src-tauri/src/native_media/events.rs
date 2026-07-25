@@ -224,6 +224,27 @@ fn decrypt_failure_counters() -> &'static Mutex<HashMap<u32, u32>> {
 #[allow(dead_code)]
 const DECRYPT_FAILURE_ALERT_THRESHOLD: u32 = 50;
 
+/// Upper bound on tracked decrypt-failure counters.
+///
+/// The key is the raw `header.ssrc` of an incoming packet, and an entry is only
+/// removed on a *successful* decrypt — which by construction never happens for
+/// an SSRC we hold no key for. The relay forwards audio bearing any SSRC from a
+/// subscribed sender, so producing new keys costs an attacker nothing and no key
+/// material is needed: the map grew toward 2^32 entries. A call has a handful of
+/// SSRCs; 1024 is far beyond any legitimate need.
+#[allow(dead_code)]
+const MAX_DECRYPT_FAILURE_COUNTERS: usize = 1024;
+
+/// Largest `layers` vector accepted from a `TrackPublish` / `TrackLayers`.
+///
+/// The simulcast ladder is three rungs. Each accepted layer installs an
+/// `Aes128Gcm` instance in the frame decryptor and (for audio) an Opus decoder
+/// plus jitter buffer, so an unbounded vector off the wire is a direct
+/// memory-amplification primitive against this client. The relay applies the
+/// same cap; this is the receiver-side half, because a compromised relay is
+/// exactly the threat the client-side E2EE exists for.
+const MAX_TRACK_LAYERS: usize = 8;
+
 /// Record the outcome of one media-datagram decrypt attempt for `ssrc`, emitting
 /// `media_decrypt_failing` once a run of [`DECRYPT_FAILURE_ALERT_THRESHOLD`]
 /// consecutive failures is reached. Without this an undelivered/rotated E2EE key
@@ -241,6 +262,13 @@ pub fn note_decrypt_result(app: &tauri::AppHandle, ssrc: u32, success: bool) {
         .unwrap_or_else(|e| e.into_inner());
     if success {
         counters.remove(&ssrc);
+        return;
+    }
+    // Only *existing* counters are advanced once the map is full: a new,
+    // never-seen SSRC cannot add an entry. Since an entry is removed only on a
+    // successful decrypt, an SSRC that never decrypts would otherwise stay
+    // forever, and the SSRC is picked by whoever sends the packet.
+    if !counters.contains_key(&ssrc) && counters.len() >= MAX_DECRYPT_FAILURE_COUNTERS {
         return;
     }
     let count = counters.entry(ssrc).or_insert(0);
@@ -496,10 +524,28 @@ async fn handle_control_message(
             }
         }
         ControlMessage::TrackPublish { track } => {
+            if track.layers.len() > MAX_TRACK_LAYERS {
+                tracing::warn!(
+                    stream_id = %track.stream_id.0,
+                    track_id = %track.track_id.0,
+                    layers = track.layers.len(),
+                    "discarding track publish with an implausible layer count"
+                );
+                return;
+            }
             {
                 let mut registry = stream_registry.lock().await;
                 registry.publish_track(track.clone());
             }
+            // Record the relay-announced SSRC→track binding. This is the only
+            // authorized statement of which SSRC belongs to which track, and it
+            // is what the video pipeline cross-checks incoming frame metadata
+            // against before letting a frame act as that track.
+            super::video_pipeline::bind_remote_video_track(
+                &track.stream_id.0,
+                &track.track_id.0,
+                &track.layers,
+            );
             apply_delivered_track_key(
                 stream_registry,
                 frame_decryptor,
@@ -516,6 +562,7 @@ async fn handle_control_message(
         } => {
             let mut registry = stream_registry.lock().await;
             registry.unpublish_track(&stream_id, &track_id);
+            super::video_pipeline::unbind_remote_video_track(&stream_id.0, &track_id.0);
             use tauri::Emitter;
             let _ = app.emit(
                 "media_track_unpublish",
@@ -530,6 +577,15 @@ async fn handle_control_message(
             track_id,
             layers,
         } => {
+            if layers.len() > MAX_TRACK_LAYERS {
+                tracing::warn!(
+                    stream_id = %stream_id.0,
+                    track_id = %track_id.0,
+                    layers = layers.len(),
+                    "discarding track layer update with an implausible layer count"
+                );
+                return;
+            }
             let maybe_track = {
                 let mut registry = stream_registry.lock().await;
                 if let Some(mut track) = registry.get_published_track(&stream_id, &track_id) {
@@ -541,6 +597,11 @@ async fn handle_control_message(
                 }
             };
             if let Some(track) = maybe_track {
+                super::video_pipeline::bind_remote_video_track(
+                    &stream_id.0,
+                    &track_id.0,
+                    &track.layers,
+                );
                 apply_delivered_track_key(stream_registry, frame_decryptor, &stream_id, &track_id)
                     .await;
                 use tauri::Emitter;

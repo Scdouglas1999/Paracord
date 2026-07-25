@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "test": "npm run typecheck && npm run test:unit",
     "test:unit": "vitest run",
     "test:unit:coverage": "vitest run --coverage",
@@ -52,6 +54,7 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/vite": "^4.0.0",
     "@tauri-apps/cli": "^2.11.4",
@@ -64,10 +67,15 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "@vitest/coverage-v8": "^4.0.18",
+    "eslint": "^9.39.5",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^16.5.0",
     "jsdom": "^28.1.0",
     "playwright": "^1.58.2",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.65.0",
     "vite": "^6.0.0",
     "vite-plugin-pwa": "^1.2.0",
     "vitest": "^4.0.18"

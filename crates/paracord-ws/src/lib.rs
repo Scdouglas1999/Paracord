@@ -17,8 +17,10 @@ pub use compression::WsCompressor;
 #[doc(hidden)]
 pub use handler::{
     run_session, test_acquire_preauth_slot, test_acquire_user_connection_slot,
+    test_buffered_event_count, test_drain_event_buffer, test_event_buffer_is_disconnected,
     test_insert_cached_session, test_max_connections_per_user, test_max_preauth_per_ip,
-    test_push_buffered_event, test_release_preauth_slot, wait_for_identify_or_resume,
+    test_push_buffered_event, test_release_event_buffer, test_release_preauth_slot,
+    wait_for_identify_or_resume,
 };
 #[doc(hidden)]
 pub use session::Session;

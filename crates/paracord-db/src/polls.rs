@@ -73,6 +73,10 @@ pub async fn create_poll(
     allow_multiselect: bool,
     expires_at: Option<DateTime<Utc>>,
 ) -> Result<PollRow, DbError> {
+    // The poll and its options are one object. Inserted separately without a
+    // transaction, a failure between them leaves a poll with no options (or a
+    // partial ballot) permanently attached to a posted message.
+    let mut tx = pool.begin().await?;
     let row = sqlx::query_as::<_, PollRow>(
         "INSERT INTO polls (id, message_id, channel_id, question, allow_multiselect, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -84,7 +88,7 @@ pub async fn create_poll(
     .bind(question)
     .bind(allow_multiselect)
     .bind(expires_at.map(datetime_to_db_text))
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     for (i, opt) in options.iter().enumerate() {
@@ -98,9 +102,10 @@ pub async fn create_poll(
         .bind(&opt.text)
         .bind(opt.emoji.as_deref())
         .bind(i as i32)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
+    tx.commit().await?;
 
     Ok(row)
 }
@@ -210,13 +215,19 @@ pub async fn add_vote(
     option_id: i64,
     user_id: i64,
 ) -> Result<(), DbError> {
+    // Read the ballot rules, clear the previous choice and record the new one as
+    // one unit. Split across three autocommitted statements, a single-select
+    // voter who raced with themselves (double-click, retry) could end up with
+    // zero votes recorded, or with two after a mid-sequence failure.
+    let mut tx = pool.begin().await?;
+
     // Check if poll allows multiselect
     let poll = sqlx::query_as::<_, PollRow>(
         "SELECT id, message_id, channel_id, question, allow_multiselect, expires_at, created_at
          FROM polls WHERE id = $1",
     )
     .bind(poll_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(DbError::NotFound)?;
 
@@ -225,7 +236,7 @@ pub async fn add_vote(
         sqlx::query("DELETE FROM poll_votes WHERE poll_id = $1 AND user_id = $2")
             .bind(poll_id)
             .bind(user_id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
     }
 
@@ -237,9 +248,10 @@ pub async fn add_vote(
     .bind(poll_id)
     .bind(option_id)
     .bind(user_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(())
 }
 

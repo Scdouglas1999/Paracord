@@ -257,12 +257,37 @@ async fn create_guild_command(
     Ok((payload, cmd_id))
 }
 
+/// Read the raw interaction token off the gateway, the way a real bot does.
+///
+/// The HTTP response to the invoker deliberately omits `token`: it is a bearer
+/// credential for acting *as the bot*, and only the bot receives it (via the
+/// INTERACTION_CREATE dispatch).
+async fn interaction_token_from_gateway(
+    events: &mut tokio::sync::broadcast::Receiver<paracord_core::events::ServerEvent>,
+) -> anyhow::Result<String> {
+    loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .context("timed out waiting for INTERACTION_CREATE")??;
+        if event.event_type != "INTERACTION_CREATE" {
+            continue;
+        }
+        return Ok(event
+            .payload
+            .get("token")
+            .and_then(Value::as_str)
+            .context("INTERACTION_CREATE should carry the raw token for the bot")?
+            .to_string());
+    }
+}
+
 async fn invoke_slash_command(
     ctx: &TestContext,
     command_name: &str,
     guild_id: &str,
     channel_id: &str,
 ) -> anyhow::Result<(Value, String)> {
+    let mut events = ctx._test_app.event_bus.subscribe_system();
     let (status, payload) = ctx
         .request_json(
             Method::POST,
@@ -281,10 +306,11 @@ async fn invoke_slash_command(
         StatusCode::CREATED,
         "invoke slash command failed: {payload}"
     );
-    let token = payload["token"]
-        .as_str()
-        .context("interaction token should be a string")?
-        .to_string();
+    assert!(
+        payload.get("token").is_none(),
+        "the invoker's HTTP response must never carry the interaction token: {payload}"
+    );
+    let token = interaction_token_from_gateway(&mut events).await?;
     Ok((payload, token))
 }
 
@@ -1912,8 +1938,8 @@ async fn component_interaction_type3_dispatches() -> anyhow::Result<()> {
         "interaction should target the bot that authored the message"
     );
     assert!(
-        component_interaction["token"].is_string(),
-        "should have token"
+        component_interaction.get("token").is_none(),
+        "the invoker must not receive the bot's interaction token: {component_interaction}"
     );
 
     Ok(())

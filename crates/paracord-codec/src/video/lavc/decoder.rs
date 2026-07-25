@@ -30,6 +30,15 @@ const MAX_DECODE_PIXELS: u32 = 7680 * 4320;
 /// same-resolution NV12→I420 reformat, but a valid flag is required).
 const SWS_BILINEAR: c_int = 2;
 
+/// Slack allocated past the exact I420 frame size for the swscale destination.
+///
+/// libswscale's vectorized output kernels may write a partial SIMD register
+/// past the last requested byte of the final row (this is why `av_image_alloc`
+/// pads its allocations). The buffer is truncated back to the exact frame size
+/// before it is returned, so this is invisible to consumers; it exists purely so
+/// such a tail write can never land outside the allocation.
+const SWS_DST_TAIL_PADDING: usize = 64;
+
 /// Which decode path was selected at construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DecodeBackend {
@@ -213,11 +222,36 @@ impl LavcDecoder {
     ) -> Result<DecodedFrame, VideoError> {
         let width = (*src).width as u32;
         let height = (*src).height as u32;
-        bound_decode_resolution(width, height)?;
+        self.bound_decode_resolution(width, height)?;
         // Carry the source bitstream's signaled matrix through the plane repack
         // (NV12/YUV→I420 leaves the matrix unchanged) so the consumer converts
         // to RGB with the right coefficients (contract C1).
         let colorspace = map_av_colorspace((*src).colorspace);
+
+        // I420 has exactly half-resolution chroma planes, so the repack target
+        // must be even in BOTH axes. `width`/`height` come from a remote,
+        // untrusted bitstream and are NOT guaranteed even: H.264 conveys its
+        // display size via `frame_crop_*_offset` and libavcodec applies the
+        // crop, so a peer can legally publish e.g. 1920x1079. For
+        // AV_PIX_FMT_YUV420P swscale writes ceil(h/2) chroma rows of ceil(w/2)
+        // bytes; sizing the destination with a truncating `w/2 * h/2` while
+        // handing swscale the full source height let it write up to a whole
+        // chroma row (4096 bytes at the 8K cap) of attacker-controlled data past
+        // the end of the heap allocation.
+        //
+        // Clamping the swscale *destination* to even makes the allocation, the
+        // strides and what swscale actually writes agree exactly, and preserves
+        // the project-wide invariant that a decoded I420 frame is even-sized —
+        // `PixelFormat::frame_size` and every downstream consumer compute chroma
+        // as a truncating `w/2 * h/2`. In the overwhelmingly common even case
+        // `out_*` equals the source, so this stays a pure format conversion.
+        let out_width = width & !1;
+        let out_height = height & !1;
+        if out_width == 0 || out_height == 0 {
+            return Err(VideoError::DecodeFailed(format!(
+                "decoded frame is too small to repack as I420: {width}x{height}"
+            )));
+        }
 
         let src_fmt: ff::AVPixelFormat =
             std::mem::transmute::<c_int, ff::AVPixelFormat>((*src).format);
@@ -226,8 +260,8 @@ impl LavcDecoder {
             width as c_int,
             height as c_int,
             src_fmt,
-            width as c_int,
-            height as c_int,
+            out_width as c_int,
+            out_height as c_int,
             ff::AVPixelFormat::AV_PIX_FMT_YUV420P,
             SWS_BILINEAR,
             ptr::null_mut(),
@@ -240,13 +274,29 @@ impl LavcDecoder {
             ));
         }
 
-        let w = width as usize;
-        let h = height as usize;
+        let w = out_width as usize;
+        let h = out_height as usize;
         let y_size = w * h;
         let uv_w = w / 2;
-        let uv_size = uv_w * (h / 2);
-        let mut out = vec![0u8; y_size + 2 * uv_size];
+        let uv_h = h / 2;
+        let uv_size = uv_w * uv_h;
+        let frame_size = y_size + 2 * uv_size;
+        debug_assert_eq!(
+            frame_size,
+            PixelFormat::I420.frame_size(out_width, out_height)
+        );
+        let mut out = vec![0u8; frame_size + SWS_DST_TAIL_PADDING];
         let base = out.as_mut_ptr();
+        // Safety: `base` owns at least `frame_size + SWS_DST_TAIL_PADDING`
+        // bytes, and the three plane offsets (0, y_size, y_size + uv_size) are
+        // all strictly below `frame_size`, so every derived pointer is in
+        // bounds. Each plane is exactly `stride * rows` bytes with `stride`
+        // equal to that plane's width, and the swscale destination is
+        // `out_width` x `out_height` with both even — so the chroma planes are
+        // exactly uv_w x uv_h, which is what swscale writes for YUV420P at that
+        // destination size (ceil is exact on even inputs). The tail padding
+        // absorbs any partial-vector write past the final row from libswscale's
+        // SIMD kernels; it is truncated away below and never observed.
         let dst_data: [*mut u8; 4] = [
             base,
             base.add(y_size),
@@ -269,15 +319,23 @@ impl LavcDecoder {
                 av_error_text(scaled)
             )));
         }
+        out.truncate(frame_size);
 
         Ok(DecodedFrame {
             data: out,
             pixel_format: PixelFormat::I420,
-            width,
-            height,
+            width: out_width,
+            height: out_height,
             pts,
             colorspace,
         })
+    }
+
+    /// Reject implausibly large decoded resolutions before any plane buffer is
+    /// allocated, capping against the resolution the peer negotiated when the
+    /// track was published (when known) rather than only the global 8K ceiling.
+    fn bound_decode_resolution(&self, w: u32, h: u32) -> Result<(), VideoError> {
+        bound_decode_resolution_against(w, h, self.config.max_dimensions)
     }
 
     /// Decode into GPU-resident handles (spec §3.2 G2). Sends `frame`, then for
@@ -344,7 +402,7 @@ impl LavcDecoder {
 
                 let width = (*self.dec_frame).width as u32;
                 let height = (*self.dec_frame).height as u32;
-                if let Err(e) = bound_decode_resolution(width, height) {
+                if let Err(e) = self.bound_decode_resolution(width, height) {
                     ff::av_frame_unref(self.dec_frame);
                     self.needs_keyframe = true;
                     return Err(e);
@@ -640,15 +698,31 @@ fn map_av_colorspace(cs: ff::AVColorSpace) -> ColorSpace {
 /// Reject implausibly large decoded resolutions before any plane buffer is
 /// allocated. Uses checked arithmetic so `w * h` cannot overflow before it is
 /// range-checked.
-fn bound_decode_resolution(w: u32, h: u32) -> Result<(), VideoError> {
-    let ok = w <= MAX_DECODE_DIMENSION
-        && h <= MAX_DECODE_DIMENSION
-        && w.checked_mul(h).is_some_and(|px| px <= MAX_DECODE_PIXELS);
+/// `negotiated` is the resolution the peer advertised for this track in
+/// `TrackPublish`. When present it is the real cap (with the tolerance factor in
+/// [`crate::video::negotiated_decode_ceiling`]): a peer that published a 320x180
+/// layer has no business sending 8K frames, and the global ceiling alone lets a
+/// few hundred bytes of bitstream expand into a ~50 MB plane allocation.
+fn bound_decode_resolution_against(
+    w: u32,
+    h: u32,
+    negotiated: Option<(u32, u32)>,
+) -> Result<(), VideoError> {
+    let (max_w, max_h, max_px) = crate::video::negotiated_decode_ceiling(
+        negotiated,
+        MAX_DECODE_DIMENSION,
+        MAX_DECODE_PIXELS,
+    );
+    let ok = w > 0
+        && h > 0
+        && w <= max_w
+        && h <= max_h
+        && w.checked_mul(h).is_some_and(|px| px <= max_px);
     if ok {
         Ok(())
     } else {
         Err(VideoError::DecodeFailed(format!(
-            "decoded frame resolution out of bounds: {w}x{h}"
+            "decoded frame resolution out of bounds: {w}x{h} (max {max_w}x{max_h})"
         )))
     }
 }
@@ -659,9 +733,60 @@ mod tests {
 
     #[test]
     fn resolution_bounds() {
-        assert!(bound_decode_resolution(1920, 1080).is_ok());
-        assert!(bound_decode_resolution(7680, 4320).is_ok());
-        assert!(bound_decode_resolution(8193, 16).is_err());
-        assert!(bound_decode_resolution(u32::MAX, u32::MAX).is_err());
+        assert!(bound_decode_resolution_against(1920, 1080, None).is_ok());
+        assert!(bound_decode_resolution_against(7680, 4320, None).is_ok());
+        assert!(bound_decode_resolution_against(8193, 16, None).is_err());
+        assert!(bound_decode_resolution_against(u32::MAX, u32::MAX, None).is_err());
+        assert!(bound_decode_resolution_against(0, 16, None).is_err());
+        assert!(bound_decode_resolution_against(16, 0, None).is_err());
+    }
+
+    #[test]
+    fn negotiated_resolution_caps_decode() {
+        // A peer that published a 320x180 layer cannot then send 4K frames.
+        assert!(bound_decode_resolution_against(320, 180, Some((320, 180))).is_ok());
+        assert!(bound_decode_resolution_against(3840, 2160, Some((320, 180))).is_err());
+        // Modest overshoot (encoder alignment padding) stays acceptable.
+        assert!(bound_decode_resolution_against(336, 192, Some((320, 180))).is_ok());
+    }
+
+    /// The odd-dimension repack is the memory-safety fix: an H.264 peer can
+    /// legally signal an odd display height via `frame_crop_bottom_offset`, so
+    /// the swscale destination must be clamped to even for the chroma
+    /// allocation and the strides to agree with what swscale writes.
+    #[test]
+    fn odd_dimensions_clamp_to_an_exact_i420_buffer() {
+        for (w, h) in [(1920u32, 1079u32), (1921, 1080), (1921, 1079), (641, 361)] {
+            let out_w = w & !1;
+            let out_h = h & !1;
+            assert!(out_w > 0 && out_h > 0);
+            assert_eq!(out_w % 2, 0);
+            assert_eq!(out_h % 2, 0);
+
+            let y = (out_w as usize) * (out_h as usize);
+            let uv = (out_w as usize / 2) * (out_h as usize / 2);
+            // The repack buffer must equal exactly what swscale writes for
+            // YUV420P at the (even) destination size.
+            assert_eq!(
+                y + 2 * uv,
+                PixelFormat::I420.frame_size(out_w, out_h),
+                "{w}x{h} -> {out_w}x{out_h}"
+            );
+
+            // The pre-fix sizing used truncating halves of the ODD source while
+            // swscale wrote ceil() halves — short by up to a full chroma row per
+            // plane. That difference is the heap overflow.
+            let buggy = (w as usize) * (h as usize) + 2 * ((w as usize) / 2) * ((h as usize) / 2);
+            let actually_written = (w as usize) * (h as usize)
+                + 2 * (w as usize).div_ceil(2) * (h as usize).div_ceil(2);
+            assert!(
+                buggy < actually_written,
+                "odd {w}x{h} must under-size under the old formula"
+            );
+        }
+
+        // A source with a dimension of 1 has no representable I420 form and is
+        // rejected rather than silently producing a zero-sized plane.
+        assert_eq!(1u32 & !1, 0);
     }
 }

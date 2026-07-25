@@ -35,6 +35,10 @@ const WS_MAX_PREAUTH_CONNECTIONS_DEFAULT: usize = 512;
 // is generous for legitimate NAT'd clients while still bounding a single source.
 const WS_MAX_PREAUTH_PER_IP_DEFAULT: usize = 32;
 const WS_MAX_MESSAGES_PER_MINUTE_DEFAULT: u32 = 240;
+/// Frames a socket may send before it has authenticated. The identify handshake
+/// needs exactly one; anything beyond this is a client that is spinning the
+/// pre-auth loop (which parses JSON twice per frame) for the full 30s timeout.
+const WS_MAX_PREAUTH_FRAMES_DEFAULT: u32 = 16;
 const WS_MAX_PRESENCE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
 const WS_MAX_TYPING_EVENTS_PER_MINUTE_DEFAULT: u32 = 120;
 const WS_MAX_VOICE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
@@ -60,12 +64,30 @@ struct BufferedEvent {
     timestamp: Instant,
 }
 
-static EVENT_BUFFERS: OnceLock<dashmap::DashMap<String, VecDeque<BufferedEvent>>> = OnceLock::new();
+/// Per-session replay buffer.
+///
+/// The buffer has to outlive its connection — RESUME replays the tail of events
+/// that were dispatched but may not have reached the client before the socket
+/// died — so it cannot simply be dropped on disconnect. Instead every buffer
+/// records *when* its connection ended, which is what makes the map boundable:
+/// live buffers are capped by `max_global_connections` (one per connection) and
+/// disconnected buffers are capped explicitly by
+/// `max_disconnected_event_buffers` and expire after
+/// `DISCONNECTED_BUFFER_RETENTION`.
+#[derive(Default)]
+struct SessionEventBuffer {
+    events: VecDeque<BufferedEvent>,
+    /// `Some(when)` once the owning connection has ended, `None` while a
+    /// connection is attached.
+    disconnected_at: Option<Instant>,
+}
 
-fn event_buffers() -> &'static dashmap::DashMap<String, VecDeque<BufferedEvent>> {
+static EVENT_BUFFERS: OnceLock<dashmap::DashMap<String, SessionEventBuffer>> = OnceLock::new();
+
+fn event_buffers() -> &'static dashmap::DashMap<String, SessionEventBuffer> {
     EVENT_BUFFERS.get_or_init(|| {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            let mut interval = tokio::time::interval(EVENT_BUFFER_SWEEP_INTERVAL);
             interval.tick().await; // skip immediate first tick
             loop {
                 interval.tick().await;
@@ -73,7 +95,15 @@ fn event_buffers() -> &'static dashmap::DashMap<String, VecDeque<BufferedEvent>>
                     let keys: Vec<String> = buffers.iter().map(|r| r.key().clone()).collect();
                     for key in keys {
                         buffers.remove_if(&key, |_, buffer| {
+                            // A buffer whose connection ended is only useful for
+                            // the short window in which that client may RESUME.
+                            if let Some(at) = buffer.disconnected_at {
+                                if at.elapsed() > DISCONNECTED_BUFFER_RETENTION {
+                                    return true;
+                                }
+                            }
                             buffer
+                                .events
                                 .back()
                                 .map_or(true, |e| e.timestamp.elapsed() > MAX_REPLAY_AGE)
                         });
@@ -84,6 +114,66 @@ fn event_buffers() -> &'static dashmap::DashMap<String, VecDeque<BufferedEvent>>
         dashmap::DashMap::new()
     })
 }
+
+/// Mark a session's replay buffer as belonging to a connection that has ended,
+/// dropping it outright when there is nothing left to replay, and enforce the
+/// cap on retained disconnected buffers.
+///
+/// Without this, a single authenticated user could loop
+/// connect -> self-addressed event -> disconnect and accumulate a buffer per
+/// iteration; the old sweep only evicted a buffer once its *newest* event was an
+/// hour old, and the map had no size cap at all.
+fn release_event_buffer(session_id: &str) {
+    let buffers = event_buffers();
+    let mut nothing_to_replay = false;
+    if let Some(mut buffer) = buffers.get_mut(session_id) {
+        buffer.disconnected_at = Some(Instant::now());
+        nothing_to_replay = buffer.events.is_empty();
+    }
+    if nothing_to_replay {
+        buffers.remove_if(session_id, |_, buffer| {
+            buffer.disconnected_at.is_some() && buffer.events.is_empty()
+        });
+        return;
+    }
+
+    // Bound the retained-disconnected set. Live buffers are already bounded by
+    // the global connection cap, so only this population can grow.
+    let max_disconnected = ws_limits().max_disconnected_event_buffers;
+    let mut disconnected: Vec<(String, Instant)> = buffers
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .value()
+                .disconnected_at
+                .map(|at| (entry.key().clone(), at))
+        })
+        .collect();
+    if disconnected.len() <= max_disconnected {
+        return;
+    }
+    // Oldest disconnect first, evict down to the cap.
+    disconnected.sort_by_key(|(_, at)| *at);
+    let overflow = disconnected.len() - max_disconnected;
+    for (key, _) in disconnected.into_iter().take(overflow) {
+        buffers.remove_if(&key, |_, buffer| buffer.disconnected_at.is_some());
+    }
+}
+
+/// Clear the disconnect marker when a session is re-attached by RESUME, so the
+/// buffer is treated as live again.
+fn reattach_event_buffer(session_id: &str) {
+    if let Some(mut buffer) = event_buffers().get_mut(session_id) {
+        buffer.disconnected_at = None;
+    }
+}
+
+/// How long a disconnected session's replay buffer is retained. A legitimate
+/// client resumes within seconds; past this window the RESUME path already
+/// degrades gracefully to a fresh IDENTIFY (`can_replay = false`).
+const DISCONNECTED_BUFFER_RETENTION: Duration = Duration::from_secs(120);
+const EVENT_BUFFER_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
+const WS_MAX_DISCONNECTED_EVENT_BUFFERS_DEFAULT: usize = 4_096;
 
 const MAX_REPLAY_EVENTS: usize = 100;
 // Keep buffered events replayable for as long as the resumed session stays in
@@ -120,6 +210,8 @@ struct WsLimits {
     max_typing_events_per_minute: u32,
     max_voice_updates_per_minute: u32,
     session_cache_max_entries: usize,
+    max_disconnected_event_buffers: usize,
+    max_preauth_frames: u32,
 }
 
 static WS_LIMITS: OnceLock<WsLimits> = OnceLock::new();
@@ -178,7 +270,61 @@ fn ws_limits() -> WsLimits {
             "PARACORD_WS_SESSION_CACHE_MAX_ENTRIES",
             SESSION_CACHE_MAX_ENTRIES_DEFAULT,
         ),
+        max_disconnected_event_buffers: env_usize(
+            "PARACORD_WS_MAX_DISCONNECTED_EVENT_BUFFERS",
+            WS_MAX_DISCONNECTED_EVENT_BUFFERS_DEFAULT,
+        ),
+        max_preauth_frames: env_u32(
+            "PARACORD_WS_MAX_PREAUTH_FRAMES",
+            WS_MAX_PREAUTH_FRAMES_DEFAULT,
+        ),
     })
+}
+
+/// Sensitive keys that must never reach the wire trace, even truncated.
+const REDACTED_GATEWAY_KEYS: [&str; 4] = ["token", "access_token", "refresh_token", "password"];
+
+/// Produce a log-safe rendering of a client frame.
+///
+/// `observability::wire_trace_payload_preview` truncates and escapes but does
+/// no key redaction, so logging an IDENTIFY frame verbatim wrote the raw access
+/// token (`{"op":2,"d":{"token":"eyJ..."}}`) into the log. Replace the value of
+/// every sensitive key before the frame is handed to the tracer. Frames that do
+/// not parse as JSON are replaced wholesale rather than guessed at.
+fn redact_gateway_credentials(parsed: Option<&Value>, raw: &str) -> String {
+    fn redact(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map.iter_mut() {
+                    if REDACTED_GATEWAY_KEYS
+                        .iter()
+                        .any(|needle| key.eq_ignore_ascii_case(needle))
+                    {
+                        *child = Value::String("[redacted]".to_string());
+                    } else {
+                        redact(child);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for child in items.iter_mut() {
+                    redact(child);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(parsed) = parsed else {
+        return "[unparsable frame redacted]".to_string();
+    };
+    let mut copy = parsed.clone();
+    redact(&mut copy);
+    // Only pay for the clone/serialize when a credential was actually present.
+    if copy == *parsed {
+        return raw.to_string();
+    }
+    copy.to_string()
 }
 
 fn wire_log_ws_in(
@@ -280,11 +426,23 @@ async fn send_ws_text_logged(
                 .await
                 .map_err(|_| ()),
             Err(e) => {
-                tracing::warn!("zlib-stream compression failed, sending uncompressed: {e}");
-                sender
-                    .send(Message::Text(payload.into()))
-                    .await
-                    .map_err(|_| ())
+                // Do NOT fall back to an uncompressed text frame. In
+                // `Mode::Streaming` the deflate window persists across frames, so
+                // skipping one desynchronises the client's single long-lived
+                // inflate context and every subsequent binary frame decodes to
+                // garbage — a silent, unrecoverable corruption. Close the socket
+                // and make the client reconnect (which resets both contexts).
+                tracing::error!("zlib-stream compression failed, closing connection: {e}");
+                let _ = send_ws_close_logged(
+                    sender,
+                    1011,
+                    "compression failure; reconnect required",
+                    user_id,
+                    session_id,
+                    "compression_failure_close",
+                )
+                .await;
+                Err(())
             }
         }
     } else {
@@ -889,6 +1047,7 @@ pub async fn handle_connection(
             .get(&session.session_id)
             .map(|buffer| {
                 buffer
+                    .events
                     .iter()
                     .filter(|e| e.sequence > requested_seq)
                     .map(|e| (e.sequence, e.event_type.clone(), e.payload.clone()))
@@ -1001,34 +1160,34 @@ pub async fn handle_connection(
             .collect();
 
         // Fetch guild data for READY with bounded concurrency.
+        //
+        // READY used to cost `3N + 2 + 2*voice` queries: a `get_guild` per guild
+        // (already fetched and discarded at IDENTIFY), a member-id query per
+        // guild (already held in `state.member_index`), and a voice-state query
+        // per guild. With `Semaphore::new(10)` and a `tokio::join!` pair that
+        // meant 20 concurrent queries per connect. Two of the three are now
+        // gone, leaving one query per guild.
         let sem = Arc::new(Semaphore::new(10));
         let ready_user_id = session.user_id;
-        let guild_futures: Vec<_> = session
-            .guild_ids
+        let ready_guilds = std::mem::take(&mut session.ready_guilds);
+        let guild_futures: Vec<_> = ready_guilds
             .iter()
-            .map(|&gid| {
+            .map(|g| {
                 let state = state.clone();
                 let sem = sem.clone();
                 let online_snapshot = online_snapshot.clone();
                 let presence_snapshot = presence_snapshot.clone();
+                let g = g.clone();
                 async move {
                     let _permit = sem.acquire_owned().await.ok()?;
-                    let guild = paracord_db::guilds::get_guild(&state.db, gid)
-                        .await
-                        .ok()
-                        .flatten();
-                    let Some(g) = guild else {
-                        return None;
-                    };
+                    let gid = g.id;
 
-                    // Two independent queries in parallel
-                    let (voice_states, member_ids) = tokio::join!(
-                        paracord_db::voice_states::get_guild_voice_states(&state.db, gid),
-                        paracord_db::members::get_guild_member_user_ids(&state.db, gid),
-                    );
-
-                    let voice_states = voice_states.unwrap_or_default();
-                    let member_ids = member_ids.unwrap_or_default();
+                    let voice_states =
+                        paracord_db::voice_states::get_guild_voice_states(&state.db, gid)
+                            .await
+                            .unwrap_or_default();
+                    // Same in-memory source the presence fan-out already uses.
+                    let member_ids = state.member_index.members_of(gid);
 
                     // Only expose the voice roster of channels this user can view.
                     // The live voice-join path filters via can_receive_channel_event;
@@ -1341,20 +1500,56 @@ pub async fn handle_connection(
     }
 }
 
+fn ready_guilds_from_rows(
+    rows: &[paracord_db::guilds::SpaceRow],
+) -> Vec<crate::session::ReadyGuild> {
+    rows.iter()
+        .map(|g| crate::session::ReadyGuild {
+            id: g.id,
+            name: g.name.clone(),
+            owner_id: g.owner_id,
+            icon_hash: g.icon_hash.clone(),
+        })
+        .collect()
+}
+
 #[doc(hidden)] // internal seam exposed for the crate's integration tests
 pub async fn wait_for_identify_or_resume(
     receiver: &mut (impl StreamExt<Item = Result<Message, axum::Error>> + Unpin),
     state: &AppState,
 ) -> Option<(Session, bool, u64)> {
+    // Frames on the pre-auth path are metered. Previously a frame without
+    // `d.token` was simply ignored and the loop continued for the full 30s
+    // identify timeout, parsing JSON twice per frame — free work for any
+    // unauthenticated socket.
+    let max_preauth_frames = ws_limits().max_preauth_frames;
+    let mut preauth_frames: u32 = 0;
     while let Some(Ok(msg)) = receiver.next().await {
         if let Message::Text(text) = msg {
-            if let Ok(payload) = serde_json::from_str::<Value>(&text) {
-                let op = payload.get("op").and_then(|v| v.as_u64()).unwrap_or(255) as u8;
-                wire_log_ws_in(None, None, op, &text, "identify_or_resume");
-            } else {
-                wire_log_ws_in(None, None, 255, &text, "identify_or_resume");
+            preauth_frames = preauth_frames.saturating_add(1);
+            if preauth_frames > max_preauth_frames {
+                tracing::debug!(
+                    frames = preauth_frames,
+                    "closing socket: too many frames before IDENTIFY/RESUME"
+                );
+                return None;
             }
-            if let Ok(payload) = serde_json::from_str::<Value>(&text) {
+            // Parse once, and never log the raw frame: IDENTIFY carries the
+            // access token in `d.token` and the wire-trace preview truncates but
+            // does not redact.
+            let parsed = serde_json::from_str::<Value>(&text).ok();
+            let op = parsed
+                .as_ref()
+                .and_then(|payload| payload.get("op").and_then(|v| v.as_u64()))
+                .unwrap_or(255) as u8;
+            wire_log_ws_in(
+                None,
+                None,
+                op,
+                &redact_gateway_credentials(parsed.as_ref(), &text),
+                "identify_or_resume",
+            );
+            if let Some(payload) = parsed {
                 if let Some(d) = payload.get("d") {
                     if let Some(token) = d.get("token").and_then(|v| v.as_str()) {
                         let claims =
@@ -1388,6 +1583,9 @@ pub async fn wait_for_identify_or_resume(
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
                             let mut session = Session::new(claims.sub, guild_ids, guild_owner_ids);
                             session.auth_session_id = session_id.to_string();
+                            // Keep the rows we already paid for; READY reads
+                            // them instead of re-fetching each guild.
+                            session.ready_guilds = ready_guilds_from_rows(&guilds);
                             return Some((session, false, 0));
                         }
                         if op == OP_RESUME as u64 {
@@ -1401,7 +1599,7 @@ pub async fn wait_for_identify_or_resume(
                                         if let Some(buffer) =
                                             event_buffers().get(&requested_session_id)
                                         {
-                                            if let Some(front) = buffer.front() {
+                                            if let Some(front) = buffer.events.front() {
                                                 if front.sequence > requested_seq.saturating_add(1)
                                                 {
                                                     can_replay = false;
@@ -1436,6 +1634,7 @@ pub async fn wait_for_identify_or_resume(
                                             guild_ids,
                                             guild_owner_ids,
                                         );
+                                        reattach_event_buffer(&requested_session_id);
                                         resumed.session_id = requested_session_id;
                                         resumed.auth_session_id = session_id.to_string();
                                         resumed.sequence = cached.sequence.max(requested_seq);
@@ -1443,7 +1642,7 @@ pub async fn wait_for_identify_or_resume(
                                     } else {
                                         let oldest_buffered = event_buffers()
                                             .get(&requested_session_id)
-                                            .and_then(|b| b.front().map(|e| e.sequence));
+                                            .and_then(|b| b.events.front().map(|e| e.sequence));
                                         tracing::info!(
                                             session_id = %requested_session_id,
                                             client_seq = requested_seq,
@@ -1465,6 +1664,7 @@ pub async fn wait_for_identify_or_resume(
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
                             let mut session = Session::new(claims.sub, guild_ids, guild_owner_ids);
                             session.auth_session_id = session_id.to_string();
+                            session.ready_guilds = ready_guilds_from_rows(&guilds);
                             return Some((session, false, 0));
                         }
                     }
@@ -1510,7 +1710,7 @@ pub async fn run_session(
                             Some(session.user_id),
                             Some(session.session_id.as_str()),
                             opcode,
-                            &text,
+                            &redact_gateway_credentials(parsed_payload.as_ref().ok(), &text),
                             "client_message",
                         );
                         // Heartbeats are never rate limited
@@ -1669,13 +1869,14 @@ pub async fn run_session(
 
                         // Buffer the event for potential replay
                         let mut buffer_entry = event_buffers().entry(session.session_id.clone()).or_default();
-                        while buffer_entry.front().map(|e| e.timestamp.elapsed() > MAX_REPLAY_AGE).unwrap_or(false) {
-                            buffer_entry.pop_front();
+                        buffer_entry.disconnected_at = None;
+                        while buffer_entry.events.front().map(|e| e.timestamp.elapsed() > MAX_REPLAY_AGE).unwrap_or(false) {
+                            buffer_entry.events.pop_front();
                         }
-                        if buffer_entry.len() >= MAX_REPLAY_EVENTS {
-                            buffer_entry.pop_front();
+                        if buffer_entry.events.len() >= MAX_REPLAY_EVENTS {
+                            buffer_entry.events.pop_front();
                         }
-                        buffer_entry.push_back(BufferedEvent {
+                        buffer_entry.events.push_back(BufferedEvent {
                             sequence: seq,
                             event_type: event.event_type.clone(),
                             payload: event.payload.clone(),
@@ -1770,7 +1971,48 @@ pub async fn run_session(
             },
         )
         .await;
+    // Hand the replay buffer over to the bounded disconnected population (or
+    // drop it outright when there is nothing to replay) so buffers cannot
+    // accumulate across a connect/disconnect loop.
+    release_event_buffer(&session.session_id);
     session
+}
+
+/// Tell the client an `OP_MEDIA_CONNECT` could not be completed.
+///
+/// Every failure on that path used to be swallowed (`let _ = ...`,
+/// `.unwrap_or_default()`), leaving the client with either no response at all or
+/// a session description carrying an empty token. Surfacing a typed failure lets
+/// it retry or fall back deliberately.
+async fn send_media_connect_failure(
+    sender: &mut (impl SinkExt<Message> + Unpin),
+    compressor: &WsCompressor,
+    session: &Session,
+    guild_id: i64,
+    channel_id: i64,
+    reason: &str,
+) -> Result<(), ()> {
+    send_ws_text_logged(
+        sender,
+        json!({
+            "op": OP_DISPATCH,
+            "t": "MEDIA_CONNECT_FAILED",
+            "d": {
+                "guild_id": guild_id.to_string(),
+                "channel_id": channel_id.to_string(),
+                "reason": reason,
+            },
+        })
+        .to_string(),
+        compressor,
+        Some(session.user_id),
+        Some(session.session_id.as_str()),
+        "media_connect_failed",
+        Some(OP_DISPATCH),
+        Some("MEDIA_CONNECT_FAILED"),
+        None,
+    )
+    .await
 }
 
 async fn handle_client_message(
@@ -2034,14 +2276,48 @@ async fn handle_client_message(
                             return;
                         }
 
-                        let _ = paracord_db::voice_states::upsert_voice_state(
+                        // Propagate: on failure the user would be broadcast as
+                        // present in voice while `resolve_active_media_room`
+                        // finds no voice state and rejects their QUIC
+                        // connection — joined, visible to everyone, no audio,
+                        // no error anywhere.
+                        if let Err(err) = paracord_db::voice_states::upsert_voice_state(
                             &state.db,
                             session.user_id,
                             Some(guild_id),
                             channel_id,
                             &session.session_id,
                         )
-                        .await;
+                        .await
+                        {
+                            tracing::error!(
+                                user_id = session.user_id,
+                                channel_id,
+                                "voice join aborted: failed to persist voice state: {err}"
+                            );
+                            let _ = send_ws_text_logged(
+                                sender,
+                                json!({
+                                    "op": OP_DISPATCH,
+                                    "t": "VOICE_STATE_UPDATE_FAILED",
+                                    "d": {
+                                        "channel_id": channel_id.to_string(),
+                                        "guild_id": guild_id.to_string(),
+                                        "reason": "voice_state_persist_failed",
+                                    },
+                                })
+                                .to_string(),
+                                compressor,
+                                Some(session.user_id),
+                                Some(session.session_id.as_str()),
+                                "voice_state_update_failed",
+                                Some(OP_DISPATCH),
+                                Some("VOICE_STATE_UPDATE_FAILED"),
+                                None,
+                            )
+                            .await;
+                            return;
+                        }
                         state
                             .voice
                             .update_self_mute(channel_id, session.user_id, self_mute)
@@ -2187,7 +2463,24 @@ async fn handle_client_message(
                             session.session_id.clone(),
                         );
                         let room_id = native.rooms.get_or_create_room(guild_id, channel_id);
-                        let _ = native.rooms.join_room(guild_id, channel_id, participant);
+                        if let Err(err) = native.rooms.join_room(guild_id, channel_id, participant)
+                        {
+                            tracing::error!(
+                                user_id = session.user_id,
+                                channel_id,
+                                "OP_MEDIA_CONNECT aborted: failed to join relay room: {err:?}"
+                            );
+                            let _ = send_media_connect_failure(
+                                sender,
+                                compressor,
+                                session,
+                                guild_id,
+                                channel_id,
+                                "relay_join_failed",
+                            )
+                            .await;
+                            return;
+                        }
 
                         // Build peer list from current room participants
                         let peers: Vec<Value> = native
@@ -2211,14 +2504,37 @@ async fn handle_client_message(
                         // Persist a voice state keyed to this gateway session so
                         // the issued media token resolves to an active room on
                         // the transport side (see `resolve_active_media_room`).
-                        let _ = paracord_db::voice_states::upsert_voice_state(
+                        // Failing here MUST abort: otherwise the client receives
+                        // a valid-looking session description whose token the
+                        // transport will reject for want of a voice state.
+                        if let Err(err) = paracord_db::voice_states::upsert_voice_state(
                             &state.db,
                             session.user_id,
                             Some(guild_id),
                             channel_id,
                             &session.session_id,
                         )
-                        .await;
+                        .await
+                        {
+                            tracing::error!(
+                                user_id = session.user_id,
+                                channel_id,
+                                "OP_MEDIA_CONNECT aborted: failed to persist voice state: {err}"
+                            );
+                            let _ = native
+                                .rooms
+                                .leave_room(guild_id, channel_id, session.user_id);
+                            let _ = send_media_connect_failure(
+                                sender,
+                                compressor,
+                                session,
+                                guild_id,
+                                channel_id,
+                                "voice_state_persist_failed",
+                            )
+                            .await;
+                            return;
+                        }
 
                         // Issue a real media token (same claims/signing as the
                         // REST join path) and advertise the configured endpoints.
@@ -2241,14 +2557,39 @@ async fn handle_client_message(
                             "iat": issued_at,
                             "exp": issued_at + 86400,
                         });
-                        let token = jsonwebtoken::encode(
+                        // `.unwrap_or_default()` here handed the client
+                        // `"token": ""` and a downstream auth failure it could
+                        // not attribute. Fail the opcode instead.
+                        let token = match jsonwebtoken::encode(
                             &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
                             &media_claims,
                             &jsonwebtoken::EncodingKey::from_secret(
                                 state.config.jwt_secret.as_bytes(),
                             ),
-                        )
-                        .unwrap_or_default();
+                        ) {
+                            Ok(token) => token,
+                            Err(err) => {
+                                tracing::error!(
+                                    user_id = session.user_id,
+                                    channel_id,
+                                    "OP_MEDIA_CONNECT aborted: failed to mint media token: {err}"
+                                );
+                                let _ =
+                                    native
+                                        .rooms
+                                        .leave_room(guild_id, channel_id, session.user_id);
+                                let _ = send_media_connect_failure(
+                                    sender,
+                                    compressor,
+                                    session,
+                                    guild_id,
+                                    channel_id,
+                                    "media_token_mint_failed",
+                                )
+                                .await;
+                                return;
+                            }
+                        };
                         let desc = json!({
                             "relay_endpoint": format!("quic://{}:{}", host, port),
                             "wt_endpoint": format!("https://{}:{}/media", host, port),
@@ -2427,7 +2768,13 @@ async fn handle_client_message(
                     })
                     .collect();
 
-                session.sequence += 1;
+                // Do NOT consume a sequence number here. This dispatch is
+                // never pushed into the replay buffer, so bumping `sequence`
+                // punched a permanent hole in the session's replay stream: a
+                // later RESUME would see `front().sequence > requested_seq + 1`
+                // and be forced into a full re-identify. GUILD_MEMBERS_CHUNK is
+                // a response to an explicit client request, so the client can
+                // simply re-issue it after a resume.
                 let chunk_payload = json!({
                     "op": OP_DISPATCH,
                     "t": EVENT_GUILD_MEMBERS_CHUNK,
@@ -2482,12 +2829,43 @@ pub fn test_push_buffered_event(session_id: &str, sequence: u64, event_type: &st
     event_buffers()
         .entry(session_id.to_string())
         .or_default()
+        .events
         .push_back(BufferedEvent {
             sequence,
             event_type: event_type.to_string(),
             payload: Arc::new(payload),
             timestamp: Instant::now(),
         });
+}
+
+/// Mark a session's buffer as disconnected exactly as the real disconnect path
+/// does, so tests can assert the release/eviction behaviour.
+#[doc(hidden)]
+pub fn test_release_event_buffer(session_id: &str) {
+    release_event_buffer(session_id);
+}
+
+/// Number of events currently retained for a session, or `None` when no buffer
+/// exists at all.
+#[doc(hidden)]
+pub fn test_buffered_event_count(session_id: &str) -> Option<usize> {
+    event_buffers().get(session_id).map(|b| b.events.len())
+}
+
+/// Whether a session's buffer is currently marked as disconnected.
+#[doc(hidden)]
+pub fn test_event_buffer_is_disconnected(session_id: &str) -> Option<bool> {
+    event_buffers()
+        .get(session_id)
+        .map(|b| b.disconnected_at.is_some())
+}
+
+/// Empty a session's buffer without removing the entry (test seam).
+#[doc(hidden)]
+pub fn test_drain_event_buffer(session_id: &str) {
+    if let Some(mut buffer) = event_buffers().get_mut(session_id) {
+        buffer.events.clear();
+    }
 }
 
 /// Exercise the per-user connection-slot guard from integration tests. Uses the

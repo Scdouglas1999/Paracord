@@ -11,7 +11,6 @@ import {
 } from '../lib/authToken';
 import { useAuthStore } from '../stores/authStore';
 import { useServerListStore } from '../stores/serverListStore';
-import { toast } from '../stores/toastStore';
 
 const API_SLOW_REQUEST_MS = 800;
 const API_TIMING_VERBOSE =
@@ -126,28 +125,6 @@ export function extractApiError(err: unknown): string {
   }
   if (err instanceof Error) return err.message;
   return 'An unexpected error occurred';
-}
-
-/**
- * Extract the machine-readable error code from an API error response.
- */
-export function extractApiErrorCode(err: unknown): string | null {
-  if (axios.isAxiosError(err)) {
-    const data = (err as AxiosError<ApiErrorResponse>).response?.data;
-    if (data && typeof data === 'object' && 'code' in data) {
-      return String(data.code);
-    }
-  }
-  return null;
-}
-
-/**
- * Show a toast for an API error. Use as a one-liner in catch blocks:
- * `.catch(toastApiError)`
- */
-export function toastApiError(err: unknown): void {
-  const message = extractApiError(err);
-  toast.error(message);
 }
 
 // ---------------------------------------------------------------------------

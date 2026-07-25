@@ -19,6 +19,15 @@ use tokio::sync::Mutex;
 // mutex is used (not `std::sync::Mutex`) because the guard is held across the
 // `.await` points of each test body; an async-aware guard avoids blocking the
 // runtime and the `await_holding_lock` lint.
+/// The destination this test server recognizes as itself.
+///
+/// `verify_transport_request` REQUIRES `x-paracord-destination` and folds it
+/// into the signed canonical bytes, so a request signed without it (or for
+/// another server) is refused — that is the point of destination binding. The
+/// federation service falls back to `PARACORD_SERVER_NAME`, which these tests
+/// leave unset, so it resolves to `localhost`.
+const TEST_DESTINATION: &str = "localhost";
+
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -376,12 +385,14 @@ async fn federation_media_token_requires_existing_room_membership() -> anyhow::R
     });
     let body_bytes = serde_json::to_vec(&body)?;
     let timestamp_ms = chrono::Utc::now().timestamp_millis();
-    let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
-        "POST",
-        "/_paracord/federation/v1/media/token",
-        timestamp_ms,
-        &body_bytes,
-    );
+    let canonical =
+        paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+            "POST",
+            "/_paracord/federation/v1/media/token",
+            timestamp_ms,
+            &body_bytes,
+            TEST_DESTINATION,
+        );
     let signature = paracord_federation::signing::sign(&signing_key, &canonical);
 
     let request = Request::builder()
@@ -392,6 +403,7 @@ async fn federation_media_token_requires_existing_room_membership() -> anyhow::R
         .header("x-paracord-key-id", key_id)
         .header("x-paracord-timestamp", timestamp_ms.to_string())
         .header("x-paracord-signature", signature)
+        .header("x-paracord-destination", TEST_DESTINATION)
         .body(Body::from(body_bytes))?;
 
     let (status, _) = harness.request(request).await?;
@@ -406,6 +418,10 @@ async fn federation_media_token_requires_existing_room_membership() -> anyhow::R
 async fn federation_message_ingest_materializes_missing_space_and_channel() -> anyhow::Result<()> {
     let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    // Ingest now enforces the federation guild allowlist BEFORE materializing a
+    // mirrored space, and the allowlist is default-deny. These tests exercise
+    // the materialization path itself, so they opt every guild in explicitly.
+    std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "*");
 
     let harness = TestHarness::new(true).await?;
     let origin_server = "remote.example";
@@ -478,12 +494,14 @@ async fn federation_message_ingest_materializes_missing_space_and_channel() -> a
 
     let body_bytes = serde_json::to_vec(&envelope)?;
     let timestamp_ms = chrono::Utc::now().timestamp_millis();
-    let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
-        "POST",
-        "/_paracord/federation/v1/event",
-        timestamp_ms,
-        &body_bytes,
-    );
+    let canonical =
+        paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+            "POST",
+            "/_paracord/federation/v1/event",
+            timestamp_ms,
+            &body_bytes,
+            TEST_DESTINATION,
+        );
     let transport_sig = paracord_federation::signing::sign(&signing_key, &canonical);
 
     let request = Request::builder()
@@ -494,6 +512,7 @@ async fn federation_message_ingest_materializes_missing_space_and_channel() -> a
         .header("x-paracord-key-id", key_id)
         .header("x-paracord-timestamp", timestamp_ms.to_string())
         .header("x-paracord-signature", transport_sig)
+        .header("x-paracord-destination", TEST_DESTINATION)
         .body(Body::from(body_bytes))?;
 
     let (status, body) = harness.request(request).await?;
@@ -530,6 +549,7 @@ async fn federation_message_ingest_materializes_missing_space_and_channel() -> a
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
     Ok(())
 }
 
@@ -724,10 +744,24 @@ async fn federation_transport_rejects_unsupported_protocol_version() -> anyhow::
 async fn discovery_includes_federated_guilds_when_requested() -> anyhow::Result<()> {
     let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_ALLOW_PRIVATE_FEDERATION_URLS", "true");
+    // Federated discovery signs its outbound request, so this server needs a
+    // signing key. Without one `build_signed_federation_client` returns None and
+    // discovery correctly degrades to local-only results.
+    let (discovery_signing_key, _discovery_public_key) =
+        paracord_federation::signing::generate_keypair();
+    std::env::set_var(
+        "PARACORD_FEDERATION_SIGNING_KEY_HEX",
+        paracord_federation::signing::signing_key_to_hex(&discovery_signing_key),
+    );
     let harness = TestHarness::new(true).await?;
 
+    // Federated discovery now goes over the SIGNED federation path, not the
+    // public REST endpoint: `/api/v1/discovery/guilds` requires an authenticated
+    // user (it was an anonymous N+1 amplification vector), so a cross-server GET
+    // there would simply 401. The peer-facing route is authorized by the Ed25519
+    // transport signature instead.
     let remote_app = Router::new().route(
-        "/api/v1/discovery/guilds",
+        "/_paracord/federation/v1/discovery/guilds",
         get(|| async move {
             Json(json!({
                 "guilds": [{
@@ -770,9 +804,19 @@ async fn discovery_includes_federated_guilds_when_requested() -> anyhow::Result<
         "trusted peer should be persisted for federated discovery"
     );
 
+    // Discovery is authenticated: the handler scans the guild table in Rust, so
+    // leaving it open let anonymous clients burn that scan at the per-IP limit.
+    let viewer_token = common::create_authenticated_user_token(
+        &harness.db,
+        &harness._test_app.jwt_secret,
+        "discovery",
+        "DiscoveryPass123!",
+    )
+    .await?;
     let request = Request::builder()
         .method("GET")
         .uri("/api/v1/discovery/guilds?include_federated=true")
+        .header(header::AUTHORIZATION, format!("Bearer {viewer_token}"))
         .body(Body::empty())?;
     let (status, payload) = harness.request(request).await?;
     assert_eq!(
@@ -793,6 +837,7 @@ async fn discovery_includes_federated_guilds_when_requested() -> anyhow::Result<
         "expected remote discovery entry in response: {payload}"
     );
     std::env::remove_var("PARACORD_ALLOW_PRIVATE_FEDERATION_URLS");
+    std::env::remove_var("PARACORD_FEDERATION_SIGNING_KEY_HEX");
     Ok(())
 }
 
@@ -931,6 +976,10 @@ async fn moderation_subscription_crud_round_trip() -> anyhow::Result<()> {
 async fn federation_ingest_does_not_collide_with_existing_local_ids() -> anyhow::Result<()> {
     let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    // Ingest now enforces the federation guild allowlist BEFORE materializing a
+    // mirrored space, and the allowlist is default-deny. These tests exercise
+    // the materialization path itself, so they opt every guild in explicitly.
+    std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "*");
 
     let harness = TestHarness::new(true).await?;
     let owner_id = 42_001;
@@ -1024,12 +1073,14 @@ async fn federation_ingest_does_not_collide_with_existing_local_ids() -> anyhow:
 
     let body_bytes = serde_json::to_vec(&envelope)?;
     let timestamp_ms = chrono::Utc::now().timestamp_millis();
-    let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
-        "POST",
-        "/_paracord/federation/v1/event",
-        timestamp_ms,
-        &body_bytes,
-    );
+    let canonical =
+        paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+            "POST",
+            "/_paracord/federation/v1/event",
+            timestamp_ms,
+            &body_bytes,
+            TEST_DESTINATION,
+        );
     let transport_sig = paracord_federation::signing::sign(&signing_key, &canonical);
 
     let request = Request::builder()
@@ -1040,6 +1091,7 @@ async fn federation_ingest_does_not_collide_with_existing_local_ids() -> anyhow:
         .header("x-paracord-key-id", key_id)
         .header("x-paracord-timestamp", timestamp_ms.to_string())
         .header("x-paracord-signature", transport_sig)
+        .header("x-paracord-destination", TEST_DESTINATION)
         .body(Body::from(body_bytes))?;
     let (status, _) = harness.request(request).await?;
     assert_eq!(status, StatusCode::ACCEPTED);
@@ -1080,6 +1132,7 @@ async fn federation_ingest_does_not_collide_with_existing_local_ids() -> anyhow:
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
     Ok(())
 }
 
@@ -1142,12 +1195,14 @@ fn signed_event_request(
     });
     let body_bytes = serde_json::to_vec(envelope)?;
     let timestamp_ms = chrono::Utc::now().timestamp_millis();
-    let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
-        "POST",
-        "/_paracord/federation/v1/event",
-        timestamp_ms,
-        &body_bytes,
-    );
+    let canonical =
+        paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+            "POST",
+            "/_paracord/federation/v1/event",
+            timestamp_ms,
+            &body_bytes,
+            TEST_DESTINATION,
+        );
     let transport_sig = paracord_federation::signing::sign(signing_key, &canonical);
     Ok(Request::builder()
         .method("POST")
@@ -1157,6 +1212,7 @@ fn signed_event_request(
         .header("x-paracord-key-id", key_id)
         .header("x-paracord-timestamp", timestamp_ms.to_string())
         .header("x-paracord-signature", transport_sig)
+        .header("x-paracord-destination", TEST_DESTINATION)
         .body(Body::from(body_bytes))?)
 }
 
@@ -1230,6 +1286,10 @@ async fn federation_message_forged_sender_is_rejected() -> anyhow::Result<()> {
 async fn federation_cross_origin_edit_and_delete_are_rejected() -> anyhow::Result<()> {
     let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    // Ingest now enforces the federation guild allowlist BEFORE materializing a
+    // mirrored space, and the allowlist is default-deny. These tests exercise
+    // the materialization path itself, so they opt every guild in explicitly.
+    std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "*");
 
     let harness = TestHarness::new(true).await?;
     let victim_server = "victim.example";
@@ -1337,6 +1397,7 @@ async fn federation_cross_origin_edit_and_delete_are_rejected() -> anyhow::Resul
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
     Ok(())
 }
 
@@ -1349,6 +1410,10 @@ async fn federation_cross_origin_edit_and_delete_are_rejected() -> anyhow::Resul
 async fn federation_cross_origin_reaction_sender_is_rejected() -> anyhow::Result<()> {
     let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    // Ingest now enforces the federation guild allowlist BEFORE materializing a
+    // mirrored space, and the allowlist is default-deny. These tests exercise
+    // the materialization path itself, so they opt every guild in explicitly.
+    std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "*");
 
     let harness = TestHarness::new(true).await?;
     let attacker_server = "attacker.example";
@@ -1464,6 +1529,7 @@ async fn federation_cross_origin_reaction_sender_is_rejected() -> anyhow::Result
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
     Ok(())
 }
 
@@ -1476,6 +1542,10 @@ async fn federation_cross_origin_reaction_sender_is_rejected() -> anyhow::Result
 async fn federation_unknown_event_type_is_not_globally_broadcast() -> anyhow::Result<()> {
     let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    // Ingest now enforces the federation guild allowlist BEFORE materializing a
+    // mirrored space, and the allowlist is default-deny. These tests exercise
+    // the materialization path itself, so they opt every guild in explicitly.
+    std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "*");
 
     let harness = TestHarness::new(true).await?;
     let origin_server = "attacker.example";
@@ -1551,6 +1621,7 @@ async fn federation_unknown_event_type_is_not_globally_broadcast() -> anyhow::Re
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
     Ok(())
 }
 
@@ -1628,6 +1699,10 @@ async fn federation_foreign_namespace_injection_is_rejected() -> anyhow::Result<
 async fn federation_same_origin_edit_succeeds() -> anyhow::Result<()> {
     let _guard = env_lock().lock().await;
     std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    // Ingest now enforces the federation guild allowlist BEFORE materializing a
+    // mirrored space, and the allowlist is default-deny. These tests exercise
+    // the materialization path itself, so they opt every guild in explicitly.
+    std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "*");
 
     let harness = TestHarness::new(true).await?;
     let origin_server = "victim.example";
@@ -1697,6 +1772,7 @@ async fn federation_same_origin_edit_succeeds() -> anyhow::Result<()> {
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
     Ok(())
 }
 
@@ -1778,12 +1854,14 @@ async fn federation_list_events_enforces_room_membership() -> anyhow::Result<()>
         |origin: &str, key: &ed25519_dalek::SigningKey| -> anyhow::Result<Request<Body>> {
             let path = format!("/_paracord/federation/v1/events?room_id={room_id}");
             let timestamp_ms = chrono::Utc::now().timestamp_millis();
-            let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
-                "GET",
-                &path,
-                timestamp_ms,
-                &[],
-            );
+            let canonical =
+                paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+                    "GET",
+                    &path,
+                    timestamp_ms,
+                    &[],
+                    TEST_DESTINATION,
+                );
             let sig = paracord_federation::signing::sign(key, &canonical);
             Ok(Request::builder()
                 .method("GET")
@@ -1792,6 +1870,7 @@ async fn federation_list_events_enforces_room_membership() -> anyhow::Result<()>
                 .header("x-paracord-key-id", key_id)
                 .header("x-paracord-timestamp", timestamp_ms.to_string())
                 .header("x-paracord-signature", sig)
+                .header("x-paracord-destination", TEST_DESTINATION)
                 .body(Body::empty())?)
         };
 
@@ -1908,12 +1987,14 @@ async fn federation_get_event_enforces_room_membership() -> anyhow::Result<()> {
         |origin: &str, key: &ed25519_dalek::SigningKey| -> anyhow::Result<Request<Body>> {
             let path = format!("/_paracord/federation/v1/event/{event_id}");
             let timestamp_ms = chrono::Utc::now().timestamp_millis();
-            let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
-                "GET",
-                &path,
-                timestamp_ms,
-                &[],
-            );
+            let canonical =
+                paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+                    "GET",
+                    &path,
+                    timestamp_ms,
+                    &[],
+                    TEST_DESTINATION,
+                );
             let sig = paracord_federation::signing::sign(key, &canonical);
             Ok(Request::builder()
                 .method("GET")
@@ -1922,6 +2003,7 @@ async fn federation_get_event_enforces_room_membership() -> anyhow::Result<()> {
                 .header("x-paracord-key-id", key_id)
                 .header("x-paracord-timestamp", timestamp_ms.to_string())
                 .header("x-paracord-signature", sig)
+                .header("x-paracord-destination", TEST_DESTINATION)
                 .body(Body::empty())?)
         };
 
@@ -2091,12 +2173,14 @@ async fn federation_room_namespace_mapping_is_used_even_when_sender_differs() ->
 
     let body_bytes = serde_json::to_vec(&envelope)?;
     let timestamp_ms = chrono::Utc::now().timestamp_millis();
-    let canonical = paracord_federation::transport::canonical_transport_bytes_with_body(
-        "POST",
-        "/_paracord/federation/v1/event",
-        timestamp_ms,
-        &body_bytes,
-    );
+    let canonical =
+        paracord_federation::transport::canonical_transport_bytes_with_body_and_destination(
+            "POST",
+            "/_paracord/federation/v1/event",
+            timestamp_ms,
+            &body_bytes,
+            TEST_DESTINATION,
+        );
     let transport_sig = paracord_federation::signing::sign(&signing_key, &canonical);
     let request = Request::builder()
         .method("POST")
@@ -2106,6 +2190,7 @@ async fn federation_room_namespace_mapping_is_used_even_when_sender_differs() ->
         .header("x-paracord-key-id", key_id)
         .header("x-paracord-timestamp", timestamp_ms.to_string())
         .header("x-paracord-signature", transport_sig)
+        .header("x-paracord-destination", TEST_DESTINATION)
         .body(Body::from(body_bytes))?;
     let (status, _) = harness.request(request).await?;
     assert_eq!(status, StatusCode::ACCEPTED);
@@ -2125,6 +2210,207 @@ async fn federation_room_namespace_mapping_is_used_even_when_sender_differs() ->
     assert!(
         wrong_space_map.is_none(),
         "sender namespace should not be used for room mapping keys"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+// ── Regression: federation guild allowlist is enforced on message ingest ────
+//
+// `dispatch_federated_message` used to call `ensure_federated_space_exists`
+// without any allowlist check, so a trusted peer could mint an unbounded number
+// of guilds (guild row + @everyone role + system member + role grant + channel +
+// message) simply by varying `room_id`/`content.guild_id` per event, at the
+// default 120 events/min/peer. The allowlist is documented default-deny.
+#[tokio::test]
+async fn federation_message_ingest_is_denied_without_guild_allowlist() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    // Deliberately NOT set: this is the default-deny posture.
+    std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
+
+    let harness = TestHarness::new(true).await?;
+    let origin_server = "remote.example";
+    let key_id = "ed25519:test";
+    let signing_key = register_signed_peer(&harness, 9301, origin_server, key_id).await?;
+
+    let mut envelope = paracord_federation::FederationEventEnvelope {
+        event_id: "$deny1:remote.example".to_string(),
+        room_id: "!7310:remote.example".to_string(),
+        event_type: "m.message".to_string(),
+        sender: "@alice:remote.example".to_string(),
+        origin_server: origin_server.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({
+            "body": "should not materialize a guild",
+            "guild_id": "7310",
+            "guild_name": "Squatted Guild",
+            "channel_id": "7320",
+            "channel_name": "general",
+            "message_id": "93001",
+        }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut envelope, &signing_key, origin_server, key_id)?;
+
+    // The envelope itself is well-formed and validly signed, so it is accepted
+    // and persisted for dedup purposes...
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    // ...but NOTHING local is materialized from it.
+    let space_mapping =
+        paracord_db::federation::get_space_mapping_by_remote(&harness.db, origin_server, "7310")
+            .await?;
+    assert!(
+        space_mapping.is_none(),
+        "a guild outside the federation allowlist must not be materialized"
+    );
+    let channel_mapping =
+        paracord_db::federation::get_channel_mapping_by_remote(&harness.db, origin_server, "7320")
+            .await?;
+    assert!(
+        channel_mapping.is_none(),
+        "a channel in a disallowed guild must not be materialized"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    Ok(())
+}
+
+// ── Regression: a case-mismatched peer block actually blocks ────────────────
+//
+// `is_federated_server_trusted` joins `federation_peer_trust_state` to
+// `federated_servers` on an EXACT `server_name` match, while the moderation
+// apply path lowercased the entry and `upsert_federated_server` stored the name
+// verbatim. A peer registered as `Peer.Example` and then blocked therefore got a
+// `peer.example` trust row that never joined: the peer stayed `allow` and kept
+// ingesting, with no error surfaced to the operator.
+#[tokio::test]
+async fn moderation_block_applies_to_case_mismatched_peer() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+    std::env::set_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS", "*");
+
+    let harness = TestHarness::new(true).await?;
+    // Registered with mixed case, exactly as an operator might type it.
+    let registered_name = "Peer.Example";
+    let key_id = "ed25519:test";
+    let signing_key = register_signed_peer(&harness, 9401, registered_name, key_id).await?;
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    assert!(
+        paracord_db::federation::is_federated_server_trusted(&harness.db, registered_name, now_ms)
+            .await?,
+        "peer should start out trusted"
+    );
+
+    // Block it using a DIFFERENT case presentation, via the admin moderation API.
+    let admin_token = make_admin_token(&harness, "modcase").await?;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/_paracord/federation/v1/moderation/apply")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::from(
+            json!({
+                "source": "test-list",
+                "entries": [ { "server_name": "peer.example", "action": "block" } ],
+            })
+            .to_string(),
+        ))?;
+    let mut request = request;
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49152))));
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::OK);
+
+    // The block must actually take effect for the registered (mixed-case) peer.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    assert!(
+        !paracord_db::federation::is_federated_server_trusted(&harness.db, registered_name, now_ms)
+            .await?,
+        "a case-mismatched block must still block the registered peer"
+    );
+
+    // And ingest from that peer must now be refused.
+    let mut envelope = paracord_federation::FederationEventEnvelope {
+        event_id: "$blocked1:peer.example".to_string(),
+        room_id: format!("!7410:{registered_name}"),
+        event_type: "m.message".to_string(),
+        sender: format!("@alice:{registered_name}"),
+        origin_server: registered_name.to_string(),
+        origin_ts: chrono::Utc::now().timestamp_millis(),
+        content: json!({ "body": "blocked", "guild_id": "7410", "channel_id": "7420" }),
+        depth: chrono::Utc::now().timestamp_millis(),
+        state_key: None,
+        signatures: json!({}),
+    };
+    let request = signed_event_request(&mut envelope, &signing_key, registered_name, key_id)?;
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a blocked peer must not be able to ingest"
+    );
+
+    std::env::remove_var("PARACORD_FEDERATION_ENABLED");
+    std::env::remove_var("PARACORD_FEDERATION_ALLOWED_GUILD_IDS");
+    Ok(())
+}
+
+// ── Regression: a moderation list that blocks by DOMAIN resolves to a server ──
+//
+// `ModerationListEntry.server_name` carries `#[serde(alias = "domain")]`, but
+// `federated_servers` has separate `server_name` and `domain` columns, so a
+// subscribed list blocking by domain matched neither and silently did nothing.
+#[tokio::test]
+async fn moderation_block_by_domain_alias_resolves_to_server() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().await;
+    std::env::set_var("PARACORD_FEDERATION_ENABLED", "true");
+
+    let harness = TestHarness::new(true).await?;
+    paracord_db::federation::upsert_federated_server(
+        &harness.db,
+        9501,
+        "peer-node-1",
+        "chat.peer.example",
+        "https://chat.peer.example/_paracord/federation/v1",
+        Some("00"),
+        Some("ed25519:test"),
+        true,
+    )
+    .await?;
+
+    let admin_token = make_admin_token(&harness, "moddomain").await?;
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/_paracord/federation/v1/moderation/apply")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::from(
+            json!({
+                "source": "test-list",
+                // Blocked by DOMAIN, not by server_name.
+                "entries": [ { "domain": "chat.peer.example", "action": "block" } ],
+            })
+            .to_string(),
+        ))?;
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49152))));
+    let (status, _) = harness.request(request).await?;
+    assert_eq!(status, StatusCode::OK);
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    assert!(
+        !paracord_db::federation::is_federated_server_trusted(&harness.db, "peer-node-1", now_ms)
+            .await?,
+        "a domain-keyed block must resolve to the registered server_name"
     );
 
     std::env::remove_var("PARACORD_FEDERATION_ENABLED");

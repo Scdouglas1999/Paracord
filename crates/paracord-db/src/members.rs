@@ -288,6 +288,10 @@ pub async fn remove_member_typed(
     // rows behind would let a kicked/left/banned user retain guild privileges
     // (and instantly regain every role on re-join). Delete them in the same
     // removal operation.
+    // Both deletes are one removal: if the membership row goes but the role
+    // assignments survive (or the process dies between them) the user keeps
+    // guild privileges and regains every role the moment they re-join.
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "DELETE FROM member_roles
          WHERE user_id = $1
@@ -295,14 +299,15 @@ pub async fn remove_member_typed(
     )
     .bind(user_id)
     .bind(guild_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query("DELETE FROM members WHERE user_id = $1 AND guild_id = $2")
         .bind(user_id)
         .bind(guild_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(())
 }
 

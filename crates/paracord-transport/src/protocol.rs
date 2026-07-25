@@ -51,6 +51,25 @@ pub struct MediaHeader {
 pub const HEADER_SIZE: usize = 16;
 pub const PROTOCOL_VERSION: u8 = 1;
 
+/// Longest `stream_id` / `track_id` accepted off the wire.
+///
+/// The wire format length-prefixes each identifier with a `u8`, so 255 is the
+/// structural ceiling; this tightens it to a value no legitimate publisher comes
+/// close to. Both identifiers are attacker-chosen strings that end up as
+/// `HashMap` keys in the receiver's reassembly pool and dispatch state, so
+/// bounding them here bounds every downstream key.
+pub const MAX_IDENTIFIER_LEN: usize = 96;
+
+/// Largest `fragment_count` accepted off the wire.
+///
+/// `fragment_count` sizes a receiver-side slot vector before a single byte of
+/// the frame has been validated, so an unbounded 16-bit value turns one ~1200
+/// byte datagram into a multi-megabyte allocation. Real senders move any frame
+/// past a few dozen fragments onto the reliable uni-stream path, so this leaves
+/// more than an order of magnitude of headroom over legitimate traffic while
+/// capping one partial frame's slot vector at ~24 KB.
+pub const MAX_FRAGMENTS_PER_FRAME: usize = 1024;
+
 /// Rich metadata that can be embedded ahead of a fragmented video access unit.
 ///
 /// This lives above [`MediaHeader`] and provides stable stream/track/frame
@@ -73,6 +92,12 @@ impl VideoFrameMetadata {
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), ProtocolError> {
         let stream_bytes = self.stream_id.0.as_bytes();
         let track_bytes = self.track_id.0.as_bytes();
+        if stream_bytes.len() > MAX_IDENTIFIER_LEN {
+            return Err(ProtocolError::IdentifierTooLong("stream_id"));
+        }
+        if track_bytes.len() > MAX_IDENTIFIER_LEN {
+            return Err(ProtocolError::IdentifierTooLong("track_id"));
+        }
         let stream_len = u8::try_from(stream_bytes.len())
             .map_err(|_| ProtocolError::IdentifierTooLong("stream_id"))?;
         let track_len = u8::try_from(track_bytes.len())
@@ -100,6 +125,9 @@ impl VideoFrameMetadata {
             });
         }
         let stream_len = buf.get_u8() as usize;
+        if stream_len > MAX_IDENTIFIER_LEN {
+            return Err(ProtocolError::IdentifierTooLong("stream_id"));
+        }
         if buf.remaining() < stream_len + 1 {
             return Err(ProtocolError::BufferTooShort {
                 expected: stream_len + 1,
@@ -109,9 +137,20 @@ impl VideoFrameMetadata {
         let stream_id = String::from_utf8(buf.copy_to_bytes(stream_len).to_vec())
             .map_err(|_| ProtocolError::InvalidIdentifier("stream_id"))?;
         let track_len = buf.get_u8() as usize;
-        if buf.remaining() < track_len + 22 {
+        if track_len > MAX_IDENTIFIER_LEN {
+            return Err(ProtocolError::IdentifierTooLong("track_id"));
+        }
+        // The fixed tail after `track_id` is 23 bytes, not 22: frame_id (u64=8)
+        // + layer_id (1) + codec (1) + timestamp_us (u64=8) + is_keyframe (1)
+        // + fragment_index (u16=2) + fragment_count (u16=2). Reserving 22 here
+        // let a 24-byte body pass the guard and then panic inside `Buf::advance`
+        // on the final `get_u16` ("advance out of bounds"), which killed the
+        // relay's per-stream forwarding task and the client's single datagram
+        // receive task (taking all audio *and* video with it).
+        const METADATA_TAIL_LEN: usize = 8 + 1 + 1 + 8 + 1 + 2 + 2;
+        if buf.remaining() < track_len + METADATA_TAIL_LEN {
             return Err(ProtocolError::BufferTooShort {
-                expected: track_len + 22,
+                expected: track_len + METADATA_TAIL_LEN,
                 actual: buf.remaining(),
             });
         }
@@ -125,6 +164,20 @@ impl VideoFrameMetadata {
         let is_keyframe = buf.get_u8() != 0;
         let fragment_index = buf.get_u16();
         let fragment_count = buf.get_u16();
+
+        // Fragmentation sanity, enforced once here so every consumer (relay
+        // routing, client reassembly) inherits it. `fragment_count` sizes a
+        // receiver-side slot vector, so an unvalidated 65535 from the wire is a
+        // ~1300x amplification of a single ~1200-byte datagram.
+        if fragment_count == 0
+            || fragment_count as usize > MAX_FRAGMENTS_PER_FRAME
+            || fragment_index >= fragment_count
+        {
+            return Err(ProtocolError::InvalidFragmentation {
+                index: fragment_index,
+                count: fragment_count,
+            });
+        }
 
         Ok(Self {
             stream_id: StreamId::new(stream_id),
@@ -250,6 +303,12 @@ impl MediaHeader {
 
         let byte0 = buf.get_u8();
         let version = (byte0 >> 7) & 0x01;
+        // The version bit is parsed from remote input, so it must be checked,
+        // not merely recorded: everything downstream (nonce construction, the
+        // metadata layout, the payload_length semantics) is version-1 specific.
+        if version != PROTOCOL_VERSION {
+            return Err(ProtocolError::UnsupportedVersion(version));
+        }
         let track_type = TrackType::try_from((byte0 >> 6) & 0x01)?;
         let simulcast_layer = byte0 & 0x0F;
         let sequence = buf.get_u16();
@@ -308,6 +367,8 @@ pub enum ProtocolError {
     InvalidIdentifier(&'static str),
     #[error("invalid codec id in video frame metadata")]
     InvalidCodecId,
+    #[error("invalid fragmentation: index {index} of count {count}")]
+    InvalidFragmentation { index: u16, count: u16 },
 }
 
 #[cfg(test)]
@@ -429,5 +490,290 @@ mod tests {
         let routed = MediaHeader::decode(&mut &encoded[..HEADER_SIZE]).unwrap();
         assert_eq!(routed.ssrc, header.ssrc);
         assert_eq!(routed.track_type, TrackType::Video);
+    }
+
+    /// Regression: the length guard reserved 22 bytes for a 23-byte fixed tail,
+    /// so a 24-byte metadata body passed the check and then panicked inside
+    /// `Buf::advance` on the final `get_u16` ("advance out of bounds: the len is
+    /// 1 but advancing by 2"). Reachable from the relay's uni-stream forwarder
+    /// and from the client's single datagram receive task.
+    #[test]
+    fn truncated_metadata_body_errors_instead_of_panicking() {
+        // stream_len = 0, track_len = 0, then 22 of the 23 required tail bytes:
+        // one byte short on `fragment_count`.
+        let mut body = Vec::new();
+        body.push(0u8); // stream_len
+        body.push(0u8); // track_len
+        body.extend_from_slice(&77u64.to_be_bytes()); // frame_id
+        body.push(0); // layer_id
+        body.push(VideoCodec::Vp9.header_id()); // codec
+        body.extend_from_slice(&0u64.to_be_bytes()); // timestamp_us
+        body.push(1); // is_keyframe
+        body.extend_from_slice(&0u16.to_be_bytes()); // fragment_index
+        body.push(0); // fragment_count: ONE byte short
+        assert_eq!(body.len(), 24);
+
+        let err = VideoFrameMetadata::decode(&mut body.as_slice())
+            .expect_err("truncated metadata must be rejected, not panic");
+        assert!(matches!(err, ProtocolError::BufferTooShort { .. }), "{err}");
+    }
+
+    /// Every prefix of a valid encoding must be rejected cleanly. This is the
+    /// generalization of the 24-byte case above: the guard must reserve exactly
+    /// what the subsequent reads consume, for every identifier length.
+    #[test]
+    fn every_truncation_of_valid_metadata_is_rejected() {
+        for (stream, track) in [
+            ("", ""),
+            ("s", "t"),
+            ("stream-42", "screen"),
+            (
+                "a-rather-long-stream-identifier-0123456789",
+                "camera-track-id",
+            ),
+        ] {
+            let metadata = VideoFrameMetadata {
+                stream_id: StreamId::new(stream),
+                track_id: TrackId::new(track),
+                frame_id: u64::MAX,
+                layer_id: 3,
+                codec: VideoCodec::H264,
+                timestamp_us: 1,
+                is_keyframe: true,
+                fragment_index: 2,
+                fragment_count: 5,
+            };
+            let mut buf = BytesMut::new();
+            metadata.encode(&mut buf).unwrap();
+            let full = buf.freeze();
+
+            for cut in 0..full.len() {
+                let mut slice = &full[..cut];
+                let result = VideoFrameMetadata::decode(&mut slice);
+                assert!(
+                    result.is_err(),
+                    "prefix of length {cut} for ({stream:?},{track:?}) decoded as valid"
+                );
+            }
+            // The complete buffer still round-trips.
+            assert_eq!(
+                VideoFrameMetadata::decode(&mut full.as_ref()).unwrap(),
+                metadata
+            );
+        }
+    }
+
+    #[test]
+    fn zero_and_oversized_fragment_counts_are_rejected() {
+        let base = VideoFrameMetadata {
+            stream_id: StreamId::new("s"),
+            track_id: TrackId::new("t"),
+            frame_id: 1,
+            layer_id: 0,
+            codec: VideoCodec::Vp9,
+            timestamp_us: 0,
+            is_keyframe: false,
+            fragment_index: 0,
+            fragment_count: 1,
+        };
+        let encode_decode = |m: &VideoFrameMetadata| {
+            let mut buf = BytesMut::new();
+            m.encode(&mut buf).unwrap();
+            VideoFrameMetadata::decode(&mut buf.freeze())
+        };
+
+        assert!(encode_decode(&base).is_ok());
+
+        let zero = VideoFrameMetadata {
+            fragment_count: 0,
+            ..base.clone()
+        };
+        assert!(matches!(
+            encode_decode(&zero),
+            Err(ProtocolError::InvalidFragmentation { .. })
+        ));
+
+        let huge = VideoFrameMetadata {
+            fragment_index: 0,
+            fragment_count: u16::MAX,
+            ..base.clone()
+        };
+        assert!(matches!(
+            encode_decode(&huge),
+            Err(ProtocolError::InvalidFragmentation { .. })
+        ));
+
+        let out_of_range = VideoFrameMetadata {
+            fragment_index: 4,
+            fragment_count: 4,
+            ..base.clone()
+        };
+        assert!(matches!(
+            encode_decode(&out_of_range),
+            Err(ProtocolError::InvalidFragmentation { .. })
+        ));
+
+        let at_cap = VideoFrameMetadata {
+            fragment_index: 0,
+            fragment_count: MAX_FRAGMENTS_PER_FRAME as u16,
+            ..base
+        };
+        assert!(encode_decode(&at_cap).is_ok());
+    }
+
+    #[test]
+    fn header_rejects_unsupported_version() {
+        // Version bit 0 with a valid track type / layer.
+        let mut bytes = vec![0u8; HEADER_SIZE];
+        bytes[0] = 0b0000_0000;
+        assert!(matches!(
+            MediaHeader::decode(&mut bytes.as_slice()),
+            Err(ProtocolError::UnsupportedVersion(0))
+        ));
+    }
+
+    #[test]
+    fn oversized_identifiers_are_rejected_both_ways() {
+        let long = "x".repeat(MAX_IDENTIFIER_LEN + 1);
+        let metadata = VideoFrameMetadata {
+            stream_id: StreamId::new(long.clone()),
+            track_id: TrackId::new("t"),
+            frame_id: 0,
+            layer_id: 0,
+            codec: VideoCodec::Vp9,
+            timestamp_us: 0,
+            is_keyframe: false,
+            fragment_index: 0,
+            fragment_count: 1,
+        };
+        let mut buf = BytesMut::new();
+        assert!(matches!(
+            metadata.encode(&mut buf),
+            Err(ProtocolError::IdentifierTooLong("stream_id"))
+        ));
+
+        // Hand-built wire bytes with an over-long stream_id must be rejected on
+        // decode too (the encoder is not the only thing that produces bytes).
+        let mut wire = Vec::new();
+        wire.push((MAX_IDENTIFIER_LEN + 1) as u8);
+        wire.extend_from_slice(long.as_bytes());
+        wire.extend_from_slice(&[0u8; 32]);
+        assert!(matches!(
+            VideoFrameMetadata::decode(&mut wire.as_slice()),
+            Err(ProtocolError::IdentifierTooLong("stream_id"))
+        ));
+    }
+
+    /// Deterministic xorshift64* — a reproducible byte source for the fuzz
+    /// sweeps below, so a failure is replayable without an external crate.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn next_u8(&mut self) -> u8 {
+            (self.next_u64() >> 24) as u8
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next_u64() % n as u64) as usize
+        }
+    }
+
+    /// Property: `VideoFrameMetadata::decode` and `MediaStreamFrame::decode` are
+    /// total over arbitrary byte strings — every input either parses or returns
+    /// a `ProtocolError`, and none of them panics. Both are fed directly from
+    /// the network (relay uni-stream forwarder, client datagram receive task),
+    /// so a panic here is a remote DoS.
+    #[test]
+    fn decoders_never_panic_on_arbitrary_bytes() {
+        let mut rng = Rng(0x5EED_1234_ABCD_0001);
+        for _ in 0..20_000 {
+            let len = rng.below(96);
+            let bytes: Vec<u8> = (0..len).map(|_| rng.next_u8()).collect();
+
+            // Never panics; the result itself is unconstrained.
+            let _ = VideoFrameMetadata::decode(&mut bytes.as_slice());
+            let _ = MediaStreamFrame::decode(&bytes);
+            let _ = MediaHeader::decode(&mut bytes.as_slice());
+        }
+    }
+
+    /// Property: single-byte mutations and truncations of a *valid* encoding —
+    /// the adversarial shape that actually reaches the decoders, since a hostile
+    /// peer starts from well-formed frames — never panic, and a decoded frame
+    /// always satisfies the invariants the receivers rely on.
+    #[test]
+    fn decoders_never_panic_on_mutated_valid_frames() {
+        let mut rng = Rng(0xC0FF_EE00_1234_5678);
+
+        let header = MediaHeader {
+            version: PROTOCOL_VERSION,
+            track_type: TrackType::Video,
+            simulcast_layer: 1,
+            sequence: 7,
+            timestamp: 90_000,
+            ssrc: 0x1234_5678,
+            audio_level: 127,
+            key_epoch: 2,
+            payload_length: 0,
+            codec: VideoCodec::H264.header_id(),
+        };
+        let metadata = VideoFrameMetadata {
+            stream_id: StreamId::new("stream-42"),
+            track_id: TrackId::new("screen"),
+            frame_id: 900,
+            layer_id: 1,
+            codec: VideoCodec::H264,
+            timestamp_us: 123,
+            is_keyframe: true,
+            fragment_index: 3,
+            fragment_count: 9,
+        };
+        let valid = MediaStreamFrame {
+            header,
+            metadata,
+            payload: Bytes::from(vec![0x5Au8; 300]),
+        }
+        .encode()
+        .unwrap();
+
+        for _ in 0..20_000 {
+            let mut bytes = valid.to_vec();
+            // Truncate at a random point (including "not at all").
+            let cut = rng.below(bytes.len() + 1);
+            bytes.truncate(cut);
+            // Flip a handful of random bytes.
+            if !bytes.is_empty() {
+                for _ in 0..1 + rng.below(4) {
+                    let idx = rng.below(bytes.len());
+                    bytes[idx] = rng.next_u8();
+                }
+            }
+
+            if let Ok(frame) = MediaStreamFrame::decode(&bytes) {
+                // Anything that parses must satisfy the invariants the
+                // reassembly pool and the relay router depend on.
+                assert_eq!(frame.header.version, PROTOCOL_VERSION);
+                assert!(frame.metadata.fragment_count >= 1);
+                assert!(frame.metadata.fragment_count as usize <= MAX_FRAGMENTS_PER_FRAME);
+                assert!(frame.metadata.fragment_index < frame.metadata.fragment_count);
+                assert!(frame.metadata.stream_id.0.len() <= MAX_IDENTIFIER_LEN);
+                assert!(frame.metadata.track_id.0.len() <= MAX_IDENTIFIER_LEN);
+            }
+
+            // The relay parses the metadata straight out of the body after the
+            // header; exercise that exact call shape too.
+            if bytes.len() > HEADER_SIZE {
+                let _ = VideoFrameMetadata::decode(&mut &bytes[HEADER_SIZE..]);
+            }
+        }
     }
 }

@@ -120,6 +120,13 @@ pub async fn start_voice_session(
     use super::session::NativeMediaSession;
     use super::{audio_pipeline, events};
 
+    // The renderer supplies both `endpoint` and `cert_hash`, so certificate
+    // pinning is not a control here — a compromised renderer simply pins the
+    // certificate of whatever host it wants us to dial. Gate on the *host*
+    // against the user's explicitly trusted servers first, exactly as the
+    // HTTP/SSE commands do with `ensure_native_fetch_target_is_trusted`.
+    crate::ensure_native_media_endpoint_is_trusted(&endpoint)?;
+
     let mut session = NativeMediaSession::connect(
         &endpoint,
         &token,
@@ -1210,6 +1217,9 @@ pub async fn quic_upload_file(
     file_path: String,
     app: tauri::AppHandle,
 ) -> Result<FileTransferResult, String> {
+    // Same trust gate as `start_voice_session`: the caller chooses both the
+    // endpoint and the certificate pin, so the pin proves nothing on its own.
+    crate::ensure_native_media_endpoint_is_trusted(&endpoint)?;
     let validated_path = validate_file_path(&app, &file_path)?;
     let path_str = validated_path
         .to_str()
@@ -1227,6 +1237,9 @@ pub async fn quic_download_file(
     dest_path: String,
     app: tauri::AppHandle,
 ) -> Result<FileTransferResult, String> {
+    // Same trust gate as `start_voice_session`: the caller chooses both the
+    // endpoint and the certificate pin, so the pin proves nothing on its own.
+    crate::ensure_native_media_endpoint_is_trusted(&endpoint)?;
     let validated_path = validate_file_path(&app, &dest_path)?;
     let path_str = validated_path
         .to_str()

@@ -4,6 +4,7 @@ import { concatBytes, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { channelApi, type GroupSenderKeyRecord } from '../api/channels';
 import type { MessageE2eePayload } from '../types';
 import { fromBase64, toArrayBuffer, toBase64 } from './crypto/util';
+import { assertPinnedIdentityKey, assertPinnedIdentityKeys, IdentityPinError } from './keyVerification';
 import { secureGet, secureSet } from './secureStorage';
 
 const GROUP_DM_CONTEXT_PREFIX = 'paracord:group-dm-sender-key:v1:';
@@ -267,6 +268,16 @@ export async function encryptGroupDmMessage(
       local!.distributed_public_keys?.[recipient.id] !== recipient.public_key,
   );
   if (pendingRecipients.length > 0) {
+    // Recipient keys come from the server's channel object, so the sender key
+    // would otherwise be wrapped to whatever key the server supplies. Assert
+    // every pin up front (one store round trip) and fail the whole send on a
+    // rotation rather than handing the group key to an unverified identity.
+    await assertPinnedIdentityKeys(
+      pendingRecipients.map((recipient) => ({
+        userId: recipient.id,
+        identityKeyHex: recipient.public_key!,
+      })),
+    );
     const envelopes = await Promise.all(
       pendingRecipients.map(async (recipient) => {
         const envelope = await encryptSenderKeyEnvelope(
@@ -341,6 +352,19 @@ export async function decryptGroupDmMessage(
       const senderPublicKey = resolvePublicKey(record.sender_id);
       if (!senderPublicKey) {
         continue;
+      }
+      try {
+        // Accepting a sender key derived against a substituted identity key
+        // would let the server hand the group a key it knows.
+        await assertPinnedIdentityKey(record.sender_id, senderPublicKey);
+      } catch (err) {
+        if (err instanceof IdentityPinError) {
+          console.warn(
+            `[group-e2ee] ignoring sender key from ${record.sender_id}: ${err.message}`,
+          );
+          continue;
+        }
+        throw err;
       }
       try {
         const decrypted = await decryptSenderKeyEnvelope(

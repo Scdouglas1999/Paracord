@@ -129,6 +129,10 @@ export function useUnreadCounts(mutedGuildIds: string[]) {
       map.set(guild.id, resolved ?? activeId);
     }
     return map;
+    // `servers` is read through `useServerListStore.getState()` inside the body,
+    // so it is invisible to the linter but must still invalidate this map when
+    // the server list changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [guilds, servers, activeId]);
 
   const serverIdForGuild = (guildId: string): string =>

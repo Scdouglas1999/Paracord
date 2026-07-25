@@ -35,6 +35,7 @@ import { useLightboxStore, type LightboxImage } from '../../stores/lightboxStore
 import { confirm } from '../../stores/confirmStore';
 import { buildGuildEmojiImageUrl, parseCustomEmojiToken } from '../../lib/customEmoji';
 import { isAllowedImageMimeType, safeClientResourceUrl } from '../../lib/security';
+import { mentionsEveryone } from '../../lib/mentions';
 import { resolveUserAvatarUrl } from '../../lib/userAvatar';
 import { MessageEmbedCard, extractUrls } from './MessageEmbed';
 import { GitHubEventEmbed, isGitHubWebhookMessage } from './GitHubEventEmbed';
@@ -45,6 +46,7 @@ import { toast } from '../../stores/toastStore';
 import { LoadingSpinner, ErrorBanner } from '../ui/Feedback';
 import { Button } from '../ui/Button';
 import { displayName } from '../../lib/displayName';
+import { fetchChannelOverwrites, fetchGuildRoles } from '../../lib/permissionDataCache';
 
 const EMPTY_TYPING: string[] = [];
 const EMPTY_CHANNELS: Channel[] = [];
@@ -83,8 +85,10 @@ function getCachedParsedMarkdown(
 
 /** Match gateway mention logic: @everyone or <@id> / <@!id> in content. */
 export function messageMentionsUser(msg: Message, userId: string | undefined | null): boolean {
-  if (!userId || msg.author.id === userId) return false;
-  if (msg.mention_everyone) return true;
+  // `author` is typed as required but a malformed payload can omit it; never
+  // let a mention check be the thing that throws inside a render.
+  if (!userId || msg.author?.id === userId) return false;
+  if (mentionsEveryone(msg)) return true;
   const content = typeof msg.content === 'string' ? msg.content : '';
   return new RegExp(`<@!?${userId}>`).test(content);
 }
@@ -94,13 +98,35 @@ const REPLY_INDENT_PX = 18;
 const THREAD_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const _threadHydratedAt = new Map<string, number>();
 const IMAGE_ATTACHMENT_EXTENSION_RE = /\.(png|jpe?g|gif|webp)$/i;
-let lightboxBlobUrls: string[] = [];
 
-function revokeLightboxBlobUrls(): void {
-  for (const url of lightboxBlobUrls) {
-    URL.revokeObjectURL(url);
+/**
+ * Object URLs handed to the lightbox, grouped by the open that created them.
+ *
+ * This used to be one flat module-global array drained at the *start* of the
+ * next open. Two consequences: nothing was ever revoked while the component
+ * stayed mounted (a session of image viewing leaked every blob), and because
+ * URLs are pushed after an `await`, two fast clicks let the second open revoke
+ * the URLs the first was still resolving — the lightbox opened blank.
+ *
+ * Keying by open generation fixes both: each open revokes only the batches that
+ * preceded it, and unmount revokes everything left.
+ */
+let lightboxBlobGeneration = 0;
+const lightboxBlobUrls = new Map<number, string[]>();
+
+/** Revoke every batch older than `keepGeneration`. */
+function revokeLightboxBlobUrls(keepGeneration = Number.POSITIVE_INFINITY): void {
+  for (const [generation, urls] of lightboxBlobUrls) {
+    if (generation >= keepGeneration) continue;
+    for (const url of urls) URL.revokeObjectURL(url);
+    lightboxBlobUrls.delete(generation);
   }
-  lightboxBlobUrls = [];
+}
+
+function trackLightboxBlobUrl(generation: number, url: string): void {
+  const batch = lightboxBlobUrls.get(generation);
+  if (batch) batch.push(url);
+  else lightboxBlobUrls.set(generation, [url]);
 }
 
 /**
@@ -204,9 +230,21 @@ function getTimestamp(msg: { timestamp?: string; created_at?: string }): string 
   return msg.timestamp || msg.created_at || '';
 }
 
-export function shouldGroup(prev: { author: { id: string }; timestamp?: string; created_at?: string } | null, curr: { author: { id: string }; timestamp?: string; created_at?: string }): boolean {
+type GroupableMessage = {
+  author?: { id?: string | null } | null;
+  timestamp?: string;
+  created_at?: string;
+};
+
+export function shouldGroup(prev: GroupableMessage | null, curr: GroupableMessage): boolean {
   if (!prev) return false;
-  if (prev.author.id !== curr.author.id) return false;
+  // Author may be absent on a malformed payload. Two authorless rows are not
+  // "the same author" — never group them, and never dereference blindly: this
+  // exact read is what a bot reply used to crash on, taking the app with it.
+  const prevAuthorId = prev.author?.id;
+  const currAuthorId = curr.author?.id;
+  if (!prevAuthorId || !currAuthorId) return false;
+  if (prevAuthorId !== currAuthorId) return false;
   const prevTs = getTimestamp(prev);
   const currTs = getTimestamp(curr);
   if (!prevTs || !currTs) return false;
@@ -482,9 +520,10 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       return;
     }
     let cancelled = false;
-    channelApi
-      .getOverwrites(channelId)
-      .then(({ data }) => {
+    // Shared, deduped fetch: MessageList, MessageInput and MemberList all need
+    // this for the same channel and used to request it independently.
+    fetchChannelOverwrites(channelId)
+      .then((data) => {
         if (!cancelled) setChannelOverwrites(data);
       })
       .catch(() => {
@@ -500,7 +539,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   });
   const canManageMessages = isAdmin || hasPermission(permissions, Permissions.MANAGE_MESSAGES);
   // DMs: API only requires recipient membership (no MANAGE_MESSAGES). Guild: MANAGE_MESSAGES.
-  const canPinInChannel = Boolean(activeGuildId) ? canManageMessages : true;
+  const canPinInChannel = activeGuildId ? canManageMessages : true;
   const canAddReactions =
     !activeGuildId || isAdmin || hasPermission(permissions, Permissions.ADD_REACTIONS);
   const activeChannelType = activeChannel?.channel_type ?? activeChannel?.type;
@@ -533,7 +572,13 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const activeTyping = typingUsers.filter((id) => id !== me);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  /** Messages that arrived while the user was scrolled away from the bottom. */
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const lastMessageId = messages[messages.length - 1]?.id ?? null;
+  const newMessageAnnouncement =
+    newMessageCount > 0
+      ? `${newMessageCount} new message${newMessageCount === 1 ? '' : 's'}`
+      : '';
 
   // All overlay/dialog UI state lives in one reducer; slice setters below are
   // thin wrappers over dispatch that keep the previous call-site API intact.
@@ -623,6 +668,11 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     dispatchUI({ slice: 'editHistory', patch: { editHistoryData } });
   const setEditHistoryLoading = (editHistoryLoading: boolean) =>
     dispatchUI({ slice: 'editHistory', patch: { editHistoryLoading } });
+  const editHistoryDialogRef = useRef<HTMLDivElement>(null);
+  const closeEditHistoryDialog = useCallback(() => {
+    dispatchUI({ slice: 'editHistory', patch: { editHistoryMsgId: null } });
+  }, []);
+  useFocusTrap(editHistoryDialogRef, Boolean(editHistoryMsgId), closeEditHistoryDialog);
   const [isCoarsePointer, setIsCoarsePointer] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(hover: none), (pointer: coarse)').matches;
@@ -634,6 +684,8 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   const [editSaving, setEditSaving] = useState(false);
   const [threadCreating, setThreadCreating] = useState(false);
   const jumpFetchAttemptedRef = useRef<string | null>(null);
+  /** Message id whose `#msg-` deep link has already been scrolled to, once. */
+  const hashJumpDoneRef = useRef<string | null>(null);
   const queryJumpAttemptedRef = useRef<string | null>(null);
   const pendingScrollMessageRef = useRef<string | null>(null);
   const jumpHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -676,11 +728,18 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       setGuildRoles([]);
       return;
     }
-    guildApi.getRoles(activeGuildId).then(({ data }) => {
-      setGuildRoles(data);
+    // Guild switches are fast and this response is not. Without the guard, the
+    // previous guild's roles landed after the switch and painted every author
+    // name with a colour from a guild the user is no longer looking at.
+    let cancelled = false;
+    fetchGuildRoles(activeGuildId).then((data) => {
+      if (!cancelled) setGuildRoles(data);
     }).catch(() => {
       // non-fatal, role colors will simply not show
     });
+    return () => {
+      cancelled = true;
+    };
   }, [activeGuildId]);
 
   const messageById = useMemo(() => {
@@ -864,10 +923,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
   useEffect(() => {
     hasHydratedChannelRef.current = false;
     lastReadStateMessageIdRef.current = null;
+    // A deep link is per-channel; re-arm the once-guard so navigating away and
+    // back to a `#msg-` link still jumps.
+    hashJumpDoneRef.current = null;
     readStateRetryRef.current = 0;
     prevMessagesLenRef.current = 0;
     isLoadingMoreRef.current = false;
     setShowScrollButton(false);
+    setNewMessageCount(0);
     setThreadModalForMessageId(null);
     setThreadCreateError(null);
     setThreadName('');
@@ -939,6 +1002,10 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     }
   }, [isLoading]);
 
+  // Latest scroll machinery, refreshed every render for the effect below.
+  const scrollDepsRef = useRef({ virtualizer, rows, markLatestRead, isNearBottom });
+  scrollDepsRef.current = { virtualizer, rows, markLatestRead, isNearBottom };
+
   // Scroll to bottom on new messages / initial load
   useEffect(() => {
     if (!messages.length) return;
@@ -950,6 +1017,14 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       return;
     }
 
+    // Read the scroll machinery through a ref rather than closing over it.
+    // `virtualizer`, `rows` and `markLatestRead` all change identity on almost
+    // every render (typing indicators, reactions, hover). Listing them as
+    // dependencies would re-run this effect — and therefore re-scroll — for
+    // reasons that have nothing to do with a new message arriving; omitting
+    // them without a ref would capture stale values. The ref gives correct
+    // values with the intended trigger set (channel, count, newest id).
+    const { virtualizer, rows, markLatestRead, isNearBottom } = scrollDepsRef.current;
     const shouldStickToBottom = !hasHydratedChannelRef.current || isNearBottom();
     if (shouldStickToBottom) {
       // Scroll to last row (bottom-sentinel)
@@ -961,8 +1036,16 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       });
       markLatestRead();
       setShowScrollButton(false);
+      setNewMessageCount(0);
     } else {
       setShowScrollButton(true);
+      // Only arrivals the user has scrolled away from are worth announcing.
+      // `hasHydratedChannelRef` is false only for the channel's first page, so
+      // the initial backlog never counts as "new".
+      if (hasHydratedChannelRef.current && messages.length > prevMessagesLenRef.current) {
+        const arrived = messages.length - prevMessagesLenRef.current;
+        setNewMessageCount((current) => current + arrived);
+      }
     }
     hasHydratedChannelRef.current = true;
     prevMessagesLenRef.current = messages.length;
@@ -977,23 +1060,42 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     }, 2200);
   }, []);
 
+  // Unmount cleanup for every timer and object URL this component owns. Without
+  // the blob revoke, leaving a channel stranded every lightbox image in memory
+  // for the lifetime of the tab.
   useEffect(() => () => {
     if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
+    if (readStateTimerRef.current) clearTimeout(readStateTimerRef.current);
+    revokeLightboxBlobUrls();
   }, []);
 
   useEffect(() => {
     if (!window.location.hash.startsWith('#msg-')) {
       jumpFetchAttemptedRef.current = null;
+      hashJumpDoneRef.current = null;
       return;
     }
     const msgId = window.location.hash.slice(5); // strip '#msg-'
+    // This effect depends on `rows`, which is rebuilt on every new message,
+    // reaction and typing flicker. Without a once-guard the found-row branch
+    // re-ran on each of those and yanked the viewport back to the search
+    // target forever — the deep link permanently owned the scroll position.
+    if (hashJumpDoneRef.current === msgId) return;
     const rowIndex = rows.findIndex(
       (r) => r.type === 'message' && r.message.id === msgId
     );
     if (rowIndex >= 0) {
+      hashJumpDoneRef.current = msgId;
       virtualizer.scrollToIndex(rowIndex, { align: 'center', behavior: 'smooth' });
       highlightJumpTarget(msgId);
       jumpFetchAttemptedRef.current = msgId;
+      // Consume the hash the same way `?message=` is stripped once its target
+      // is in view, so a later reload or re-render cannot replay the jump.
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${window.location.search}`,
+      );
       return;
     }
     // Message not in the loaded window — fetch around the anchor once, then scroll.
@@ -1096,6 +1198,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     setShowScrollButton(!nearBottom && distanceFromBottom > 200);
     if (nearBottom) {
       markLatestRead();
+      setNewMessageCount(0);
     }
 
     // Load older messages when scrolled near top
@@ -1109,6 +1212,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
     virtualizer.scrollToIndex(rows.length - 1, { align: 'end', behavior: 'smooth' });
     markLatestRead();
     setShowScrollButton(false);
+    setNewMessageCount(0);
   }, [virtualizer, rows.length, markLatestRead]);
 
   const openReactionPicker = (e: React.MouseEvent, messageId: string) => {
@@ -1638,8 +1742,23 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
       return <div style={{ height: 1 }} />;
     }
 
-    // Message row
-    const msg = row.message;
+    // Message row.
+    //
+    // The store rejects authorless payloads, but this render path is also
+    // reached for messages cached before that guard existed and for any future
+    // shape the server invents. Substituting a placeholder author costs one
+    // object and removes the last way a single bad record can white-screen the
+    // app — the row degrades instead of the whole feed.
+    const msg: Message = row.message.author?.id
+      ? row.message
+      : {
+          ...row.message,
+          author: {
+            id: `unknown-${row.message.id}`,
+            username: 'Unknown User',
+            discriminator: '0000',
+          },
+        };
     const isGrouped = row.isGrouped;
     const replyDepth = row.replyDepth;
     const replyParentId = row.replyParentId;
@@ -2120,7 +2239,11 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                   }
                   const imageAttachments = msg.attachments!.filter(isImageAttachment);
                   const openImageLightbox = async () => {
-                    revokeLightboxBlobUrls();
+                    // Claim a generation up front, then revoke only the batches
+                    // that came before it — never the URLs this call is about to
+                    // resolve.
+                    const generation = ++lightboxBlobGeneration;
+                    revokeLightboxBlobUrls(generation);
                     const safeImageAttachments = await Promise.all(
                       imageAttachments.map(async (imageAtt) => {
                         const imageSrc = resolveFederatedAttachmentUrl(imageAtt, msg.channel_id);
@@ -2130,7 +2253,7 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
                         try {
                           const resolvedSrc = await fileApi.resolveAttachmentObjectUrl(safeRawUrl);
                           if (resolvedSrc.startsWith('blob:')) {
-                            lightboxBlobUrls.push(resolvedSrc);
+                            trackLightboxBlobUrl(generation, resolvedSrc);
                           }
                           return {
                             attachment: imageAtt,
@@ -2387,6 +2510,15 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
 
   return (
     <div className="relative flex-1 overflow-hidden">
+      {/*
+        New-message announcements live here, NOT on the scroll container.
+        `aria-live` on a virtualized list makes every row mount an announcement,
+        so a screen-reader user scrolling back through history heard the entire
+        feed read out. A dedicated region announces only the delta.
+      */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {newMessageAnnouncement}
+      </div>
       <div
         ref={scrollRef}
         className="h-full overflow-y-auto px-2.5 sm:px-5"
@@ -2394,7 +2526,6 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
         style={{ overscrollBehavior: 'contain' }}
         role="feed"
         aria-busy={isLoading ? 'true' : 'false'}
-        aria-live="polite"
         aria-label="Message history"
       >
         {isLoading && messages.length === 0 ? (
@@ -2658,14 +2789,26 @@ export function MessageList({ channelId, onReply }: MessageListProps) {
           }}
         >
           <div
-            className="glass-modal absolute max-h-[min(20rem,calc(100dvh-1rem))] w-[min(20rem,calc(100vw-1rem))] overflow-y-auto rounded-md border border-border-subtle shadow-xl backdrop-blur-md"
+            ref={editHistoryDialogRef}
+            // Was a bare div: no role, no accessible name, no focus management,
+            // and dismissable only by clicking the backdrop — completely
+            // unreachable by keyboard or screen reader. `useFocusTrap` supplies
+            // focus containment, initial focus and Escape-to-close.
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-history-dialog-title"
+            tabIndex={-1}
+            className="glass-modal absolute max-h-[min(20rem,calc(100dvh-1rem))] w-[min(20rem,calc(100vw-1rem))] overflow-y-auto rounded-md border border-border-subtle shadow-xl backdrop-blur-md focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             style={{
               left: Math.max(8, Math.min(editHistoryPos.x, window.innerWidth - Math.min(320, window.innerWidth - 16) - 8)),
               top: Math.max(8, Math.min(editHistoryPos.y, window.innerHeight - Math.min(320, window.innerHeight - 16) - 8)),
               boxShadow: 'var(--shadow-lg)',
             }}
           >
-            <div className="border-b border-border-subtle px-3 py-2 text-label font-semibold text-text-primary">
+            <div
+              id="edit-history-dialog-title"
+              className="border-b border-border-subtle px-3 py-2 text-label font-semibold text-text-primary"
+            >
               Edit History
             </div>
             {editHistoryLoading ? (

@@ -36,11 +36,13 @@ fn message_xp_amount(content: &str) -> i64 {
     (MESSAGE_XP_MIN + length_bonus).clamp(MESSAGE_XP_MIN, MESSAGE_XP_MAX)
 }
 
+/// Require MANAGE_GUILD and return the guild owner plus the actor's effective
+/// permissions, so callers that go on to grant roles can enforce assignability.
 async fn ensure_manage_guild(
     state: &AppState,
     guild_id: i64,
     user_id: i64,
-) -> Result<(), ApiError> {
+) -> Result<(i64, Permissions), ApiError> {
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
@@ -52,7 +54,7 @@ async fn ensure_manage_guild(
     let perms =
         paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
-    Ok(())
+    Ok((guild.owner_id, perms))
 }
 
 pub(crate) async fn award_message_xp(
@@ -308,7 +310,7 @@ pub async fn update_level_roles(
     Path(guild_id): Path<i64>,
     Json(body): Json<UpdateLevelRolesRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    ensure_manage_guild(&state, guild_id, auth.user_id).await?;
+    let (guild_owner_id, actor_perms) = ensure_manage_guild(&state, guild_id, auth.user_id).await?;
 
     if body.mappings.len() > 200 {
         return Err(ApiError::BadRequest(
@@ -336,6 +338,18 @@ pub async fn update_level_roles(
                 "role_id must belong to this guild".to_string(),
             ));
         }
+        // A level-role mapping is an automatic, unattended role grant: every
+        // member who reaches the level receives the role without any further
+        // authorization check. It therefore has to satisfy exactly the same
+        // assignability rules as a manual role assignment, otherwise a
+        // MANAGE_GUILD moderator could map the ADMINISTRATOR role to level 0
+        // and escalate themselves (and the whole guild) on the next message.
+        crate::routes::members::validate_member_role_assignment(
+            guild_owner_id,
+            auth.user_id,
+            actor_perms,
+            &role,
+        )?;
         parsed_mappings.push((mapping.level, role_id));
     }
 

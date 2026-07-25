@@ -18,7 +18,16 @@ pub fn generate_invite_code(length: usize) -> String {
 }
 
 /// Create a full guild with owner membership, @everyone role, and default channels.
-/// Returns (guild_row, general_channel_id).
+///
+/// The six writes are all-or-nothing: if any step after the guild row fails, the
+/// guild is deleted again (every child table cascades off `spaces.id`) and the
+/// original error is returned. A partial guild is unrecoverable for the user —
+/// without the owner's member row they can neither enter it nor delete it.
+///
+/// This is a compensating rollback, not a real transaction: `paracord-db`
+/// exposes only `&DbPool` entry points, so the writes cannot share one `sqlx`
+/// transaction from here. A concurrent reader can still observe the half-built
+/// guild during the failure window.
 pub async fn create_guild_full(
     pool: &DbPool,
     guild_id: i64,
@@ -29,6 +38,25 @@ pub async fn create_guild_full(
     let guild =
         paracord_db::guilds::create_guild(pool, guild_id, name, owner_id, icon_hash).await?;
 
+    match seed_new_guild(pool, guild_id, owner_id).await {
+        Ok(()) => Ok(guild),
+        Err(err) => {
+            if let Err(cleanup_err) = paracord_db::guilds::delete_guild(pool, guild_id).await {
+                tracing::error!(
+                    guild_id,
+                    error = %cleanup_err,
+                    "failed to roll back a partially created guild; it is left unusable"
+                );
+            }
+            Err(err)
+        }
+    }
+}
+
+/// Populate a freshly created guild with its owner membership, default role and
+/// starter channels. Split out of [`create_guild_full`] so every failure path
+/// funnels through one rollback.
+async fn seed_new_guild(pool: &DbPool, guild_id: i64, owner_id: i64) -> Result<(), CoreError> {
     // Add owner as member
     paracord_db::members::add_member(pool, owner_id, guild_id).await?;
 
@@ -49,7 +77,7 @@ pub async fn create_guild_full(
     paracord_db::channels::create_channel(pool, voice_id, guild_id, "General", 2, 1, None, None)
         .await?;
 
-    Ok(guild)
+    Ok(())
 }
 
 /// Delete a guild, only allowed by the owner.
@@ -85,8 +113,8 @@ pub async fn update_guild(
         .await?
         .ok_or(CoreError::NotFound)?;
 
-    let roles = paracord_db::roles::get_member_roles(pool, user_id, guild_id).await?;
-    let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
+    let perms =
+        permissions::compute_guild_permissions(pool, guild_id, guild.owner_id, user_id).await?;
     permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
 
     let mut updated = paracord_db::guilds::update_guild(
@@ -124,4 +152,68 @@ pub async fn update_guild(
         .await?;
     }
     Ok(updated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn mem_pool() -> DbPool {
+        let pool = paracord_db::create_pool("sqlite::memory:", 1)
+            .await
+            .expect("create in-memory pool");
+        paracord_db::run_migrations(&pool)
+            .await
+            .expect("run migrations");
+        pool
+    }
+
+    #[tokio::test]
+    async fn create_guild_full_seeds_owner_membership() {
+        let pool = mem_pool().await;
+        paracord_db::users::create_user(&pool, 1, "owner", 1, "owner@x", "h")
+            .await
+            .unwrap();
+
+        let guild = create_guild_full(&pool, 100, "g", 1, None).await.unwrap();
+        assert_eq!(guild.id, 100);
+        assert!(paracord_db::members::get_member(&pool, 1, 100)
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            paracord_db::channels::get_guild_channels(&pool, 100)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn create_guild_full_rolls_back_a_partial_guild() {
+        let pool = mem_pool().await;
+        paracord_db::users::create_user(&pool, 1, "owner", 1, "owner@x", "h")
+            .await
+            .unwrap();
+        // Park a role on the id that create_guild_full will try to use for the new
+        // guild's default role (role id == guild id), so the third write fails.
+        paracord_db::guilds::create_guild(&pool, 100, "other", 1, None)
+            .await
+            .unwrap();
+        paracord_db::roles::create_role(&pool, 200, 100, "squatter", 0)
+            .await
+            .unwrap();
+
+        let result = create_guild_full(&pool, 200, "g", 1, None).await;
+        assert!(result.is_err(), "the role insert must fail");
+        assert!(
+            paracord_db::guilds::get_guild(&pool, 200)
+                .await
+                .unwrap()
+                .is_none(),
+            "a guild whose owner is not a member must not survive; it can be \
+             neither entered nor deleted"
+        );
+    }
 }

@@ -13,13 +13,13 @@ import {
 import {
   loadSession,
   saveSession,
-  deleteSession,
   loadPrekeyStore,
   savePrekeyStore,
   consumeLocalOPK,
   getSignedPrekeyPair,
 } from './crypto/sessionManager';
-import type { MessageHeader, PrekeyBundle } from './crypto/types';
+import type { LocalPrekeyStore, MessageHeader, PrekeyBundle, RatchetState } from './crypto/types';
+import { assertPinnedDmPeerIdentity, IdentityPinError } from './keyVerification';
 import { keysApi } from '../api/keys';
 
 // ── V1 legacy encryption (static ECDH) ──────────────────────────
@@ -44,7 +44,8 @@ function warnV1Fallback(path: string): void {
 export type DmE2eeErrorCode =
   | 'SESSION_REQUIRED'
   | 'PEER_ID_REQUIRED'
-  | 'PEER_BUNDLE_UNAVAILABLE';
+  | 'PEER_BUNDLE_UNAVAILABLE'
+  | 'PEER_IDENTITY_MISMATCH';
 
 export class DmE2eeError extends Error {
   public readonly code: DmE2eeErrorCode;
@@ -55,6 +56,40 @@ export class DmE2eeError extends Error {
     this.name = 'DmE2eeError';
     this.code = code;
     this.cause = cause;
+  }
+}
+
+/** Canonical lowercase-hex form used for all identity-key comparisons. */
+function normalizeIdentityHex(value: string): string {
+  return value.trim().toLowerCase().replace(/[^0-9a-f]/g, '');
+}
+
+/**
+ * Reject any payload whose claimed sender identity key is not the DM peer's.
+ *
+ * `header.ik` is attacker-controlled: it arrives with the ciphertext and is not
+ * authenticated by anything we already trust. Deriving a session from it — as
+ * this module used to — lets anyone able to insert a message into the channel
+ * (the server operator, or anyone on the delivery path) install a ratchet they
+ * control under the real peer's key, then read what the victim sends next and
+ * inject messages that render as the peer. The header identity key is therefore
+ * only ever a *claim* to be checked against the peer key the caller resolved.
+ */
+function assertHeaderIdentityIsPeer(headerIk: string, expectedPeerHex: string): void {
+  let headerHex: string;
+  try {
+    headerHex = bytesToHex(fromBase64(headerIk));
+  } catch {
+    throw new DmE2eeError(
+      'PEER_IDENTITY_MISMATCH',
+      'Refusing to decrypt DM: message header identity key is malformed',
+    );
+  }
+  if (!expectedPeerHex || headerHex !== expectedPeerHex) {
+    throw new DmE2eeError(
+      'PEER_IDENTITY_MISMATCH',
+      'Refusing to decrypt DM: message claims an identity key that is not this conversation peer',
+    );
   }
 }
 
@@ -95,7 +130,12 @@ async function encryptV1(
   plaintext: string,
   myPrivateKeyEd25519: Uint8Array,
   peerPublicKeyEd25519Hex: string,
+  peerUserId?: string | null,
 ): Promise<MessageE2eePayload> {
+  // V1 derives the conversation key straight from the server-supplied peer key,
+  // so the pin is the only thing standing between the user and a substituted
+  // identity key.
+  await assertPinnedDmPeerIdentity(channelId, peerPublicKeyEd25519Hex, peerUserId);
   const key = await deriveConversationKey(
     channelId,
     myPrivateKeyEd25519,
@@ -120,7 +160,9 @@ async function decryptV1(
   payload: MessageE2eePayload,
   myPrivateKeyEd25519: Uint8Array,
   peerPublicKeyEd25519Hex: string,
+  peerUserId?: string | null,
 ): Promise<string> {
+  await assertPinnedDmPeerIdentity(channelId, peerPublicKeyEd25519Hex, peerUserId);
   const key = await deriveConversationKey(
     channelId,
     myPrivateKeyEd25519,
@@ -143,12 +185,24 @@ async function decryptV1(
 
 /**
  * Fetch a peer's prekey bundle from the server and parse it into typed form.
+ *
+ * The bundle is entirely server-controlled, and its signed prekey is verified
+ * against the identity key *from the same bundle* (see `x3dh.ts`), so that
+ * signature proves nothing about who the peer is: a malicious server can hand
+ * out its own identity key with a matching self-signed prekey. The identity key
+ * is therefore checked twice before it is used — against the peer key the
+ * caller already resolved, and against the pinned key for this user.
  */
-async function fetchPeerBundle(peerUserId: string): Promise<PrekeyBundle> {
+async function fetchPeerBundle(
+  channelId: string,
+  peerUserId: string,
+  expectedIdentityHex: string,
+): Promise<PrekeyBundle> {
   if (!peerUserId.trim()) {
     throw new DmE2eeError('PEER_ID_REQUIRED', 'Unable to encrypt DM: recipient identity is unavailable');
   }
 
+  let bundle: PrekeyBundle;
   try {
     const { data } = await keysApi.getBundle(peerUserId);
     const identityKey = hexToBytes(data.identity_key);
@@ -161,7 +215,7 @@ async function fetchPeerBundle(peerUserId: string): Promise<PrekeyBundle> {
         }
       : undefined;
 
-    return {
+    bundle = {
       identityKey,
       signedPrekey: {
         id: data.signed_prekey.id,
@@ -177,6 +231,20 @@ async function fetchPeerBundle(peerUserId: string): Promise<PrekeyBundle> {
       err,
     );
   }
+
+  // Validation lives outside the try/catch above on purpose: an identity
+  // mismatch must never be reported as "bundle unavailable", which callers may
+  // treat as a reason to fall back to legacy V1 encryption.
+  const bundleIdentityHex = bytesToHex(bundle.identityKey);
+  if (bundleIdentityHex !== expectedIdentityHex) {
+    throw new DmE2eeError(
+      'PEER_IDENTITY_MISMATCH',
+      'Refusing to encrypt DM: the prekey bundle identity key does not match the recipient',
+    );
+  }
+  await assertPinnedDmPeerIdentity(channelId, bundleIdentityHex, peerUserId);
+
+  return bundle;
 }
 
 function getMyPublicKeyHex(myPrivateKeyEd25519: Uint8Array): string {
@@ -234,14 +302,19 @@ export async function encryptDmMessageV2(
   peerUserId: string,
 ): Promise<MessageE2eePayload> {
   const myPubHex = getMyPublicKeyHex(myPrivateKeyEd25519);
+  const expectedPeerHex = normalizeIdentityHex(peerPublicKeyEd25519Hex);
 
   // Try to load an existing session
   let session = await loadSession(myPubHex, peerPublicKeyEd25519Hex);
 
   if (!session) {
     // No session — initiate via X3DH
-    const bundle = await fetchPeerBundle(peerUserId).catch((err) => {
-      if (DM_E2EE_ALLOW_V1_FALLBACK) {
+    const bundle = await fetchPeerBundle(channelId, peerUserId, expectedPeerHex).catch((err) => {
+      // Only a genuinely missing/unusable bundle may fall back. An identity
+      // mismatch or a rotated pin must fail closed — falling back to V1 would
+      // encrypt to the substituted key we just rejected.
+      if (DM_E2EE_ALLOW_V1_FALLBACK && err instanceof DmE2eeError
+        && err.code === 'PEER_BUNDLE_UNAVAILABLE') {
         warnV1Fallback('encryptDmMessageV2:bundle-fetch');
         return null;
       }
@@ -249,7 +322,13 @@ export async function encryptDmMessageV2(
     });
     if (!bundle) {
       warnV1Fallback('encryptDmMessageV2:legacy-encrypt');
-      return encryptV1(channelId, plaintext, myPrivateKeyEd25519, peerPublicKeyEd25519Hex);
+      return encryptV1(
+        channelId,
+        plaintext,
+        myPrivateKeyEd25519,
+        peerPublicKeyEd25519Hex,
+        peerUserId,
+      );
     }
 
     const x3dhResult = x3dhInitiate(myPrivateKeyEd25519, bundle);
@@ -289,17 +368,110 @@ export async function encryptDmMessageV2(
 }
 
 /**
+ * The header the sender actually authenticated.
+ *
+ * `ratchetEncrypt` seals the ciphertext with `JSON.stringify({dh, pn, n})` as
+ * AES-GCM additional data; the X3DH fields (`ik`/`ek`/`opk_id`) are attached to
+ * the wire header afterwards. Feeding the full wire header back into
+ * `ratchetDecrypt` therefore produces different additional data and the tag
+ * check fails — which is why the first message of a conversation never
+ * decrypted. Rebuild the ratchet header in the sender's field order.
+ *
+ * The X3DH fields being outside the AAD is not a trust gap: `header.ik` is
+ * checked against the pinned peer identity before it is used at all.
+ */
+function ratchetHeaderOf(header: MessageHeader): MessageHeader {
+  return { dh: header.dh, pn: header.pn, n: header.n };
+}
+
+/**
+ * Derive a responder session from an X3DH initial message and decrypt with it.
+ *
+ * Nothing is persisted unless the ciphertext actually decrypts. That matters
+ * twice over:
+ *
+ *  - The stored session is only replaced by a message that authenticates under
+ *    the derived keys. DH1 = X25519(SPK_b, IK_a) can only be computed by the
+ *    holder of the peer's identity private key, and `header.ik` has already
+ *    been checked against the pinned peer key, so a successful decrypt proves
+ *    the real peer sent this message. A failed decrypt leaves the existing
+ *    session untouched — there is no reset oracle.
+ *  - A one-time prekey is only burned once the message using it is known to be
+ *    genuine. Consuming it eagerly would let anyone posting garbage destroy the
+ *    private key the real message needs.
+ */
+async function decryptViaX3dhResponder(
+  channelId: string,
+  header: MessageHeader,
+  payload: MessageE2eePayload,
+  myPrivateKeyEd25519: Uint8Array,
+  myPubHex: string,
+  peerPublicKeyEd25519Hex: string,
+  peerUserId?: string | null,
+): Promise<string> {
+  await assertPinnedDmPeerIdentity(channelId, peerPublicKeyEd25519Hex, peerUserId);
+
+  const peerEdPub = fromBase64(header.ik!);
+  const ephemeralPub = fromBase64(header.ek!);
+
+  const prekeyStore = await loadPrekeyStore();
+  if (!prekeyStore) {
+    throw new Error('Cannot decrypt X3DH message: no local prekey store');
+  }
+
+  let opkPrivate: Uint8Array | null = null;
+  let updatedStore: LocalPrekeyStore = prekeyStore;
+  if (header.opk_id !== undefined && header.opk_id !== null) {
+    const consumed = consumeLocalOPK(prekeyStore, header.opk_id);
+    if (consumed) {
+      opkPrivate = consumed.privateKey;
+      updatedStore = consumed.updatedStore;
+    }
+  }
+
+  const sharedSecret = x3dhRespond(
+    myPrivateKeyEd25519,
+    prekeyStore.signedPrekey.privateKey,
+    opkPrivate,
+    peerEdPub,
+    ephemeralPub,
+  );
+
+  const candidate: RatchetState = initializeResponder(
+    sharedSecret,
+    getSignedPrekeyPair(prekeyStore),
+  );
+  const result = await ratchetDecrypt(
+    candidate,
+    ratchetHeaderOf(header),
+    payload.nonce,
+    payload.ciphertext,
+  );
+
+  await saveSession(myPubHex, peerPublicKeyEd25519Hex, result.state);
+  if (opkPrivate && updatedStore !== prekeyStore) {
+    await savePrekeyStore(updatedStore);
+  }
+  return result.plaintext;
+}
+
+/**
  * Decrypt a DM message. Routes to v1 or v2 based on payload version.
+ *
+ * @param peerUserId - optional; when the caller knows the peer's user id it is
+ *   used to enforce the user-scoped identity pin as well as the channel-scoped
+ *   one.
  */
 export async function decryptDmMessage(
   channelId: string,
   payload: MessageE2eePayload,
   myPrivateKeyEd25519: Uint8Array,
   peerPublicKeyEd25519Hex: string,
+  peerUserId?: string | null,
 ): Promise<string> {
   if (payload.version === DM_E2EE_V1 || !payload.header) {
     warnV1Fallback('decryptDmMessage');
-    return decryptV1(channelId, payload, myPrivateKeyEd25519, peerPublicKeyEd25519Hex);
+    return decryptV1(channelId, payload, myPrivateKeyEd25519, peerPublicKeyEd25519Hex, peerUserId);
   }
 
   if (payload.version !== DM_E2EE_V2) {
@@ -308,89 +480,63 @@ export async function decryptDmMessage(
 
   const header: MessageHeader = JSON.parse(payload.header);
   const myPubHex = getMyPublicKeyHex(myPrivateKeyEd25519);
-  let session = await loadSession(myPubHex, peerPublicKeyEd25519Hex);
+  const expectedPeerHex = normalizeIdentityHex(peerPublicKeyEd25519Hex);
 
-  // If this is an X3DH initial message (has ik + ek), we may need to init as responder
-  if (!session && header.ik && header.ek) {
-    const peerEdPub = fromBase64(header.ik);
-    const ephemeralPub = fromBase64(header.ek);
+  // Check the claimed sender identity before it can influence anything else.
+  if (header.ik !== undefined && header.ik !== null) {
+    assertHeaderIdentityIsPeer(header.ik, expectedPeerHex);
+  }
 
-    // Load our prekey store to get the signed prekey private + optional OPK
-    const prekeyStore = await loadPrekeyStore();
-    if (!prekeyStore) {
-      throw new Error('Cannot decrypt X3DH message: no local prekey store');
-    }
+  const isX3dhInitial = Boolean(header.ik && header.ek);
+  const session = await loadSession(myPubHex, peerPublicKeyEd25519Hex);
 
-    let opkPrivate: Uint8Array | null = null;
-    let updatedStore = prekeyStore;
-    if (header.opk_id !== undefined && header.opk_id !== null) {
-      const consumed = consumeLocalOPK(prekeyStore, header.opk_id);
-      if (consumed) {
-        opkPrivate = consumed.privateKey;
-        updatedStore = consumed.updatedStore;
+  if (session) {
+    try {
+      const result = await ratchetDecrypt(
+        session,
+        ratchetHeaderOf(header),
+        payload.nonce,
+        payload.ciphertext,
+      );
+      await saveSession(myPubHex, peerPublicKeyEd25519Hex, result.state);
+      return result.plaintext;
+    } catch (err) {
+      // A peer that reinstalled starts a brand-new X3DH session, which the
+      // current ratchet cannot decrypt. Try that interpretation without
+      // touching the stored session; only an authenticated message replaces it.
+      if (!isX3dhInitial) throw err;
+      try {
+        return await decryptViaX3dhResponder(
+          channelId,
+          header,
+          payload,
+          myPrivateKeyEd25519,
+          myPubHex,
+          peerPublicKeyEd25519Hex,
+          peerUserId,
+        );
+      } catch (reinitErr) {
+        // A pin failure is the actionable diagnosis; anything else means this
+        // simply was not a valid re-initiation, so report the original failure.
+        if (reinitErr instanceof IdentityPinError || reinitErr instanceof DmE2eeError) {
+          throw reinitErr;
+        }
+        throw err;
       }
-    }
-
-    const sharedSecret = x3dhRespond(
-      myPrivateKeyEd25519,
-      prekeyStore.signedPrekey.privateKey,
-      opkPrivate,
-      peerEdPub,
-      ephemeralPub,
-    );
-
-    session = initializeResponder(sharedSecret, getSignedPrekeyPair(prekeyStore));
-
-    // Save the updated prekey store (OPK consumed)
-    if (opkPrivate) {
-      await savePrekeyStore(updatedStore);
     }
   }
 
-  if (!session) {
-    // Try X3DH re-initiation: clear any stale session and fail
+  if (!isX3dhInitial) {
     throw new Error('No session found and message is not an X3DH initial message');
   }
 
-  try {
-    const result = await ratchetDecrypt(session, header, payload.nonce, payload.ciphertext);
-    await saveSession(myPubHex, peerPublicKeyEd25519Hex, result.state);
-    return result.plaintext;
-  } catch (err) {
-    // If decryption fails and this is an X3DH initial message, try resetting
-    if (header.ik && header.ek) {
-      await deleteSession(myPubHex, peerPublicKeyEd25519Hex);
-
-      // Retry with a fresh session
-      const peerEdPub = fromBase64(header.ik);
-      const ephemeralPub = fromBase64(header.ek);
-      const prekeyStore = await loadPrekeyStore();
-      if (!prekeyStore) throw err;
-
-      let opkPrivate: Uint8Array | null = null;
-      let updatedStore = prekeyStore;
-      if (header.opk_id !== undefined && header.opk_id !== null) {
-        const consumed = consumeLocalOPK(prekeyStore, header.opk_id);
-        if (consumed) {
-          opkPrivate = consumed.privateKey;
-          updatedStore = consumed.updatedStore;
-        }
-      }
-
-      const sharedSecret = x3dhRespond(
-        myPrivateKeyEd25519,
-        prekeyStore.signedPrekey.privateKey,
-        opkPrivate,
-        peerEdPub,
-        ephemeralPub,
-      );
-
-      const freshSession = initializeResponder(sharedSecret, getSignedPrekeyPair(prekeyStore));
-      const result = await ratchetDecrypt(freshSession, header, payload.nonce, payload.ciphertext);
-      await saveSession(myPubHex, peerPublicKeyEd25519Hex, result.state);
-      if (opkPrivate) await savePrekeyStore(updatedStore);
-      return result.plaintext;
-    }
-    throw err;
-  }
+  return decryptViaX3dhResponder(
+    channelId,
+    header,
+    payload,
+    myPrivateKeyEd25519,
+    myPubHex,
+    peerPublicKeyEd25519Hex,
+    peerUserId,
+  );
 }

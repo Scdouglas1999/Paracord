@@ -192,6 +192,33 @@ pub struct TransferOwnershipRequest {
     pub new_owner_id: String,
 }
 
+/// Enforce the admin-configurable `max_guilds_per_user` quota.
+///
+/// The setting is exposed and validated by the admin dashboard but was never
+/// read on any guild-creation path, so a single account could mint guilds
+/// without limit (each one also seeding channels and roles). Shared with the
+/// template-apply path, which creates a guild too.
+pub(crate) async fn ensure_guild_creation_allowed(
+    state: &AppState,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    let max_guilds = state.runtime.read().await.max_guilds_per_user;
+    if max_guilds == 0 {
+        return Ok(());
+    }
+
+    let current = paracord_db::guilds::get_user_guilds(&state.db, user_id.into())
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .len();
+    if current >= max_guilds as usize {
+        return Err(ApiError::BadRequest(format!(
+            "You have reached the maximum of {max_guilds} servers per account"
+        )));
+    }
+    Ok(())
+}
+
 pub async fn create_guild(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -202,6 +229,8 @@ pub async fn create_guild(
             "Guild name must be between 2 and 100 characters".into(),
         ));
     }
+
+    ensure_guild_creation_allowed(&state, auth.user_id).await?;
 
     let guild_id = paracord_util::snowflake::generate(1);
 

@@ -245,16 +245,30 @@ const MAX_DECODE_PIXELS: u32 = 7680 * 4320;
 /// checked arithmetic so the `w * h` product cannot overflow before it is
 /// range-checked. Callers must treat a rejection as a decode failure and
 /// request a fresh keyframe.
+/// `negotiated` is the resolution the peer advertised for this track in
+/// `TrackPublish`; when present it caps the decode far below the global 8K
+/// ceiling (see [`DecoderConfig::max_dimensions`]).
 #[cfg(feature = "vpx")]
-fn check_decode_resolution(w: u32, h: u32) -> Result<(), VideoError> {
-    let within_bounds = w <= MAX_DECODE_DIMENSION
-        && h <= MAX_DECODE_DIMENSION
-        && w.checked_mul(h).is_some_and(|px| px <= MAX_DECODE_PIXELS);
+fn check_decode_resolution(
+    w: u32,
+    h: u32,
+    negotiated: Option<(u32, u32)>,
+) -> Result<(), VideoError> {
+    let (max_w, max_h, max_px) = crate::video::negotiated_decode_ceiling(
+        negotiated,
+        MAX_DECODE_DIMENSION,
+        MAX_DECODE_PIXELS,
+    );
+    let within_bounds = w > 0
+        && h > 0
+        && w <= max_w
+        && h <= max_h
+        && w.checked_mul(h).is_some_and(|px| px <= max_px);
     if within_bounds {
         Ok(())
     } else {
         Err(VideoError::DecodeFailed(format!(
-            "decoded frame resolution out of bounds: {w}x{h}"
+            "decoded frame resolution out of bounds: {w}x{h} (max {max_w}x{max_h})"
         )))
     }
 }
@@ -333,11 +347,19 @@ mod vpx_impl {
                     first_frame.len() as u32,
                     &mut si,
                 );
-                // Only used to size threads (bounded to a small max); the real
-                // resolution bound still runs per decoded image. If peek fails,
-                // keep the default thread count.
+                // Only used to size threads; the real resolution bound still
+                // runs per decoded image. If peek fails, keep the default thread
+                // count. The peeked header is untrusted, so clamp it to the
+                // resolution the peer negotiated before it can buy a 16-thread
+                // decoder off a crafted 4K/8K header on a 320x180 layer.
                 if ret == VPX_CODEC_OK && si.w > 0 && si.h > 0 {
-                    self.threads = decode_threads_for_pixels(si.w.saturating_mul(si.h));
+                    let (max_w, max_h, max_px) = crate::video::negotiated_decode_ceiling(
+                        self.config.max_dimensions,
+                        super::MAX_DECODE_DIMENSION,
+                        super::MAX_DECODE_PIXELS,
+                    );
+                    let pixels = si.w.min(max_w).saturating_mul(si.h.min(max_h)).min(max_px);
+                    self.threads = decode_threads_for_pixels(pixels);
                 }
             }
             self.init_context()
@@ -418,28 +440,53 @@ mod vpx_impl {
                     }
 
                     let img = &*img;
-                    let w = img.d_w;
-                    let h = img.d_h;
+
+                    // The copy loops below treat the image as planar 8-bit
+                    // I420. VP9 profiles 1/2/3 legitimately carry 4:2:2, 4:4:4,
+                    // 4:4:0 and 10/12-bit content, and libvpx will happily hand
+                    // us one — reinterpreting those planes as I420 produces
+                    // garbled output (and, for the high-bit-depth formats, reads
+                    // half the real plane). There is no silent reinterpretation:
+                    // an unsupported format is a loud decode failure.
+                    if img.fmt != vpx_img_fmt::VPX_IMG_FMT_I420 {
+                        self.needs_keyframe = true;
+                        return Err(VideoError::DecodeFailed(format!(
+                            "unsupported VP9 image format {:?}; only 8-bit I420 (profile 0) is supported",
+                            img.fmt
+                        )));
+                    }
 
                     // Bound the decoded resolution before computing plane sizes
                     // or allocating any buffer. `d_w`/`d_h` come from the remote
                     // bitstream header, so an unbounded value here is both a DoS
                     // allocation vector and an out-of-bounds risk in the copy
                     // loops below. On rejection, request a keyframe to recover.
-                    if let Err(e) = super::check_decode_resolution(w, h) {
+                    if let Err(e) =
+                        super::check_decode_resolution(img.d_w, img.d_h, self.config.max_dimensions)
+                    {
                         self.needs_keyframe = true;
                         return Err(e);
                     }
 
-                    // VP9's I420 (4:2:0) subsampling requires even display
-                    // dimensions: the chroma planes are exactly w/2 × h/2, and
-                    // the copy loops below assume that halving is exact. libvpx
-                    // never emits odd display dimensions for an I420 stream, so
-                    // an odd value here indicates a corrupt or misdecoded frame.
-                    debug_assert!(
-                        w.is_multiple_of(2) && h.is_multiple_of(2),
-                        "VP9 I420 frame has non-even dimensions: {w}x{h}"
-                    );
+                    // VP9's display size is arbitrary (`frame_width_minus_1` is
+                    // a free 16-bit field), so an odd `d_w`/`d_h` is legal even
+                    // though the 4:2:0 chroma planes are ceil(w/2) x ceil(h/2).
+                    // The tightly-packed I420 buffer this produces is consumed
+                    // by code that computes chroma as a truncating `w/2 * h/2`
+                    // (`PixelFormat::frame_size`, the renderers, the IPC frame
+                    // header), so an odd frame is emitted at the largest even
+                    // size it contains rather than as a self-inconsistent
+                    // buffer. `debug_assert!` used to "check" this and vanished
+                    // in release.
+                    let w = img.d_w & !1;
+                    let h = img.d_h & !1;
+                    if w == 0 || h == 0 {
+                        self.needs_keyframe = true;
+                        return Err(VideoError::DecodeFailed(format!(
+                            "decoded VP9 frame is too small to represent as I420: {}x{}",
+                            img.d_w, img.d_h
+                        )));
+                    }
 
                     // Extract I420 planes
                     let y_stride = img.stride[0] as usize;
@@ -454,6 +501,15 @@ mod vpx_impl {
                     let uv_h = (h / 2) as usize;
                     let uv_size = uv_w * uv_h;
 
+                    // Safety: `w`/`h` are the display dimensions rounded DOWN to
+                    // even, so `w <= img.d_w` and `h <= img.d_h`; libvpx
+                    // allocates the luma plane with at least `d_h` rows of
+                    // `stride[0] >= d_w` bytes and each chroma plane with at
+                    // least ceil(d_h/2) rows of `stride[i] >= ceil(d_w/2)`
+                    // bytes. `uv_w = w/2 <= ceil(d_w/2)` and
+                    // `uv_h = h/2 <= ceil(d_h/2)`, so every row slice below is
+                    // fully inside its plane. The format check above guarantees
+                    // the planes are 8-bit I420, so one byte per sample.
                     let mut data = Vec::with_capacity(y_size + 2 * uv_size);
 
                     // Copy Y plane (handle stride != width)
@@ -936,36 +992,55 @@ mod vpx_tests {
     #[test]
     fn check_decode_resolution_accepts_normal_sizes() {
         // Common call resolutions all pass.
-        assert!(check_decode_resolution(320, 240).is_ok());
-        assert!(check_decode_resolution(1920, 1080).is_ok());
-        assert!(check_decode_resolution(3840, 2160).is_ok());
+        assert!(check_decode_resolution(320, 240, None).is_ok());
+        assert!(check_decode_resolution(1920, 1080, None).is_ok());
+        assert!(check_decode_resolution(3840, 2160, None).is_ok());
         // Exactly the pixel budget (8K UHD) is accepted.
-        assert!(check_decode_resolution(7680, 4320).is_ok());
+        assert!(check_decode_resolution(7680, 4320, None).is_ok());
     }
 
     #[test]
     fn check_decode_resolution_rejects_oversize() {
         // A single dimension past the cap is rejected.
         assert!(matches!(
-            check_decode_resolution(8193, 16),
+            check_decode_resolution(8193, 16, None),
             Err(VideoError::DecodeFailed(_))
         ));
         assert!(matches!(
-            check_decode_resolution(16, 8193),
+            check_decode_resolution(16, 8193, None),
             Err(VideoError::DecodeFailed(_))
         ));
         // Both dimensions within the per-dimension cap but the pixel product
         // over budget is rejected.
         assert!(matches!(
-            check_decode_resolution(8192, 8192),
+            check_decode_resolution(8192, 8192, None),
             Err(VideoError::DecodeFailed(_))
         ));
         // Extreme values that would overflow a naive `w * h` are rejected via
         // checked arithmetic rather than wrapping.
         assert!(matches!(
-            check_decode_resolution(u32::MAX, u32::MAX),
+            check_decode_resolution(u32::MAX, u32::MAX, None),
             Err(VideoError::DecodeFailed(_))
         ));
+        // Zero is not a decodable frame either.
+        assert!(matches!(
+            check_decode_resolution(0, 0, None),
+            Err(VideoError::DecodeFailed(_))
+        ));
+    }
+
+    /// The peer's negotiated (`TrackPublish`) resolution — not the global 8K
+    /// constant — is the real ceiling: a 320x180 layer publisher cannot make the
+    /// decoder allocate 4K/8K planes off a crafted bitstream header.
+    #[cfg(feature = "vpx")]
+    #[test]
+    fn negotiated_resolution_caps_vp9_decode() {
+        let negotiated = Some((1280u32, 720u32));
+        assert!(check_decode_resolution(1280, 720, negotiated).is_ok());
+        assert!(check_decode_resolution(3840, 2160, negotiated).is_err());
+        assert!(check_decode_resolution(7680, 4320, negotiated).is_err());
+        // With no negotiated size the global ceiling still applies.
+        assert!(check_decode_resolution(7680, 4320, None).is_ok());
     }
 
     #[test]

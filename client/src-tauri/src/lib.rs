@@ -91,7 +91,7 @@ fn is_trusted_cert_origin(uri: &str) -> bool {
     false
 }
 
-fn ensure_native_fetch_target_is_trusted(uri: &str) -> Result<(), String> {
+pub(crate) fn ensure_native_fetch_target_is_trusted(uri: &str) -> Result<(), String> {
     let parsed = url::Url::parse(uri).map_err(|_| "Native fetch requires an absolute URL")?;
     match parsed.scheme() {
         "http" | "https" => {}
@@ -101,6 +101,97 @@ fn ensure_native_fetch_target_is_trusted(uri: &str) -> Result<(), String> {
         return Err("Native fetch target is not in the trusted server list".to_string());
     }
     Ok(())
+}
+
+/// Hosts of every currently-trusted server origin, lowercased and without IPv6
+/// brackets (the same normalisation [`pin_host_from_url`] applies).
+#[allow(dead_code)] // used by ensure_native_media_endpoint_is_trusted (see below)
+fn trusted_server_hosts() -> HashSet<String> {
+    TRUSTED_SERVER_ORIGINS
+        .read()
+        .map(|guard| {
+            guard
+                .iter()
+                .filter_map(|origin| pin_host_from_url(origin))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Normalise a native media endpoint into a bare host.
+///
+/// Unlike the HTTP commands, media endpoints reach Rust as `host:port` (see
+/// `normalizeNativeRelayEndpoint` in the renderer), so `Url::parse` alone is not
+/// enough — `chat.example:9443` parses as a URL with scheme `chat.example` and
+/// no host at all.
+#[allow(dead_code)] // used by ensure_native_media_endpoint_is_trusted (see below)
+fn native_endpoint_host(endpoint: &str) -> Option<String> {
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(addr) = trimmed.parse::<std::net::SocketAddr>() {
+        return Some(addr.ip().to_string().to_ascii_lowercase());
+    }
+
+    if let Ok(parsed) = url::Url::parse(trimmed) {
+        if let Some(host) = parsed.host_str() {
+            return Some(
+                host.trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_ascii_lowercase(),
+            );
+        }
+    }
+
+    // Bare `host:port` / `[v6]:port`.
+    let host = if let Some(rest) = trimmed.strip_prefix('[') {
+        let end = rest.find(']')?;
+        let after = &rest[end + 1..];
+        if !after.is_empty() && !after.starts_with(':') {
+            return None;
+        }
+        rest[..end].to_string()
+    } else {
+        let (host, port) = trimmed.rsplit_once(':')?;
+        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        host.to_string()
+    };
+
+    if host.is_empty() || host.contains('/') || host.contains('@') {
+        return None;
+    }
+    Some(host.to_ascii_lowercase())
+}
+
+/// Host-only trust gate for native transports whose endpoint is a bare
+/// `host:port` rather than a URL (the QUIC media relay).
+///
+/// Comparison is by host, not origin: the media relay listens on a different
+/// port from the HTTP API, so its port is legitimately absent from
+/// [`TRUSTED_SERVER_ORIGINS`]. Restricting to approved *hosts* still confines a
+/// compromised renderer to servers the user has explicitly trusted, which is
+/// what the caller-supplied `cert_hash` cannot do — a pin chosen by the caller
+/// is not a control.
+///
+/// PENDING WIRE-UP: the QUIC commands in `native_media/commands.rs` still accept
+/// a renderer-supplied `endpoint` with no gate at all. `start_voice_session`,
+/// `quic_upload_file` and `quic_download_file` must each call this before
+/// touching the endpoint, exactly as the HTTP/SSE commands in this file call
+/// `ensure_native_fetch_target_is_trusted`. The `allow(dead_code)` here goes
+/// away with those call sites.
+#[allow(dead_code)]
+pub(crate) fn ensure_native_media_endpoint_is_trusted(endpoint: &str) -> Result<(), String> {
+    let Some(host) = native_endpoint_host(endpoint) else {
+        return Err("Native media endpoint must be a host:port address".to_string());
+    };
+    if trusted_server_hosts().contains(&host) {
+        return Ok(());
+    }
+    Err("Native media endpoint host is not in the trusted server list".to_string())
 }
 
 fn health_url_for_server(server_url: &str) -> Result<String, String> {
@@ -1559,6 +1650,51 @@ mod tests {
 
         assert!(ensure_native_fetch_target_is_trusted("/api/v1/users").is_err());
         assert!(ensure_native_fetch_target_is_trusted("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn native_media_endpoint_gate_accepts_trusted_host_on_any_port() {
+        let _guard = TRUSTED_ORIGINS_TEST_LOCK.lock().expect("test lock");
+        reset_trusted_origins();
+
+        // Untrusted until the server list says otherwise.
+        assert!(ensure_native_media_endpoint_is_trusted("relay.example:9443").is_err());
+
+        if let Ok(mut guard) = TRUSTED_SERVER_ORIGINS.write() {
+            guard.insert(
+                trusted_origin_from_url("https://relay.example:8443/api/v1")
+                    .expect("valid trusted origin"),
+            );
+        }
+
+        // The media relay runs on its own port, so the gate is host-scoped.
+        assert!(ensure_native_media_endpoint_is_trusted("relay.example:9443").is_ok());
+        assert!(ensure_native_media_endpoint_is_trusted("RELAY.EXAMPLE:9443").is_ok());
+        assert!(ensure_native_media_endpoint_is_trusted("evil.example:9443").is_err());
+        assert!(ensure_native_media_endpoint_is_trusted("").is_err());
+        assert!(ensure_native_media_endpoint_is_trusted("relay.example").is_err());
+
+        reset_trusted_origins();
+    }
+
+    #[test]
+    fn native_endpoint_host_parses_every_endpoint_shape() {
+        assert_eq!(
+            native_endpoint_host("chat.example:9443"),
+            Some("chat.example".to_string())
+        );
+        assert_eq!(
+            native_endpoint_host("127.0.0.1:9443"),
+            Some("127.0.0.1".to_string())
+        );
+        assert_eq!(native_endpoint_host("[::1]:9443"), Some("::1".to_string()));
+        assert_eq!(
+            native_endpoint_host("https://chat.example:9443"),
+            Some("chat.example".to_string())
+        );
+        assert_eq!(native_endpoint_host("chat.example:notaport"), None);
+        assert_eq!(native_endpoint_host("chat.example"), None);
+        assert_eq!(native_endpoint_host(""), None);
     }
 
     #[test]

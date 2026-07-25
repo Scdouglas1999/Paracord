@@ -52,6 +52,18 @@ impl AudioLevelHistory {
     }
 }
 
+/// Upper bound on tracked audio-level histories.
+///
+/// The key is nominally a `user_id`, but the federation ingress path reports
+/// levels keyed by the raw `ssrc` off an incoming packet header
+/// (`FederationRelay::handle_incoming_federation_packet`), which is
+/// remote-controlled and 32 bits wide. Entries are only removed on an explicit
+/// `remove_user`, which never fires for a sprayed identifier — so without a cap
+/// this map grows toward 2^32 entries from unauthenticated input. A server-wide
+/// 8192 comfortably exceeds any real concurrent-speaker count (rooms cap at 50
+/// participants) while making the growth bounded.
+const MAX_TRACKED_SPEAKERS: usize = 8192;
+
 /// Detects active speakers by analyzing the cleartext audio_level byte
 /// from MediaHeader packets.
 pub struct SpeakerDetector {
@@ -67,7 +79,25 @@ impl SpeakerDetector {
     }
 
     /// Report an audio level for a user.
+    ///
+    /// Reporting for an identifier that is not already tracked is refused once
+    /// the map is at [`MAX_TRACKED_SPEAKERS`]; updates to already-tracked
+    /// identifiers always proceed, so a saturated map degrades to "no new
+    /// speakers detected" rather than unbounded growth. Real participants are
+    /// registered long before that ceiling is reachable.
     pub fn report_audio_level(&self, user_id: i64, room_id: &str, level: u8) {
+        if let Some(mut entry) = self.histories.get_mut(&user_id) {
+            entry.push(level);
+            return;
+        }
+        if self.histories.len() >= MAX_TRACKED_SPEAKERS {
+            tracing::debug!(
+                user_id,
+                room_id,
+                "speaker detector at capacity; refusing to track a new identifier"
+            );
+            return;
+        }
         let mut entry = self
             .histories
             .entry(user_id)

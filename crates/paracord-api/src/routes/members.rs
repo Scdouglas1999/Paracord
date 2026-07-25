@@ -14,7 +14,13 @@ use crate::middleware::AuthUser;
 use crate::routes::audit;
 use crate::routes::mod_log;
 
-fn validate_member_role_assignment(
+/// Reject a role the actor is not allowed to hand out: never ADMINISTRATOR, and
+/// never a role carrying a permission bit the actor does not already hold.
+///
+/// Shared with every other surface that can cause a role to be granted (e.g.
+/// the economy level-role mapping), so a lesser-privileged moderator cannot use
+/// an indirect grant path to escalate themselves or others.
+pub(crate) fn validate_member_role_assignment(
     guild_owner_id: i64,
     actor_user_id: i64,
     actor_perms: paracord_models::permissions::Permissions,
@@ -119,6 +125,17 @@ pub async fn update_member(
             actor_perms,
             paracord_models::permissions::Permissions::MANAGE_NICKNAMES,
         )?;
+        // Renaming another member is a moderation action and must obey the same
+        // owner immunity and role hierarchy as kick/ban/timeout. The bare
+        // MANAGE_NICKNAMES check let a junior moderator rename the guild owner
+        // or anyone ranked above them.
+        paracord_core::admin::ensure_actor_can_moderate_target(
+            &state.db,
+            guild_id,
+            auth.user_id,
+            user_id,
+        )
+        .await?;
     }
 
     let mut role_ids: Vec<String> =

@@ -198,6 +198,9 @@ fn target_kind_for(data_type: &str) -> TargetKind {
 struct ColumnPlan {
     name: String,
     kind: TargetKind,
+    /// 1-based position of this column inside the source table's primary key,
+    /// or 0 when it is not part of it (mirrors `PRAGMA table_info.pk`).
+    pk: i64,
 }
 
 fn quote_ident(ident: &str) -> String {
@@ -206,6 +209,15 @@ fn quote_ident(ident: &str) -> String {
 
 /// Build the parameterised `INSERT` used to copy a single row. Temporal columns
 /// get an explicit cast so PostgreSQL accepts the normalised text value.
+///
+/// The statement upserts on the source primary key rather than plainly
+/// inserting. `migrate_sqlite_to_postgres` runs the PostgreSQL migrations
+/// against the target first, and several of those migrations seed rows --
+/// `server_settings` most obviously. A plain `INSERT` then collided with the
+/// seeded keys, and because the whole copy runs in one transaction, that single
+/// duplicate-key error rolled everything back: the SQLite-to-PostgreSQL
+/// migration tool could never succeed against a freshly migrated target.
+/// Upserting keeps the source authoritative, which is what a copy should be.
 fn build_insert_sql(table: &str, columns: &[ColumnPlan]) -> String {
     let col_list = columns
         .iter()
@@ -218,11 +230,44 @@ fn build_insert_sql(table: &str, columns: &[ColumnPlan]) -> String {
         .map(|(i, c)| format!("${}{}", i + 1, c.kind.cast_suffix()))
         .collect::<Vec<_>>()
         .join(", ");
+
+    let mut pk_cols: Vec<&ColumnPlan> = columns.iter().filter(|c| c.pk > 0).collect();
+    pk_cols.sort_by_key(|c| c.pk);
+
+    let conflict = if pk_cols.is_empty() {
+        // No primary key to infer a conflict target from; nothing can collide
+        // by key, so a plain INSERT is correct.
+        String::new()
+    } else {
+        let target = pk_cols
+            .iter()
+            .map(|c| quote_ident(&c.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let assignments = columns
+            .iter()
+            .filter(|c| c.pk == 0)
+            .map(|c| {
+                let ident = quote_ident(&c.name);
+                format!("{ident} = EXCLUDED.{ident}")
+            })
+            .collect::<Vec<_>>();
+        if assignments.is_empty() {
+            format!(" ON CONFLICT ({target}) DO NOTHING")
+        } else {
+            format!(
+                " ON CONFLICT ({target}) DO UPDATE SET {}",
+                assignments.join(", ")
+            )
+        }
+    };
+
     format!(
-        "INSERT INTO {} ({}) VALUES ({})",
+        "INSERT INTO {} ({}) VALUES ({}){}",
         quote_ident(table),
         col_list,
-        placeholders
+        placeholders,
+        conflict
     )
 }
 
@@ -404,6 +449,7 @@ async fn plan_table(
         plan.push(ColumnPlan {
             name: col.name.clone(),
             kind: kind.clone(),
+            pk: col.pk,
         });
     }
 
@@ -587,25 +633,71 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn build_insert_sql_casts_temporal_columns() {
+    fn build_insert_sql_casts_temporal_columns_and_upserts_on_the_primary_key() {
         let columns = vec![
             ColumnPlan {
                 name: "id".to_string(),
                 kind: TargetKind::Int,
+                pk: 1,
             },
             ColumnPlan {
                 name: "name".to_string(),
                 kind: TargetKind::Text,
+                pk: 0,
             },
             ColumnPlan {
                 name: "expires_at".to_string(),
                 kind: TargetKind::Temporal("timestamptz"),
+                pk: 0,
             },
         ];
         let sql = build_insert_sql("webhooks", &columns);
         assert_eq!(
             sql,
-            r#"INSERT INTO "webhooks" ("id", "name", "expires_at") VALUES ($1, $2, $3::timestamptz)"#
+            r#"INSERT INTO "webhooks" ("id", "name", "expires_at") VALUES ($1, $2, $3::timestamptz) ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name", "expires_at" = EXCLUDED."expires_at""#
+        );
+    }
+
+    #[test]
+    fn build_insert_sql_upserts_seeded_key_value_tables() {
+        // `server_settings` is seeded by the PostgreSQL migrations that run
+        // against the target before the copy starts. A plain INSERT collided
+        // with those seeds and rolled the entire copy transaction back.
+        let columns = vec![
+            ColumnPlan {
+                name: "key".to_string(),
+                kind: TargetKind::Text,
+                pk: 1,
+            },
+            ColumnPlan {
+                name: "value".to_string(),
+                kind: TargetKind::Text,
+                pk: 0,
+            },
+        ];
+        assert_eq!(
+            build_insert_sql("server_settings", &columns),
+            r#"INSERT INTO "server_settings" ("key", "value") VALUES ($1, $2) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value""#
+        );
+    }
+
+    #[test]
+    fn build_insert_sql_uses_do_nothing_when_every_column_is_a_key() {
+        let columns = vec![
+            ColumnPlan {
+                name: "user_id".to_string(),
+                kind: TargetKind::Int,
+                pk: 1,
+            },
+            ColumnPlan {
+                name: "role_id".to_string(),
+                kind: TargetKind::Int,
+                pk: 2,
+            },
+        ];
+        assert_eq!(
+            build_insert_sql("member_roles", &columns),
+            r#"INSERT INTO "member_roles" ("user_id", "role_id") VALUES ($1, $2) ON CONFLICT ("user_id", "role_id") DO NOTHING"#
         );
     }
 
@@ -615,10 +707,12 @@ mod tests {
             ColumnPlan {
                 name: "id".to_string(),
                 kind: TargetKind::Int,
+                pk: 1,
             },
             ColumnPlan {
                 name: "content".to_string(),
                 kind: TargetKind::Text,
+                pk: 0,
             },
         ];
         assert_eq!(

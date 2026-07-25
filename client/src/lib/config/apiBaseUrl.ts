@@ -210,13 +210,40 @@ export function resolveServerRootUrl(path: string): string {
 }
 
 /**
+ * The origin of the API server this client is talking to, or null when it
+ * cannot be determined. Used to decide who is allowed to receive a download
+ * ticket.
+ */
+export function resolveApiOrigin(): string | null {
+  const base = resolveApiBaseUrl();
+  if (base.startsWith('http')) {
+    try {
+      return new URL(base).origin;
+    } catch {
+      return null;
+    }
+  }
+  // A relative base means "same origin as the page".
+  if (typeof window === 'undefined') return null;
+  if (!/^https?:$/.test(window.location.protocol)) return null;
+  return window.location.origin;
+}
+
+/**
  * Build an absolute resource URL suitable for `<img>` src and similar
  * browser-native fetches that cannot carry an Authorization header.
- * Appends `?ticket=<download_ticket>` when the URL is cross-origin so the
- * server can authenticate the request without exposing the raw access token.
+ *
+ * Appends `?ticket=<download_ticket>` ONLY when the target origin is the user's
+ * own API server. The download ticket is a multi-use bearer credential accepted
+ * on attachment/emoji/sticker/avatar/federated-file endpoints, so "origin
+ * differs from the page" is not a sufficient test: values such as
+ * `avatar_hash` may be arbitrary absolute URLs chosen by another user, and on
+ * desktop the page origin is `tauri://localhost`, which differs from *every*
+ * http(s) origin. Attaching the ticket on that basis handed it to any host an
+ * attacker could name.
  *
  * @param path - relative path, absolute path, or full URL
- * @param ticket - download ticket to append for cross-origin auth (defaults to cached ticket)
+ * @param ticket - download ticket to append for same-API-origin auth
  */
 export function resolveResourceUrl(path: string, ticket?: string | null): string {
   const base = resolveApiBaseUrl();
@@ -238,12 +265,15 @@ export function resolveResourceUrl(path: string, ticket?: string | null): string
   } else {
     url = `${base}/${path}`;
   }
-  // Append download ticket for cross-origin requests where cookies won't work.
+  // Append the download ticket only for our own API server, and only when the
+  // browser will not already authenticate the request with cookies.
   const authTicket = ticket ?? null;
   if (authTicket && url.startsWith('http')) {
     try {
       const parsed = new URL(url);
-      if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
+      const apiOrigin = resolveApiOrigin();
+      const pageOrigin = typeof window !== 'undefined' ? window.location.origin : null;
+      if (apiOrigin && parsed.origin === apiOrigin && parsed.origin !== pageOrigin) {
         parsed.searchParams.set('ticket', authTicket);
         return parsed.toString();
       }

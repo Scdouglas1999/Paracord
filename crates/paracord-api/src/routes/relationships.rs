@@ -89,21 +89,36 @@ pub async fn add_friend(
     }
 
     if rel_type == 2 {
-        // Block: normalize the reverse direction (drop any friend/pending row the
-        // target had toward us) before recording the block for our direction.
-        paracord_db::relationships::delete_relationship(&state.db, target_id, auth.user_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        // Block: normalize the reverse direction before recording the block for
+        // our own direction. Only a friend (1) or pending (4) row may be
+        // cleared -- a block the target placed on *us* (type 2) must survive,
+        // exactly as `remove_relationship` preserves it. Clearing it
+        // unconditionally let a harasser erase the victim's block simply by
+        // "blocking" them and then unblocking, leaving no block in either
+        // direction.
+        let reverse =
+            paracord_db::relationships::get_relationship(&state.db, target_id, auth.user_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let reverse_removed = matches!(reverse.as_ref().map(|r| r.rel_type), Some(1) | Some(4));
+        if reverse_removed {
+            paracord_db::relationships::delete_relationship(&state.db, target_id, auth.user_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        }
         paracord_db::relationships::create_relationship(&state.db, auth.user_id, target_id, 2)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-        // Tell the (now ex-)friend to drop us from their relationship list.
-        state.event_bus.dispatch_to_users(
-            "RELATIONSHIP_REMOVE",
-            json!({ "user_id": auth.user_id.to_string() }),
-            vec![target_id],
-        );
+        // Tell the (now ex-)friend to drop us from their relationship list, but
+        // only when their own row actually changed.
+        if reverse_removed {
+            state.event_bus.dispatch_to_users(
+                "RELATIONSHIP_REMOVE",
+                json!({ "user_id": auth.user_id.to_string() }),
+                vec![target_id],
+            );
+        }
         return Ok(StatusCode::NO_CONTENT);
     }
 

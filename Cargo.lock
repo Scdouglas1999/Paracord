@@ -5382,6 +5382,7 @@ dependencies = [
  "dashmap",
  "ed25519-dalek",
  "futures-util",
+ "governor",
  "hmac 0.12.1",
  "jsonwebtoken",
  "lettre",

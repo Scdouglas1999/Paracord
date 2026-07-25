@@ -48,8 +48,8 @@ pub async fn kick_member(
         .ok_or(CoreError::NotFound)?;
 
     permissions::ensure_guild_member(pool, guild_id, actor_id).await?;
-    let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
-    let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
+    let perms =
+        permissions::compute_guild_permissions(pool, guild_id, guild.owner_id, actor_id).await?;
     permissions::require_permission(perms, Permissions::KICK_MEMBERS)?;
     ensure_actor_can_moderate_target(pool, guild_id, actor_id, target_id).await?;
 
@@ -62,6 +62,14 @@ pub async fn kick_member(
 }
 
 /// Ban a member from a guild. Requires BAN_MEMBERS permission.
+///
+/// The ban row is written before the member row is removed, and the ban is undone
+/// if the removal fails. `paracord-db` exposes only `&DbPool` entry points, so the
+/// two writes cannot share one `sqlx` transaction from here; ordering them this
+/// way makes the reported outcome match the stored state either way. Doing the
+/// removal first (and ignoring its result, as this used to) could leave a user
+/// kicked but unbanned while the caller was told the ban succeeded, or banned but
+/// still a member.
 pub async fn ban_member(
     pool: &DbPool,
     guild_id: i64,
@@ -74,16 +82,34 @@ pub async fn ban_member(
         .ok_or(CoreError::NotFound)?;
 
     permissions::ensure_guild_member(pool, guild_id, actor_id).await?;
-    let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
-    let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
+    let perms =
+        permissions::compute_guild_permissions(pool, guild_id, guild.owner_id, actor_id).await?;
     permissions::require_permission(perms, Permissions::BAN_MEMBERS)?;
     ensure_actor_can_moderate_target(pool, guild_id, actor_id, target_id).await?;
 
-    // Remove from members if present
-    let _ = paracord_db::members::remove_member(pool, target_id, guild_id).await;
-
-    // Create ban entry
+    // Create ban entry first (the insert upserts, so re-banning is idempotent).
+    let already_banned = paracord_db::bans::get_ban(pool, target_id, guild_id)
+        .await?
+        .is_some();
     paracord_db::bans::create_ban(pool, target_id, guild_id, reason, actor_id).await?;
+
+    // Remove from members if present; undo the ban if that fails so the caller's
+    // error means "nothing happened". A pre-existing ban is left alone -- this
+    // call doubles as "update the ban reason", and a failed update must not unban.
+    if let Err(err) = paracord_db::members::remove_member(pool, target_id, guild_id).await {
+        if !already_banned {
+            if let Err(cleanup_err) = paracord_db::bans::delete_ban(pool, target_id, guild_id).await
+            {
+                tracing::error!(
+                    guild_id,
+                    target_id,
+                    error = %cleanup_err,
+                    "failed to roll back a ban whose member removal failed"
+                );
+            }
+        }
+        return Err(err.into());
+    }
 
     Ok(())
 }
@@ -101,8 +127,8 @@ pub async fn timeout_member(
         .ok_or(CoreError::NotFound)?;
 
     permissions::ensure_guild_member(pool, guild_id, actor_id).await?;
-    let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
-    let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
+    let perms =
+        permissions::compute_guild_permissions(pool, guild_id, guild.owner_id, actor_id).await?;
     permissions::require_permission(perms, Permissions::MUTE_MEMBERS)?;
     ensure_actor_can_moderate_target(pool, guild_id, actor_id, target_id).await?;
 
@@ -126,8 +152,8 @@ pub async fn unban_member(
         .ok_or(CoreError::NotFound)?;
 
     permissions::ensure_guild_member(pool, guild_id, actor_id).await?;
-    let roles = paracord_db::roles::get_member_roles(pool, actor_id, guild_id).await?;
-    let perms = permissions::compute_permissions_from_roles(&roles, guild.owner_id, actor_id);
+    let perms =
+        permissions::compute_guild_permissions(pool, guild_id, guild.owner_id, actor_id).await?;
     permissions::require_permission(perms, Permissions::BAN_MEMBERS)?;
 
     paracord_db::bans::delete_ban(pool, target_id, guild_id).await?;

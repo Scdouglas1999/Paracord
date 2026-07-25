@@ -3,6 +3,7 @@ import { StreamViewer } from './StreamViewer';
 import { FocusedWebcamView } from './FocusedWebcamView';
 import { SplitPaneSourcePicker, type PaneSource } from './SplitPaneSourcePicker';
 import type { WebcamTile } from '../../hooks/useWebcamTiles';
+import { ErrorBoundary } from '../ErrorBoundary';
 
 interface SplitPaneProps {
   source: PaneSource;
@@ -56,6 +57,8 @@ export function SplitPane({
 
       {/* Pane content */}
       {source.type === 'stream' ? (
+        // One pane failing must not take the other pane — or the call — down.
+        <ErrorBoundary variant="section" label="this pane">
         <StreamViewer
           streamerId={source.userId}
           streamerName={resolveStreamerName(source.userId)}
@@ -74,6 +77,7 @@ export function SplitPane({
           onStopWatching={() => onSourceChange({ type: 'none' })}
           onStopStream={onStopStream}
         />
+        </ErrorBoundary>
       ) : source.type === 'webcam' ? (
         (() => {
           const tile = webcamTiles.find((t) => t.participantId === source.userId);

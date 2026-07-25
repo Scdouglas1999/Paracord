@@ -13,6 +13,7 @@ import { useServerListStore } from '../stores/serverListStore';
 import { useReadStateStore } from '../stores/readStateStore';
 import { useInteractionStore } from '../stores/interactionStore';
 import { hasUnlockedPrivateKey } from '../lib/accountSession';
+import { mentionsEveryone } from '../lib/mentions';
 import { ensurePrekeysUploaded } from '../lib/signalPrekeys';
 import { GatewayEvents } from './events';
 import { sendNotification, isEnabled as notificationsEnabled } from '../lib/features/notifications';
@@ -212,7 +213,11 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
 
     case GatewayEvents.MESSAGE_CREATE:
       if (!data.channel_id || !data.id) break;
-      useMessageStore.getState().addMessage(data.channel_id, data as Message);
+      // Pass the raw payload: the interaction paths emit `author_id` instead of
+      // an `author` object, so asserting `as Message` here was a lie that put an
+      // authorless record in the store and crashed the whole feed on render.
+      // `addMessage` normalizes and drops anything it cannot make safe.
+      useMessageStore.getState().addMessage(data.channel_id, data);
       useChannelStore.getState().updateLastMessageId(data.channel_id, data.id);
       // Slash / component responses arrive as MESSAGE_CREATE with an interaction
       // payload. Clear the invoking client's pending/thinking state.
@@ -239,7 +244,8 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       // directly (<@id> / <@!id> in the content) or via @everyone — bumps the
       // channel's unread mention count. Reconciled on the next READY/refresh.
       {
-        const mentionAuthorId = data.author?.id ?? data.user_id;
+        const mentionAuthorId =
+          data.author?.id ?? (data as { author_id?: string }).author_id ?? data.user_id;
         const selfUserId =
           useServerListStore.getState().getServer(serverId)?.userId ||
           useAuthStore.getState().user?.id ||
@@ -247,7 +253,9 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
         if (selfUserId && mentionAuthorId && mentionAuthorId !== selfUserId) {
           const content = typeof data.content === 'string' ? data.content : '';
           const mentionsSelf =
-            data.mention_everyone === true ||
+            // The server never emits `mention_everyone`, so reading the field
+            // alone meant an @everyone ping never produced a mention badge.
+            mentionsEveryone(data) ||
             new RegExp(`<@!?${selfUserId}>`).test(content);
           if (mentionsSelf) {
             useReadStateStore.getState().incrementMention(serverId, data.channel_id);
@@ -522,15 +530,39 @@ export function dispatchGatewayEvent(serverId: string, event: string, data: Gate
       // Profile identity is projected into member lists, cached messages,
       // relationships, and DM titles. Keep all of them live from one event.
       if (!data.user?.id) break;
+      const updatedUserId = data.user.id;
       const currentUserId = useAuthStore.getState().user?.id;
-      if (currentUserId === data.user.id) {
+      const isSelf = currentUserId === updatedUserId;
+      if (isSelf) {
         const current = useAuthStore.getState().user;
         useAuthStore.setState({ user: current ? { ...current, ...data.user } : data.user });
       }
+      // These two are cheap and self-limiting — they bail internally when the
+      // user owns nothing cached.
       useMemberStore.getState().updateUserIdentity(data.user);
       useMessageStore.getState().updateUserIdentity(data.user);
-      void useRelationshipStore.getState().fetchRelationships();
-      void useChannelStore.getState().loadAllDmChannels();
+
+      // The refetches below are not cheap: `loadAllDmChannels` hits every
+      // connected server. Firing both on every profile edit by anyone visible
+      // meant a busy guild produced a steady stream of full DM + relationship
+      // reloads. Only refetch when this user can actually appear in that data.
+      const isKnownRelationship = useRelationshipStore
+        .getState()
+        .relationships.some((relationship) => relationship.user?.id === updatedUserId);
+      const isDmRecipient = Object.values(useChannelStore.getState().dmChannelsByServer).some(
+        (channels) =>
+          channels.some(
+            (channel) =>
+              channel.recipient?.id === updatedUserId ||
+              channel.recipients?.some((recipient) => recipient.id === updatedUserId),
+          ),
+      );
+      if (isSelf || isKnownRelationship) {
+        void useRelationshipStore.getState().fetchRelationships();
+      }
+      if (isSelf || isDmRecipient) {
+        void useChannelStore.getState().loadAllDmChannels();
+      }
       break;
     }
 

@@ -176,12 +176,25 @@ impl MediaConnection {
             let encoded = auth_msg.encode()?;
             send.write_all(&encoded).await?;
 
-            // Wait for Pong acknowledgement
+            // Wait for Pong acknowledgement. Bound the frame before allocating
+            // attacker-controlled memory — exactly as the server side does at
+            // `accept_and_auth`. This is a *client* reading a length prefix from
+            // a server it dialed, and in this product that server is an
+            // arbitrary self-hosted relay: an unbounded `u32` here let a
+            // malicious or compromised relay answer `0xFFFFFFFF` and force a
+            // 4 GB allocation on the desktop client before a single byte of the
+            // reply had been validated.
             let mut len_buf = [0u8; 4];
             recv.read_exact(&mut len_buf)
                 .await
                 .map_err(ConnectionError::ReadError)?;
-            let len = u32::from_be_bytes(len_buf) as usize;
+            let len = u32::from_be_bytes(len_buf);
+            if len == 0 || len > MAX_AUTH_MESSAGE_SIZE || len > crate::control::MAX_MESSAGE_SIZE {
+                return Err(ConnectionError::Control(ControlError::MessageTooLarge {
+                    size: len,
+                }));
+            }
+            let len = len as usize;
 
             let mut msg_buf = vec![0u8; len];
             recv.read_exact(&mut msg_buf)

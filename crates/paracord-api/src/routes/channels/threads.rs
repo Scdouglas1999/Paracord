@@ -269,6 +269,19 @@ pub async fn update_thread(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
+    // Thread ownership is not a standing grant: the owner must still be a member
+    // of the guild and must still be able to see the parent channel. Skipping
+    // both guards for the owner let someone who had been kicked from the guild
+    // (or denied VIEW_CHANNEL on the parent) keep renaming their thread and,
+    // worse, send `{"locked": false}` to undo a moderator's lock.
+    ensure_channel_permissions(
+        &state,
+        &parent_channel,
+        auth.user_id,
+        &[Permissions::VIEW_CHANNEL],
+    )
+    .await?;
+
     let is_thread_owner = thread.owner_id == Some(auth.user_id);
 
     if (body.archived.is_some() || body.locked.is_some()) && !is_thread_owner {

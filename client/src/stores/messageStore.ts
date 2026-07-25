@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import type {
   EditMessageRequest,
   Message,
+  MessageAuthor,
   MessageE2eePayload,
   PaginationParams,
   SendMessageRequest,
@@ -18,9 +19,10 @@ import { decryptGroupDmMessage, encryptGroupDmMessage } from '../lib/groupDmE2ee
 import { refreshGuildChannelVisibility, useChannelStore } from './channelStore';
 import { toast } from './toastStore';
 import { usePollStore } from './pollStore';
-import { getVersionedJson, setVersionedJson } from '../lib/versionedStorage';
+import { getVersionedJson, setVersionedStorageItem } from '../lib/versionedStorage';
 import { useAuthStore } from './authStore';
 import { useServerListStore } from './serverListStore';
+import { registerSessionReset } from './sessionReset';
 
 /**
  * Resolve the current user's id for the active server. Per-server user ids are
@@ -205,6 +207,97 @@ function createMessageNonce(): string {
   return crypto.randomUUID();
 }
 
+/**
+ * Wire shape of an inbound message before it is trusted as a `Message`.
+ *
+ * The gateway's interaction paths (slash commands, component callbacks, bot
+ * replies) emit `author_id` as a bare string instead of the `author` object
+ * every other path emits. Casting that straight to `Message` produced a stored
+ * record with no `author`, and the first render that touched `msg.author.id`
+ * threw — taking the entire app down with it, because a bot reply is enough to
+ * trip it.
+ */
+export type IncomingMessagePayload = Partial<Message> & {
+  author_id?: string | number | null;
+  user_id?: string | number | null;
+};
+
+/**
+ * Author placeholder for payloads that identify their author by id only. The
+ * id is what every downstream consumer actually keys on (grouping, ownership,
+ * mention checks, profile popups); the label is corrected as soon as a
+ * USER_UPDATE, member fetch, or full refetch supplies the real identity.
+ */
+function synthesizeAuthor(authorId: string): MessageAuthor {
+  return {
+    id: authorId,
+    username: 'Unknown User',
+    discriminator: '0000',
+    display_name: null,
+    avatar_hash: null,
+  };
+}
+
+/**
+ * Coerce an inbound payload into a renderable `Message`, or return `null` when
+ * it cannot be made safe. A malformed payload must never reach the store: the
+ * feed is virtualized and shared, so one bad record breaks every row around it.
+ *
+ * This is deliberately defensive rather than trusting the declared type — the
+ * client talks to self-hosted servers of arbitrary version and must not crash
+ * on any of them.
+ */
+export function normalizeIncomingMessage(raw: IncomingMessagePayload | null | undefined): Message | null {
+  if (!raw || typeof raw !== 'object') return null;
+  if (!raw.id || !raw.channel_id) return null;
+
+  const rawAuthor = raw.author as Partial<MessageAuthor> | null | undefined;
+  let author: MessageAuthor;
+
+  if (rawAuthor && rawAuthor.id != null && String(rawAuthor.id).length > 0) {
+    // Present but possibly partial — fill the fields the UI dereferences.
+    author = {
+      ...rawAuthor,
+      id: String(rawAuthor.id),
+      username: rawAuthor.username ?? 'Unknown User',
+      discriminator: rawAuthor.discriminator ?? '0000',
+    };
+  } else {
+    const fallbackId = raw.author_id ?? raw.user_id;
+    if (fallbackId == null || String(fallbackId).length === 0) {
+      console.warn('[messageStore] dropping message payload with no resolvable author');
+      return null;
+    }
+    author = synthesizeAuthor(String(fallbackId));
+  }
+
+  return { ...(raw as Message), id: String(raw.id), author };
+}
+
+/**
+ * Carry locally-known `flags` onto refetched copies of the same message.
+ *
+ * `build_message_json` omits `flags` entirely, so a refetch returns `undefined`
+ * where the live gateway payload had a value. `(flags ?? 0) & 64` — the
+ * EPHEMERAL bit — is therefore true while the message is live and false after
+ * any refetch, silently promoting an ephemeral bot reply into a normal message
+ * visible to the whole channel. An absent field means "unknown", never
+ * "cleared", so keep the value we already had.
+ */
+function preserveKnownFlags(incoming: Message[], existing: Message[] | undefined): Message[] {
+  if (!existing?.length) return incoming;
+  const knownFlagsById = new Map<string, number>();
+  for (const message of existing) {
+    if (message.flags != null) knownFlagsById.set(message.id, message.flags);
+  }
+  if (knownFlagsById.size === 0) return incoming;
+  return incoming.map((message) => {
+    if (message.flags != null) return message;
+    const known = knownFlagsById.get(message.id);
+    return known == null ? message : { ...message, flags: known };
+  });
+}
+
 function mergeMessageFields(existing: Message, incoming: Partial<Message>): Message {
   const merged: Message = { ...existing };
   for (const key of Object.keys(incoming) as (keyof Message)[]) {
@@ -217,12 +310,40 @@ function mergeMessageFields(existing: Message, incoming: Partial<Message>): Mess
   return merged;
 }
 
+/**
+ * Hard cap on queued offline messages. Without one, a client left offline in a
+ * retry loop grows the queue until localStorage hits its quota — at which point
+ * the write throws, the whole queue silently stops persisting, and the user is
+ * still being told their messages will send on reconnect.
+ */
+const MAX_OFFLINE_QUEUE = 100;
+
 function loadOfflineQueue(): OfflineQueuedMessage[] {
-  return getVersionedJson<OfflineQueuedMessage[]>(OFFLINE_QUEUE_STORAGE_KEY, []);
+  const queue = getVersionedJson<OfflineQueuedMessage[]>(OFFLINE_QUEUE_STORAGE_KEY, []);
+  return Array.isArray(queue) ? queue.slice(-MAX_OFFLINE_QUEUE) : [];
 }
 
-function persistOfflineQueue(queue: OfflineQueuedMessage[]): void {
-  setVersionedJson(OFFLINE_QUEUE_STORAGE_KEY, queue);
+/**
+ * Persist the queue, dropping the oldest entries past the cap. Returns the list
+ * that was actually written so callers keep memory and storage in agreement.
+ * A quota failure is surfaced rather than swallowed: the user was promised
+ * delivery, so they need to know when that promise cannot be kept.
+ */
+function persistOfflineQueue(queue: OfflineQueuedMessage[]): OfflineQueuedMessage[] {
+  const capped = queue.length > MAX_OFFLINE_QUEUE ? queue.slice(-MAX_OFFLINE_QUEUE) : queue;
+  try {
+    setVersionedStorageItem(OFFLINE_QUEUE_STORAGE_KEY, JSON.stringify(capped));
+  } catch (err) {
+    const isQuota =
+      err instanceof DOMException &&
+      (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED');
+    toast.error(
+      isQuota
+        ? 'Out of local storage — queued messages will be lost if you close the app.'
+        : 'Could not save queued messages to this device.',
+    );
+  }
+  return capped;
 }
 
 function shouldQueueMessageError(err: unknown): boolean {
@@ -534,12 +655,16 @@ interface MessageState {
   // Pin state update
   updatePinState: (channelId: string, messageId: string, pinned: boolean) => void;
 
-  // Gateway event handlers
-  addMessage: (channelId: string, message: Message) => void;
+  // Gateway event handlers. `addMessage` takes the raw wire payload — it
+  // normalizes and validates internally, so callers must NOT pre-cast to
+  // `Message` and assert a shape the server may not have sent.
+  addMessage: (channelId: string, message: IncomingMessagePayload) => void;
   updateMessage: (channelId: string, message: Partial<Message> & Pick<Message, 'id'>) => void;
   removeMessage: (channelId: string, messageId: string) => void;
   removeMessages: (channelId: string, messageIds: string[]) => void;
   updateUserIdentity: (user: User) => void;
+  /** Drop all cached messages, pins and queues. Called on logout. */
+  reset: () => void;
 }
 
 export const useMessageStore = create<MessageState>()((set, get) => ({
@@ -604,7 +729,10 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
           set((state) => {
             // API returns newest first (ORDER BY id DESC); reverse to
             // chronological order (oldest at top, newest at bottom).
-            const sorted = [...decrypted].reverse();
+            const sorted = preserveKnownFlags(
+              [...decrypted].reverse(),
+              state.messages[channelId],
+            );
             let merged: typeof sorted;
             if (params?.before) {
               const existing = state.messages[channelId] || [];
@@ -693,11 +821,11 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
         nonce: createMessageNonce(),
         createdAt: new Date().toISOString(),
       };
-      set((state) => {
-        const next = [...state.offlineQueue, queued];
-        persistOfflineQueue(next);
-        return { offlineQueue: next };
-      });
+      set((state) => ({
+        // Keep the in-memory queue identical to what was persisted, so a capped
+        // write does not leave the UI showing entries that no longer exist.
+        offlineQueue: persistOfflineQueue([...state.offlineQueue, queued]),
+      }));
       toast.info('Message queued and will send when reconnected.');
     }
   },
@@ -790,7 +918,10 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
       return {
         messages: {
           ...state.messages,
-          [channelId]: existing.map((m) => (m.id === messageId ? decrypted : m)),
+          // Merge rather than replace: the edit response comes from the same
+          // serializer that omits `flags`, and a wholesale replace would drop
+          // the ephemeral bit off a message the user just edited.
+          [channelId]: existing.map((m) => (m.id === messageId ? mergeMessageFields(m, decrypted) : m)),
         },
       };
     });
@@ -822,7 +953,13 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
     try {
       const { data } = await channelApi.getPins(channelId);
       const decrypted = await decryptMessagesForChannel(channelId, data);
-      set((state) => ({ pins: { ...state.pins, [channelId]: decrypted } }));
+      set((state) => ({
+        pins: {
+          ...state.pins,
+          // Pins come from the same serializer that omits `flags`.
+          [channelId]: preserveKnownFlags(decrypted, state.messages[channelId]),
+        },
+      }));
     } catch (err) {
       toast.error(`Failed to load pinned messages: ${extractApiError(err)}`);
     }
@@ -1060,7 +1197,12 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
     }),
 
   // Gateway event handlers
-  addMessage: (channelId, message) => {
+  addMessage: (channelId, rawMessage) => {
+    // Guard here rather than only at the dispatch call site: every path into the
+    // store (gateway, replay, optimistic send) has to be safe, and an authorless
+    // record in the cache breaks the whole virtualized feed, not just its row.
+    const message = normalizeIncomingMessage(rawMessage);
+    if (!message) return;
     const isE2ee = Boolean(message.e2ee);
     const baseMessage = {
       ...message,
@@ -1138,8 +1280,12 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
     const shouldDecrypt = message.e2ee !== undefined
       ? Boolean(message.e2ee)
       : Boolean(existingMessage?.e2ee);
-    if (shouldDecrypt && message.e2ee !== undefined) {
-      void decryptMessageForChannel(channelId, mergeMessageFields(existingMessage!, message)).then((decrypted) => {
+    // `existingMessage` is genuinely optional: the `set` above returns early
+    // when the message is not cached (and eviction can drop it between the two
+    // statements). The old `existingMessage!` asserted otherwise and would have
+    // thrown inside `mergeMessageFields`. Nothing to decrypt if it is gone.
+    if (shouldDecrypt && message.e2ee !== undefined && existingMessage) {
+      void decryptMessageForChannel(channelId, mergeMessageFields(existingMessage, message)).then((decrypted) => {
         set((state) => {
           const current = state.messages[channelId] || [];
           const nextDecrypting = new Set(state.decryptingIds);
@@ -1184,7 +1330,7 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
   updateUserIdentity: (user) =>
     set((state) => {
       const patchAuthor = (message: Message): Message =>
-        message.author.id === user.id
+        message.author?.id === user.id
           ? {
               ...message,
               author: {
@@ -1194,19 +1340,60 @@ export const useMessageStore = create<MessageState>()((set, get) => ({
               },
             }
           : message;
+
+      // USER_UPDATE fires for every profile edit by anyone the client can see.
+      // Rebuilding every cached channel array and every message object on each
+      // one re-rendered the whole feed even when the user had authored nothing
+      // here. Rebuild only the channels that actually contain their messages,
+      // and keep the original array identity everywhere else so downstream
+      // selectors and memos stay stable.
+      const remapChannels = (
+        source: Record<string, Message[]>,
+      ): Record<string, Message[]> | null => {
+        let changed = false;
+        const next: Record<string, Message[]> = {};
+        for (const [channelId, messages] of Object.entries(source)) {
+          if (!messages.some((message) => message.author?.id === user.id)) {
+            next[channelId] = messages;
+            continue;
+          }
+          next[channelId] = messages.map(patchAuthor);
+          changed = true;
+        }
+        return changed ? next : null;
+      };
+
+      const messages = remapChannels(state.messages);
+      const pins = remapChannels(state.pins);
+      if (!messages && !pins) return state;
       return {
-        messages: Object.fromEntries(
-          Object.entries(state.messages).map(([channelId, messages]) => [
-            channelId,
-            messages.map(patchAuthor),
-          ]),
-        ),
-        pins: Object.fromEntries(
-          Object.entries(state.pins).map(([channelId, messages]) => [
-            channelId,
-            messages.map(patchAuthor),
-          ]),
-        ),
+        ...(messages ? { messages } : {}),
+        ...(pins ? { pins } : {}),
       };
     }),
+
+  reset: () => {
+    // Abort every in-flight fetch before dropping state, otherwise a response
+    // for the previous account lands after the reset and repopulates the cache.
+    for (const [, controller] of _messageFetchControllers) controller.abort();
+    _messageFetchControllers.clear();
+    _pendingReactionKeys.clear();
+    _channelAccessOrder.clear();
+    set({
+      messages: {},
+      hasMore: {},
+      loading: {},
+      messageErrors: {},
+      pins: {},
+      decryptingIds: new Set<string>(),
+      // The offline queue is persisted per-device and intentionally survives a
+      // logout so drafted messages are not silently destroyed; it is re-read
+      // from storage on the next load.
+      offlineQueue: [],
+    });
+  },
 }));
+
+// Cleared on logout; see `sessionReset` for why this is a registration
+// rather than a direct import from `authStore`.
+registerSessionReset('messages', () => useMessageStore.getState().reset());

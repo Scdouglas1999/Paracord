@@ -273,16 +273,162 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
     run_migrations_for_engine(pool, active_database_engine()).await
 }
 
+/// Historical checksums of SQLite migrations that had to be corrected *in place*
+/// because a forward-only repair could not reach the damage they do.
+///
+/// Each entry is `(version, sha384-of-the-shipped-file)`. Three shipped SQLite
+/// migrations were destructive or fatal on any database that already held rows:
+///
+/// * `20260211000001` dropped and recreated `channels`, whose implicit
+///   `DELETE FROM` cascaded away every message, read state, reaction,
+///   attachment, permission overwrite and DM membership.
+/// * `20260214000001` used a non-constant `DEFAULT` on `ADD COLUMN`, which
+///   SQLite rejects once a table holds rows, so the server refused to start.
+/// * `20260220000001` dropped and recreated `poll_options`, `poll_votes` and
+///   `event_rsvps` empty, discarding every option, vote and RSVP.
+///
+/// A later migration cannot undo any of that: on a server that is still on an
+/// older tag the damage happens when the *old* file runs, so only fixing the
+/// file itself helps. Correcting a file changes its checksum, which sqlx
+/// normally rejects with `VersionMismatch`, so the exact pre-fix checksums are
+/// pinned here and rewritten to the current ones before the migrator runs.
+///
+/// This is deliberately narrow: a row is only touched when its stored checksum
+/// is byte-identical to one of these known-bad values, so genuine drift in any
+/// other migration still fails loudly.
+const REPAIRED_SQLITE_MIGRATIONS: &[(i64, &str)] = &[
+    (
+        20260211000001,
+        "9668743d4f398c4d847f21e51ecaaa7de11a2ef85cf50a596f870715473c6eed1a8b35878492839237eb721e5804229b",
+    ),
+    (
+        20260214000001,
+        "7fdde7c220d0df0fbc9f6330282d1a26b288453cac5f3cd916a692b934ab30734ec62fa7cabe316f0b4e17b4bf71a2cf",
+    ),
+    (
+        20260220000001,
+        "7a05dd77f954de18f4135b043380efeea983155e3a1a096e34e811d690424e71ed8cae4a2efa4de1570adc9247fef07d",
+    ),
+];
+
+fn decode_hex(hex: &str) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
+/// Rewrite the recorded checksum of an already-applied migration that we had to
+/// correct in place. No-op on a fresh database, and no-op unless the stored
+/// checksum matches the exact historical value.
+async fn repair_migration_checksums(
+    pool: &DbPool,
+    migrator: &sqlx::migrate::Migrator,
+) -> Result<(), sqlx::Error> {
+    // Nothing to repair before the migrator has ever run.
+    let table_exists: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if table_exists.is_none() {
+        return Ok(());
+    }
+
+    for (version, legacy_hex) in REPAIRED_SQLITE_MIGRATIONS {
+        let Some(legacy) = decode_hex(legacy_hex) else {
+            return Err(sqlx::Error::Configuration(
+                format!("migration checksum repair table has malformed hex for {version}").into(),
+            ));
+        };
+        let Some(current) = migrator.iter().find(|m| m.version == *version) else {
+            continue;
+        };
+        let current_checksum = current.checksum.to_vec();
+        if current_checksum == legacy {
+            // File is unmodified relative to the pinned value: nothing to do.
+            continue;
+        }
+
+        let updated = sqlx::query(
+            "UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2 AND checksum = $3",
+        )
+        .bind(current_checksum)
+        .bind(*version)
+        .bind(legacy)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        if updated > 0 {
+            tracing::warn!(
+                version,
+                "migrations: rewrote the recorded checksum of a migration that was corrected in \
+                 place; the database schema is unchanged"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub async fn run_migrations_for_engine(
     pool: &DbPool,
     engine: DatabaseEngine,
 ) -> Result<(), sqlx::Error> {
     match engine {
-        DatabaseEngine::Sqlite => sqlx::migrate!("./migrations").run(pool).await?,
+        DatabaseEngine::Sqlite => {
+            let migrator = sqlx::migrate!("./migrations");
+            repair_migration_checksums(pool, &migrator).await?;
+            migrator.run(pool).await?
+        }
         DatabaseEngine::Postgres => sqlx::migrate!("./migrations_pg").run(pool).await?,
     }
     backfill_webhook_token_hashes(pool).await?;
     tracing::info!("migrations: applied successfully");
+    Ok(())
+}
+
+/// Take a self-consistent snapshot of a SQLite database into `dest_path`.
+///
+/// Goes through the normal pool builder, so the snapshot honours `PRAGMA key`
+/// and therefore works for SQLCipher-encrypted databases -- opening the file
+/// with a plain unkeyed SQLite handle just reports "file is not a database".
+/// `VACUUM INTO` also produces a coherent file while the database is being
+/// written to, which a filesystem copy of a WAL database does not: the copy
+/// misses whatever is still sitting in `-wal`.
+pub async fn vacuum_sqlite_into(
+    database_url: &str,
+    sqlite_key_hex: Option<String>,
+    dest_path: &str,
+) -> Result<(), sqlx::Error> {
+    if detect_database_engine(database_url)? != DatabaseEngine::Sqlite {
+        return Err(sqlx::Error::Configuration(
+            "VACUUM INTO is only available for SQLite databases".into(),
+        ));
+    }
+    // `VACUUM INTO` takes a string literal, not a bind parameter.
+    if dest_path.contains('\'') {
+        return Err(sqlx::Error::Configuration(
+            format!("refusing to VACUUM INTO a path containing a quote: {dest_path}").into(),
+        ));
+    }
+
+    let pool = create_pool_full(
+        database_url,
+        1,
+        Some(DatabaseEngine::Sqlite),
+        sqlite_key_hex,
+        None,
+    )
+    .await?;
+    let result = sqlx::query(&format!("VACUUM INTO '{dest_path}'"))
+        .execute(&pool)
+        .await;
+    pool.close().await;
+    result?;
     Ok(())
 }
 
@@ -468,9 +614,70 @@ async fn backfill_webhook_token_hashes(pool: &DbPool) -> Result<(), sqlx::Error>
 mod tests {
     use super::{
         backfill_webhook_token_hashes, create_pool, create_pool_with_engine_and_sqlite_key,
-        create_pool_with_sqlite_key, run_migrations, run_migrations_for_engine, DatabaseEngine,
+        create_pool_with_sqlite_key, decode_hex, run_migrations, run_migrations_for_engine,
+        DatabaseEngine, REPAIRED_SQLITE_MIGRATIONS,
     };
     use sqlx::Row;
+
+    #[tokio::test]
+    async fn corrected_migrations_repair_their_recorded_checksum() {
+        let pool = create_pool("sqlite::memory:", 1).await.expect("pool");
+        run_migrations(&pool).await.expect("migrations");
+
+        // Rewind the bookkeeping to what a database migrated by the shipped,
+        // pre-correction files looks like.
+        for (version, legacy_hex) in REPAIRED_SQLITE_MIGRATIONS {
+            let legacy = decode_hex(legacy_hex).expect("pinned checksum must be valid hex");
+            let updated =
+                sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
+                    .bind(legacy)
+                    .bind(*version)
+                    .execute(&pool)
+                    .await
+                    .expect("seed legacy checksum")
+                    .rows_affected();
+            assert_eq!(updated, 1, "migration {version} should already be applied");
+        }
+
+        // Without the repair pass this is `MigrateError::VersionMismatch` and
+        // the server refuses to start.
+        run_migrations(&pool)
+            .await
+            .expect("a corrected migration must not fail an already-migrated database");
+
+        for (version, legacy_hex) in REPAIRED_SQLITE_MIGRATIONS {
+            let stored: Vec<u8> =
+                sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = $1")
+                    .bind(*version)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("checksum");
+            assert_ne!(
+                stored,
+                decode_hex(legacy_hex).expect("hex"),
+                "checksum for {version} was not rewritten"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn checksum_repair_does_not_mask_unrelated_drift() {
+        let pool = create_pool("sqlite::memory:", 1).await.expect("pool");
+        run_migrations(&pool).await.expect("migrations");
+
+        // A migration that is *not* on the repair list, and a checksum that is
+        // not one of the pinned historical values, must still fail loudly.
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
+            .bind(vec![0u8; 48])
+            .bind(20260209000001_i64)
+            .execute(&pool)
+            .await
+            .expect("corrupt a checksum");
+
+        run_migrations(&pool)
+            .await
+            .expect_err("tampered migration bookkeeping must abort startup");
+    }
 
     #[tokio::test]
     async fn create_pool_supports_default_sqlite_mode() {

@@ -13,6 +13,13 @@ use thiserror::Error;
 const FILE_MAGIC_V1: &[u8; 8] = b"PRCENC01";
 const FILE_MAGIC_V2: &[u8; 8] = b"PRCENC02";
 const NONCE_LEN: usize = 12;
+/// When set (`1`/`true`/`yes`/`on`), legacy V1 (`PRCENC01`) payloads are refused
+/// outright instead of being decrypted with an empty AAD. V1 blobs carry no
+/// record binding, so an attacker with blob-store write access can move one onto
+/// a different row and it still authenticates. Deployments that have finished
+/// re-wrapping their V1 payloads as V2 (see
+/// [`FileCryptor::decrypt_with_aad_migrating`]) should set this.
+const REFUSE_LEGACY_V1_ENV: &str = "PARACORD_AT_REST_REFUSE_LEGACY_V1";
 
 #[derive(Debug, Error)]
 pub enum AtRestKeyError {
@@ -38,6 +45,31 @@ pub enum FileCryptoError {
     DecryptFailed,
     #[error("plaintext attachment reads are disabled while at-rest encryption is enabled")]
     PlaintextReadDisabled,
+    #[error("legacy (V1) at-rest payloads are refused by configuration")]
+    LegacyPayloadRefused,
+}
+
+/// Result of [`FileCryptor::decrypt_with_aad_migrating`].
+///
+/// `rewrapped` is `Some` when the stored blob was a legacy V1 envelope (no AAD
+/// binding) and has been re-encrypted as a V2 envelope bound to `aad`. Callers
+/// that own the blob store should persist it in place so the unbound copy stops
+/// existing.
+#[derive(Debug, Clone)]
+pub struct MigratedPayload {
+    pub plaintext: Vec<u8>,
+    pub rewrapped: Option<Vec<u8>>,
+}
+
+fn legacy_v1_reads_refused() -> bool {
+    std::env::var(REFUSE_LEGACY_V1_ENV)
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 #[derive(Clone)]
@@ -115,6 +147,15 @@ impl FileCryptor {
         self.decrypt_with_aad(stored, b"")
     }
 
+    /// Decrypt a stored payload.
+    ///
+    /// V2 (`PRCENC02`) envelopes are bound to `aad`: the same ciphertext moved
+    /// onto a different record fails to authenticate. V1 (`PRCENC01`) envelopes
+    /// predate that binding and were sealed with an empty AAD, so they decrypt
+    /// identically under any record id — set `PARACORD_AT_REST_REFUSE_LEGACY_V1`
+    /// to refuse them once they have been migrated, and prefer
+    /// [`Self::decrypt_with_aad_migrating`] on read paths that can persist the
+    /// upgraded blob.
     pub fn decrypt_with_aad(&self, stored: &[u8], aad: &[u8]) -> Result<Vec<u8>, FileCryptoError> {
         if !Self::payload_is_encrypted(stored) {
             if self.allow_plaintext_reads {
@@ -130,6 +171,9 @@ impl FileCryptor {
         let is_v1 = stored.starts_with(FILE_MAGIC_V1);
         if !is_v2 && !is_v1 {
             return Err(FileCryptoError::InvalidPayload);
+        }
+        if is_v1 && legacy_v1_reads_refused() {
+            return Err(FileCryptoError::LegacyPayloadRefused);
         }
 
         let nonce_start = FILE_MAGIC_V2.len();
@@ -150,8 +194,41 @@ impl FileCryptor {
             .map_err(|_| FileCryptoError::DecryptFailed)
     }
 
+    /// Decrypt a stored payload and, when it is a legacy V1 envelope, hand back
+    /// a V2 re-wrap bound to `aad` for the caller to persist in place.
+    ///
+    /// V1 blobs authenticate under any record id (they were sealed with an empty
+    /// AAD), so a blob-store writer can relocate one onto a different row and it
+    /// decrypts cleanly. Re-wrapping on access retires those copies as the data
+    /// is read; the returned `rewrapped` blob is only meaningful if the caller
+    /// stores it back under the same key.
+    pub fn decrypt_with_aad_migrating(
+        &self,
+        stored: &[u8],
+        aad: &[u8],
+    ) -> Result<MigratedPayload, FileCryptoError> {
+        let plaintext = self.decrypt_with_aad(stored, aad)?;
+        if Self::payload_is_legacy_v1(stored) {
+            let rewrapped = self.encrypt_with_aad(&plaintext, aad)?;
+            return Ok(MigratedPayload {
+                plaintext,
+                rewrapped: Some(rewrapped),
+            });
+        }
+        Ok(MigratedPayload {
+            plaintext,
+            rewrapped: None,
+        })
+    }
+
     pub fn payload_is_encrypted(payload: &[u8]) -> bool {
         payload.starts_with(FILE_MAGIC_V1) || payload.starts_with(FILE_MAGIC_V2)
+    }
+
+    /// True for a legacy `PRCENC01` envelope — encrypted, but not bound to any
+    /// record id.
+    pub fn payload_is_legacy_v1(payload: &[u8]) -> bool {
+        payload.starts_with(FILE_MAGIC_V1)
     }
 }
 
@@ -240,7 +317,48 @@ fn parse_base64_key(raw: &str) -> Result<[u8; 32], AtRestKeyError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_sqlite_key_hex, parse_master_key, FileCryptoError, FileCryptor};
+    use super::{
+        derive_sqlite_key_hex, parse_master_key, FileCryptoError, FileCryptor, Nonce, Payload,
+        FILE_MAGIC_V1, NONCE_LEN, REFUSE_LEGACY_V1_ENV,
+    };
+    use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::Aes256Gcm;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Serializes every test whose behaviour depends on
+    /// `PARACORD_AT_REST_REFUSE_LEGACY_V1`.
+    ///
+    /// The flag is read from the process environment inside `decrypt_with_aad`,
+    /// and Rust runs tests as parallel threads in ONE process — so a test that
+    /// merely *decrypts* observes a flag another test sets, even though it never
+    /// touches the environment itself. Only the setter held this lock
+    /// originally, which made the rewrap test fail intermittently in a full
+    /// workspace run while passing in isolation.
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// Build a legacy `PRCENC01` blob the way pre-AAD Paracord wrote them:
+    /// same key, empty AAD, V1 magic.
+    fn legacy_v1_blob(cryptor: &FileCryptor, plaintext: &[u8]) -> Vec<u8> {
+        let cipher = Aes256Gcm::new_from_slice(&cryptor.key).expect("cipher");
+        let nonce_bytes = [9_u8; NONCE_LEN];
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce_bytes),
+                Payload {
+                    msg: plaintext,
+                    aad: b"",
+                },
+            )
+            .expect("v1 encrypt");
+        let mut out = Vec::with_capacity(FILE_MAGIC_V1.len() + NONCE_LEN + ciphertext.len());
+        out.extend_from_slice(FILE_MAGIC_V1);
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ciphertext);
+        out
+    }
 
     #[test]
     fn parses_hex_master_key() {
@@ -261,6 +379,7 @@ mod tests {
 
     #[test]
     fn encrypt_decrypt_roundtrip() {
+        let _guard = env_lock().lock().expect("env lock");
         let master =
             parse_master_key("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").expect("master");
         let cryptor = FileCryptor::from_master_key(&master, false);
@@ -274,6 +393,7 @@ mod tests {
 
     #[test]
     fn decrypt_with_wrong_aad_fails() {
+        let _guard = env_lock().lock().expect("env lock");
         let master =
             parse_master_key("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").expect("master");
         let cryptor = FileCryptor::from_master_key(&master, false);
@@ -290,6 +410,7 @@ mod tests {
 
     #[test]
     fn plaintext_read_fallback_when_allowed() {
+        let _guard = env_lock().lock().expect("env lock");
         let master =
             parse_master_key("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").expect("master");
         let cryptor = FileCryptor::from_master_key(&master, true);
@@ -299,11 +420,87 @@ mod tests {
 
     #[test]
     fn plaintext_read_is_blocked_when_disabled() {
+        let _guard = env_lock().lock().expect("env lock");
         let master =
             parse_master_key("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").expect("master");
         let cryptor = FileCryptor::from_master_key(&master, false);
         let err = cryptor.decrypt(b"legacy plaintext").expect_err("must fail");
         assert!(matches!(err, FileCryptoError::PlaintextReadDisabled));
+    }
+
+    #[test]
+    fn legacy_v1_payload_rewraps_to_an_aad_bound_v2_payload() {
+        let _guard = env_lock().lock().expect("env lock");
+        let master =
+            parse_master_key("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").expect("master");
+        let cryptor = FileCryptor::from_master_key(&master, false);
+        let plaintext = b"legacy attachment bytes";
+        let v1 = legacy_v1_blob(&cryptor, plaintext);
+        assert!(FileCryptor::payload_is_legacy_v1(&v1));
+
+        // The V1 blob is unbound: it decrypts under a record id it was never
+        // sealed for. That is the defect the re-wrap retires.
+        assert_eq!(
+            cryptor
+                .decrypt_with_aad(&v1, b"attachment:999")
+                .expect("v1 ignores aad"),
+            plaintext
+        );
+
+        let migrated = cryptor
+            .decrypt_with_aad_migrating(&v1, b"attachment:1")
+            .expect("migrating decrypt");
+        assert_eq!(migrated.plaintext, plaintext);
+        let rewrapped = migrated.rewrapped.expect("v1 payloads must be re-wrapped");
+        assert!(!FileCryptor::payload_is_legacy_v1(&rewrapped));
+
+        // The re-wrapped copy is bound: it only opens under its own record id.
+        assert_eq!(
+            cryptor
+                .decrypt_with_aad(&rewrapped, b"attachment:1")
+                .expect("rewrapped decrypt"),
+            plaintext
+        );
+        assert!(matches!(
+            cryptor
+                .decrypt_with_aad(&rewrapped, b"attachment:999")
+                .expect_err("relocated ciphertext must fail"),
+            FileCryptoError::DecryptFailed
+        ));
+
+        // V2 payloads are already bound and are never re-wrapped.
+        let v2 = cryptor
+            .encrypt_with_aad(plaintext, b"attachment:1")
+            .expect("encrypt");
+        let migrated_v2 = cryptor
+            .decrypt_with_aad_migrating(&v2, b"attachment:1")
+            .expect("migrating decrypt");
+        assert!(migrated_v2.rewrapped.is_none());
+    }
+
+    #[test]
+    fn legacy_v1_reads_can_be_refused_by_configuration() {
+        let _guard = env_lock().lock().expect("env lock");
+        let master =
+            parse_master_key("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").expect("master");
+        let cryptor = FileCryptor::from_master_key(&master, false);
+        let v1 = legacy_v1_blob(&cryptor, b"legacy attachment bytes");
+
+        std::env::set_var(REFUSE_LEGACY_V1_ENV, "true");
+        let err = cryptor
+            .decrypt_with_aad(&v1, b"attachment:1")
+            .expect_err("v1 reads must be refused when configured");
+        std::env::remove_var(REFUSE_LEGACY_V1_ENV);
+        assert!(matches!(err, FileCryptoError::LegacyPayloadRefused));
+
+        // V2 payloads keep working with the flag set.
+        std::env::set_var(REFUSE_LEGACY_V1_ENV, "true");
+        let v2 = cryptor
+            .encrypt_with_aad(b"fresh bytes", b"attachment:1")
+            .expect("encrypt");
+        let decrypted = cryptor.decrypt_with_aad(&v2, b"attachment:1");
+        std::env::remove_var(REFUSE_LEGACY_V1_ENV);
+        assert_eq!(decrypted.expect("v2 decrypt"), b"fresh bytes");
     }
 
     #[test]

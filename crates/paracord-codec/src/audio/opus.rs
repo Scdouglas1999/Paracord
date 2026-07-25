@@ -11,6 +11,17 @@ use thiserror::Error;
 pub const SAMPLE_RATE: u32 = 48_000;
 /// 20 ms frame at 48 kHz = 960 samples *per channel*.
 pub const FRAME_SIZE: usize = 960;
+/// Longest audio duration a single legal Opus packet can carry (RFC 6716 §2.1.4:
+/// code-3 packets may hold up to 120 ms), in samples *per channel* at 48 kHz.
+///
+/// `opus_decode_float` is given the output buffer's per-channel capacity as its
+/// `frame_size` argument and returns `OPUS_BUFFER_TOO_SMALL` when the packet
+/// decodes to more than that. Sizing the scratch buffer for one 20 ms frame
+/// therefore made every legal 40/60/80/100/120 ms packet fail to decode — a peer
+/// whose encoder used a longer frame duration was silently, permanently
+/// inaudible. The buffer is sized for the maximum instead; `decode` still
+/// returns only the samples the packet actually produced.
+pub const MAX_FRAME_SIZE: usize = 5760;
 /// Maximum Opus packet size (recommended by RFC 6716).
 const MAX_PACKET_SIZE: usize = 4000;
 
@@ -148,8 +159,11 @@ impl OpusDecoder {
         Ok(Self {
             inner: decoder,
             // decode_float writes `samples_per_channel * channels` interleaved
-            // values; size the scratch buffer for a full 20 ms frame.
-            decode_buf: vec![0.0f32; FRAME_SIZE * count],
+            // values and is handed this buffer's per-channel capacity as its
+            // `frame_size` bound, so it must be sized for the LONGEST legal
+            // packet (120 ms), not for our own 20 ms send cadence. A remote
+            // peer chooses its own frame duration.
+            decode_buf: vec![0.0f32; MAX_FRAME_SIZE * count],
             channels: count,
         })
     }
@@ -160,7 +174,11 @@ impl OpusDecoder {
     }
 
     /// Decode an Opus packet into interleaved PCM f32 samples.
-    /// Returns `FRAME_SIZE * channels` samples for a full 20 ms frame.
+    ///
+    /// Returns `samples_per_channel * channels` samples for whatever frame
+    /// duration the packet actually carries — 960 per channel for the 20 ms
+    /// frames this project sends, up to [`MAX_FRAME_SIZE`] for a peer using a
+    /// longer legal frame duration.
     pub fn decode(&mut self, packet_data: &[u8]) -> Result<Vec<f32>, OpusError> {
         let pkt: Packet<'_> = packet_data.try_into()?;
         let output: MutSignals<'_, f32> = (&mut self.decode_buf[..]).try_into()?;
@@ -170,8 +188,15 @@ impl OpusDecoder {
 
     /// Perform packet loss concealment (PLC).
     /// Called when a packet is missing; the decoder generates a best-guess frame.
+    ///
+    /// Concealment has no packet to take a duration from, so libopus generates
+    /// exactly the `frame_size` implied by the output buffer. The slice is
+    /// therefore pinned to one 20 ms frame — the pipeline's tick — rather than
+    /// the full [`MAX_FRAME_SIZE`] scratch buffer, which would emit 120 ms of
+    /// concealment per lost 20 ms packet.
     pub fn decode_plc(&mut self) -> Result<Vec<f32>, OpusError> {
-        let output: MutSignals<'_, f32> = (&mut self.decode_buf[..]).try_into()?;
+        let span = FRAME_SIZE * self.channels;
+        let output: MutSignals<'_, f32> = (&mut self.decode_buf[..span]).try_into()?;
         let per_channel = self.inner.decode_float(None, output, false)?;
         Ok(self.decode_buf[..per_channel * self.channels].to_vec())
     }
@@ -179,9 +204,14 @@ impl OpusDecoder {
     /// Decode with FEC. If the *next* packet has arrived but the *current* one
     /// was lost, pass the next packet here with `fec=true` to recover the
     /// lost frame from the forward error correction data.
+    ///
+    /// FEC reconstruction needs the duration of the *missing* frame, which is
+    /// not recoverable from the packet in hand, so this pins the output to the
+    /// project's 20 ms cadence for the same reason as `decode_plc`.
     pub fn decode_fec(&mut self, next_packet_data: &[u8]) -> Result<Vec<f32>, OpusError> {
         let pkt: Packet<'_> = next_packet_data.try_into()?;
-        let output: MutSignals<'_, f32> = (&mut self.decode_buf[..]).try_into()?;
+        let span = FRAME_SIZE * self.channels;
+        let output: MutSignals<'_, f32> = (&mut self.decode_buf[..span]).try_into()?;
         let per_channel = self.inner.decode_float(Some(pkt), output, true)?;
         Ok(self.decode_buf[..per_channel * self.channels].to_vec())
     }
@@ -286,6 +316,55 @@ mod tests {
             FRAME_SIZE * 2,
             "one 20ms stereo frame must decode to 1920 interleaved samples"
         );
+    }
+
+    /// A remote peer chooses its own Opus frame duration. Sizing the decode
+    /// scratch buffer for 20 ms made `opus_decode_float` return
+    /// `OPUS_BUFFER_TOO_SMALL` for every legal 40/60/80/100/120 ms packet, so
+    /// that peer's audio was silently and permanently dead. Every legal frame
+    /// duration must decode to exactly its own sample count.
+    #[test]
+    fn decodes_every_legal_frame_duration() {
+        for samples_per_channel in [480usize, 960, 1920, 2880, 3840, 4800, MAX_FRAME_SIZE] {
+            let encoder =
+                OpusEncoderInner::new(SampleRate::Hz48000, Channels::Mono, Application::Audio)
+                    .expect("encoder creation failed");
+            let pcm: Vec<f32> = (0..samples_per_channel)
+                .map(|i| {
+                    (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin() * 0.5
+                })
+                .collect();
+            let mut packet = vec![0u8; MAX_PACKET_SIZE];
+            let len = encoder
+                .encode_float(&pcm, &mut packet)
+                .unwrap_or_else(|e| panic!("encode of {samples_per_channel} samples failed: {e}"));
+
+            let mut decoder = OpusDecoder::new().expect("decoder creation failed");
+            let decoded = decoder.decode(&packet[..len]).unwrap_or_else(|e| {
+                panic!("decode of a {samples_per_channel}-sample frame failed: {e}")
+            });
+            assert_eq!(
+                decoded.len(),
+                samples_per_channel,
+                "a {samples_per_channel}-sample packet must decode to exactly that many samples"
+            );
+        }
+    }
+
+    /// PLC and FEC have no packet to take a duration from, so they must stay
+    /// pinned to the pipeline's 20 ms tick even though the scratch buffer is now
+    /// sized for 120 ms.
+    #[test]
+    fn plc_and_fec_still_emit_one_20ms_frame() {
+        let mut encoder = OpusEncoder::new().expect("encoder creation failed");
+        let packet = encoder.encode(&vec![0.0f32; FRAME_SIZE]).expect("encode");
+
+        let mut decoder = OpusDecoder::new().expect("decoder creation failed");
+        assert_eq!(decoder.decode_plc().expect("PLC").len(), FRAME_SIZE);
+        assert_eq!(decoder.decode_fec(&packet).expect("FEC").len(), FRAME_SIZE);
+
+        let mut stereo = OpusDecoder::new_stereo().expect("stereo decoder creation failed");
+        assert_eq!(stereo.decode_plc().expect("PLC").len(), FRAME_SIZE * 2);
     }
 
     #[test]

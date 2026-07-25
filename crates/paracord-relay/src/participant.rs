@@ -7,6 +7,25 @@ use paracord_transport::stream::{
     PublishedTrack, StreamId, TrackId, TrackSubscription, VideoCodecCapability,
 };
 
+/// Largest number of distinct `(stream_id, track_id)` announcements one
+/// participant may have live at once.
+///
+/// A client publishes at most a handful (microphone, camera, screen, screen
+/// audio); the identifiers are attacker-chosen strings, so without a cap a
+/// single participant can grow this map — and every structure the relay derives
+/// from it — without bound.
+const MAX_PUBLISHED_TRACKS_PER_PARTICIPANT: usize = 16;
+
+/// Number of key epochs retained per `(track, recipient)` in
+/// [`MediaParticipant::published_track_keys`]. Only the newest is ever read
+/// back; the extras cover a rotation that is still in flight.
+const MAX_RETAINED_KEY_EPOCHS: usize = 4;
+
+/// Largest number of explicit track subscriptions one participant may hold.
+/// Bounded for the same reason as [`MAX_PUBLISHED_TRACKS_PER_PARTICIPANT`]: the
+/// `(stream_id, track_id)` key comes straight off the wire.
+const MAX_TRACK_SUBSCRIPTIONS_PER_PARTICIPANT: usize = 256;
+
 /// How this participant is connected to the media server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionType {
@@ -105,8 +124,24 @@ impl MediaParticipant {
         if !self.can_publish {
             return;
         }
-        self.published_tracks
-            .insert((track.stream_id.clone(), track.track_id.clone()), track);
+        let key = (track.stream_id.clone(), track.track_id.clone());
+        // `(stream_id, track_id)` is entirely attacker-chosen, so an *update* to
+        // an existing track is always allowed but a *new* track is refused once
+        // this participant is at the cap. Otherwise one client could mint
+        // unbounded track entries (each of which the relay clones into every
+        // recipient snapshot rebuild and re-broadcasts to the room).
+        if !self.published_tracks.contains_key(&key)
+            && self.published_tracks.len() >= MAX_PUBLISHED_TRACKS_PER_PARTICIPANT
+        {
+            tracing::warn!(
+                user_id = self.user_id,
+                stream_id = %key.0 .0,
+                track_id = %key.1 .0,
+                "participant at published-track cap; ignoring announcement"
+            );
+            return;
+        }
+        self.published_tracks.insert(key, track);
     }
 
     /// Remove a previously published stream-aware track.
@@ -136,6 +171,26 @@ impl MediaParticipant {
             ),
             ciphertext,
         );
+
+        // Only the newest epochs are ever read back
+        // (`latest_track_key_for_recipient` takes the max epoch), but the key
+        // includes a caller-supplied `epoch`, so re-announcing across all 256
+        // epoch values would otherwise pin 256 ciphertexts per
+        // (track, recipient) forever. Keep a small rotation window so a key
+        // rotation in flight is still resolvable, and drop the rest.
+        let mut epochs: Vec<u8> = self
+            .published_track_keys
+            .keys()
+            .filter(|(s, t, _, r)| s == stream_id && t == track_id && *r == recipient_user_id)
+            .map(|(_, _, e, _)| *e)
+            .collect();
+        if epochs.len() > MAX_RETAINED_KEY_EPOCHS {
+            epochs.sort_unstable();
+            let drop_below = epochs[epochs.len() - MAX_RETAINED_KEY_EPOCHS];
+            self.published_track_keys.retain(|(s, t, e, r), _| {
+                !(s == stream_id && t == track_id && *r == recipient_user_id && *e < drop_below)
+            });
+        }
     }
 
     pub fn latest_track_key_for_recipient(
@@ -163,13 +218,24 @@ impl MediaParticipant {
 
     /// Subscribe to a specific stream-aware track.
     pub fn subscribe_track(&mut self, subscription: TrackSubscription) {
-        self.track_subscriptions.insert(
-            (
-                subscription.stream_id.clone(),
-                subscription.track_id.clone(),
-            ),
-            subscription,
+        let key = (
+            subscription.stream_id.clone(),
+            subscription.track_id.clone(),
         );
+        // Updates to an existing subscription always apply; a *new* key is
+        // refused at the cap. See MAX_TRACK_SUBSCRIPTIONS_PER_PARTICIPANT.
+        if !self.track_subscriptions.contains_key(&key)
+            && self.track_subscriptions.len() >= MAX_TRACK_SUBSCRIPTIONS_PER_PARTICIPANT
+        {
+            tracing::warn!(
+                user_id = self.user_id,
+                stream_id = %key.0 .0,
+                track_id = %key.1 .0,
+                "participant at track-subscription cap; ignoring subscription"
+            );
+            return;
+        }
+        self.track_subscriptions.insert(key, subscription);
     }
 
     /// Remove a specific stream-aware track subscription.

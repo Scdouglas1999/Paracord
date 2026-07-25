@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, Compass, Globe2, Search, Server, Users } from 'lucide-react';
 import { extractApiError } from '../api/client';
@@ -47,6 +48,9 @@ const CATEGORIES = [
   'Sports',
 ];
 
+/** Keystroke settle time before a discovery search is issued. */
+const DISCOVERY_SEARCH_DEBOUNCE_MS = 300;
+
 export function DiscoveryPage() {
   const navigate = useNavigate();
   const [guilds, setGuilds] = useState<DiscoverableGuild[]>([]);
@@ -61,31 +65,55 @@ export function DiscoveryPage() {
   const myGuilds = useGuildStore((s) => s.guilds);
   const myGuildIds = new Set(myGuilds.map((g) => g.id));
 
-  const fetchDiscovery = useCallback(async (searchQuery?: string, tag?: string | null) => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (searchQuery?.trim()) params.set('search', searchQuery.trim());
-      if (tag) params.set('tag', tag);
-      params.set('limit', '50');
-      params.set('include_federated', 'true');
-      const { data } = await getApi().get<DiscoveryResponse>(
-        `/discovery/guilds?${params.toString()}`
-      );
-      setGuilds(data.guilds);
-      setTotal(data.total);
-      setLoadError(null);
-    } catch (err) {
-      setGuilds([]);
-      setTotal(0);
-      setLoadError(`Failed to load public spaces: ${extractApiError(err)}`);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const fetchDiscovery = useCallback(
+    async (searchQuery?: string, tag?: string | null, signal?: AbortSignal) => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (searchQuery?.trim()) params.set('search', searchQuery.trim());
+        if (tag) params.set('tag', tag);
+        params.set('limit', '50');
+        params.set('include_federated', 'true');
+        const { data } = await getApi().get<DiscoveryResponse>(
+          `/discovery/guilds?${params.toString()}`,
+          { signal },
+        );
+        setGuilds(data.guilds);
+        setTotal(data.total);
+        setLoadError(null);
+      } catch (err) {
+        if (signal?.aborted || axios.isCancel(err)) return;
+        setGuilds([]);
+        setTotal(0);
+        setLoadError(`Failed to load public spaces: ${extractApiError(err)}`);
+      } finally {
+        if (!signal?.aborted) setLoading(false);
+      }
+    },
+    [],
+  );
 
+  // Search fired a request on every keystroke with nothing cancelling the
+  // previous one, so typing "gaming" issued six overlapping searches whose
+  // responses could land out of order and leave the wrong results on screen.
+  // Debounce keystrokes and abort the in-flight request when the query moves
+  // on — but load the first page immediately, so opening the page is not
+  // gratuitously delayed by a debounce that has nothing to wait for.
+  const hasLoadedRef = useRef(false);
   useEffect(() => {
-    void fetchDiscovery(search, selectedTag);
+    const controller = new AbortController();
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true;
+      void fetchDiscovery(search, selectedTag, controller.signal);
+      return () => controller.abort();
+    }
+    const timer = setTimeout(() => {
+      void fetchDiscovery(search, selectedTag, controller.signal);
+    }, DISCOVERY_SEARCH_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [fetchDiscovery, search, selectedTag]);
 
   const handleJoin = async (guild: DiscoverableGuild) => {

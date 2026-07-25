@@ -37,17 +37,44 @@ fn extract_auth_scheme(parts: &Parts) -> Option<AuthScheme<'_>> {
 }
 
 fn get_cookie_value(parts: &Parts, cookie_name: &str) -> Option<String> {
-    let raw = parts.headers.get(header::COOKIE)?.to_str().ok()?;
-    for part in raw.split(';') {
-        let trimmed = part.trim();
-        let Some((name, value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        if name == cookie_name {
-            return Some(value.to_string());
+    let headers = parts
+        .headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok());
+    cookie_value_from_headers(headers, cookie_name)
+}
+
+/// Read a single cookie value, refusing to guess when the name appears more
+/// than once.
+///
+/// A cookie set for a parent domain (e.g. by an attacker who controls a sibling
+/// subdomain) arrives alongside the host's own cookie, and the RFC 6265 send
+/// order is not something a server may rely on. Returning the first match would
+/// let that attacker decide which credential the server reads — session
+/// fixation. Duplicates are therefore treated as unusable: the request falls
+/// through to `Unauthorized` and the user re-authenticates, rather than
+/// silently adopting an injected session.
+fn cookie_value_from_headers<'a>(
+    raw_headers: impl IntoIterator<Item = &'a str>,
+    cookie_name: &str,
+) -> Option<String> {
+    let mut found: Option<&str> = None;
+    for raw in raw_headers {
+        for part in raw.split(';') {
+            let trimmed = part.trim();
+            let Some((name, value)) = trimmed.split_once('=') else {
+                continue;
+            };
+            if name == cookie_name {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(value);
+            }
         }
     }
-    None
+    found.map(str::to_string)
 }
 
 /// Extract `ticket` query parameter from the request URI.
@@ -203,31 +230,51 @@ impl FromRequestParts<AppState> for AuthUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        // Try Bearer JWT first, then Bot token.
-        if let Ok(claims) = validate_auth(parts, state).await {
-            return Ok(AuthUser {
-                user_id: claims.sub,
-                session_id: claims.sid,
-                token_jti: claims.jti,
-            });
+        // Try Bearer JWT first, then Bot token, then a query download ticket.
+        //
+        // Only a genuine `Unauthorized` ("this scheme does not apply / the
+        // credential is invalid") may fall through to the next scheme. An
+        // infrastructure failure — a database blip while checking session
+        // revocation — must surface as itself. Collapsing it into 401 tells
+        // every client its token is invalid, and clients respond by clearing
+        // credentials: a 30-second database hiccup would log out the entire
+        // server.
+        match validate_auth(parts, state).await {
+            Ok(claims) => {
+                return Ok(AuthUser {
+                    user_id: claims.sub,
+                    session_id: claims.sid,
+                    token_jti: claims.jti,
+                })
+            }
+            Err(ApiError::Unauthorized) => {}
+            Err(err) => return Err(err),
         }
 
-        if let Ok(bot_user_id) = validate_bot_auth(parts, state).await {
-            return Ok(AuthUser {
-                user_id: bot_user_id,
-                session_id: None,
-                token_jti: None,
-            });
+        match validate_bot_auth(parts, state).await {
+            Ok(bot_user_id) => {
+                return Ok(AuthUser {
+                    user_id: bot_user_id,
+                    session_id: None,
+                    token_jti: None,
+                })
+            }
+            Err(ApiError::Unauthorized) => {}
+            Err(err) => return Err(err),
         }
 
         if allows_query_download_ticket(parts) {
             if let Some(ticket) = get_query_download_ticket(&parts.uri) {
-                if let Some(user_id) = validate_download_ticket(state, &ticket).await {
-                    return Ok(AuthUser {
-                        user_id,
-                        session_id: None,
-                        token_jti: None,
-                    });
+                match validate_download_ticket(state, &ticket).await {
+                    Ok(Some(user_id)) => {
+                        return Ok(AuthUser {
+                            user_id,
+                            session_id: None,
+                            token_jti: None,
+                        })
+                    }
+                    Ok(None) => {}
+                    Err(err) => return Err(err),
                 }
             }
         }
@@ -267,8 +314,51 @@ impl FromRequestParts<AppState> for AdminUser {
 
 #[cfg(test)]
 mod tests {
-    use super::allows_query_download_ticket;
-    use axum::http::Request;
+    use super::{allows_query_download_ticket, cookie_value_from_headers, get_cookie_value};
+    use axum::http::{header, Request};
+
+    #[test]
+    fn reads_a_single_cookie_value() {
+        assert_eq!(
+            cookie_value_from_headers(["paracord_access=abc; other=1"], "paracord_access"),
+            Some("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_cookie_names_instead_of_taking_the_first() {
+        // A sibling-subdomain attacker can set `paracord_access` for the parent
+        // domain; the browser then sends both and the order is not something we
+        // may rely on. Picking either one is session fixation — refuse instead.
+        assert_eq!(
+            cookie_value_from_headers(
+                ["paracord_access=attacker; paracord_access=victim"],
+                "paracord_access"
+            ),
+            None
+        );
+        // Duplicates split across two Cookie headers must be caught too.
+        assert_eq!(
+            cookie_value_from_headers(
+                ["paracord_access=attacker", "paracord_access=victim"],
+                "paracord_access"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn extractor_cookie_lookup_rejects_duplicates() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/users/@me")
+            .header(header::COOKIE, "paracord_access=attacker")
+            .header(header::COOKIE, "paracord_access=victim")
+            .body(())
+            .expect("request");
+        let (parts, _) = request.into_parts();
+        assert_eq!(get_cookie_value(&parts, "paracord_access"), None);
+    }
 
     #[test]
     fn rejects_query_download_ticket_for_realtime_events() {

@@ -38,6 +38,10 @@ const ALLOWED_CSS_PROPERTIES = new Set([
   'transition',
 ]);
 
+// Kept as a second layer behind the value allowlist below. The allowlist is
+// what actually decides; these patterns are a cheap, explicit backstop for the
+// classic vectors so a future refactor of the tokenizer cannot silently
+// re-open them.
 const BLOCKED_VALUE_PATTERNS = [
   /url\s*\(/i,
   /expression\s*\(/i,
@@ -45,6 +49,142 @@ const BLOCKED_VALUE_PATTERNS = [
   /behavior\s*:/i,
   /-moz-binding/i,
 ];
+
+/**
+ * The only functions a custom-theme value may use.
+ *
+ * This is an allowlist, not a denylist, because denylisting CSS functions does
+ * not work: blocking `url(` still left `image-set("https://evil.tld/x" 1x)`,
+ * `-moz-element()` and `-webkit-cross-fade()`, all of which fetch. Combined
+ * with attribute-selector prefix matching that is a character-at-a-time
+ * exfiltration channel — and since `custom_css` comes from the active server
+ * and is injected as one global <style>, a hostile server could read the UI of
+ * every other server this client is connected to.
+ *
+ * Everything here is a computation over colours/numbers. No CSS `<image>`
+ * function is included (not even gradients, which are safe today but sit in the
+ * grammar slot where the fetching ones live).
+ */
+const ALLOWED_CSS_FUNCTIONS = new Set([
+  'rgb',
+  'rgba',
+  'hsl',
+  'hsla',
+  'hwb',
+  'lab',
+  'lch',
+  'oklab',
+  'oklch',
+  'color',
+  'color-mix',
+  'var',
+  'calc',
+  'min',
+  'max',
+  'clamp',
+  'cubic-bezier',
+  'steps',
+]);
+
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{3,8}/;
+const NUMBER_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)/;
+const UNIT_RE = /^(?:%|[a-zA-Z]+)/;
+const IDENT_RE = /^-{0,2}[a-zA-Z_][a-zA-Z0-9_-]*/;
+const IMPORTANT_RE = /^!\s*important\s*$/i;
+
+/**
+ * Allowlist validation of a declaration value.
+ *
+ * A value may only be built from: whitespace and separators, hex colours,
+ * numbers with a unit, quoted strings, bare keywords, and calls to the
+ * functions in {@link ALLOWED_CSS_FUNCTIONS}. Anything else — a colon (which is
+ * what `javascript:` needs), an at-sign, a brace, an unknown function name — is
+ * rejected outright.
+ *
+ * Backslashes are rejected before tokenizing: CSS escapes exist here only to
+ * disguise a spelling the browser will re-assemble (`\75rl(` → `url(`), and no
+ * legitimate theme value in the allowed property set needs one.
+ */
+function isAllowedCssValue(value: string): boolean {
+  if (value.includes('\\')) return false;
+
+  let i = 0;
+  let depth = 0;
+  while (i < value.length) {
+    const ch = value[i];
+    const rest = value.slice(i);
+
+    if (/\s/.test(ch) || ch === ',' || ch === '/' || ch === '*' || ch === '+') {
+      i += 1;
+      continue;
+    }
+
+    if (ch === ')') {
+      if (depth === 0) return false;
+      depth -= 1;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '#') {
+      const match = HEX_COLOR_RE.exec(rest);
+      if (!match) return false;
+      const digits = match[0].length - 1;
+      if (digits !== 3 && digits !== 4 && digits !== 6 && digits !== 8) return false;
+      i += match[0].length;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      const end = value.indexOf(ch, i + 1);
+      if (end === -1) return false;
+      if (/[\n\r]/.test(value.slice(i + 1, end))) return false;
+      i = end + 1;
+      continue;
+    }
+
+    const startsNumber =
+      /[0-9.]/.test(ch) || ((ch === '-' || ch === '+') && /[0-9.]/.test(value[i + 1] ?? ''));
+    if (startsNumber) {
+      const match = NUMBER_RE.exec(rest);
+      if (!match) return false;
+      i += match[0].length;
+      const unit = UNIT_RE.exec(value.slice(i));
+      if (unit) i += unit[0].length;
+      continue;
+    }
+
+    const startsIdent = /[a-zA-Z_]/.test(ch) || (ch === '-' && /[a-zA-Z_-]/.test(value[i + 1] ?? ''));
+    if (startsIdent) {
+      const match = IDENT_RE.exec(rest);
+      if (!match) return false;
+      i += match[0].length;
+      if (value[i] === '(') {
+        if (!ALLOWED_CSS_FUNCTIONS.has(match[0].toLowerCase())) return false;
+        depth += 1;
+        i += 1;
+      }
+      continue;
+    }
+
+    // A lone `-` is an operator inside calc()/clamp().
+    if (ch === '-') {
+      i += 1;
+      continue;
+    }
+
+    if (ch === '!') {
+      const match = IMPORTANT_RE.exec(rest);
+      if (!match) return false;
+      i += match[0].length;
+      continue;
+    }
+
+    return false;
+  }
+
+  return depth === 0;
+}
 
 const HEX_DIGIT_RE = /[0-9a-fA-F]/;
 
@@ -98,8 +238,11 @@ function sanitizeDeclarations(block: string): string {
     const value = declaration.slice(idx + 1).trim();
     if (!prop || !value) continue;
     if (!ALLOWED_CSS_PROPERTIES.has(prop) && !prop.startsWith('--')) continue;
-    // Match blocked patterns against both the raw value and its escape-decoded
-    // form so escaped spellings (e.g. `\75rl(`) cannot smuggle url()/etc.
+    // Custom properties are held to the same standard as real properties: a
+    // `--x` value can be substituted into an allowed property with var().
+    //
+    // Match against both the raw value and its escape-decoded form so escaped
+    // spellings (e.g. `\75rl(`) cannot smuggle url()/etc.
     const decodedValue = decodeCssEscapes(value);
     if (
       BLOCKED_VALUE_PATTERNS.some(
@@ -107,6 +250,7 @@ function sanitizeDeclarations(block: string): string {
       )
     )
       continue;
+    if (!isAllowedCssValue(value) || !isAllowedCssValue(decodedValue)) continue;
     safe.push(`${prop}: ${value}`);
   }
   return safe.join('; ');

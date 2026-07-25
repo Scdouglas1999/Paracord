@@ -423,13 +423,62 @@ pub fn simulcast_ladder(
 pub struct DecoderConfig {
     /// Output pixel format.
     pub pixel_format: PixelFormat,
+    /// The largest resolution the remote peer negotiated for this track when it
+    /// published it (`TrackPublish` layer dimensions), if known.
+    ///
+    /// The decoder's own resolution ceiling is a global 8K constant — enough to
+    /// let a peer that published a 320x180 layer hand every frame an 8K
+    /// bitstream header, so a few hundred bytes of all-skip keyframe expands
+    /// into a ~50 MB plane allocation and (for VP9) a 16-thread decoder. Setting
+    /// this caps the decode at what the peer actually announced. `None` keeps
+    /// only the global ceiling.
+    pub max_dimensions: Option<(u32, u32)>,
 }
 
 impl Default for DecoderConfig {
     fn default() -> Self {
         Self {
             pixel_format: PixelFormat::I420,
+            max_dimensions: None,
         }
+    }
+}
+
+/// Tolerance applied to a peer's negotiated resolution before it becomes a hard
+/// decode cap. Encoders align dimensions up (macroblock/CTU granularity) and a
+/// publisher may bump its top layer slightly between the `TrackPublish` we hold
+/// and the frames in flight, so the cap is deliberately loose — it exists to
+/// turn "unbounded" into "bounded by what was announced", not to police exact
+/// pixel counts.
+const NEGOTIATED_RESOLUTION_TOLERANCE: u32 = 2;
+
+/// Resolve the effective decode ceiling for a track: the peer's negotiated
+/// resolution (scaled by [`NEGOTIATED_RESOLUTION_TOLERANCE`]) when known, always
+/// clamped by the global limits. Returns `(max_width, max_height, max_pixels)`.
+pub fn negotiated_decode_ceiling(
+    negotiated: Option<(u32, u32)>,
+    global_max_dimension: u32,
+    global_max_pixels: u32,
+) -> (u32, u32, u32) {
+    match negotiated {
+        Some((w, h)) if w > 0 && h > 0 => {
+            let max_w = w
+                .saturating_mul(NEGOTIATED_RESOLUTION_TOLERANCE)
+                .min(global_max_dimension);
+            let max_h = h
+                .saturating_mul(NEGOTIATED_RESOLUTION_TOLERANCE)
+                .min(global_max_dimension);
+            let max_px = max_w
+                .checked_mul(max_h)
+                .unwrap_or(global_max_pixels)
+                .min(global_max_pixels);
+            (max_w, max_h, max_px)
+        }
+        _ => (
+            global_max_dimension,
+            global_max_dimension,
+            global_max_pixels,
+        ),
     }
 }
 

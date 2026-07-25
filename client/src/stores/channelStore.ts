@@ -7,6 +7,7 @@ import { extractApiError } from '../api/client';
 import { toast } from './toastStore';
 import { useServerListStore } from './serverListStore';
 import { connectionManager } from '../lib/connectionManager';
+import { registerSessionReset } from './sessionReset';
 
 function normalizeChannel(channel: Channel): Channel {
   return {
@@ -69,6 +70,8 @@ interface ChannelState {
   updateChannel: (channel: Channel) => void;
   removeChannel: (guildId: string, channelId: string) => void;
   updateLastMessageId: (channelId: string, messageId: string) => void;
+  /** Drop every cached channel and selection. Called on logout. */
+  reset: () => void;
 }
 
 const _fetchInFlight = new Set<string>();
@@ -139,21 +142,32 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
           _channelFetchControllers.delete(guildId);
           return;
         }
-        const { data } = await guildApi.getChannels(guildId, {
-          timeout: 5_000,
-          signal: controller.signal,
-        });
         // Progressive / rules onboarding can hide channels the member is not
         // ready for yet. Prefer the visible-id list when the endpoint responds;
         // fall back to the full permission-filtered list on failure.
-        let visibleIds: Set<string> | null = null;
-        try {
-          const visible = await channelApi.getVisibleChannels(guildId);
-          if (Array.isArray(visible.data?.channel_ids)) {
-            visibleIds = new Set(visible.data.channel_ids.map(String));
-          }
-        } catch {
-          visibleIds = null;
+        //
+        // Both requests are independent, so issue them together and give the
+        // visibility probe the same abort signal — run serially and unabortable
+        // it doubled the switch latency and kept running after the user had
+        // already moved to another guild.
+        const [{ data }, visibleIds] = await Promise.all([
+          guildApi.getChannels(guildId, {
+            timeout: 5_000,
+            signal: controller.signal,
+          }),
+          channelApi
+            .getVisibleChannels(guildId, { timeout: 5_000, signal: controller.signal })
+            .then((visible) =>
+              Array.isArray(visible.data?.channel_ids)
+                ? new Set(visible.data.channel_ids.map(String))
+                : null,
+            )
+            .catch(() => null),
+        ]);
+        if (controller.signal.aborted) {
+          _fetchInFlight.delete(guildId);
+          _channelFetchControllers.delete(guildId);
+          return;
         }
         const sorted = data
           .map(normalizeChannel)
@@ -443,4 +457,28 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
         : state.channels;
       return { channelsByGuild, channelsById, channels };
     }),
+
+  reset: () => {
+    // Cancel in-flight work and pending debounced refreshes first: either would
+    // otherwise repopulate the store with the previous account's channels.
+    for (const [, controller] of _channelFetchControllers) controller.abort();
+    _channelFetchControllers.clear();
+    _fetchInFlight.clear();
+    for (const [, timer] of _visibilityRefreshTimers) clearTimeout(timer);
+    _visibilityRefreshTimers.clear();
+    set({
+      channelsByGuild: {},
+      dmChannelsByServer: {},
+      channelsById: {},
+      channels: [],
+      guildChannelsLoaded: {},
+      selectedChannelId: null,
+      selectedGuildId: null,
+      isLoading: false,
+    });
+  },
 }));
+
+// Cleared on logout; see `sessionReset` for why this is a registration
+// rather than a direct import from `authStore`.
+registerSessionReset('channels', () => useChannelStore.getState().reset());

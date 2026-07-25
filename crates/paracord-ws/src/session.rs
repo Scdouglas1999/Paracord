@@ -1,5 +1,21 @@
 use std::collections::HashMap;
 
+/// The subset of a guild row the READY payload needs.
+///
+/// IDENTIFY already fetches full guild rows via `get_user_guilds` in order to
+/// derive `guild_ids`/`guild_owner_ids`; carrying these three fields forward
+/// removes a per-guild `get_guild` round trip from READY (which previously cost
+/// `3N + 2 + 2*voice` queries and, with `Semaphore::new(10)` plus a
+/// `tokio::join!` pair, could put 20 concurrent queries in flight from a single
+/// connect — exactly the pool's `max_connections`).
+#[derive(Clone, Debug)]
+pub struct ReadyGuild {
+    pub id: i64,
+    pub name: String,
+    pub owner_id: i64,
+    pub icon_hash: Option<String>,
+}
+
 pub struct Session {
     pub user_id: i64,
     pub guild_ids: Vec<i64>,
@@ -15,6 +31,9 @@ pub struct Session {
     /// presence transition and invalidated when a relationship-change event is
     /// delivered to this session. Avoids a DB query on every presence update.
     pub friend_ids: Option<Vec<i64>>,
+    /// Guild rows captured during IDENTIFY, consumed once when building READY.
+    /// Empty for resumed sessions (which never send READY).
+    pub ready_guilds: Vec<ReadyGuild>,
 }
 
 impl Session {
@@ -27,6 +46,7 @@ impl Session {
             auth_session_id: String::new(),
             sequence: 0,
             friend_ids: None,
+            ready_guilds: Vec::new(),
         }
     }
 

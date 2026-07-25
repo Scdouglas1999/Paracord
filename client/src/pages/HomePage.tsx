@@ -140,6 +140,10 @@ export function HomePage() {
       friends.map(
         (r) => (getPresence(r.user.id, presenceScope)?.status || 'offline') !== 'offline',
       ),
+    // `presences` is the value `getPresence` reads; the accessor itself is a
+    // stable store action, so it can never signal a change. The linter cannot
+    // see through the accessor and flags `presences` as unnecessary.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [friends, presences, getPresence, presenceScope],
   );
 

@@ -402,10 +402,29 @@ async fn resolve_report_target_user(
             let Some(message_id) = target_id else {
                 return Ok(None);
             };
-            let message = paracord_db::messages::get_message(&state.db, message_id)
+            let Some(message) = paracord_db::messages::get_message(&state.db, message_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            else {
+                return Ok(None);
+            };
+            // The message id came straight from the reporter's request body and
+            // was never bound to the guild the report lives in. Without this
+            // containment check a member could report any message snowflake on
+            // the instance, resolve their own report as "ban", and then read the
+            // author's id + username back out of `GET /guilds/{own}/bans` --
+            // de-anonymizing (and banning) an arbitrary user from a guild they
+            // control. Resolve to no target instead of erroring so a moderator
+            // can still dismiss a bogus report.
+            let channel = paracord_db::channels::get_channel(&state.db, message.channel_id)
                 .await
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-            Ok(message.map(|m| m.author_id))
+            match channel {
+                Some(channel) if channel.guild_id() == Some(report.space_id) => {
+                    Ok(Some(message.author_id))
+                }
+                _ => Ok(None),
+            }
         }
         _ => Ok(None),
     }

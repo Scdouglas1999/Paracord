@@ -696,26 +696,3 @@ export function EmojiPicker({ onSelect, onClose, position, guildId }: EmojiPicke
   // Inline mode: just render the picker
   return pickerContent;
 }
-
-// ---------------------------------------------------------------------------
-// QuickReactBar — compact row of favorites for message hover toolbar
-// ---------------------------------------------------------------------------
-
-export function QuickReactBar({ onSelect }: { onSelect: (emoji: string) => void }) {
-  const [favorites] = useState<string[]>(loadFavorites);
-
-  return (
-    <div className="flex items-center gap-0.5">
-      {favorites.map((emoji, i) => (
-        <button
-          key={`qr-${i}`}
-          type="button"
-          onClick={() => onSelect(emoji)}
-          className="flex h-7 w-7 items-center justify-center rounded-sm text-base leading-none outline-none transition-colors duration-[140ms] ease-[var(--ease-out)] hover:bg-bg-mod-subtle focus-visible:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]"
-        >
-          {emoji}
-        </button>
-      ))}
-    </div>
-  );
-}

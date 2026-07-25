@@ -118,14 +118,51 @@ pub async fn create_forum_post(
         "Cannot create forum posts in DMs".into(),
     ))?;
 
+    // `applied_tag_ids` used to be integer-parsed and stored verbatim, so a post
+    // could carry tag ids belonging to another forum (or to nothing at all), and
+    // the `moderated` flag -- the whole point of which is to restrict who may
+    // apply a tag -- was never enforced. Bind every id to a tag that actually
+    // exists on *this* forum, and gate moderated tags behind the same permission
+    // that creates and deletes them.
     let applied_tags = match body.applied_tag_ids {
-        Some(tags) => {
-            let parsed = parse_role_id_strings(&tags)?
-                .into_iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<String>>();
+        Some(raw_tag_ids) => {
+            let available_tags = paracord_db::channels::get_forum_tags(&state.db, channel_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+            let mut seen = std::collections::HashSet::new();
+            let mut normalized: Vec<String> = Vec::with_capacity(raw_tag_ids.len());
+            let mut requires_moderator = false;
+            for raw in &raw_tag_ids {
+                let tag_id = raw
+                    .parse::<i64>()
+                    .map_err(|_| ApiError::BadRequest("Invalid applied_tag_ids".into()))?;
+                let Some(tag) = available_tags.iter().find(|tag| tag.id == tag_id) else {
+                    return Err(ApiError::BadRequest(
+                        "applied_tag_ids must reference tags that belong to this forum".into(),
+                    ));
+                };
+                if !seen.insert(tag_id) {
+                    continue;
+                }
+                if tag.moderated {
+                    requires_moderator = true;
+                }
+                normalized.push(tag_id.to_string());
+            }
+
+            if requires_moderator {
+                ensure_channel_permissions(
+                    &state,
+                    &forum_channel,
+                    auth.user_id,
+                    &[Permissions::MANAGE_CHANNELS],
+                )
+                .await?;
+            }
+
             Some(
-                serde_json::to_string(&parsed)
+                serde_json::to_string(&normalized)
                     .map_err(|_| ApiError::BadRequest("Invalid applied_tag_ids".into()))?,
             )
         }

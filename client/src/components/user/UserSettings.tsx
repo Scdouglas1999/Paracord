@@ -1737,19 +1737,19 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       title="Noise suppression"
                       description="Filters out steady background noise like fans and keyboards."
                       on={Boolean(mergedNotifications['noiseSuppression'] ?? true)}
-                      onToggle={() => setNotifications((prev) => ({ ...prev, noiseSuppression: !Boolean(prev['noiseSuppression'] ?? true) }))}
+                      onToggle={() => setNotifications((prev) => ({ ...prev, noiseSuppression: !(prev['noiseSuppression'] ?? true) }))}
                     />
                     <ToggleRow
                       title="Echo cancellation"
                       description="Stops your speakers from bleeding back into your mic."
                       on={Boolean(mergedNotifications['echoCancellation'] ?? true)}
-                      onToggle={() => setNotifications((prev) => ({ ...prev, echoCancellation: !Boolean(prev['echoCancellation'] ?? true) }))}
+                      onToggle={() => setNotifications((prev) => ({ ...prev, echoCancellation: !(prev['echoCancellation'] ?? true) }))}
                     />
                     <ToggleRow
                       title="Automatic gain control"
                       description="Levels your mic volume. Can add hiss on some setups."
                       on={Boolean(mergedNotifications['autoGainControl'] ?? false)}
-                      onToggle={() => setNotifications((prev) => ({ ...prev, autoGainControl: !Boolean(prev['autoGainControl'] ?? false) }))}
+                      onToggle={() => setNotifications((prev) => ({ ...prev, autoGainControl: !(prev['autoGainControl'] ?? false) }))}
                     />
                   </div>
                 </section>
@@ -1813,14 +1813,14 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       title="Message sound"
                       description="Play a soft chime when a new message arrives."
                       on={Boolean(mergedNotifications.messageSound)}
-                      onToggle={() => setNotifications((prev) => ({ ...prev, messageSound: !Boolean(prev.messageSound) }))}
+                      onToggle={() => setNotifications((prev) => ({ ...prev, messageSound: !prev.messageSound }))}
                     />
                     <ToggleRow
                       title="Low bandwidth mode"
                       description="Hide heavy image previews and cut back on automatic media loading."
                       on={Boolean(mergedNotifications.lowBandwidthMode)}
                       onToggle={() => {
-                        const next = !Boolean(mergedNotifications.lowBandwidthMode);
+                        const next = !mergedNotifications.lowBandwidthMode;
                         setLowBandwidthModeUI(next);
                         setNotifications((prev) => ({ ...prev, lowBandwidthMode: next }));
                       }}
@@ -1846,7 +1846,7 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                       title="Display current activity"
                       description="Show the game or app you're using in your presence."
                       on={Boolean(activityDetectionEnabled)}
-                      onToggle={() => setActivityDetectionEnabled(!Boolean(activityDetectionEnabled))}
+                      onToggle={() => setActivityDetectionEnabled(!activityDetectionEnabled)}
                     />
                   </div>
                 </section>

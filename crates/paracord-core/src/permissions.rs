@@ -11,6 +11,13 @@ use std::sync::Arc;
 pub const OVERWRITE_TARGET_ROLE: i16 = 0;
 pub const OVERWRITE_TARGET_MEMBER: i16 = 1;
 
+/// Channel type shared by threads and forum posts.
+///
+/// Rows of this type are always written with `required_role_ids = '[]'` and
+/// never receive permission overwrites of their own, so their access control
+/// lives entirely on the parent channel. See [`resolve_permission_gate`].
+pub const CHANNEL_TYPE_THREAD: i16 = 6;
+
 /// Remove `key` from the reverse index bucket `outer`, dropping the bucket when
 /// it becomes empty so the index cannot grow without bound.
 fn remove_from_reverse_index(
@@ -217,7 +224,17 @@ pub fn is_server_admin(perms: Permissions) -> bool {
     perms.contains(Permissions::ADMINISTRATOR)
 }
 
-/// Compute permissions from a set of Role rows
+/// Compute permissions from a set of Role rows.
+///
+/// **Hazard:** this is a pure fold over role bits. It applies neither channel
+/// permission overwrites nor the bot install-permission cap, because it never
+/// touches the database. Using it as an authorization gate is only correct when
+/// the caller genuinely has nothing but a role list to work from:
+///
+/// - channel-scoped actions must use [`compute_channel_permissions`] (or the
+///   cached/batch variants), otherwise a per-channel deny is unenforceable;
+/// - guild-scoped actions must use [`compute_guild_permissions`], otherwise a
+///   bot installed with restricted permissions exercises its full role bits.
 pub fn compute_permissions_from_roles(
     roles: &[paracord_db::roles::RoleRow],
     guild_owner_id: i64,
@@ -353,6 +370,51 @@ async fn cap_bot_install_permissions_hinted(
     }
 }
 
+/// Resolve the channel row whose containment settings (`required_role_ids` plus
+/// permission overwrites) govern access to `channel`.
+///
+/// For ordinary channels that is the channel itself. Threads and forum posts
+/// (both [`CHANNEL_TYPE_THREAD`]) are created with an empty `required_role_ids`
+/// and never carry overwrites, so evaluating them directly would let a member
+/// who is denied `VIEW_CHANNEL` on `#private` fall straight through to their
+/// base role bits inside `#private`'s threads — and thread ids are enumerable.
+///
+/// Returns `None` when a thread has no parent or its parent no longer exists;
+/// callers must fail closed on that rather than fall back to base permissions.
+async fn resolve_permission_gate(
+    pool: &DbPool,
+    channel: paracord_db::channels::ChannelRow,
+) -> Result<Option<paracord_db::channels::ChannelRow>, CoreError> {
+    if channel.channel_type != CHANNEL_TYPE_THREAD {
+        return Ok(Some(channel));
+    }
+    let Some(parent_id) = channel.parent_id else {
+        return Ok(None);
+    };
+    Ok(paracord_db::channels::get_channel(pool, parent_id).await?)
+}
+
+/// Compute a member's guild-level (channel-independent) permissions.
+///
+/// This is the correct primitive for guild-scoped gates such as `MANAGE_GUILD`,
+/// `KICK_MEMBERS` or `MANAGE_EMOJIS`: it folds the member's role bits *and*
+/// applies the bot install-permission cap. [`compute_permissions_from_roles`]
+/// cannot apply that cap, so a bot installed with `permissions=0` would
+/// otherwise exercise whatever its guild roles happen to grant.
+///
+/// Actions scoped to a specific channel must still use
+/// [`compute_channel_permissions`] so that channel overwrites are honored.
+pub async fn compute_guild_permissions(
+    pool: &DbPool,
+    guild_id: i64,
+    guild_owner_id: i64,
+    user_id: i64,
+) -> Result<Permissions, CoreError> {
+    let roles = paracord_db::roles::get_member_roles(pool, user_id, guild_id).await?;
+    let perms = compute_permissions_from_roles(&roles, guild_owner_id, user_id);
+    cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, None).await
+}
+
 pub async fn compute_channel_permissions(
     pool: &DbPool,
     guild_id: i64,
@@ -390,15 +452,21 @@ pub async fn compute_channel_permissions(
         .ok_or(CoreError::NotFound)?;
 
     let role_ids: std::collections::HashSet<i64> = roles.iter().map(|r| r.id).collect();
-    let required_role_ids =
-        paracord_db::channels::parse_required_role_ids(&channel.required_role_ids);
+
+    let Some(gate) = resolve_permission_gate(pool, channel).await? else {
+        // Orphaned thread: without a parent there is no containment to evaluate,
+        // so deny visibility instead of falling through to base role bits.
+        perms.remove(Permissions::VIEW_CHANNEL);
+        return cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, hint).await;
+    };
+
+    let required_role_ids = paracord_db::channels::parse_required_role_ids(&gate.required_role_ids);
     if !required_role_ids.is_empty() && !required_role_ids.iter().any(|id| role_ids.contains(id)) {
         perms.remove(Permissions::VIEW_CHANNEL);
         return cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, hint).await;
     }
 
-    let overwrites =
-        paracord_db::channel_overwrites::get_channel_overwrites(pool, channel_id).await?;
+    let overwrites = paracord_db::channel_overwrites::get_channel_overwrites(pool, gate.id).await?;
     let perms = apply_overwrites(perms, &role_ids, guild_id, user_id, &overwrites);
 
     cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, hint).await
@@ -435,8 +503,50 @@ pub async fn compute_all_channel_permissions(
 
     let role_ids: std::collections::HashSet<i64> = roles.iter().map(|r| r.id).collect();
 
-    // Load all overwrites for all channels in one query
-    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
+    // Resolve every channel to the row that actually gates it, so threads are
+    // evaluated against their parent exactly as in the single-channel path.
+    let by_id: HashMap<i64, &paracord_db::channels::ChannelRow> =
+        channels.iter().map(|c| (c.id, c)).collect();
+    // A thread's parent is normally part of the same batch (callers pass every
+    // guild channel), but load any that are not so a narrower batch cannot
+    // silently lose the parent's gate.
+    let mut absent_parents: Vec<i64> = channels
+        .iter()
+        .filter(|c| c.channel_type == CHANNEL_TYPE_THREAD)
+        .filter_map(|c| c.parent_id)
+        .filter(|parent_id| !by_id.contains_key(parent_id))
+        .collect();
+    absent_parents.sort_unstable();
+    absent_parents.dedup();
+    let mut fetched_parents: HashMap<i64, paracord_db::channels::ChannelRow> = HashMap::new();
+    for parent_id in absent_parents {
+        if let Some(parent) = paracord_db::channels::get_channel(pool, parent_id).await? {
+            fetched_parents.insert(parent_id, parent);
+        }
+    }
+    // Channels absent from this map are orphaned threads and are denied below.
+    let mut gates: HashMap<i64, &paracord_db::channels::ChannelRow> =
+        HashMap::with_capacity(channels.len());
+    for channel in channels {
+        let gate = if channel.channel_type == CHANNEL_TYPE_THREAD {
+            channel.parent_id.and_then(|parent_id| {
+                by_id
+                    .get(&parent_id)
+                    .copied()
+                    .or_else(|| fetched_parents.get(&parent_id))
+            })
+        } else {
+            Some(channel)
+        };
+        if let Some(gate) = gate {
+            gates.insert(channel.id, gate);
+        }
+    }
+
+    // Load all overwrites for every gating channel in one query
+    let mut channel_ids: Vec<i64> = gates.values().map(|gate| gate.id).collect();
+    channel_ids.sort_unstable();
+    channel_ids.dedup();
     let all_overwrites =
         paracord_db::channel_overwrites::get_overwrites_for_channels(pool, &channel_ids).await?;
 
@@ -464,19 +574,29 @@ pub async fn compute_all_channel_permissions(
     // Compute permissions per channel
     let mut result = HashMap::with_capacity(channels.len());
     for channel in channels {
-        // Check required_role_ids
-        let required_role_ids =
-            paracord_db::channels::parse_required_role_ids(&channel.required_role_ids);
-        let perms = if !required_role_ids.is_empty()
-            && !required_role_ids.iter().any(|id| role_ids.contains(id))
-        {
-            let mut perms = base_perms;
-            perms.remove(Permissions::VIEW_CHANNEL);
-            perms
-        } else {
-            let empty = Vec::new();
-            let overwrites = overwrites_by_channel.get(&channel.id).unwrap_or(&empty);
-            apply_overwrites(base_perms, &role_ids, guild_id, user_id, overwrites)
+        // Check required_role_ids on the gating channel (the parent, for threads)
+        let perms = match gates.get(&channel.id) {
+            Some(gate) => {
+                let required_role_ids =
+                    paracord_db::channels::parse_required_role_ids(&gate.required_role_ids);
+                if !required_role_ids.is_empty()
+                    && !required_role_ids.iter().any(|id| role_ids.contains(id))
+                {
+                    let mut perms = base_perms;
+                    perms.remove(Permissions::VIEW_CHANNEL);
+                    perms
+                } else {
+                    let empty = Vec::new();
+                    let overwrites = overwrites_by_channel.get(&gate.id).unwrap_or(&empty);
+                    apply_overwrites(base_perms, &role_ids, guild_id, user_id, overwrites)
+                }
+            }
+            None => {
+                // Orphaned thread: fail closed rather than expose base role bits.
+                let mut perms = base_perms;
+                perms.remove(Permissions::VIEW_CHANNEL);
+                perms
+            }
         };
 
         // Apply the bot install-permission cap consistently with the
@@ -986,6 +1106,259 @@ mod tests {
 
         assert_eq!(single, batch);
         assert_eq!(single, Permissions::empty());
+    }
+
+    // ── Threads inherit their parent channel's containment ───────────────────
+
+    /// Create a thread under `parent_id` and return the permissions the member
+    /// gets for it via both the single-channel and batch paths (asserted equal).
+    async fn thread_perms(
+        pool: &DbPool,
+        guild_id: i64,
+        parent_id: i64,
+        thread_id: i64,
+        owner_id: i64,
+        user_id: i64,
+    ) -> Permissions {
+        let thread = paracord_db::channels::get_channel(pool, thread_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let parent = paracord_db::channels::get_channel(pool, parent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let single = compute_channel_permissions(pool, guild_id, thread_id, owner_id, user_id)
+            .await
+            .unwrap();
+        // Batch with the parent present (the real gateway/REST shape) and without
+        // it, since both must resolve the parent's gate.
+        let with_parent = compute_all_channel_permissions(
+            pool,
+            guild_id,
+            &[parent, thread.clone()],
+            owner_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+        let alone = compute_all_channel_permissions(pool, guild_id, &[thread], owner_id, user_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            single,
+            *with_parent.get(&thread_id).unwrap(),
+            "single and batch (parent in batch) must agree for threads"
+        );
+        assert_eq!(
+            single,
+            *alone.get(&thread_id).unwrap(),
+            "single and batch (parent outside batch) must agree for threads"
+        );
+        single
+    }
+
+    #[tokio::test]
+    async fn thread_inherits_parent_view_channel_deny() {
+        let pool = mem_pool().await;
+        let owner_id = 1;
+        let user_id = 7;
+        let role_perms = (Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES).bits();
+        let (guild_id, parent_id, _role_id) = seed_guild(
+            &pool,
+            owner_id,
+            user_id,
+            0,
+            role_perms,
+            None,
+            // @everyone (role id == guild id) is denied VIEW on the parent channel.
+            &[(
+                100,
+                OVERWRITE_TARGET_ROLE,
+                Permissions::empty(),
+                Permissions::VIEW_CHANNEL,
+            )],
+        )
+        .await;
+
+        let thread_id = 900;
+        paracord_db::channels::create_thread(
+            &pool, thread_id, guild_id, parent_id, "t", owner_id, 1440, None,
+        )
+        .await
+        .unwrap();
+
+        // Sanity: the parent itself is hidden.
+        let parent_perms =
+            compute_channel_permissions(&pool, guild_id, parent_id, owner_id, user_id)
+                .await
+                .unwrap();
+        assert!(!parent_perms.contains(Permissions::VIEW_CHANNEL));
+
+        let perms = thread_perms(&pool, guild_id, parent_id, thread_id, owner_id, user_id).await;
+        assert!(
+            !perms.contains(Permissions::VIEW_CHANNEL),
+            "a thread must not expose a channel its parent hides"
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_inherits_parent_required_roles() {
+        let pool = mem_pool().await;
+        let owner_id = 1;
+        let user_id = 7;
+        let role_perms = (Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES).bits();
+        // Parent requires role 999, which the member does not hold.
+        let (guild_id, parent_id, _role_id) =
+            seed_guild(&pool, owner_id, user_id, 0, role_perms, Some("[999]"), &[]).await;
+
+        let thread_id = 901;
+        paracord_db::channels::create_thread(
+            &pool, thread_id, guild_id, parent_id, "t", owner_id, 1440, None,
+        )
+        .await
+        .unwrap();
+
+        let perms = thread_perms(&pool, guild_id, parent_id, thread_id, owner_id, user_id).await;
+        assert!(
+            !perms.contains(Permissions::VIEW_CHANNEL),
+            "a thread must inherit its parent's required-role gate"
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_inherits_parent_allow_overwrite() {
+        let pool = mem_pool().await;
+        let owner_id = 1;
+        let user_id = 7;
+        // No base permissions at all; the parent's member overwrite grants them.
+        let (guild_id, parent_id, _role_id) = seed_guild(
+            &pool,
+            owner_id,
+            user_id,
+            0,
+            Permissions::empty().bits(),
+            None,
+            &[(
+                7,
+                OVERWRITE_TARGET_MEMBER,
+                Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES,
+                Permissions::empty(),
+            )],
+        )
+        .await;
+
+        let thread_id = 902;
+        paracord_db::channels::create_thread(
+            &pool, thread_id, guild_id, parent_id, "t", owner_id, 1440, None,
+        )
+        .await
+        .unwrap();
+
+        let perms = thread_perms(&pool, guild_id, parent_id, thread_id, owner_id, user_id).await;
+        assert!(perms.contains(Permissions::VIEW_CHANNEL));
+        assert!(perms.contains(Permissions::SEND_MESSAGES));
+    }
+
+    #[tokio::test]
+    async fn parentless_thread_fails_closed() {
+        let pool = mem_pool().await;
+        let owner_id = 1;
+        let user_id = 7;
+        let role_perms = (Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES).bits();
+        let (guild_id, _parent_id, _role_id) =
+            seed_guild(&pool, owner_id, user_id, 0, role_perms, None, &[]).await;
+
+        // A thread row with no parent has no containment to evaluate. It cannot be
+        // produced by the normal thread routes, but federation/import paths write
+        // channel rows directly, so the computation must not fall through to the
+        // member's base role bits.
+        let thread_id = 903;
+        paracord_db::channels::create_channel(
+            &pool,
+            thread_id,
+            guild_id,
+            "orphan",
+            CHANNEL_TYPE_THREAD,
+            0,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let thread = paracord_db::channels::get_channel(&pool, thread_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let single = compute_channel_permissions(&pool, guild_id, thread_id, owner_id, user_id)
+            .await
+            .unwrap();
+        let batch = compute_all_channel_permissions(&pool, guild_id, &[thread], owner_id, user_id)
+            .await
+            .unwrap();
+        assert_eq!(single, *batch.get(&thread_id).unwrap());
+        assert!(
+            !single.contains(Permissions::VIEW_CHANNEL),
+            "a thread with no parent must fail closed"
+        );
+    }
+
+    // ── Guild-scoped permissions apply the bot install cap ───────────────────
+
+    #[tokio::test]
+    async fn compute_guild_permissions_caps_bots() {
+        let pool = mem_pool().await;
+        let owner_id = 1;
+        let bot_user_id = 7;
+        let bot_app_id = 900;
+        let role_perms = (Permissions::MANAGE_GUILD | Permissions::KICK_MEMBERS).bits();
+        let (guild_id, _channel_id, _role_id) = seed_guild(
+            &pool,
+            owner_id,
+            bot_user_id,
+            crate::USER_FLAG_BOT,
+            role_perms,
+            None,
+            &[],
+        )
+        .await;
+        paracord_db::bot_applications::create_bot_application(
+            &pool,
+            bot_app_id,
+            "bot",
+            None,
+            owner_id,
+            bot_user_id,
+            "tokenhash",
+            None,
+            Permissions::KICK_MEMBERS.bits(),
+        )
+        .await
+        .unwrap();
+        paracord_db::bot_applications::add_bot_to_guild(
+            &pool,
+            bot_app_id,
+            guild_id,
+            owner_id,
+            Permissions::KICK_MEMBERS.bits(),
+        )
+        .await
+        .unwrap();
+
+        let roles = paracord_db::roles::get_member_roles(&pool, bot_user_id, guild_id)
+            .await
+            .unwrap();
+        let uncapped = compute_permissions_from_roles(&roles, owner_id, bot_user_id);
+        assert!(
+            uncapped.contains(Permissions::MANAGE_GUILD),
+            "the raw role fold is what a guild-level gate used to see"
+        );
+
+        let capped = compute_guild_permissions(&pool, guild_id, owner_id, bot_user_id)
+            .await
+            .unwrap();
+        assert_eq!(capped, Permissions::KICK_MEMBERS);
     }
 
     // ── PermissionCache targeted invalidation ────────────────────────────────

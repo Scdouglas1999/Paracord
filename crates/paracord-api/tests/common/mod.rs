@@ -72,6 +72,9 @@ pub struct TestApp {
     pub db: paracord_db::DbPool,
     pub jwt_secret: String,
     pub event_bus: paracord_core::events::EventBus,
+    /// The same `AppState` the router was built with, so tests can assert on
+    /// process-global state (e.g. `user_presences`) that has no read endpoint.
+    pub state: AppState,
     _storage_dir: TempDir,
     _media_dir: TempDir,
     _backup_dir: TempDir,
@@ -219,7 +222,7 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
         0,
     );
     let app = paracord_api::build_router()
-        .with_state(state)
+        .with_state(state.clone())
         .layer(from_fn(
             move |mut req: Request<Body>, next: Next| async move {
                 if req.extensions().get::<ConnectInfo<SocketAddr>>().is_none() {
@@ -233,6 +236,7 @@ pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> 
         db,
         jwt_secret: options.jwt_secret,
         event_bus,
+        state,
         _storage_dir: storage_dir,
         _media_dir: media_dir,
         _backup_dir: backup_dir,

@@ -3,6 +3,7 @@ import { MessageList } from '../../components/message/MessageList';
 import { MessageInput } from '../../components/message/MessageInput';
 import type { Message } from '../../types';
 import { displayName } from '../../lib/displayName';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 type ReplyTarget = { id: string; author: string; content: string } | null;
 
@@ -47,10 +48,12 @@ export function VoiceChatSidebar({
   const body = (
     <>
       {header}
-      <MessageList
-        channelId={channelId}
-        onReply={(msg: Message) => onReply({ id: msg.id, author: displayName(msg.author), content: msg.content || '' })}
-      />
+      <ErrorBoundary variant="section" label="the message feed">
+        <MessageList
+          channelId={channelId}
+          onReply={(msg: Message) => onReply({ id: msg.id, author: displayName(msg.author), content: msg.content || '' })}
+        />
+      </ErrorBoundary>
       <MessageInput
         channelId={channelId}
         guildId={guildId}

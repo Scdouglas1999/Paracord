@@ -29,9 +29,10 @@ use tokio::time::{timeout, Duration};
 
 use paracord_ws::{
     run_session, test_acquire_preauth_slot, test_acquire_user_connection_slot,
+    test_buffered_event_count, test_drain_event_buffer, test_event_buffer_is_disconnected,
     test_insert_cached_session, test_is_origin_allowed, test_max_connections_per_user,
-    test_max_preauth_per_ip, test_push_buffered_event, test_release_preauth_slot,
-    wait_for_identify_or_resume, Session, WsCompressor,
+    test_max_preauth_per_ip, test_push_buffered_event, test_release_event_buffer,
+    test_release_preauth_slot, wait_for_identify_or_resume, Session, WsCompressor,
 };
 
 // ── Mock stream/sink ────────────────────────────────────────────────────────
@@ -736,4 +737,47 @@ async fn message_flood_trips_rate_limit() {
 
     drop(client_tx);
     let _ = handle.await;
+}
+
+// ── Regression: EVENT_BUFFERS is released on disconnect ────────────────────
+//
+// `ConnectionGuard::Drop` released connection counters but never touched the
+// replay buffer, and the sweep only evicted a buffer once its *newest* event was
+// an hour old. The map had no size cap either (unlike SESSION_CACHE), so a
+// single authenticated user could loop connect -> self-addressed event ->
+// disconnect and accumulate hour-lived 100-event buffers indefinitely.
+#[tokio::test]
+async fn empty_event_buffer_is_dropped_on_disconnect() {
+    let gw_session = format!("gw-{}", uuid::Uuid::new_v4().simple());
+
+    // A connection that produced no replayable events still creates a buffer
+    // entry the moment anything touches it.
+    test_push_buffered_event(&gw_session, 1, "MESSAGE_CREATE", json!({"content": "a"}));
+    assert_eq!(test_buffered_event_count(&gw_session), Some(1));
+
+    test_release_event_buffer(&gw_session);
+    // Non-empty: retained for RESUME, but explicitly marked disconnected so the
+    // sweep and the disconnected-buffer cap can reclaim it.
+    assert_eq!(
+        test_event_buffer_is_disconnected(&gw_session),
+        Some(true),
+        "a disconnected buffer must be marked, not left indistinguishable from a live one"
+    );
+}
+
+#[tokio::test]
+async fn event_buffer_with_nothing_to_replay_is_removed_on_disconnect() {
+    let gw_session = format!("gw-{}", uuid::Uuid::new_v4().simple());
+
+    // Create the entry, then drain it so there is nothing left to replay.
+    test_push_buffered_event(&gw_session, 1, "MESSAGE_CREATE", json!({"content": "a"}));
+    test_drain_event_buffer(&gw_session);
+    assert_eq!(test_buffered_event_count(&gw_session), Some(0));
+
+    test_release_event_buffer(&gw_session);
+    assert_eq!(
+        test_buffered_event_count(&gw_session),
+        None,
+        "a disconnected buffer with nothing to replay must be dropped outright"
+    );
 }

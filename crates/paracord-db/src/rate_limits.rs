@@ -140,58 +140,54 @@ pub async fn record_auth_guard_failure(
     guard_key: &str,
     now_epoch: i64,
 ) -> Result<AuthGuardStateRow, DbError> {
-    let mut tx = pool.begin().await?;
-    let existing = sqlx::query_as::<_, AuthGuardStateRow>(
-        "SELECT guard_key, failures, locked_until, last_seen
-         FROM auth_guard_state
-         WHERE guard_key = $1",
+    // The counter is incremented by the database, never by the application.
+    //
+    // The previous shape read `failures`, added one in Rust and wrote the result
+    // back. That is a lost update on PostgreSQL: at READ COMMITTED, N concurrent
+    // failed logins all observe the same value and all store the same successor,
+    // so a parallel brute-force burst advanced the counter by one and the
+    // lockout never armed. On SQLite the losing writer instead got
+    // `SQLITE_BUSY_SNAPSHOT`, which `PRAGMA busy_timeout` does not retry, so the
+    // failure was not recorded at all.
+    let (next_failures,): (i64,) = sqlx::query_as(
+        "INSERT INTO auth_guard_state (guard_key, failures, locked_until, last_seen)
+         VALUES ($1, 1, 0, $2)
+         ON CONFLICT(guard_key) DO UPDATE SET
+            failures = auth_guard_state.failures + 1,
+            last_seen = $2
+         RETURNING failures",
     )
     .bind(guard_key)
-    .fetch_optional(&mut *tx)
+    .bind(now_epoch)
+    .fetch_one(pool)
     .await?;
 
-    let next_failures = existing
-        .as_ref()
-        .map(|row| row.failures.saturating_add(1))
-        .unwrap_or(1);
-    let next_locked_until = if next_failures >= AUTH_GUARD_LOCK_THRESHOLD {
+    // The backoff curve is not expressible portably in SQL, so it is derived
+    // from the committed counter and written back monotonically: a concurrent
+    // failure that already pushed the lockout further out is never walked back.
+    let candidate_locked_until = if next_failures >= AUTH_GUARD_LOCK_THRESHOLD {
         now_epoch.saturating_add(auth_guard_backoff_seconds(next_failures))
     } else {
         0
     };
+    let (locked_until,): (i64,) = sqlx::query_as(
+        "UPDATE auth_guard_state
+         SET locked_until = CASE
+                 WHEN $2 > locked_until THEN $2
+                 ELSE locked_until
+             END
+         WHERE guard_key = $1
+         RETURNING locked_until",
+    )
+    .bind(guard_key)
+    .bind(candidate_locked_until)
+    .fetch_one(pool)
+    .await?;
 
-    if existing.is_some() {
-        sqlx::query(
-            "UPDATE auth_guard_state
-             SET failures = $2,
-                 locked_until = $3,
-                 last_seen = $4
-             WHERE guard_key = $1",
-        )
-        .bind(guard_key)
-        .bind(next_failures)
-        .bind(next_locked_until)
-        .bind(now_epoch)
-        .execute(&mut *tx)
-        .await?;
-    } else {
-        sqlx::query(
-            "INSERT INTO auth_guard_state (guard_key, failures, locked_until, last_seen)
-             VALUES ($1, $2, $3, $4)",
-        )
-        .bind(guard_key)
-        .bind(next_failures)
-        .bind(next_locked_until)
-        .bind(now_epoch)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    tx.commit().await?;
     Ok(AuthGuardStateRow {
         guard_key: guard_key.to_string(),
         failures: next_failures,
-        locked_until: next_locked_until,
+        locked_until,
         last_seen: now_epoch,
     })
 }
