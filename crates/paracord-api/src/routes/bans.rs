@@ -104,7 +104,12 @@ pub async fn ban_member(
 ) -> Result<StatusCode, ApiError> {
     let reason = body.and_then(|b| b.0.reason);
     if let Some(reason_text) = reason.as_deref() {
-        if reason_text.trim().len() > MAX_BAN_REASON_LEN {
+        // Measured on the raw value: `reason` is stored untrimmed below, so
+        // checking `trim()` let a whitespace-padded reason of any size reach a
+        // length-limited column. PostgreSQL only silently truncates a varchar
+        // overflow when the excess is spaces — a padded newline or tab raises
+        // 22001 and surfaces as a 500.
+        if reason_text.len() > MAX_BAN_REASON_LEN {
             return Err(ApiError::BadRequest("Ban reason is too long".into()));
         }
         if contains_dangerous_markup(reason_text) {

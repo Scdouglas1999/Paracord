@@ -85,6 +85,40 @@ const MAX_CONTENT_DEPTH: usize = 32;
 /// Maximum number of elements/keys allowed in a single JSON collection.
 const MAX_COLLECTION_LENGTH: usize = 10_000;
 
+/// Every identifier column on `federation_events` — and on the outbound queue,
+/// message map and membership rows derived from it — is `VARCHAR(255)`.
+const MAX_FEDERATION_IDENTIFIER_LEN: usize = 255;
+
+/// Bound the envelope's identifier fields before anything derived from them is
+/// written.
+///
+/// `validate_federation_content` bounds only `content`; the identifiers were
+/// never checked at all, and they come straight off a remote peer's request
+/// body. A peer sending a 10 KB `event_id` produced a clean insert on SQLite
+/// and a PostgreSQL `22001` surfaced as a 500. Applied inside
+/// `ingest_verified_payload` so both entry points are covered — the signed
+/// `POST /event` handler and the catch-up puller, which never called
+/// `validate_federation_content` at all.
+fn validate_envelope_identifier_lengths(
+    envelope: &FederationEventEnvelope,
+) -> Result<(), ApiError> {
+    for (field, value) in [
+        ("event_id", envelope.event_id.as_str()),
+        ("room_id", envelope.room_id.as_str()),
+        ("event_type", envelope.event_type.as_str()),
+        ("sender", envelope.sender.as_str()),
+        ("origin_server", envelope.origin_server.as_str()),
+        ("state_key", envelope.state_key.as_deref().unwrap_or("")),
+    ] {
+        if value.chars().count() > MAX_FEDERATION_IDENTIFIER_LEN {
+            return Err(ApiError::BadRequest(format!(
+                "federation event {field} exceeds maximum length of {MAX_FEDERATION_IDENTIFIER_LEN} characters"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_federation_content(content: &Value) -> Result<(), ApiError> {
     let serialized = serde_json::to_vec(content).unwrap_or_default();
     if serialized.len() > MAX_CONTENT_SIZE_BYTES {
@@ -832,6 +866,8 @@ async fn ingest_verified_payload(
     mut payload: FederationEventEnvelope,
     transport_origin: Option<&str>,
 ) -> Result<bool, ApiError> {
+    validate_envelope_identifier_lengths(&payload)?;
+
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     // Per-event freshness. The transport timestamp is bounded to ±60s, but the

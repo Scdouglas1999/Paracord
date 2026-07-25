@@ -119,6 +119,11 @@ fn contains_mass_mention(content: &str) -> bool {
 }
 
 const MAX_CHANNEL_TOPIC_LEN: usize = 1_024;
+/// Matches the `channels.name` column, and the bound the thread handlers in
+/// this crate already apply. The guild channel create/update handlers had no
+/// bound at all, so an over-long name stored fine on SQLite and 500ed on
+/// PostgreSQL.
+const MAX_CHANNEL_NAME_LEN: usize = 100;
 const MAX_BULK_DELETE_REQUEST_IDS: usize = 500;
 const MAX_POLL_QUESTION_LEN: usize = 300;
 const MAX_POLL_OPTION_LEN: usize = 100;
@@ -935,6 +940,9 @@ pub async fn create_channel(
     Path(guild_id): Path<i64>,
     Json(body): Json<CreateChannelRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if body.name.chars().count() > MAX_CHANNEL_NAME_LEN {
+        return Err(ApiError::BadRequest("name is too long".into()));
+    }
     let channel_id = paracord_util::snowflake::generate(1);
     let required_role_ids = match body.required_role_ids.as_deref() {
         Some(raw_role_ids) => {
@@ -996,8 +1004,15 @@ pub async fn update_channel(
     Path(channel_id): Path<i64>,
     Json(body): Json<UpdateChannelRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(name) = body.name.as_deref() {
+        if name.chars().count() > MAX_CHANNEL_NAME_LEN {
+            return Err(ApiError::BadRequest("name is too long".into()));
+        }
+    }
+    // Measured on the raw value, which is what reaches the column; checking
+    // `trim()` let an arbitrarily whitespace-padded topic past.
     if let Some(topic) = body.topic.as_deref() {
-        if topic.trim().len() > MAX_CHANNEL_TOPIC_LEN {
+        if topic.len() > MAX_CHANNEL_TOPIC_LEN {
             return Err(ApiError::BadRequest("topic is too long".into()));
         }
         if contains_dangerous_markup(topic) {

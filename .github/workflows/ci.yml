@@ -209,6 +209,18 @@ jobs:
         run: cargo test -p paracord-db postgres_query_plan_smoke_when_configured -- --nocapture
       - name: Run paracord-api PostgreSQL route smoke
         run: cargo test -p paracord-api --test postgres_route_smoke -- --nocapture
+      - name: Run the full paracord-api integration suite on PostgreSQL
+        # The suite defaults to `sqlite::memory:`, which structurally cannot
+        # catch PostgreSQL-only defects — a SQLite-ism in a query, a type the
+        # `Any` driver cannot decode, a VARCHAR(n) SQLite ignores and PostgreSQL
+        # enforces, an engine split that drifted from its column type. Only the
+        # four narrow smokes above ran on PostgreSQL before, and six real
+        # PostgreSQL-only failures were sitting behind that gap.
+        #
+        # With PARACORD_TEST_POSTGRES_URL set, every test provisions its own
+        # database cloned from a migrated template, so isolation matches SQLite's
+        # and the migration cost is paid once per test binary.
+        run: cargo test -p paracord-api --tests --no-fail-fast -- --test-threads=4
       - name: Install SQLite CLI (migrator fixture)
         run: sudo apt-get update && sudo apt-get install -y sqlite3
       - name: SQLite -> PostgreSQL migrator end-to-end

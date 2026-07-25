@@ -1,0 +1,15 @@
+-- SQLite: no-op. The PostgreSQL counterpart widens six columns whose declared
+-- VARCHAR length was narrower than the limit the application accepts:
+--   users.display_name  VARCHAR(32)   -> VARCHAR(64)
+--   users.bio           VARCHAR(190)  -> VARCHAR(512)
+--   users.avatar_hash   VARCHAR(64)   -> TEXT
+--   spaces.description  VARCHAR(1000) -> VARCHAR(1024)
+--   spaces.icon_hash    VARCHAR(64)   -> TEXT
+--   messages.nonce      VARCHAR(64)   -> VARCHAR(128)
+--
+-- SQLite does not enforce VARCHAR lengths at all (they carry TEXT affinity and
+-- nothing more), so it has always accepted these values and there is nothing to
+-- change here. The declarations in migrations/ are documentation of intent
+-- only; the enforcing schema is migrations_pg/. See
+-- migrations_pg/20260727000001_varchar_limits_match_validation.sql.
+SELECT 1;

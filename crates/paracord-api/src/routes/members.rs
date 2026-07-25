@@ -14,6 +14,11 @@ use crate::middleware::AuthUser;
 use crate::routes::audit;
 use crate::routes::mod_log;
 
+/// Matches the `members.nick` column. The handler previously accepted a
+/// nickname of any length, which SQLite stored and PostgreSQL rejected with a
+/// 500.
+const MAX_NICK_LEN: usize = 32;
+
 /// Reject a role the actor is not allowed to hand out: never ADMINISTRATOR, and
 /// never a role carrying a permission bit the actor does not already hold.
 ///
@@ -98,6 +103,11 @@ pub async fn update_member(
     Path((guild_id, user_id)): Path<(i64, i64)>,
     Json(body): Json<UpdateMemberRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(nick) = body.nick.as_deref() {
+        if nick.chars().count() > MAX_NICK_LEN {
+            return Err(ApiError::BadRequest("nick is too long".into()));
+        }
+    }
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?

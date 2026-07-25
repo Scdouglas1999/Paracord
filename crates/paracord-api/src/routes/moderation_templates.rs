@@ -13,6 +13,14 @@ use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::routes::{audit, mod_log};
 
+/// `bans.reason` and `audit_log_entries.reason` are both length-limited, and
+/// `apply_template` feeds its rendered string to `ban_member` and to
+/// `audit::log_action`. Neither the request's `reason` nor the stored
+/// `reason_template` was bounded — and `render_template` substitutes `{reason}`
+/// into the template, so even a short request body can amplify past the column.
+/// Unbounded, that stored fine on SQLite and 500ed on PostgreSQL.
+const MAX_RENDERED_REASON_LEN: usize = 512;
+
 const ACTION_WARN: i16 = 1;
 const ACTION_TIMED_MUTE: i16 = 2;
 const ACTION_KICK: i16 = 3;
@@ -195,6 +203,11 @@ pub async fn apply_template(
         &actor_user.username,
         reason,
     );
+    if rendered_reason.len() > MAX_RENDERED_REASON_LEN {
+        return Err(ApiError::BadRequest(
+            "rendered moderation reason is too long".into(),
+        ));
+    }
     let rendered_dm = body
         .dm_message
         .as_deref()

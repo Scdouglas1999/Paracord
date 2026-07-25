@@ -23,6 +23,25 @@ const MALWARE_SCAN_FAIL_CLOSED_ENV: &str = "PARACORD_MALWARE_SCAN_FAIL_CLOSED";
 const MALWARE_SCAN_INFECTED_EXIT_CODES_ENV: &str = "PARACORD_MALWARE_SCAN_INFECTED_EXIT_CODES";
 const MALWARE_QUARANTINE_PATH_ENV: &str = "PARACORD_MALWARE_QUARANTINE_PATH";
 const ATTACHMENT_AAD_PREFIX: &str = "attachment:";
+/// `attachments.filename` and `attachments.content_type` are length-limited
+/// columns, and both values come straight off the multipart part headers, which
+/// are entirely client-controlled. Nothing bounded them: `sanitize_filename_*`
+/// only ever guards *derived* uses (the on-disk name, the response header) and
+/// never truncates, and `resolve_stored_content_type` passes an inactive
+/// claimed type through unchanged. An over-long value stored fine on SQLite and
+/// 500ed on PostgreSQL.
+const MAX_ATTACHMENT_FILENAME_LEN: usize = 255;
+const MAX_ATTACHMENT_CONTENT_TYPE_LEN: usize = 127;
+
+fn validate_attachment_metadata(filename: &str, content_type: &str) -> Result<(), ApiError> {
+    if filename.chars().count() > MAX_ATTACHMENT_FILENAME_LEN {
+        return Err(ApiError::BadRequest("filename is too long".into()));
+    }
+    if content_type.chars().count() > MAX_ATTACHMENT_CONTENT_TYPE_LEN {
+        return Err(ApiError::BadRequest("content type is too long".into()));
+    }
+    Ok(())
+}
 
 fn attachment_aad(attachment_id: i64) -> String {
     format!("{ATTACHMENT_AAD_PREFIX}{attachment_id}")
@@ -636,6 +655,7 @@ pub async fn upload_file(
     // bypass an allowlist before being persisted as application/octet-stream.
     let content_type =
         resolve_stored_content_type(&filename, claimed_content_type.as_deref(), &data);
+    validate_attachment_metadata(&filename, &content_type)?;
     check_guild_upload_policy(&state, channel_id, size, &content_type).await?;
 
     // Store file via storage backend
@@ -905,6 +925,7 @@ pub async fn process_uploaded_file(
     // Check guild-level upload policy against the type that will be stored,
     // after active-content downgrades.
     let content_type = resolve_stored_content_type(filename, claimed_content_type, data);
+    validate_attachment_metadata(filename, &content_type)?;
     check_guild_upload_policy(state, channel_id, size, &content_type).await?;
 
     let attachment_id = paracord_util::snowflake::generate(1);

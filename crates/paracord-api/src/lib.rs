@@ -255,6 +255,23 @@ pub fn build_router() -> Router<AppState> {
             "/api/v1/users/@me/read-states",
             get(routes::users::get_read_states),
         )
+        // Per-space / per-channel notification settings. Read in one call
+        // because a client needs every override up front to render the space
+        // and channel lists.
+        .route(
+            "/api/v1/users/@me/notification-settings",
+            get(routes::notification_settings::list_my_notification_settings),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/notification-settings",
+            put(routes::notification_settings::put_space_notification_settings)
+                .delete(routes::notification_settings::delete_space_notification_settings),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/notification-settings",
+            put(routes::notification_settings::put_channel_notification_settings)
+                .delete(routes::notification_settings::delete_channel_notification_settings),
+        )
         .route(
             "/api/v1/users/@me/saved-messages",
             get(routes::channels::list_saved_messages),

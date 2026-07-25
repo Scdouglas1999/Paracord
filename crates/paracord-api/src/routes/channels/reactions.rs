@@ -1,10 +1,18 @@
 use super::*;
 
+/// Matches the `reactions.emoji_name` column. The whole path segment is stored
+/// verbatim (a custom emoji arrives as `name:snowflake`), and nothing bounded
+/// it, so an over-long segment stored fine on SQLite and 500ed on PostgreSQL.
+const MAX_REACTION_EMOJI_LEN: usize = 64;
+
 pub async fn add_reaction(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((channel_id, message_id, emoji)): Path<(i64, i64, String)>,
 ) -> Result<StatusCode, ApiError> {
+    if emoji.chars().count() > MAX_REACTION_EMOJI_LEN {
+        return Err(ApiError::BadRequest("emoji is too long".into()));
+    }
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?

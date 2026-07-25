@@ -475,11 +475,40 @@ async fn current_user_id_with_token(ctx: &TestContext, token: &str) -> anyhow::R
         .to_string())
 }
 
+/// Render a snowflake as base-36 so a unique suffix costs 12 characters
+/// instead of the 18 a decimal snowflake needs.
+fn base36(mut value: i64) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    if value == 0 {
+        return "0".to_string();
+    }
+    let mut out = Vec::new();
+    while value > 0 {
+        out.push(DIGITS[(value % 36) as usize]);
+        value /= 36;
+    }
+    out.reverse();
+    String::from_utf8(out).expect("base36 digits are ASCII")
+}
+
+/// Create a user straight through the database layer, bypassing registration.
+///
+/// The generated username must still respect the product's 32-character limit.
+/// PostgreSQL declares `users.username` as `VARCHAR(32)` and enforces it;
+/// SQLite ignores the length entirely. Formatting the full 18-digit decimal
+/// snowflake into the name overflowed that budget for any prefix of 14
+/// characters or more — passing on SQLite and failing on PostgreSQL with
+/// "value too long for type character varying(32)". Base-36 keeps the suffix
+/// unique in 12 characters, and the explicit validation below makes a future
+/// over-long prefix fail loudly in the fixture instead of as an engine-specific
+/// 500.
 async fn create_external_user(ctx: &TestContext, prefix: &str) -> anyhow::Result<i64> {
     let user_id = paracord_util::snowflake::generate(1);
-    let nonce = format!("{}-{}", prefix, user_id);
-    let username = format!("{prefix}_{user_id}");
-    let email = format!("{nonce}@example.com");
+    let username = format!("{prefix}_{}", base36(user_id));
+    paracord_util::validation::validate_username(&username).map_err(|err| {
+        anyhow::anyhow!("test fixture built an invalid username {username:?}: {err}")
+    })?;
+    let email = format!("{prefix}-{user_id}@example.com");
     let password_hash = paracord_core::auth::hash_password("CoveragePass123!")?;
     let user =
         paracord_db::users::create_user(&ctx.db, user_id, &username, 1, &email, &password_hash)

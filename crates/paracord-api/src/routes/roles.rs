@@ -12,6 +12,17 @@ use crate::middleware::AuthUser;
 use crate::routes::audit;
 use crate::routes::mod_log;
 
+/// Matches the `roles.name` column. Without it an over-long role name was a
+/// clean insert on SQLite and a 500 on PostgreSQL.
+const MAX_ROLE_NAME_LEN: usize = 100;
+
+fn validate_role_name(name: &str) -> Result<(), ApiError> {
+    if name.len() > MAX_ROLE_NAME_LEN {
+        return Err(ApiError::BadRequest("Role name is too long".into()));
+    }
+    Ok(())
+}
+
 fn validate_role_permission_assignment(
     guild_owner_id: i64,
     actor_user_id: i64,
@@ -82,6 +93,7 @@ pub async fn create_role(
     Path(guild_id): Path<i64>,
     Json(body): Json<CreateRoleRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    validate_role_name(&body.name)?;
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -185,6 +197,9 @@ pub async fn update_role(
     Path((guild_id, role_id)): Path<(i64, i64)>,
     Json(body): Json<UpdateRoleRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(name) = body.name.as_deref() {
+        validate_role_name(name)?;
+    }
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?

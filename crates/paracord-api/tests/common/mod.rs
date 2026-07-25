@@ -80,13 +80,96 @@ pub struct TestApp {
     _backup_dir: TempDir,
 }
 
+/// Guards one-time creation of the migrated PostgreSQL template database.
+static PG_TEMPLATE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+
+/// Swap the database name in a PostgreSQL URL, preserving everything else.
+fn with_database(base: &str, name: &str) -> anyhow::Result<String> {
+    let mut url = url::Url::parse(base)?;
+    url.set_path(name);
+    Ok(url.to_string())
+}
+
+/// Provision a throwaway PostgreSQL database for one test app.
+///
+/// Every integration test in this crate runs against `sqlite::memory:` by
+/// default, which structurally cannot catch PostgreSQL-only defects — a
+/// SQLite-ism in a query, a type the `Any` driver cannot decode, an engine
+/// split that drifted. Those only appear against a real server, and they have
+/// shipped before (scheduled-message delivery was dead on PostgreSQL because a
+/// `TIMESTAMPTZ`-era projection outlived its column type).
+///
+/// Setting `PARACORD_TEST_POSTGRES_URL` therefore reruns the whole suite on
+/// PostgreSQL. Isolation matches SQLite's: each test app gets its own database,
+/// cloned from a template that pays the migration cost once (`CREATE DATABASE
+/// … TEMPLATE …` is a file copy, so per-test setup stays cheap).
+async fn provision_postgres_database(base_url: &str, migrated: bool) -> anyhow::Result<String> {
+    // `postgres` is the maintenance database every server has; CREATE DATABASE
+    // cannot run from inside the database being cloned.
+    let admin_url = with_database(base_url, "postgres")?;
+
+    // Some tests want a database with no schema at all — they stand in for an
+    // unavailable database and assert the failure surfaces correctly. Cloning
+    // the migrated template would hand them working tables and quietly void the
+    // premise, so those get a bare database.
+    if !migrated {
+        let name = format!("pcbare_{}", Uuid::new_v4().simple());
+        let admin = paracord_db::create_pool(&admin_url, 1).await?;
+        sqlx::query(&format!("CREATE DATABASE {name}"))
+            .execute(&admin)
+            .await?;
+        admin.close().await;
+        return with_database(base_url, &name);
+    }
+
+    let template = PG_TEMPLATE
+        .get_or_try_init(|| async {
+            // Unique per test binary. Cargo runs each integration test as its
+            // own process, so a shared fixed name would let one binary DROP the
+            // template another was mid-clone from — and it lets several `cargo
+            // test` runs share one server without colliding.
+            let name = format!("pctpl_{}", Uuid::new_v4().simple());
+            let admin = paracord_db::create_pool(&admin_url, 1).await?;
+            sqlx::query(&format!("CREATE DATABASE {name}"))
+                .execute(&admin)
+                .await?;
+            admin.close().await;
+
+            let template_url = with_database(base_url, &name)?;
+            let pool = paracord_db::create_pool(&template_url, 1).await?;
+            paracord_db::run_migrations(&pool).await?;
+            // A template cannot be cloned while anything is connected to it.
+            pool.close().await;
+            Ok::<String, anyhow::Error>(name)
+        })
+        .await?;
+
+    let name = format!("pctest_{}", Uuid::new_v4().simple());
+    let admin = paracord_db::create_pool(&admin_url, 1).await?;
+    sqlx::query(&format!("CREATE DATABASE {name} TEMPLATE {template}"))
+        .execute(&admin)
+        .await?;
+    admin.close().await;
+
+    with_database(base_url, &name)
+}
+
 pub async fn build_test_app(options: TestAppOptions) -> anyhow::Result<TestApp> {
-    let database_url = options
-        .database_url
-        .clone()
-        .unwrap_or_else(|| "sqlite::memory:".to_string());
+    // An explicit url in the options always wins (the PostgreSQL-specific
+    // smokes pass one directly). Otherwise honour the suite-wide PostgreSQL
+    // override, and fall back to in-memory SQLite.
+    let (database_url, migrated_by_template) = match options.database_url.clone() {
+        Some(url) => (url, false),
+        None => match std::env::var("PARACORD_TEST_POSTGRES_URL") {
+            Ok(base) if !base.trim().is_empty() => (
+                provision_postgres_database(base.trim(), options.run_migrations).await?,
+                options.run_migrations,
+            ),
+            _ => ("sqlite::memory:".to_string(), false),
+        },
+    };
     let db = paracord_db::create_pool(&database_url, 1).await?;
-    if options.run_migrations {
+    if options.run_migrations && !migrated_by_template {
         paracord_db::run_migrations(&db).await?;
     }
 

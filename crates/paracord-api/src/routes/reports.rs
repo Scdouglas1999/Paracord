@@ -438,6 +438,18 @@ pub async fn resolve_report(
 ) -> Result<Json<Value>, ApiError> {
     ensure_moderator(&state, guild_id, auth.user_id).await?;
 
+    // Validated up front, not at the point it is recorded further down. The
+    // `"ban"` branch passes `body.note` to `ban_member` long before the old
+    // check ran, so an over-long note was written to a length-limited column
+    // first and rejected afterwards — a 500 on PostgreSQL. The emptiness filter
+    // on the later check also skipped whitespace-only notes entirely, which are
+    // then handed untrimmed to the audit log.
+    if let Some(note) = body.note.as_deref() {
+        if note.len() > MAX_REASON_LEN {
+            return Err(ApiError::BadRequest("invalid note".into()));
+        }
+    }
+
     let mut report = paracord_db::audit_log::get_entry_by_id(&state.db, report_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?

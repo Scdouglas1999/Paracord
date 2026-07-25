@@ -102,6 +102,9 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "anonymous_messages",
     "attachments",
     "channel_feature_settings",
+    // Both depend on users plus their scope (spaces / channels), so they belong
+    // with the leaf tables rather than the roots.
+    "channel_notification_settings",
     "channel_overwrites",
     "event_rsvps",
     "federation_message_map",
@@ -114,6 +117,7 @@ pub const MIGRATION_TABLE_ORDER: &[&str] = &[
     "message_stickers",
     "poll_options",
     "poll_votes",
+    "space_notification_settings",
     "webhook_messages",
 ];
 

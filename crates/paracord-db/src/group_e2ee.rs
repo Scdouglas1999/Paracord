@@ -1,3 +1,14 @@
+//! Sender-key envelopes for group (multi-recipient) E2EE channels.
+//!
+//! `acknowledged` is a real `BOOLEAN` on both engines, so every write and
+//! comparison uses the `TRUE`/`FALSE` keywords rather than `1`/`0`. SQLite
+//! treats those keywords as its integer 1/0, while PostgreSQL is strictly
+//! typed and rejects an integer against a boolean column outright ("column
+//! \"acknowledged\" is of type boolean but expression is of type integer"),
+//! which took the whole sender-key flow down on PostgreSQL. Reads still go
+//! through `CASE WHEN ... THEN 1 ELSE 0 END` + [`crate::bool_from_any_row`],
+//! because the `Any` driver cannot decode SQLite's `Bool` type info.
+
 use crate::{datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
@@ -45,11 +56,11 @@ pub async fn upsert_sender_key(
     let row = sqlx::query_as::<_, GroupSenderKeyRow>(
         "INSERT INTO group_e2ee_sender_keys (
             id, channel_id, sender_id, recipient_id, epoch, ciphertext, header, acknowledged
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
          ON CONFLICT(channel_id, sender_id, recipient_id, epoch) DO UPDATE SET
             ciphertext = EXCLUDED.ciphertext,
             header = EXCLUDED.header,
-            acknowledged = 0
+            acknowledged = FALSE
          RETURNING id, channel_id, sender_id, recipient_id, epoch, ciphertext, header,
                    CASE WHEN acknowledged THEN 1 ELSE 0 END AS acknowledged, created_at",
     )
@@ -77,7 +88,7 @@ pub async fn list_pending_for_recipient(
          FROM group_e2ee_sender_keys
          WHERE channel_id = $1
            AND recipient_id = $2
-           AND (acknowledged = 0 OR $3 IS NOT NULL)
+           AND (acknowledged = FALSE OR $3 IS NOT NULL)
            AND ($3 IS NULL OR epoch >= $3)
          ORDER BY epoch ASC, created_at ASC",
     )
@@ -98,7 +109,7 @@ pub async fn acknowledge_sender_keys(
 ) -> Result<u64, DbError> {
     let result = sqlx::query(
         "UPDATE group_e2ee_sender_keys
-         SET acknowledged = 1
+         SET acknowledged = TRUE
          WHERE channel_id = $1
            AND recipient_id = $2
            AND ($3 IS NULL OR sender_id = $3)

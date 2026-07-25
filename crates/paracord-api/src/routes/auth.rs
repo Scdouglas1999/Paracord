@@ -1516,6 +1516,23 @@ pub async fn register(
             "Username must be between 2 and 32 valid characters".into(),
         ));
     }
+    // Registration writes `display_name` too (further down, after the account
+    // row exists) but never bounded it, unlike `PATCH /users/@me`. The column
+    // is length-limited, so an over-long value was accepted on SQLite and 500ed
+    // on PostgreSQL. Checked here rather than at the write so a rejected
+    // display name cannot leave a half-created account behind.
+    if let Some(display_name) = body.display_name.as_deref() {
+        if display_name.trim().len() > MAX_DISPLAY_NAME_LEN {
+            auth_guard_record_failure(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                Some(&account_hint),
+            )
+            .await;
+            return Err(ApiError::BadRequest("display_name is too long".into()));
+        }
+    }
     if state.config.require_email && normalized_email.is_empty() {
         auth_guard_record_failure(
             &state,

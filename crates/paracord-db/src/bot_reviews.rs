@@ -88,12 +88,24 @@ pub async fn list_reviews(
     Ok(rows)
 }
 
+/// Review count and mean rating for one bot application.
+///
+/// The average is cast to `DOUBLE PRECISION` in SQL rather than left to the
+/// engine's own aggregate type. `rating` is a `SMALLINT`, and on PostgreSQL
+/// `AVG()` over any integer type returns `NUMERIC` -- a type the sqlx `Any`
+/// driver cannot decode ("Any driver does not support the Postgres type
+/// PgTypeInfo(Numeric)"), which fails the entire row, not just that column.
+/// Multiplying by `1.0` does not help: the literal is `NUMERIC` on PostgreSQL
+/// too. SQLite reads `DOUBLE PRECISION` as REAL affinity, so the cast is a
+/// no-op there.
 pub async fn get_review_summary(pool: &DbPool, bot_app_id: i64) -> Result<(i64, f64), DbError> {
-    let row: (i64, Option<f64>) =
-        sqlx::query_as("SELECT COUNT(*), AVG(rating * 1.0) FROM bot_reviews WHERE bot_app_id = $1")
-            .bind(bot_app_id)
-            .fetch_one(pool)
-            .await?;
+    let row: (i64, Option<f64>) = sqlx::query_as(
+        "SELECT COUNT(*), CAST(AVG(rating) AS DOUBLE PRECISION) \
+         FROM bot_reviews WHERE bot_app_id = $1",
+    )
+    .bind(bot_app_id)
+    .fetch_one(pool)
+    .await?;
     Ok((row.0, row.1.unwrap_or(0.0)))
 }
 
@@ -109,7 +121,11 @@ pub async fn get_review_summaries(
     }
     let placeholders = crate::messages::build_placeholders(1, app_ids.len());
     let sql = format!(
-        "SELECT bot_app_id, COUNT(*) AS review_count, AVG(rating * 1.0) AS avg_rating \
+        // `CAST(... AS DOUBLE PRECISION)` for the same reason as
+        // `get_review_summary`: PostgreSQL's `AVG()` over `SMALLINT` yields
+        // `NUMERIC`, which the `Any` driver refuses, failing every row here.
+        "SELECT bot_app_id, COUNT(*) AS review_count, \
+         CAST(AVG(rating) AS DOUBLE PRECISION) AS avg_rating \
          FROM bot_reviews WHERE bot_app_id IN ({placeholders}) GROUP BY bot_app_id"
     );
     let mut query = sqlx::query(&sql);

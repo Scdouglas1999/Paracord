@@ -18,6 +18,12 @@ use crate::routes::security;
 
 const MAX_DISPLAY_NAME_LEN: usize = 64;
 const MAX_BIO_LEN: usize = 512;
+/// `user_settings.theme` is `VARCHAR(32)` and `user_settings.locale` is
+/// `VARCHAR(10)`. Both are echoed straight out of the request body, so without
+/// these bounds an over-long value is a clean insert on SQLite and a 500 on
+/// PostgreSQL.
+const MAX_SETTINGS_THEME_LEN: usize = 32;
+const MAX_SETTINGS_LOCALE_LEN: usize = 10;
 const MAX_CUSTOM_STATUS_LEN: usize = 128;
 const MAX_AVATAR_IMAGE_SIZE: usize = 2 * 1024 * 1024;
 const MAX_AVATAR_DATA_URL_LEN: usize = 2 * 1024 * 1024;
@@ -477,23 +483,25 @@ pub async fn update_me(
     auth: AuthUser,
     Json(body): Json<UpdateMeRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    // Length is measured on the raw value, not on `trim()`ed one, because the
+    // raw value is what reaches the column below. Checking the trimmed length
+    // let `"  ".repeat(n) + "ab"` through at any size, which SQLite stored and
+    // PostgreSQL rejected with "value too long for type character varying".
     if let Some(display_name) = body.display_name.as_deref() {
-        let trimmed = display_name.trim();
-        if trimmed.len() > MAX_DISPLAY_NAME_LEN {
+        if display_name.len() > MAX_DISPLAY_NAME_LEN {
             return Err(ApiError::BadRequest("display_name is too long".into()));
         }
-        if contains_dangerous_markup(trimmed) {
+        if contains_dangerous_markup(display_name.trim()) {
             return Err(ApiError::BadRequest(
                 "display_name contains unsafe markup".into(),
             ));
         }
     }
     if let Some(bio) = body.bio.as_deref() {
-        let trimmed = bio.trim();
-        if trimmed.len() > MAX_BIO_LEN {
+        if bio.len() > MAX_BIO_LEN {
             return Err(ApiError::BadRequest("bio is too long".into()));
         }
-        if contains_dangerous_markup(trimmed) {
+        if contains_dangerous_markup(bio.trim()) {
             return Err(ApiError::BadRequest("bio contains unsafe markup".into()));
         }
     }
@@ -690,6 +698,12 @@ pub async fn update_settings(
         .as_deref()
         .or_else(|| existing.as_ref().map(|s| s.locale.as_str()))
         .unwrap_or("en-US");
+    if theme.len() > MAX_SETTINGS_THEME_LEN {
+        return Err(ApiError::BadRequest("theme is too long".into()));
+    }
+    if locale.len() > MAX_SETTINGS_LOCALE_LEN {
+        return Err(ApiError::BadRequest("locale is too long".into()));
+    }
     let message_display = if let Some(is_compact) = body.message_display_compact {
         if is_compact {
             "compact"

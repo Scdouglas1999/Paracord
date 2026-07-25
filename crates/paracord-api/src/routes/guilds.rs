@@ -16,6 +16,9 @@ use crate::routes::audit;
 
 const MAX_VANITY_CODE_LEN: usize = 32;
 
+/// Matches the `spaces.name` column and the bound `create_guild` already
+/// applies.
+const MAX_GUILD_NAME_LEN: usize = 100;
 const MAX_GUILD_DESCRIPTION_LEN: usize = 1_024;
 const MAX_DISCOVERY_TAGS: usize = 10;
 const MAX_DISCOVERY_TAG_LEN: usize = 32;
@@ -224,7 +227,7 @@ pub async fn create_guild(
     auth: AuthUser,
     Json(body): Json<CreateGuildRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if body.name.len() < 2 || body.name.len() > 100 {
+    if body.name.len() < 2 || body.name.len() > MAX_GUILD_NAME_LEN {
         return Err(ApiError::BadRequest(
             "Guild name must be between 2 and 100 characters".into(),
         ));
@@ -291,8 +294,18 @@ pub async fn update_guild(
     Path(guild_id): Path<i64>,
     Json(body): Json<UpdateGuildRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    // `create_guild` bounds the name but `update_guild` never did, and the
+    // column is length-limited: a rename past the limit stored fine on SQLite
+    // and 500ed on PostgreSQL.
+    if let Some(name) = body.name.as_deref() {
+        if name.len() > MAX_GUILD_NAME_LEN {
+            return Err(ApiError::BadRequest("name is too long".into()));
+        }
+    }
+    // Measured on the raw value, which is what reaches the column below;
+    // checking `trim()` let an arbitrarily whitespace-padded description past.
     if let Some(description) = body.description.as_deref() {
-        if description.trim().len() > MAX_GUILD_DESCRIPTION_LEN {
+        if description.len() > MAX_GUILD_DESCRIPTION_LEN {
             return Err(ApiError::BadRequest("description is too long".into()));
         }
         if contains_dangerous_markup(description) {

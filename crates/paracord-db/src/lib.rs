@@ -28,6 +28,7 @@ pub mod messages;
 pub mod mfa;
 pub mod migrate_export;
 pub mod moderation_templates;
+pub mod notification_settings;
 pub mod onboarding;
 pub mod password_reset;
 pub mod polls;
@@ -479,12 +480,31 @@ pub(crate) fn datetime_to_db_text(value: chrono::DateTime<chrono::Utc>) -> Strin
     value.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+/// Parse a timestamp out of a `TEXT` column.
+///
+/// House convention is that temporal columns are `TEXT` written by
+/// [`datetime_to_db_text`], but a handful of PostgreSQL columns are still
+/// native `TIMESTAMPTZ` and are read back through a `CAST(... AS TEXT)`. That
+/// cast yields PostgreSQL's own rendering — `2026-07-25 20:26:54.890859+00` —
+/// which matches none of the naive formats: it has a space separator rather
+/// than RFC 3339's `T`, *and* a trailing offset the naive parsers reject. The
+/// offset-aware arms below accept it (`%#z` also takes `+00:00` and `+0000`),
+/// so a value this database can emit is always a value it can read back.
 pub(crate) fn datetime_from_db_text(
     value: &str,
 ) -> Result<chrono::DateTime<chrono::Utc>, sqlx::Error> {
     use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 
     if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    // Offset-bearing forms must be tried before the naive ones: a naive parse
+    // of an offset-bearing string would silently drop the offset and shift the
+    // instant.
+    if let Ok(dt) = DateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f%#z") {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    if let Ok(dt) = DateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f%#z") {
         return Ok(dt.with_timezone(&Utc));
     }
     if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
@@ -614,10 +634,51 @@ async fn backfill_webhook_token_hashes(pool: &DbPool) -> Result<(), sqlx::Error>
 mod tests {
     use super::{
         backfill_webhook_token_hashes, create_pool, create_pool_with_engine_and_sqlite_key,
-        create_pool_with_sqlite_key, decode_hex, run_migrations, run_migrations_for_engine,
-        DatabaseEngine, REPAIRED_SQLITE_MIGRATIONS,
+        create_pool_with_sqlite_key, datetime_from_db_text, datetime_to_db_text, decode_hex,
+        run_migrations, run_migrations_for_engine, DatabaseEngine, REPAIRED_SQLITE_MIGRATIONS,
     };
     use sqlx::Row;
+
+    /// Anything either engine can emit for a timestamp must read back, and must
+    /// read back as the *same instant*.
+    ///
+    /// PostgreSQL renders a `TIMESTAMPTZ` cast to text as
+    /// `2026-07-25 20:26:54.890859+00` — a space separator plus a trailing
+    /// offset. That parsed as neither RFC 3339 nor either naive format, so rows
+    /// carrying one failed to decode entirely on PostgreSQL.
+    #[test]
+    fn datetime_text_round_trips_every_shape_either_engine_emits() {
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-07-25T20:26:54Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        for text in [
+            // Our own writer (SQLite and PostgreSQL TEXT columns).
+            "2026-07-25 20:26:54",
+            // PostgreSQL TIMESTAMPTZ cast to text, with and without fraction.
+            "2026-07-25 20:26:54+00",
+            "2026-07-25 20:26:54.000000+00",
+            "2026-07-25 20:26:54+00:00",
+            "2026-07-25 20:26:54+0000",
+            // RFC 3339, as produced elsewhere in the codebase.
+            "2026-07-25T20:26:54Z",
+            "2026-07-25T20:26:54.000+00:00",
+        ] {
+            let parsed =
+                datetime_from_db_text(text).unwrap_or_else(|e| panic!("{text:?} must parse: {e}"));
+            assert_eq!(parsed, expected, "{text:?} decoded to the wrong instant");
+        }
+
+        // A non-UTC offset must be honoured, not dropped — dropping it would
+        // silently shift the instant by the offset instead of failing.
+        assert_eq!(
+            datetime_from_db_text("2026-07-25 15:26:54-05").unwrap(),
+            expected,
+        );
+
+        assert_eq!(datetime_to_db_text(expected), "2026-07-25 20:26:54");
+        assert!(datetime_from_db_text("not a timestamp").is_err());
+    }
 
     #[tokio::test]
     async fn corrected_migrations_repair_their_recorded_checksum() {
@@ -986,8 +1047,16 @@ mod tests {
                 "idx_attachments_message_id",
             ),
             (
+                // `send_at` is epoch milliseconds in a BIGINT (see
+                // scheduled_messages.rs), and the worker binds
+                // `now.timestamp_millis()`. Comparing against a TIMESTAMPTZ
+                // literal here failed EXPLAIN outright — `operator does not
+                // exist: bigint <= timestamp with time zone` — so this index was
+                // never actually validated on PostgreSQL. The literal below is
+                // 2026-05-16T00:00:00Z in epoch milliseconds, matching the
+                // production comparison.
                 "scheduled message worker",
-                "SELECT id FROM scheduled_messages WHERE status = 0 AND send_at <= TIMESTAMPTZ '2026-05-16T00:00:00Z' ORDER BY send_at ASC LIMIT 100",
+                "SELECT id FROM scheduled_messages WHERE status = 0 AND send_at <= 1778889600000 ORDER BY send_at ASC LIMIT 100",
                 "idx_scheduled_messages_due",
             ),
             (

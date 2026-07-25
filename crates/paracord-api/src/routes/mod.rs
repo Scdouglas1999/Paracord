@@ -24,6 +24,7 @@ pub mod members;
 pub mod message_features;
 pub mod mod_log;
 pub mod moderation_templates;
+pub mod notification_settings;
 pub mod onboarding;
 pub mod realtime;
 pub mod relationships;
