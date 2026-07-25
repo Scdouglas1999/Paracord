@@ -48,11 +48,11 @@ const PRESETS: Array<{
 }> = [
   {
     key: 'invites',
-    name: 'Block server invites',
-    blurb: 'Stops drive-by advertising of other servers.',
+    name: 'Block space invites',
+    blurb: 'Stops drive-by advertising of other spaces.',
     trigger_type: TriggerType.Link,
     trigger_metadata: { kind: 'link', block_all: false, block_invites: true, allowed_domains: [] },
-    actions: [{ kind: 'block_message', reason: 'Server invites are not allowed here.' }],
+    actions: [{ kind: 'block_message', reason: 'Space invites are not allowed here.' }],
   },
   {
     key: 'mentions',
@@ -671,7 +671,7 @@ function TriggerFields({
           <div className="divide-y divide-border-subtle border-y border-border-subtle">
             <ToggleRow
               label="Block invite links"
-              description="Invites to other chat servers."
+              description="Invites to other spaces on any Paracord server."
               checked={meta.block_invites ?? false}
               onChange={(v) => onChange({ ...meta, block_invites: v })}
             />

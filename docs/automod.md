@@ -71,7 +71,7 @@ offending content. Rule create/update/delete also lands in the space audit log.
 
 The settings page offers three one-click presets:
 
-- **Block server invites** — stops drive-by advertising.
+- **Block space invites** — stops drive-by advertising.
 - **Stop mention spam** — blocks messages pinging more than five people.
 - **Slow down flooding** — 5-minute timeout after 8 messages in 10 seconds.
 

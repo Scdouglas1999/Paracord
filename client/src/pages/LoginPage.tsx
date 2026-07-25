@@ -539,7 +539,7 @@ export function LoginPage() {
             <AuthHeading
               mark={false}
               title="Welcome back"
-              subtitle="Sign in to pick up where you left off across your servers."
+              subtitle="Sign in to pick up where you left off across your spaces."
             />
 
             {error && <ErrorBanner message={error} />}

@@ -62,7 +62,7 @@ const GUILD_STEPS: TourStepDef[] = [
     id: 'rooms',
     // LiveRoomsGrid labels its section "Live rooms" when occupied, else "Rooms".
     selector: 'section[aria-label="Live rooms"], section[aria-label="Rooms"]',
-    body: "Servers open on who's around — jump into a room or pick a channel below.",
+    body: "Spaces open on who's around — jump into a room or pick a channel below.",
     side: 'top',
   },
 ];

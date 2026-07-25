@@ -38,7 +38,7 @@ describe('BotStoreCard', () => {
     expect(screen.getByText('ci')).toBeInTheDocument();
     expect(screen.getByText('release')).toBeInTheDocument();
     expect(screen.queryByText('extra')).not.toBeInTheDocument();
-    expect(screen.getByText('12 servers')).toBeInTheDocument();
+    expect(screen.getByText('12 spaces')).toBeInTheDocument();
     expect(screen.getByText('4.8 (4)')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /Add to Server/ }));

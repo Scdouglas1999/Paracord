@@ -66,7 +66,7 @@ export function BotStoreCard({ bot, onAdd, adding, canManage }: BotStoreCardProp
         <div className="space-y-0.5">
           <span className="text-xs font-semibold text-text-muted flex items-center gap-1">
             <Download size={12} />
-            {bot.install_count.toLocaleString()} {bot.install_count === 1 ? 'server' : 'servers'}
+            {bot.install_count.toLocaleString()} {bot.install_count === 1 ? 'space' : 'spaces'}
           </span>
           {typeof bot.average_rating === 'number' && typeof bot.review_count === 'number' && (
             <span className="text-[11px] text-text-muted inline-flex items-center gap-1">

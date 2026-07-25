@@ -32,7 +32,7 @@ const PERMISSION_META: Record<PermissionKey, { name: string; description: string
   ATTACH_FILES: { name: 'Attach Files', description: 'Upload files and images' },
   READ_MESSAGE_HISTORY: { name: 'Read Message History', description: 'View past messages in channels' },
   MENTION_EVERYONE: { name: 'Mention Everyone', description: 'Use @everyone and @here' },
-  USE_EXTERNAL_EMOJIS: { name: 'Use External Emojis', description: 'Use emojis from other servers' },
+  USE_EXTERNAL_EMOJIS: { name: 'Use External Emojis', description: 'Use emojis from other spaces' },
   CONNECT: { name: 'Connect', description: 'Connect to voice channels' },
   SPEAK: { name: 'Speak', description: 'Speak in voice channels' },
   MUTE_MEMBERS: { name: 'Mute Members', description: 'Mute others in voice channels' },

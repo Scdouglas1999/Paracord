@@ -308,7 +308,7 @@ export function FriendsPage() {
           </span>
           <div className="min-w-0 flex-1">
             <h1 className="font-display text-heading text-text-primary">Friends</h1>
-            <p className="text-meta text-text-muted">People you can DM, share servers with, and see around.</p>
+            <p className="text-meta text-text-muted">People you can DM, share spaces with, and see around.</p>
           </div>
           <Button
             onClick={() => (showAddFriend ? setShowAddFriend(false) : openAddFriend())}
@@ -652,7 +652,7 @@ function FriendsEmptyState({
         <EmptyState
           icon={<UserRoundPlus size={20} />}
           title="Your friends list is empty"
-          description="Add people by their username with the Add friend button up top to start DMs, share servers, and see when they're around. All it takes is their handle."
+          description="Add people by their username with the Add friend button up top to start DMs, share spaces, and see when they're around. All it takes is their handle."
           action={
             <Button size="sm" onClick={onAdd}>
               Add your first friend
