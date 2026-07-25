@@ -757,3 +757,142 @@ async fn basic_route_flow_uses_postgres_when_configured() -> anyhow::Result<()> 
 
     Ok(())
 }
+
+/// Every scheduled-message read path, exercised on PostgreSQL.
+///
+/// `created_at`/`updated_at` are `TEXT` on both engines, but the PostgreSQL
+/// select list kept projecting them through `to_char(timezone('UTC', ...))`
+/// from when they were `TIMESTAMPTZ`. Against a `TEXT` column that resolves to
+/// nothing — `function timezone(unknown, text) does not exist` — so every one of
+/// these queries failed on PostgreSQL only. The delivery worker polls through
+/// `list_due_scheduled_messages`, so no scheduled message was ever sent on a
+/// PostgreSQL deployment; it just logged the failure once per poll.
+///
+/// SQLite cannot catch this: it never ran that projection. Set
+/// `PARACORD_TEST_POSTGRES_URL` to run it.
+#[tokio::test]
+async fn scheduled_message_paths_work_on_postgres() -> anyhow::Result<()> {
+    let database_url = match std::env::var("PARACORD_TEST_POSTGRES_URL") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            eprintln!("skipping scheduled-message PostgreSQL smoke: PARACORD_TEST_POSTGRES_URL is not set");
+            return Ok(());
+        }
+    };
+
+    let test_app = build_test_app(TestAppOptions {
+        database_url: Some(database_url),
+        ..Default::default()
+    })
+    .await?;
+    let token = create_authenticated_user_token(
+        &test_app.db,
+        &test_app.jwt_secret,
+        "pg_scheduled",
+        "PostgresSchedPass123!",
+    )
+    .await?;
+
+    let (status, guild) = request_json(
+        &test_app.app,
+        &token,
+        Method::POST,
+        "/api/v1/guilds",
+        Some(json!({ "name": "PG Scheduled", "icon": Value::Null })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "guild: {guild}");
+    let guild_id = guild["id"].as_str().context("guild id")?.to_string();
+
+    let (status, channels) = request_json(
+        &test_app.app,
+        &token,
+        Method::GET,
+        &format!("/api/v1/guilds/{guild_id}/channels"),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "channels: {channels}");
+    let channel_id = channels
+        .as_array()
+        .context("channels should be an array")?
+        .iter()
+        .find(|c| c["channel_type"].as_i64().or_else(|| c["type"].as_i64()) == Some(0))
+        .and_then(|c| c["id"].as_str())
+        .context("a text channel should exist")?
+        .to_string();
+
+    // create → the INSERT ... RETURNING select list
+    let send_at = (Utc::now() + Duration::hours(1)).to_rfc3339();
+    let (status, created) = request_json(
+        &test_app.app,
+        &token,
+        Method::POST,
+        &format!("/api/v1/channels/{channel_id}/scheduled-messages"),
+        Some(json!({ "content": "scheduled on postgres", "send_at": send_at })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "create scheduled: {created}");
+    let scheduled_id = created["id"].as_str().context("scheduled id")?.to_string();
+
+    // list → the plain SELECT
+    let (status, listed) = request_json(
+        &test_app.app,
+        &token,
+        Method::GET,
+        &format!("/api/v1/channels/{channel_id}/scheduled-messages"),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "list scheduled: {listed}");
+    assert!(
+        listed
+            .as_array()
+            .context("scheduled list should be an array")?
+            .iter()
+            .any(|m| m["id"].as_str() == Some(scheduled_id.as_str())),
+        "the scheduled message should come back from the list: {listed}"
+    );
+
+    // update → the UPDATE ... RETURNING select list
+    let (status, updated) = request_json(
+        &test_app.app,
+        &token,
+        Method::PATCH,
+        &format!("/api/v1/channels/{channel_id}/scheduled-messages/{scheduled_id}"),
+        Some(json!({
+            "content": "rescheduled on postgres",
+            "send_at": (Utc::now() + Duration::hours(2)).to_rfc3339(),
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "update scheduled: {updated}");
+
+    // The worker's own query — the one whose failure silently stopped delivery.
+    let due = paracord_db::scheduled_messages::list_due_scheduled_messages(
+        &test_app.db,
+        Utc::now() + Duration::days(365),
+        10,
+    )
+    .await?;
+    assert!(
+        due.iter().any(|m| m.id.to_string() == scheduled_id),
+        "the delivery worker's due-poll must return the scheduled message"
+    );
+
+    // cancel → the remaining UPDATE ... RETURNING select list
+    let (status, cancelled) = request_json(
+        &test_app.app,
+        &token,
+        Method::DELETE,
+        &format!("/api/v1/channels/{channel_id}/scheduled-messages/{scheduled_id}"),
+        None,
+    )
+    .await?;
+    assert!(
+        status == StatusCode::OK || status == StatusCode::NO_CONTENT,
+        "cancel scheduled: {status} {cancelled}"
+    );
+
+    Ok(())
+}

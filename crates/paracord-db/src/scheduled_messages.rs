@@ -4,10 +4,9 @@
 //! INTEGER (SQLite) / BIGINT (PostgreSQL) column, mirroring the i64 timestamp
 //! style used across the schema, so it needs no per-engine casts on read or
 //! write and compares numerically on both engines. The bookkeeping columns
-//! `created_at`/`updated_at` remain DB-native timestamp values (TEXT on SQLite,
-//! TIMESTAMPTZ on PostgreSQL) and are rendered to text on PostgreSQL via the
-//! projection below so they read back as strings on either engine.
-use crate::{active_database_engine, datetime_from_db_text, DatabaseEngine, DbError, DbPool};
+//! `created_at`/`updated_at` are TEXT on both engines, so they read back as
+//! strings without a per-engine projection.
+use crate::{datetime_from_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
@@ -58,15 +57,19 @@ impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for ScheduledMessageRow {
     }
 }
 
-const SCHEDULED_MESSAGES_SELECT_SQLITE: &str =
+/// `created_at`/`updated_at` are `TEXT` on both engines (house convention: the
+/// sqlx `Any` driver cannot decode a native PostgreSQL `TIMESTAMP`, and one such
+/// column fails the *entire* row), so both engines select them verbatim.
+///
+/// The PostgreSQL list used to wrap them in `to_char(timezone('UTC', ...))` from
+/// when they really were `TIMESTAMPTZ`. Once the columns became `TEXT` that call
+/// no longer resolves — `function timezone(unknown, text) does not exist` — and
+/// it took the scheduled-message worker down with it: every poll failed, so no
+/// scheduled message was ever delivered on PostgreSQL and the log filled at the
+/// poll interval.
+const SCHEDULED_MESSAGES_SELECT: &str =
     "id, channel_id, author_id, content, e2ee_payload, nonce, reference_id, send_at,
      delivered_message_id, status, error, created_at, updated_at";
-
-const SCHEDULED_MESSAGES_SELECT_POSTGRES: &str =
-    "id, channel_id, author_id, content, e2ee_payload, nonce, reference_id, send_at,
-     delivered_message_id, status, error,
-     to_char(timezone('UTC', created_at), 'YYYY-MM-DD HH24:MI:SS.US') AS created_at,
-     to_char(timezone('UTC', updated_at), 'YYYY-MM-DD HH24:MI:SS.US') AS updated_at";
 
 pub async fn create_scheduled_message(
     pool: &DbPool,
@@ -79,10 +82,7 @@ pub async fn create_scheduled_message(
     reference_id: Option<i64>,
     send_at: DateTime<Utc>,
 ) -> Result<ScheduledMessageRow, DbError> {
-    let select_cols = match active_database_engine() {
-        DatabaseEngine::Postgres => SCHEDULED_MESSAGES_SELECT_POSTGRES,
-        DatabaseEngine::Sqlite => SCHEDULED_MESSAGES_SELECT_SQLITE,
-    };
+    let select_cols = SCHEDULED_MESSAGES_SELECT;
     let row = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
         "INSERT INTO scheduled_messages
             (id, channel_id, author_id, content, e2ee_payload, nonce, reference_id, send_at, status, updated_at)
@@ -110,10 +110,7 @@ pub async fn list_for_author_in_channel(
     channel_id: i64,
     author_id: i64,
 ) -> Result<Vec<ScheduledMessageRow>, DbError> {
-    let select_cols = match active_database_engine() {
-        DatabaseEngine::Postgres => SCHEDULED_MESSAGES_SELECT_POSTGRES,
-        DatabaseEngine::Sqlite => SCHEDULED_MESSAGES_SELECT_SQLITE,
-    };
+    let select_cols = SCHEDULED_MESSAGES_SELECT;
     let rows = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
         "SELECT {}
          FROM scheduled_messages
@@ -132,10 +129,7 @@ pub async fn get_scheduled_message(
     pool: &DbPool,
     id: i64,
 ) -> Result<Option<ScheduledMessageRow>, DbError> {
-    let select_cols = match active_database_engine() {
-        DatabaseEngine::Postgres => SCHEDULED_MESSAGES_SELECT_POSTGRES,
-        DatabaseEngine::Sqlite => SCHEDULED_MESSAGES_SELECT_SQLITE,
-    };
+    let select_cols = SCHEDULED_MESSAGES_SELECT;
     let row = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
         "SELECT {}
          FROM scheduled_messages
@@ -152,10 +146,7 @@ pub async fn cancel_scheduled_message(
     pool: &DbPool,
     id: i64,
 ) -> Result<Option<ScheduledMessageRow>, DbError> {
-    let select_cols = match active_database_engine() {
-        DatabaseEngine::Postgres => SCHEDULED_MESSAGES_SELECT_POSTGRES,
-        DatabaseEngine::Sqlite => SCHEDULED_MESSAGES_SELECT_SQLITE,
-    };
+    let select_cols = SCHEDULED_MESSAGES_SELECT;
     let row = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
         "UPDATE scheduled_messages
          SET status = $2,
@@ -181,10 +172,7 @@ pub async fn update_scheduled_message(
     nonce: Option<&str>,
     send_at: DateTime<Utc>,
 ) -> Result<Option<ScheduledMessageRow>, DbError> {
-    let select_cols = match active_database_engine() {
-        DatabaseEngine::Postgres => SCHEDULED_MESSAGES_SELECT_POSTGRES,
-        DatabaseEngine::Sqlite => SCHEDULED_MESSAGES_SELECT_SQLITE,
-    };
+    let select_cols = SCHEDULED_MESSAGES_SELECT;
     let row = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
         "UPDATE scheduled_messages
          SET content = $2,
@@ -213,10 +201,7 @@ pub async fn list_due_scheduled_messages(
     now: DateTime<Utc>,
     limit: i64,
 ) -> Result<Vec<ScheduledMessageRow>, DbError> {
-    let select_cols = match active_database_engine() {
-        DatabaseEngine::Postgres => SCHEDULED_MESSAGES_SELECT_POSTGRES,
-        DatabaseEngine::Sqlite => SCHEDULED_MESSAGES_SELECT_SQLITE,
-    };
+    let select_cols = SCHEDULED_MESSAGES_SELECT;
     let rows = sqlx::query_as::<_, ScheduledMessageRow>(&format!(
         "SELECT {}
          FROM scheduled_messages
