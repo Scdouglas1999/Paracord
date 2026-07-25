@@ -1,7 +1,7 @@
 use paracord_core::{AppState, USER_FLAG_BOT};
 use serde_json::{json, Value};
 
-const MOD_LOG_BOT_ID: i64 = -2;
+pub(crate) const MOD_LOG_BOT_ID: i64 = -2;
 const MOD_LOG_BOT_USERNAME: &str = "Auto-Moderator";
 const MOD_LOG_BOT_EMAIL: &str = "automod@paracord.internal";
 
@@ -43,7 +43,7 @@ pub async fn get_mod_log_channel_id(state: &AppState, guild_id: i64) -> Option<i
     Some(channel_id)
 }
 
-async fn ensure_mod_log_bot(state: &AppState) {
+pub(crate) async fn ensure_mod_log_bot(state: &AppState) {
     let _ = paracord_db::users::create_user(
         &state.db,
         MOD_LOG_BOT_ID,

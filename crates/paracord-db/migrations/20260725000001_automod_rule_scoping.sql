@@ -9,7 +9,15 @@
 
 ALTER TABLE automod_rules ADD COLUMN exempt_role_ids TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE automod_rules ADD COLUMN exempt_channel_ids TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE automod_rules ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'));
+
+-- SQLite only permits a *constant* DEFAULT on ADD COLUMN when the table already
+-- holds rows: `DEFAULT (datetime('now'))` fails with "Cannot add a column with
+-- non-constant default" on a populated table. Add the column with a constant
+-- default, then backfill from created_at — which is also the semantically
+-- correct value for a pre-existing rule, rather than stamping it with the
+-- migration's own run time.
+ALTER TABLE automod_rules ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+UPDATE automod_rules SET updated_at = created_at WHERE updated_at = '';
 
 CREATE INDEX IF NOT EXISTS idx_automod_rules_space_enabled
     ON automod_rules (space_id, enabled);

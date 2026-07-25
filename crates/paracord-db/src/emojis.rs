@@ -43,7 +43,7 @@ pub async fn create_emoji(
     .bind(guild_id)
     .bind(name)
     .bind(creator_id)
-    .bind(i64::from(animated))
+    .bind(animated)
     .fetch_one(pool)
     .await?;
     Ok(row)

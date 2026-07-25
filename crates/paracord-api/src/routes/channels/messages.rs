@@ -698,7 +698,9 @@ pub async fn send_message(
         dispatch_channel_event(&state, &channel, "MESSAGE_CREATE", msg_json.clone()).await;
 
         if !automod.alerts.is_empty() {
-            dispatch_automod_alerts(&state, automod.alerts).await;
+            if let Some(gid) = guild_id {
+                dispatch_automod_alerts(&state, gid, automod.alerts).await;
+            }
         }
         // Applied after the triggering message is stored so the author's own
         // message posts as configured; the timeout starts from the next send.
@@ -863,6 +865,20 @@ pub async fn edit_message(
             ciphertext: payload.ciphertext,
             header: payload.header,
         });
+    // AutoMod must run on edits too. Filtering only `send_message` left a
+    // trivial bypass: post innocuous text, then edit it to the banned content —
+    // permanently, with no hit recorded.
+    let edit_guild_id = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|c| c.guild_id());
+    let edit_automod = if let Some(gid) = edit_guild_id {
+        run_automod(&state, gid, channel_id, auth.user_id, &body.content).await?
+    } else {
+        paracord_core::automod_enforce::AutomodVerdict::default()
+    };
+
     let updated = paracord_core::message::edit_message_with_options(
         &state.db,
         channel_id,
@@ -872,6 +888,15 @@ pub async fn edit_message(
         dm_e2ee,
     )
     .await?;
+
+    if let Some(gid) = edit_guild_id {
+        if !edit_automod.alerts.is_empty() {
+            dispatch_automod_alerts(&state, gid, edit_automod.alerts).await;
+        }
+        if !edit_automod.timeouts.is_empty() {
+            paracord_core::automod_enforce::apply_timeouts(&state.db, &edit_automod.timeouts).await;
+        }
+    }
 
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
@@ -1091,29 +1116,43 @@ async fn run_automod(
     .await;
 
     if let Some(reason) = verdict.blocked_reason.take() {
-        // The message is rejected, so nothing downstream will apply the
-        // queued timeouts — do it here before returning.
+        // The message is rejected, so nothing downstream runs the side effects —
+        // apply them here. Alerts matter *most* for blocked content: dropping
+        // them would notify moderators about everything except what was actually
+        // stopped.
         paracord_core::automod_enforce::apply_timeouts(&state.db, &verdict.timeouts).await;
+        dispatch_automod_alerts(state, guild_id, std::mem::take(&mut verdict.alerts)).await;
         return Err(ApiError::AutomodBlocked(reason));
     }
     Ok(verdict)
 }
 
-/// Post AutoMod moderator alerts. Best-effort: a failed alert never affects the
-/// message that triggered it.
+/// Post AutoMod moderator alerts.
+///
+/// Best-effort: a failed alert never affects the message that triggered it.
+///
+/// Three things here are deliberate and were security-relevant to get right:
+///
+/// * The target channel is re-checked against the rule's own space. The write
+///   path must not trust that the stored rule was validated, and a channel can
+///   move or be deleted after the rule was authored.
+/// * The alert is authored by the AutoMod system user, never by the member who
+///   tripped the rule. Attributing it to them forges authorship and would let
+///   them delete the alert about themselves.
+/// * The rule name and matched excerpt are operator- and offender-influenced
+///   text going into a message body, so they are stripped of markup and
+///   length-bounded rather than interpolated raw.
 async fn dispatch_automod_alerts(
     state: &AppState,
+    guild_id: i64,
     alerts: Vec<paracord_core::automod_enforce::AutomodAlert>,
 ) {
-    for alert in alerts {
-        let username = paracord_db::users::get_user_by_id(&state.db, alert.user_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|u| u.username)
-            .unwrap_or_else(|| alert.user_id.to_string());
+    if alerts.is_empty() {
+        return;
+    }
+    crate::routes::mod_log::ensure_mod_log_bot(state).await;
 
-        let body = paracord_core::automod_enforce::alert_message(&alert, &username);
+    for alert in alerts {
         let alert_channel =
             match paracord_db::channels::get_channel(&state.db, alert.channel_id).await {
                 Ok(Some(channel)) => channel,
@@ -1125,13 +1164,30 @@ async fn dispatch_automod_alerts(
                     continue;
                 }
             };
+        if alert_channel.guild_id() != Some(guild_id) {
+            tracing::warn!(
+                channel_id = alert.channel_id,
+                guild_id,
+                "automod: refusing to post an alert outside the rule's space"
+            );
+            continue;
+        }
+
+        let username = paracord_db::users::get_user_by_id(&state.db, alert.user_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|u| u.username)
+            .unwrap_or_else(|| alert.user_id.to_string());
+
+        let body = paracord_core::automod_enforce::alert_message(&alert, &username);
 
         let alert_id = paracord_util::snowflake::generate(1);
         match paracord_db::messages::create_message(
             &state.db,
             alert_id,
             alert.channel_id,
-            alert.user_id,
+            crate::routes::mod_log::MOD_LOG_BOT_ID,
             &body,
             0,
             None,
@@ -1139,7 +1195,8 @@ async fn dispatch_automod_alerts(
         .await
         {
             Ok(row) => {
-                let payload = message_to_json(state, &row, alert.user_id).await;
+                let payload =
+                    message_to_json(state, &row, crate::routes::mod_log::MOD_LOG_BOT_ID).await;
                 dispatch_channel_event(state, &alert_channel, "MESSAGE_CREATE", payload).await;
             }
             Err(err) => {

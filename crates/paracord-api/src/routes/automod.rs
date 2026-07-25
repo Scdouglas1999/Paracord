@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use paracord_core::automod::{RuleConfig, TriggerKind, MAX_RULES_PER_GUILD};
+use paracord_core::automod::{RuleAction, RuleConfig, TriggerKind, MAX_RULES_PER_GUILD};
 use paracord_core::AppState;
 use paracord_models::permissions::Permissions;
 use serde::Deserialize;
@@ -75,6 +75,42 @@ async fn ensure_manage_guild(
     let perms =
         paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
+    Ok(())
+}
+
+/// Every `alert_channel` target must live in the rule's own space.
+///
+/// `RuleConfig::validate` cannot do this — it has no database and no guild
+/// context, so it can only check the id parses. Without this gate a rule author
+/// could point an alert at *any* channel id on the instance, including another
+/// space's channel or a DM, and the dispatcher would happily post there.
+async fn ensure_alert_channels_in_guild(
+    state: &AppState,
+    guild_id: i64,
+    actions: &[RuleAction],
+) -> Result<(), ApiError> {
+    for action in actions {
+        let RuleAction::AlertChannel { channel_id } = action else {
+            continue;
+        };
+        let parsed: i64 = channel_id
+            .parse()
+            .map_err(|_| ApiError::BadRequest("Invalid alert channel".into()))?;
+        let channel = paracord_db::channels::get_channel(&state.db, parsed)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or_else(|| ApiError::BadRequest("Alert channel does not exist".into()))?;
+        if channel.guild_id() != Some(guild_id) {
+            return Err(ApiError::BadRequest(
+                "Alert channel must belong to this space".into(),
+            ));
+        }
+        if channel.channel_type != 0 {
+            return Err(ApiError::BadRequest(
+                "Alert channel must be a text channel".into(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -160,7 +196,8 @@ pub async fn create_rule(
 
     // Single validation gate — rejects unknown triggers, mismatched configs,
     // empty action lists, uncompilable patterns and out-of-range durations.
-    RuleConfig::parse(body.trigger_type, &trigger_metadata, &actions)?;
+    let config = RuleConfig::parse(body.trigger_type, &trigger_metadata, &actions)?;
+    ensure_alert_channels_in_guild(&state, guild_id, &config.actions).await?;
 
     let exempt_roles = encode_id_list(&body.exempt_role_ids, "role")?;
     let exempt_channels = encode_id_list(&body.exempt_channel_ids, "channel")?;
@@ -239,7 +276,8 @@ pub async fn update_rule(
         None => existing.actions.clone(),
     };
 
-    RuleConfig::parse(existing.trigger_type, &trigger_metadata, &actions)?;
+    let config = RuleConfig::parse(existing.trigger_type, &trigger_metadata, &actions)?;
+    ensure_alert_channels_in_guild(&state, guild_id, &config.actions).await?;
 
     let exempt_roles = match body.exempt_role_ids.as_ref() {
         Some(values) => encode_id_list(values, "role")?,

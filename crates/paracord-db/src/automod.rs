@@ -5,7 +5,7 @@
 //! matches, which actions run) live in `paracord-core::automod` — this file
 //! only persists and retrieves.
 
-use crate::{bool_from_any_row, datetime_from_db_text, DbError, DbPool};
+use crate::{bool_from_any_row, datetime_from_db_text, datetime_to_db_text, DbError, DbPool};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
@@ -73,7 +73,7 @@ pub async fn create_rule(
         "INSERT INTO automod_rules (
             id, space_id, name, creator_id, event_type, trigger_type,
             trigger_metadata, actions, enabled, exempt_role_ids, exempt_channel_ids, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING {RULE_COLUMNS}"
     ))
     .bind(id)
@@ -84,9 +84,10 @@ pub async fn create_rule(
     .bind(trigger_type)
     .bind(trigger_metadata)
     .bind(actions)
-    .bind(i64::from(enabled))
+    .bind(enabled)
     .bind(exempt_role_ids)
     .bind(exempt_channel_ids)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -142,7 +143,7 @@ pub async fn update_rule(
     let row = sqlx::query_as::<_, AutomodRuleRow>(&format!(
         "UPDATE automod_rules
             SET name = $2, trigger_metadata = $3, actions = $4, enabled = $5,
-                exempt_role_ids = $6, exempt_channel_ids = $7, updated_at = CURRENT_TIMESTAMP
+                exempt_role_ids = $6, exempt_channel_ids = $7, updated_at = $8
           WHERE id = $1
          RETURNING {RULE_COLUMNS}"
     ))
@@ -150,9 +151,10 @@ pub async fn update_rule(
     .bind(name)
     .bind(trigger_metadata)
     .bind(actions)
-    .bind(i64::from(enabled))
+    .bind(enabled)
     .bind(exempt_role_ids)
     .bind(exempt_channel_ids)
+    .bind(datetime_to_db_text(Utc::now()))
     .fetch_optional(pool)
     .await?;
     Ok(row)
@@ -233,8 +235,8 @@ pub async fn record_hit(
     sqlx::query(
         "INSERT INTO automod_hits (
             id, space_id, rule_id, rule_name, user_id, channel_id,
-            trigger_type, actions_taken, matched_excerpt, content_excerpt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            trigger_type, actions_taken, matched_excerpt, content_excerpt, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(id)
     .bind(guild_id)
@@ -246,6 +248,7 @@ pub async fn record_hit(
     .bind(actions_taken)
     .bind(matched_excerpt)
     .bind(content_excerpt)
+    .bind(datetime_to_db_text(Utc::now()))
     .execute(pool)
     .await?;
     Ok(())
@@ -283,7 +286,7 @@ pub async fn count_recent_hits_for_user(
     )
     .bind(guild_id)
     .bind(user_id)
-    .bind(since.format("%Y-%m-%d %H:%M:%S").to_string())
+    .bind(datetime_to_db_text(since))
     .fetch_one(pool)
     .await?;
     Ok(row.try_get("count")?)

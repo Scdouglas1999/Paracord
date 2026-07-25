@@ -18,9 +18,12 @@
 //! * **Fail open, never fail closed.** If AutoMod itself errors, the message
 //!   sends. A broken filter must not take chat down.
 
+use moka::sync::Cache;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
+use unicode_normalization::UnicodeNormalization;
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 use crate::error::CoreError;
 
@@ -30,6 +33,15 @@ const MAX_PATTERN_LEN: usize = 260;
 const MAX_REGEX_SIZE: usize = 64 * 1024;
 /// Maximum keywords in a single keyword rule.
 const MAX_KEYWORDS: usize = 200;
+/// Maximum patterns in a single regex rule.
+///
+/// Compiling a regex is far more expensive than matching one, so an uncapped
+/// pattern list is a CPU-exhaustion vector even though the matching engine
+/// itself is linear-time. Kept deliberately small: a rule needing more than
+/// this wants a keyword list.
+const MAX_PATTERNS: usize = 20;
+/// Bound on the process-wide compiled-pattern cache.
+const REGEX_CACHE_CAPACITY: u64 = 1024;
 /// Maximum rules a single guild may define.
 pub const MAX_RULES_PER_GUILD: i64 = 50;
 /// Excerpt length stored in hit history.
@@ -173,6 +185,15 @@ impl RuleConfig {
     fn validate(&self) -> Result<(), CoreError> {
         match &self.trigger {
             TriggerConfig::Keyword { keywords, .. } => {
+                // Cap the *raw* list first: `evaluate_trigger` iterates what was
+                // stored, not the filtered view, so checking only non-blank
+                // entries let a caller smuggle in an arbitrarily long list of
+                // blanks that still cost work on every message.
+                if keywords.len() > MAX_KEYWORDS {
+                    return Err(CoreError::BadRequest(format!(
+                        "A keyword rule can hold at most {MAX_KEYWORDS} keywords"
+                    )));
+                }
                 let cleaned: Vec<&String> =
                     keywords.iter().filter(|k| !k.trim().is_empty()).collect();
                 if cleaned.is_empty() {
@@ -187,12 +208,22 @@ impl RuleConfig {
                 }
             }
             TriggerConfig::Regex { patterns } => {
+                if patterns.len() > MAX_PATTERNS {
+                    return Err(CoreError::BadRequest(format!(
+                        "A pattern rule can hold at most {MAX_PATTERNS} patterns"
+                    )));
+                }
                 let cleaned: Vec<&String> =
                     patterns.iter().filter(|p| !p.trim().is_empty()).collect();
                 if cleaned.is_empty() {
                     return Err(CoreError::BadRequest(
                         "Add at least one pattern to this rule".into(),
                     ));
+                }
+                if cleaned.len() > MAX_PATTERNS {
+                    return Err(CoreError::BadRequest(format!(
+                        "A pattern rule can hold at most {MAX_PATTERNS} patterns"
+                    )));
                 }
                 for pattern in cleaned {
                     compile_pattern(pattern)?;
@@ -261,18 +292,35 @@ impl RuleConfig {
     }
 }
 
-/// Compile a user-supplied pattern under strict bounds.
-fn compile_pattern(pattern: &str) -> Result<Regex, CoreError> {
+/// Compiled-pattern cache.
+///
+/// Compilation, not matching, is the expensive half of a regex rule (~150 µs
+/// for a pattern that fits the size bound). Without this, every message send
+/// recompiled every pattern of every enabled rule, and the dry-run endpoint
+/// compiled each pattern twice per request — turning an authorized-but-cheap
+/// call into seconds of synchronous runtime-thread CPU.
+static REGEX_CACHE: LazyLock<Cache<String, Arc<Regex>>> =
+    LazyLock::new(|| Cache::builder().max_capacity(REGEX_CACHE_CAPACITY).build());
+
+/// Compile a user-supplied pattern under strict bounds, memoized.
+fn compile_pattern(pattern: &str) -> Result<Arc<Regex>, CoreError> {
     if pattern.len() > MAX_PATTERN_LEN {
         return Err(CoreError::BadRequest(format!(
             "Pattern is too long (max {MAX_PATTERN_LEN} characters)"
         )));
     }
-    RegexBuilder::new(pattern)
+    if let Some(cached) = REGEX_CACHE.get(pattern) {
+        return Ok(cached);
+    }
+    let compiled = RegexBuilder::new(pattern)
         .case_insensitive(true)
         .size_limit(MAX_REGEX_SIZE)
         .build()
-        .map_err(|e| CoreError::BadRequest(format!("Invalid pattern: {e}")))
+        .map(Arc::new)
+        .map_err(|e| CoreError::BadRequest(format!("Invalid pattern: {e}")))?;
+    // Only well-formed patterns are cached; a rejected one is cheap to re-reject.
+    REGEX_CACHE.insert(pattern.to_string(), Arc::clone(&compiled));
+    Ok(compiled)
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +345,10 @@ static INVITE_RE: LazyLock<Regex> = LazyLock::new(|| {
 static MENTION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<@!?(\d+)>").expect("static mention pattern is valid"));
 
+/// Role mentions (`<@&id>`). A mass-ping usually targets roles, not users.
+static ROLE_MENTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<@&(\d+)>").expect("static role mention pattern is valid"));
+
 fn excerpt(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.chars().count() <= EXCERPT_LEN {
@@ -306,30 +358,98 @@ fn excerpt(text: &str) -> String {
     format!("{cut}…")
 }
 
-/// Count distinct user mentions in a message body.
+/// Count distinct mention targets in a message body.
+///
+/// Counts users *and* roles, and treats `@everyone`/`@here` as an automatic
+/// flood. Counting only `<@id>` — as this did originally — meant the rule whose
+/// entire purpose is stopping mass pings scored zero for the two most common
+/// ways to mass ping.
+///
+/// Ids are normalized by parsing so `<@1>`, `<@01>` and `<@001>` are one target
+/// rather than three.
 pub fn count_mentions(content: &str) -> usize {
+    if mentions_everyone(content) {
+        return usize::MAX;
+    }
     let mut seen = std::collections::HashSet::new();
     for caps in MENTION_RE.captures_iter(content) {
-        if let Some(id) = caps.get(1) {
-            seen.insert(id.as_str().to_string());
+        if let Some(id) = caps.get(1).and_then(|m| m.as_str().parse::<u64>().ok()) {
+            seen.insert((false, id));
+        }
+    }
+    for caps in ROLE_MENTION_RE.captures_iter(content) {
+        if let Some(id) = caps.get(1).and_then(|m| m.as_str().parse::<u64>().ok()) {
+            seen.insert((true, id));
         }
     }
     seen.len()
 }
 
-fn matches_keyword(content: &str, keyword: &str, whole_word: bool) -> bool {
-    let haystack = content.to_lowercase();
-    let needle = keyword.trim().to_lowercase();
+/// Whether the body carries an `@everyone` / `@here` token on a word boundary.
+fn mentions_everyone(content: &str) -> bool {
+    for token in ["@everyone", "@here"] {
+        let mut start = 0usize;
+        while let Some(rel) = content[start..].find(token) {
+            let at = start + rel;
+            let before_ok = content[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+            let after_idx = at + token.len();
+            let after_ok = content[after_idx..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+            if before_ok && after_ok {
+                return true;
+            }
+            start = after_idx;
+            if start >= content.len() {
+                break;
+            }
+        }
+    }
+    false
+}
+
+/// Fold text into a comparable form before keyword matching.
+///
+/// Case-folding alone is not a filter: `bad\u{200b}word`, `ｂａｄｗｏｒｄ` and
+/// `𝐛𝐚𝐝𝐰𝐨𝐫𝐝` all read as the banned word to a human and all sailed past a
+/// naive `to_lowercase()` comparison. This applies NFKC — which maps fullwidth,
+/// mathematical and other compatibility forms onto their ASCII equivalents —
+/// then drops format characters (`Cf`: zero-width space, ZWNJ, word joiner,
+/// RTL override) and combining marks (`Mn`) that can be interleaved to break a
+/// word up invisibly.
+///
+/// Homoglyph substitution across scripts (Cyrillic `а` for Latin `a`) is *not*
+/// covered; that needs a confusables table and is documented as a limitation.
+fn fold_for_match(value: &str) -> String {
+    value
+        .nfkc()
+        .filter(|c| {
+            let cat = c.general_category();
+            !matches!(
+                cat,
+                GeneralCategory::Format | GeneralCategory::NonspacingMark
+            )
+        })
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// Does `haystack` (already folded) contain `needle` (already folded)?
+///
+/// `whole_word` requires the match not be flanked by alphanumerics.
+fn folded_contains(haystack: &str, needle: &str, whole_word: bool) -> bool {
     if needle.is_empty() {
         return false;
     }
     if !whole_word {
-        return haystack.contains(&needle);
+        return haystack.contains(needle);
     }
-    // Whole-word: the match must not be flanked by alphanumerics, so "ass"
-    // does not fire on "assignment" but does on "ass!" or "an ass".
     let mut start = 0usize;
-    while let Some(found) = haystack[start..].find(&needle) {
+    while let Some(found) = haystack[start..].find(needle) {
         let at = start + found;
         let before_ok = haystack[..at]
             .chars()
@@ -343,12 +463,28 @@ fn matches_keyword(content: &str, keyword: &str, whole_word: bool) -> bool {
         if before_ok && after_ok {
             return true;
         }
-        start = at + needle.len();
+        // Advance by ONE character, not by the needle length: skipping the whole
+        // needle misses an overlapping occurrence that would have passed the
+        // boundary test (keyword "a-a" in "xa-a-a").
+        let step = haystack[at..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
+        start = at + step;
         if start >= haystack.len() {
             break;
         }
     }
     false
+}
+
+fn matches_keyword(content: &str, keyword: &str, whole_word: bool) -> bool {
+    folded_contains(
+        &fold_for_match(content),
+        &fold_for_match(keyword),
+        whole_word,
+    )
 }
 
 fn host_of(url: &str) -> Option<String> {
@@ -403,6 +539,11 @@ pub fn evaluate_trigger(
         }
 
         TriggerConfig::MentionFlood { max_mentions } => {
+            if mentions_everyone(content) {
+                return Some(TriggerMatch {
+                    excerpt: "@everyone / @here mention".to_string(),
+                });
+            }
             let count = count_mentions(content);
             if count > *max_mentions as usize {
                 Some(TriggerMatch {
@@ -494,6 +635,96 @@ mod tests {
         let t = keyword(&["spam"], false);
         assert!(evaluate_trigger(&t, "this is SPAMmy", None).is_some());
         assert!(evaluate_trigger(&t, "nothing here", None).is_none());
+    }
+
+    #[test]
+    fn unicode_evasion_does_not_defeat_keyword_matching() {
+        // Every one of these read as "badword" to a human and every one of them
+        // slipped through a plain to_lowercase() comparison.
+        let t = keyword(&["badword"], false);
+        for evasion in [
+            "bad\u{200b}word", // zero-width space
+            "bad\u{200c}word", // ZWNJ
+            "bad\u{00ad}word", // soft hyphen
+            "bad\u{2060}word", // word joiner
+            "bad\u{202e}word", // RTL override
+            "ｂａｄｗｏｒｄ",  // fullwidth
+            "𝐛𝐚𝐝𝐰𝐨𝐫𝐝",         // math bold
+            "BADWORD",
+            "BaDwOrD",
+        ] {
+            assert!(
+                evaluate_trigger(&t, evasion, None).is_some(),
+                "evasion not caught: {evasion:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn folding_does_not_create_false_positives() {
+        let t = keyword(&["badword"], false);
+        assert!(evaluate_trigger(&t, "a perfectly fine message", None).is_none());
+        assert!(
+            evaluate_trigger(&t, "badwordy", None).is_some(),
+            "substring still matches"
+        );
+        let whole = keyword(&["badword"], true);
+        assert!(
+            evaluate_trigger(&whole, "badwordy", None).is_none(),
+            "whole-word must still reject an embedded hit"
+        );
+    }
+
+    #[test]
+    fn whole_word_finds_overlapping_occurrences() {
+        // The scan used to advance by the needle length, so the standalone
+        // occurrence at the end was skipped after the embedded one failed.
+        let t = keyword(&["a-a"], true);
+        assert!(evaluate_trigger(&t, "xa-a-a", None).is_some());
+    }
+
+    #[test]
+    fn mention_flood_counts_roles_and_everyone() {
+        let t = TriggerConfig::MentionFlood { max_mentions: 2 };
+        // Role mentions were previously invisible to the counter.
+        assert!(evaluate_trigger(&t, "<@&1> <@&2> <@&3>", None).is_some());
+        // @everyone is the canonical mass ping and scored zero before.
+        assert!(evaluate_trigger(&t, "hey @everyone look", None).is_some());
+        assert!(evaluate_trigger(&t, "hey @here look", None).is_some());
+        // Not a mention when embedded in a word.
+        assert!(evaluate_trigger(&t, "email me at foo@herefoo", None).is_none());
+        // Padded ids are one target, not three.
+        assert!(evaluate_trigger(&t, "<@1> <@01> <@001>", None).is_none());
+    }
+
+    #[test]
+    fn keyword_cap_counts_the_raw_list() {
+        // Blank entries still cost work at evaluation time, so they must count.
+        let mut keywords: Vec<String> = vec![" ".into(); 500];
+        keywords.push("real".into());
+        let meta = serde_json::to_string(&TriggerConfig::Keyword {
+            keywords,
+            whole_word: false,
+        })
+        .unwrap();
+        assert!(RuleConfig::parse(
+            TriggerKind::Keyword.as_i16(),
+            &meta,
+            r#"[{"kind":"block_message"}]"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn pattern_count_is_capped() {
+        let patterns: Vec<String> = (0..MAX_PATTERNS + 1).map(|i| format!("a{i}")).collect();
+        let meta = serde_json::to_string(&TriggerConfig::Regex { patterns }).unwrap();
+        assert!(RuleConfig::parse(
+            TriggerKind::Regex.as_i16(),
+            &meta,
+            r#"[{"kind":"block_message"}]"#
+        )
+        .is_err());
     }
 
     #[test]

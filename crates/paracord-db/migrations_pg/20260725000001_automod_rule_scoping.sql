@@ -6,10 +6,20 @@
 --
 -- Note: `20260211000001_guilds_to_spaces` rebuilt this table with `space_id`,
 -- so the scoping column here is `space_id`, not `guild_id`.
+--
+-- Timestamps are TEXT, matching `automod_rules.created_at` and the rest of this
+-- schema. They must NOT be native TIMESTAMP: the dual-engine pool reads through
+-- the sqlx `Any` driver, which decodes only Bool/Int/Float/Bytea/Text/Varchar.
+-- A single native temporal column in the projection fails the whole row, which
+-- would make every AutoMod read error on PostgreSQL.
 
 ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS exempt_role_ids TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS exempt_channel_ids TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+
+-- Backfill: a pre-existing rule's correct updated_at is its created_at, not the
+-- time this migration happened to run.
+UPDATE automod_rules SET updated_at = created_at WHERE updated_at = '';
 
 CREATE INDEX IF NOT EXISTS idx_automod_rules_space_enabled
     ON automod_rules (space_id, enabled);
@@ -27,7 +37,7 @@ CREATE TABLE IF NOT EXISTS automod_hits (
     actions_taken   TEXT NOT NULL DEFAULT '[]',
     matched_excerpt TEXT,
     content_excerpt TEXT,
-    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at      TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_automod_hits_space_created

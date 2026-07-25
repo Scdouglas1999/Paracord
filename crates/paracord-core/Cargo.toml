@@ -30,6 +30,8 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 moka = { workspace = true }
 regex = { workspace = true }
+unicode-normalization = { workspace = true }
+unicode-properties = { workspace = true }
 dashmap = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 flate2 = { version = "1", optional = true }

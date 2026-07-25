@@ -149,6 +149,25 @@ A blocked message returns **403** with code `AUTOMOD_BLOCKED` and the operator's
 - **23 new automated tests** — 13 covering the AutoMod rule engine (whole-word boundaries, allowlisted domains, distinct-mention counting, validation rejections), 10 covering the health advice engine (including that a loopback dev server is not flagged for plaintext, and that PostgreSQL deployments skip SQLite advice), plus client regression tests for both bugs above.
 - AutoMod and the health endpoint were additionally exercised end-to-end against a running server: rule creation, blocking, whole-word near-misses, admin bypass, hit recording, link allowlists, dry runs, permission enforcement, channel alerts, and member timeouts.
 
+## Post-release audit — PostgreSQL is not usable in v2.0.0
+
+A full security and code-quality audit run immediately after this release found
+that **PostgreSQL deployments cannot start**. `migrations_pg/20260708000001`
+applies JSONB operators (`->>`, `?`) to `user_settings.notifications`, which is
+declared `TEXT`, so migrations abort with `operator does not exist: text ->> unknown`
+and startup fails. The fix is in the working tree but is not part of this tag.
+
+Further Postgres-only defects were confirmed behind that one: seven federation
+column defaults overflow `int4`, a `MAX(a, b)` call uses SQLite scalar semantics
+where Postgres has only the aggregate, and roughly 21 tables declare native
+`TIMESTAMP` columns that the sqlx `Any` driver cannot decode.
+
+**Treat SQLite as the only supported engine for v2.0.0.** Disregard the
+PostgreSQL recommendation elsewhere in these notes until a follow-up release
+lands the fixes. Two SQLite *upgrade-path* migrations were also found to be
+destructive on populated databases — take a backup before upgrading, which the
+upgrade section already advises.
+
 ## Known issues
 
 - Two VP9 decode unit tests (`native_media::video_pipeline`) fail on this Linux/libvpx build with `NeedKeyframe`. **This is pre-existing and not introduced by this release** — it was reproduced identically on a clean `v1.0.0` checkout. Screen share and video calls are unaffected in normal operation, but the decode path should be validated on your target distribution before publishing Linux artifacts.

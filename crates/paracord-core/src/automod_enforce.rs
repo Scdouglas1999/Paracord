@@ -223,8 +223,29 @@ async fn evaluate_inner(
 
 /// Apply queued timeouts. Best effort: a failure is logged, never fatal to the
 /// message that triggered it.
+///
+/// Only the longest timeout per member is applied. `set_member_timeout` writes
+/// an absolute instant, so applying several in sequence would let the *last*
+/// rule win — and since rules evaluate oldest-first, a message tripping both a
+/// 28-day rule and a newer 60-second rule would end up timed out for a minute.
 pub async fn apply_timeouts(pool: &DbPool, timeouts: &[TimeoutRequest]) {
+    let mut longest: std::collections::HashMap<(i64, i64), u32> = std::collections::HashMap::new();
     for request in timeouts {
+        let slot = longest
+            .entry((request.user_id, request.guild_id))
+            .or_insert(0);
+        *slot = (*slot).max(request.duration_seconds);
+    }
+    let timeouts: Vec<TimeoutRequest> = longest
+        .into_iter()
+        .map(|((user_id, guild_id), duration_seconds)| TimeoutRequest {
+            user_id,
+            guild_id,
+            duration_seconds,
+        })
+        .collect();
+
+    for request in &timeouts {
         let until = Utc::now() + chrono::Duration::seconds(i64::from(request.duration_seconds));
         if let Err(err) = paracord_db::members::set_member_timeout(
             pool,
@@ -244,11 +265,46 @@ pub async fn apply_timeouts(pool: &DbPool, timeouts: &[TimeoutRequest]) {
     }
 }
 
+/// Longest span of operator/offender text allowed into an alert body.
+const ALERT_FIELD_LEN: usize = 120;
+
+/// Flatten untrusted text for inclusion in a message body.
+///
+/// The rule name is operator-authored and the matched excerpt is *offender*-
+/// authored; both land in a real message. Strip characters that would let
+/// either forge structure — markdown emphasis, links, mentions, code fences,
+/// and newlines — and bound the length so an alert cannot exceed the message
+/// size invariant the normal send path enforces.
+fn sanitize_alert_field(value: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .map(|c| {
+            if c.is_control() {
+                ' '
+            } else {
+                match c {
+                    '*' | '_' | '`' | '~' | '|' | '<' | '>' | '[' | ']' | '(' | ')' | '@' | '#'
+                    | '\\' => ' ',
+                    other => other,
+                }
+            }
+        })
+        .collect();
+    let trimmed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trimmed.chars().count() <= ALERT_FIELD_LEN {
+        return trimmed;
+    }
+    let cut: String = trimmed.chars().take(ALERT_FIELD_LEN).collect();
+    format!("{cut}…")
+}
+
 /// Build the moderator-facing alert body for a triggered rule.
 pub fn alert_message(alert: &AutomodAlert, username: &str) -> String {
     format!(
         "**AutoMod** · rule “{}” triggered by {} — {}",
-        alert.rule_name, username, alert.matched_excerpt
+        sanitize_alert_field(&alert.rule_name),
+        sanitize_alert_field(username),
+        sanitize_alert_field(&alert.matched_excerpt),
     )
 }
 
