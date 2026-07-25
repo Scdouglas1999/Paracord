@@ -212,6 +212,29 @@ pub async fn create_message_with_options(
         permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
         permissions::require_permission(perms, Permissions::SEND_MESSAGES)?;
 
+        // A locked thread has to actually reject messages. Nothing read
+        // `thread_metadata` on the send path, so locking was purely cosmetic:
+        // the moderator saw the padlock, the members kept posting, and the
+        // audit log recorded a moderation action that did nothing. Moderators
+        // keep posting so they can close a thread out.
+        if channel.channel_type == permissions::CHANNEL_TYPE_THREAD {
+            let (archived, locked) = channel.thread_state();
+            let can_manage_thread = perms.contains(Permissions::MANAGE_MESSAGES)
+                || perms.contains(Permissions::MANAGE_CHANNELS);
+            if locked && !can_manage_thread {
+                return Err(CoreError::BadRequest(
+                    "This thread is locked and cannot receive new messages".into(),
+                ));
+            }
+            // Archiving is inactivity, not moderation: posting revives the
+            // thread, as it does everywhere else. Clear the flag so it reflects
+            // reality instead of staying set under an active conversation.
+            if archived {
+                paracord_db::channels::update_thread(pool, channel_id, None, Some(false), None)
+                    .await?;
+            }
+        }
+
         // Enforce slowmode for non-admins, including optional per-role exemptions and adaptive
         // slowmode settings.
         let now = chrono::Utc::now();

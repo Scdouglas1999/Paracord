@@ -1610,3 +1610,271 @@ async fn slowmode_rate_limits_a_non_privileged_member() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// A locked thread has to actually reject messages, and the member it was
+/// locked against must not be able to unlock it.
+///
+/// Both halves were broken at once: nothing on the send path read
+/// `thread_metadata`, so locking was cosmetic; and `locked` counted as an owner
+/// right, so the thread's author could `PATCH {"locked": false}` and undo a
+/// moderator. A lock that the person it targets can lift is not a lock.
+#[tokio::test]
+async fn locking_a_thread_stops_its_members_and_survives_its_owner() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Thread Lock Guild").await?;
+    let gid = guild_id_i64(&guild_id)?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "lockable").await?;
+    let (member_token, _member_id) = ctx.add_member("threadlocker", gid).await?;
+
+    // The member opens a thread, so they own it.
+    let (status, thread) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/threads"),
+            Some(json!({ "name": "members thread" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "create thread: {thread}");
+    let thread_id = thread["id"]
+        .as_str()
+        .context("thread id should be a string")?
+        .to_string();
+    let thread_path = format!("/api/v1/channels/{channel_id}/threads/{thread_id}");
+    let post_path = format!("/api/v1/channels/{thread_id}/messages");
+
+    // Before the lock, the owner can post in their own thread.
+    let (status, _) = ctx
+        .request_json_as(
+            Method::POST,
+            &post_path,
+            Some(json!({ "content": "before the lock" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // A moderator locks it.
+    let (status, locked) = ctx
+        .request_json(Method::PATCH, &thread_path, Some(json!({ "locked": true })))
+        .await?;
+    assert_eq!(status, StatusCode::OK, "moderator lock: {locked}");
+    assert_eq!(locked["thread_metadata"]["locked"], json!(true));
+
+    // The lock now bites.
+    let (status, blocked) = ctx
+        .request_json_as(
+            Method::POST,
+            &post_path,
+            Some(json!({ "content": "after the lock" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a locked thread must reject member messages: {blocked}"
+    );
+
+    // ...and its owner cannot lift it, rename around it, or unarchive it back
+    // into circulation.
+    for body in [
+        json!({ "locked": false }),
+        json!({ "name": "renamed while locked" }),
+        json!({ "archived": false }),
+    ] {
+        let (status, payload) = ctx
+            .request_json_as(
+                Method::PATCH,
+                &thread_path,
+                Some(body.clone()),
+                &member_token,
+            )
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "thread owner must not {body} a locked thread: {payload}"
+        );
+    }
+
+    // The moderator can still post, to close the conversation out.
+    let (status, _) = ctx
+        .request_json(
+            Method::POST,
+            &post_path,
+            Some(json!({ "content": "locking this, see #rules" })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a moderator must still be able to post in a thread they locked"
+    );
+
+    // Unlocking restores the member.
+    let (status, _) = ctx
+        .request_json(
+            Method::PATCH,
+            &thread_path,
+            Some(json!({ "locked": false })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = ctx
+        .request_json_as(
+            Method::POST,
+            &post_path,
+            Some(json!({ "content": "after the unlock" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED);
+
+    Ok(())
+}
+
+/// Archiving is inactivity, not moderation: a member posting revives the
+/// thread. The flag has to actually clear, or it sits set under an active
+/// conversation and the archived list stays wrong.
+#[tokio::test]
+async fn posting_in_an_archived_thread_unarchives_it() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Thread Archive Guild").await?;
+    let gid = guild_id_i64(&guild_id)?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "archivable").await?;
+    let (member_token, _member_id) = ctx.add_member("threadarchiver", gid).await?;
+
+    let (status, thread) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/threads"),
+            Some(json!({ "name": "quiet thread" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "create thread: {thread}");
+    let thread_id = thread["id"]
+        .as_str()
+        .context("thread id should be a string")?
+        .to_string();
+    let thread_path = format!("/api/v1/channels/{channel_id}/threads/{thread_id}");
+
+    let (status, archived) = ctx
+        .request_json(
+            Method::PATCH,
+            &thread_path,
+            Some(json!({ "archived": true })),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "archive: {archived}");
+    assert_eq!(archived["thread_metadata"]["archived"], json!(true));
+
+    let (status, _) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{thread_id}/messages"),
+            Some(json!({ "content": "reviving this" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let channel = paracord_db::channels::get_channel(&ctx.db, thread_id.parse::<i64>()?)
+        .await?
+        .context("thread should still exist")?;
+    let (still_archived, _locked) = channel.thread_state();
+    assert!(
+        !still_archived,
+        "posting must clear the archived flag, not leave it set under a live thread"
+    );
+
+    Ok(())
+}
+
+/// A timeout has to cover every way a member can put text in front of the
+/// space. Only `POST /messages` checked it, so a timed-out member could still
+/// open a thread (naming it, and posting a starter message) and rename existing
+/// ones — talking straight through the timeout.
+#[tokio::test]
+async fn a_timeout_covers_threads_not_just_messages() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let guild_id = create_guild(&ctx, "Thread Timeout Guild").await?;
+    let gid = guild_id_i64(&guild_id)?;
+    let channel_id = create_text_channel(&ctx, &guild_id, "timeout-parent").await?;
+    let (member_token, member_id) = ctx.add_member("timedoutmember", gid).await?;
+
+    // A thread they own from before the timeout.
+    let (status, thread) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/threads"),
+            Some(json!({ "name": "before timeout" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "create thread: {thread}");
+    let thread_id = thread["id"]
+        .as_str()
+        .context("thread id should be a string")?
+        .to_string();
+
+    let until = chrono::Utc::now() + chrono::Duration::hours(1);
+    paracord_db::members::set_member_timeout(&ctx.db, member_id, gid, Some(until)).await?;
+
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            Some(json!({ "content": "muted" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the existing send gate still holds: {payload}"
+    );
+
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/threads"),
+            Some(json!({ "name": "talking anyway" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a timed-out member must not be able to open a thread: {payload}"
+    );
+
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::PATCH,
+            &format!("/api/v1/channels/{channel_id}/threads/{thread_id}"),
+            Some(json!({ "name": "talking via the title" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a timed-out member must not be able to rename a thread: {payload}"
+    );
+
+    // Lifting the timeout restores both.
+    paracord_db::members::set_member_timeout(&ctx.db, member_id, gid, None).await?;
+    let (status, payload) = ctx
+        .request_json_as(
+            Method::POST,
+            &format!("/api/v1/channels/{channel_id}/threads"),
+            Some(json!({ "name": "after the timeout" })),
+            &member_token,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "timeout lifted: {payload}");
+
+    Ok(())
+}

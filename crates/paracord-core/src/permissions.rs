@@ -298,6 +298,33 @@ pub async fn ensure_guild_member(
     Ok(())
 }
 
+/// Reject the action if `user_id` is currently timed out in `guild_id`.
+///
+/// A timeout has to cover every way a member can put text in front of the
+/// space, not just `POST /messages`. Creating a thread names it and posts a
+/// starter message, and renaming one rewrites a title everyone sees, so both
+/// were a way to keep talking straight through a timeout.
+///
+/// Deliberately *not* covered: deleting one's own messages. A timeout silences
+/// a member, it does not freeze their existing posts (see
+/// `timed_out_author_cannot_edit_but_can_delete`).
+pub async fn ensure_not_timed_out(
+    pool: &DbPool,
+    guild_id: i64,
+    user_id: i64,
+) -> Result<(), CoreError> {
+    if let Some(member) = paracord_db::members::get_member(pool, user_id, guild_id).await? {
+        if let Some(until) = member.communication_disabled_until {
+            if until > chrono::Utc::now() {
+                return Err(CoreError::BadRequest(
+                    "You are timed out and cannot do that".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Apply a channel's permission overwrites on top of a member's base
 /// permissions, following Discord precedence:
 /// base -> @everyone overwrite -> combined role overwrites -> member overwrite.

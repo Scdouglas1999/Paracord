@@ -64,6 +64,10 @@ pub async fn create_thread(
     let guild_id = parent_channel
         .guild_id()
         .ok_or(ApiError::BadRequest("Cannot create threads in DMs".into()))?;
+    // Creating a thread names it and posts into the space, so a timed-out
+    // member must not be able to do it. Only `POST /messages` checked the
+    // timeout, leaving this as a way to keep talking through one.
+    paracord_core::permissions::ensure_not_timed_out(&state.db, guild_id, auth.user_id).await?;
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -282,19 +286,26 @@ pub async fn update_thread(
     )
     .await?;
 
-    let is_thread_owner = thread.owner_id == Some(auth.user_id);
-
-    if (body.archived.is_some() || body.locked.is_some()) && !is_thread_owner {
-        ensure_channel_permissions(
-            &state,
-            &parent_channel,
-            auth.user_id,
-            &[Permissions::MANAGE_CHANNELS],
-        )
-        .await?;
+    if let Some(guild_id) = parent_channel.guild_id() {
+        // Renaming a thread rewrites a title the whole space sees, so it is
+        // subject to the timeout like any other way of talking.
+        paracord_core::permissions::ensure_not_timed_out(&state.db, guild_id, auth.user_id).await?;
     }
 
-    if body.name.is_some() && !is_thread_owner {
+    let is_thread_owner = thread.owner_id == Some(auth.user_id);
+    let (_, currently_locked) = thread.thread_state();
+
+    // Locking is a moderator action, so only a moderator may undo it. Owner
+    // rights previously covered `locked` too, which meant the member a thread
+    // was locked against could simply PATCH `{"locked": false}` and carry on —
+    // the lock could not survive the person it was aimed at. For the same
+    // reason a locked thread is frozen outright: its owner cannot rename it or
+    // unarchive it back into circulation either.
+    let needs_manage = body.locked.is_some()
+        || currently_locked
+        || (!is_thread_owner && (body.archived.is_some() || body.name.is_some()));
+
+    if needs_manage {
         ensure_channel_permissions(
             &state,
             &parent_channel,

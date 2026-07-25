@@ -88,6 +88,29 @@ impl ChannelRow {
     pub fn guild_id(&self) -> Option<i64> {
         self.space_id
     }
+
+    /// `(archived, locked)` as recorded in `thread_metadata`.
+    ///
+    /// Both default to false for non-threads and for a thread whose metadata is
+    /// missing or unparseable — a thread nobody can prove is locked is treated
+    /// as open, matching how it renders.
+    pub fn thread_state(&self) -> (bool, bool) {
+        let Some(meta) = self
+            .thread_metadata
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        else {
+            return (false, false);
+        };
+        (
+            meta.get("archived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            meta.get("locked")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        )
+    }
 }
 
 /// Core implementation using newtype IDs.
