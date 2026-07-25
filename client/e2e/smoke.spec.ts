@@ -329,7 +329,7 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
     { path: '/app', text: /New message/i },
     { path: '/app/friends', text: /Friends/i },
     { path: '/app/dms', text: /Pick up a conversation/i },
-    { path: '/app/discovery', text: /Discover Servers/i },
+    { path: '/app/discovery', text: /Discover spaces/i },
     { path: '/app/templates', text: /Template Gallery/i },
     { path: '/app/developers', text: /Developer Portal/i },
   ];
@@ -411,10 +411,10 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
   const textChannelsRegion = page.getByRole('region', { name: 'Text channels' });
   await expect(textChannelsRegion).toBeVisible();
 
-  // Server settings now open from the guild-home header (MANAGE_GUILD-gated),
+  // Space settings now open from the guild-home header (MANAGE_GUILD-gated),
   // not the deleted channel-column dropdown.
-  await page.getByRole('button', { name: 'Server settings' }).click();
-  const serverSettingsDialog = page.getByRole('dialog', { name: 'Server settings' });
+  await page.getByRole('button', { name: 'Space settings' }).click();
+  const serverSettingsDialog = page.getByRole('dialog', { name: 'Space settings' });
   await expect(serverSettingsDialog).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(serverSettingsDialog).toBeHidden();
@@ -431,8 +431,8 @@ test('login -> guild -> message -> voice smoke flow', async ({ page }) => {
   // The unified sidebar merges every connected server's guilds into "Spaces";
   // the guild is reachable there as a roving-tabindex option row.
   // The expanded sidebar is one roving listbox with grouped options; "Spaces" is
-  // the "Joined servers" group inside it (single-listbox composite, not four).
-  const spacesList = page.getByRole('group', { name: 'Joined servers' });
+  // the "Joined spaces" group inside it (single-listbox composite, not four).
+  const spacesList = page.getByRole('group', { name: 'Joined spaces' });
   await expect(spacesList.getByRole('option', { name: /QA Guild/i })).toBeVisible();
 
   await page.goto(`/app/guilds/${guildId}/channels/999999999`);

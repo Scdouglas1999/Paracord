@@ -46,7 +46,7 @@ const SHELL_STEPS: TourStepDef[] = [
   {
     id: 'sidebar',
     selector: 'aside[aria-label="Navigation"]',
-    body: 'Everything that needs you, in one place: mentions, DMs, and your servers, ranked.',
+    body: 'Everything that needs you, in one place: mentions, DMs, and your spaces, ranked.',
     side: 'right',
   },
   {

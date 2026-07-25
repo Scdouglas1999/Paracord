@@ -11,7 +11,7 @@ import type { ConversationEntry } from '../../../lib/attention/conversationModel
  *
  * Zero-state comfort (design-spec Empty-state recipe; kill-list #4/#11): a left-aligned
  * icon-in-well, one warm specific line, and two quiet inline actions (Add a friend /
- * Explore servers) so a brand-new account can still reach people. When non-empty, a
+ * Explore spaces) so a brand-new account can still reach people. When non-empty, a
  * the list is bounded by the sidebar and can expand in place, so Spaces remains visible
  * by default without pretending a DM-only route contains every conversation kind.
  */
@@ -76,7 +76,7 @@ export function RecentList({
           <div className="mt-1 flex items-center gap-3">
             <InlineAction label="Add a friend" onClick={onAddFriend} />
             <span aria-hidden className="text-meta text-text-muted">·</span>
-            <InlineAction label="Explore servers" onClick={onExploreServers} />
+            <InlineAction label="Explore spaces" onClick={onExploreServers} />
           </div>
         </div>
       ) : (

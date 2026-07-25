@@ -25,7 +25,10 @@ export function HomeJumpInRow({ actions, quiet = true }: HomeJumpInRowProps) {
       <HomeSectionHeader
         label={quiet ? 'Start something' : 'Jump in'}
       />
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Four across only from xl: at lg the sidebar leaves ~150px per tile,
+          which clipped the labels themselves ("Explore spaces", "Create a
+          space"). Two across below that keeps every tile readable. */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {actions.map((action) => (
           <button
             key={action.label}
@@ -40,7 +43,11 @@ export function HomeJumpInRow({ actions, quiet = true }: HomeJumpInRowProps) {
               <span className="block truncate text-label font-semibold text-text-primary">
                 {action.label}
               </span>
-              <span className="mt-0.5 block truncate text-meta text-text-muted">
+              {/* Wraps rather than truncates: at four across, the text column is
+                  ~124px, which silently cut "Find public communities" down to
+                  "Find public commu…". Grid items stretch, so the tiles in a row
+                  stay the same height when one hint takes two lines. */}
+              <span className="mt-0.5 block text-meta text-text-muted line-clamp-2">
                 {action.hint}
               </span>
             </span>

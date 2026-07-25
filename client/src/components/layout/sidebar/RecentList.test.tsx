@@ -99,7 +99,7 @@ describe('RecentList', () => {
     // Two quiet inline actions wired to the friends / discovery destinations.
     fireEvent.click(screen.getByRole('button', { name: 'Add a friend' }));
     expect(onAddFriend).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Explore servers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Explore spaces' }));
     expect(onExploreServers).toHaveBeenCalledTimes(1);
   });
 
