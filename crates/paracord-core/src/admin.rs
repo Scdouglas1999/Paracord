@@ -172,7 +172,9 @@ pub struct ServerStats {
 }
 
 pub async fn get_server_stats(pool: &DbPool) -> Result<ServerStats, CoreError> {
-    let users = paracord_db::users::count_users(pool).await?;
+    // Humans only: the seeded Welcome Bot / Auto-Moderator are not "registered
+    // users" from an operator's point of view.
+    let users = paracord_db::users::count_human_users(pool).await?;
     let guilds = paracord_db::guilds::count_guilds(pool).await?;
     let messages = paracord_db::messages::count_messages(pool).await?;
     let channels = paracord_db::channels::count_channels(pool).await?;

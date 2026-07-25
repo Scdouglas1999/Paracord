@@ -505,6 +505,22 @@ pub async fn count_users(pool: &DbPool) -> Result<i64, DbError> {
     Ok(row.0)
 }
 
+/// Count real accounts, excluding bots and the internal system users.
+///
+/// `count_users` includes every row, which is what the admin user *list* wants
+/// (its total must match what it renders). The operator health panel does not:
+/// the Welcome Bot and Auto-Moderator are seeded automatically, so a brand new
+/// instance with nobody signed up reported "2 registered users".
+pub async fn count_human_users(pool: &DbPool) -> Result<i64, DbError> {
+    let row: (i64,) = sqlx::query_as(&format!(
+        "SELECT COUNT(*) FROM users WHERE (flags & {bot}) = 0 AND id > 0",
+        bot = USER_FLAG_BOT
+    ))
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
 /// Core implementation using newtype ID.
 pub async fn update_user_flags_typed(
     pool: &DbPool,
@@ -1629,6 +1645,32 @@ mod tests {
         create_user_typed(&pool, UserId::new(61), "u2", 1, "u2@example.com", "h")
             .await
             .unwrap();
+        assert_eq!(count_users(&pool).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn count_human_users_excludes_bots_and_system_accounts() {
+        let pool = test_pool().await;
+        // A seeded system bot (negative id, BOT flag) must not read as a
+        // registered user on the operator health panel.
+        create_user(
+            &pool,
+            -2,
+            "Auto-Moderator",
+            0,
+            "automod@paracord.internal",
+            "",
+        )
+        .await
+        .unwrap();
+        update_user_flags(&pool, -2, USER_FLAG_BOT).await.unwrap();
+        assert_eq!(count_human_users(&pool).await.unwrap(), 0);
+
+        create_user(&pool, 1, "human", 0, "h@example.com", "hash")
+            .await
+            .unwrap();
+        assert_eq!(count_human_users(&pool).await.unwrap(), 1);
+        // The raw count still sees everything, which is what the admin list wants.
         assert_eq!(count_users(&pool).await.unwrap(), 2);
     }
 

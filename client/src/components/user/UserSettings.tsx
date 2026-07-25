@@ -401,8 +401,20 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   };
 
   const handleThemeChange = (newTheme: 'dark' | 'light' | 'amoled' | 'high-contrast') => {
+    const previous = theme;
     setTheme(newTheme);
     setThemeUI(newTheme);
+    // Persist immediately. The theme applies the instant it is clicked, which
+    // reads as "saved" — but it used to live only in local state, so closing
+    // settings or reloading silently reverted it. `PATCH /users/@me/settings`
+    // is a partial update (absent fields keep their stored value), so sending
+    // just the theme is safe.
+    void updateSettings({ theme: newTheme }).catch((err: unknown) => {
+      // Roll the UI back so what is shown matches what is stored.
+      setTheme(previous);
+      setThemeUI(previous);
+      toast.error(`Could not save theme: ${extractApiError(err)}`);
+    });
   };
 
   const mergedNotifications = useMemo<Record<string, unknown>>(
