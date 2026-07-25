@@ -261,12 +261,40 @@ pub async fn update_channel(
     .await
 }
 
-/// Core implementation using newtype ID.
+/// Ids of every channel parented to `parent_id` (threads and forum posts).
+///
+/// Used to extend permission-cache invalidation to children, which inherit
+/// their permissions from this channel.
+pub async fn get_child_channel_ids(pool: &DbPool, parent_id: i64) -> Result<Vec<i64>, DbError> {
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT id FROM channels WHERE parent_id = $1")
+        .bind(parent_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// Delete a channel and everything parented to it. Core implementation using
+/// newtype ID.
+///
+/// `channels.parent_id` references `channels(id)` with **no** `ON DELETE`
+/// action on either engine, so deleting a channel that has threads or forum
+/// posts under it violates the constraint and the request fails — the API
+/// returned a bare 500 and both rows survived. Children are removed first, in a
+/// transaction, so the delete is all-or-nothing. Their messages, overwrites and
+/// read states cascade off the child rows as usual.
 pub async fn delete_channel_typed(pool: &DbPool, id: ChannelId) -> Result<(), DbError> {
+    let mut tx = pool.begin().await?;
+    // One level is sufficient: threads and forum posts cannot themselves be
+    // parents (thread creation rejects a thread parent).
+    sqlx::query("DELETE FROM channels WHERE parent_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM channels WHERE id = $1")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(())
 }
 

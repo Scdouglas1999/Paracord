@@ -865,14 +865,42 @@ pub async fn edit_message(
             ciphertext: payload.ciphertext,
             header: payload.header,
         });
+    // Authorize BEFORE evaluating AutoMod.
+    //
+    // `run_automod` is not a pure predicate — it records hit rows and can post
+    // moderator alerts. Running it ahead of the edit's own authorization let a
+    // user who was not even a member of the space drive those side effects:
+    // PATCHing a nonexistent message id in a private channel returned 403, but
+    // only *after* AutoMod had already written an alert containing
+    // attacker-chosen text into that channel. `edit_message_with_options` does
+    // the real authorization, but it runs too late to gate the side effects.
+    let edit_channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let edit_guild_id = edit_channel.guild_id();
+    if edit_guild_id.is_some() {
+        ensure_channel_permissions(
+            &state,
+            &edit_channel,
+            auth.user_id,
+            &[Permissions::VIEW_CHANNEL],
+        )
+        .await?;
+        // The target must be a real message in this channel; a bogus id must not
+        // reach the evaluator.
+        let existing = paracord_db::messages::get_message(&state.db, message_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?;
+        if existing.channel_id != channel_id {
+            return Err(ApiError::NotFound);
+        }
+    }
+
     // AutoMod must run on edits too. Filtering only `send_message` left a
     // trivial bypass: post innocuous text, then edit it to the banned content —
     // permanently, with no hit recorded.
-    let edit_guild_id = paracord_db::channels::get_channel(&state.db, channel_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|c| c.guild_id());
     let edit_automod = if let Some(gid) = edit_guild_id {
         run_automod(&state, gid, channel_id, auth.user_id, &body.content).await?
     } else {
@@ -1142,7 +1170,7 @@ async fn run_automod(
 /// * The rule name and matched excerpt are operator- and offender-influenced
 ///   text going into a message body, so they are stripped of markup and
 ///   length-bounded rather than interpolated raw.
-async fn dispatch_automod_alerts(
+pub(crate) async fn dispatch_automod_alerts(
     state: &AppState,
     guild_id: i64,
     alerts: Vec<paracord_core::automod_enforce::AutomodAlert>,

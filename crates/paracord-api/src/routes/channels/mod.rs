@@ -1052,6 +1052,22 @@ pub async fn update_channel(
     )
     .await?;
 
+    // `required_role_ids` is a permission input, so a change to it must drop the
+    // cached decisions for this channel and everything that inherits from it.
+    // Nothing invalidated here previously, so tightening or relaxing a channel's
+    // role gate did not take effect until the cache TTL expired.
+    if required_role_ids.is_some() {
+        if let Err(err) = paracord_core::permissions::invalidate_channel_tree(
+            &state.db,
+            &state.permission_cache,
+            channel_id,
+        )
+        .await
+        {
+            tracing::warn!(channel_id, error = %err, "failed to invalidate permission cache");
+        }
+    }
+
     let channel_json = channel_to_json(&updated);
 
     state
@@ -1257,7 +1273,16 @@ pub async fn upsert_channel_overwrite(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     // Invalidate permission cache when channel overwrites change
-    paracord_core::permissions::invalidate_channel(&state.permission_cache, channel_id).await;
+    // Threads inherit from this channel, so their cached entries must go too.
+    if let Err(err) = paracord_core::permissions::invalidate_channel_tree(
+        &state.db,
+        &state.permission_cache,
+        channel_id,
+    )
+    .await
+    {
+        tracing::warn!(channel_id, error = %err, "failed to invalidate child permission cache");
+    }
     state.event_bus.dispatch(
         "CHANNEL_UPDATE",
         json!({ "id": channel_id.to_string() }),
@@ -1287,7 +1312,16 @@ pub async fn delete_channel_overwrite(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     // Invalidate permission cache when channel overwrites are removed
-    paracord_core::permissions::invalidate_channel(&state.permission_cache, channel_id).await;
+    // Threads inherit from this channel, so their cached entries must go too.
+    if let Err(err) = paracord_core::permissions::invalidate_channel_tree(
+        &state.db,
+        &state.permission_cache,
+        channel_id,
+    )
+    .await
+    {
+        tracing::warn!(channel_id, error = %err, "failed to invalidate child permission cache");
+    }
     state.event_bus.dispatch(
         "CHANNEL_UPDATE",
         json!({ "id": channel_id.to_string() }),

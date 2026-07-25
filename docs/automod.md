@@ -77,8 +77,10 @@ The settings page offers three one-click presets:
 
 ## Scope and behavior
 
-- AutoMod covers **human messages sent through the REST API**. Bots, webhooks,
-  and scheduled delivery are operator-authored and deliberately not filtered.
+- AutoMod covers **human messages sent through the REST API**, and **webhook
+  executions** whose creator does not hold `MANAGE_GUILD` (a webhook acts with
+  its creator's authority, and privileged members are never filtered). Bot
+  messages and scheduled delivery are operator-authored and not filtered.
 - Evaluation **fails open**. If a rule can't be parsed or evaluation errors, the
   message is delivered and the problem is logged — a broken filter never takes
   chat down.

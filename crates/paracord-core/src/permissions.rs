@@ -169,6 +169,28 @@ pub async fn invalidate_channel(cache: &PermissionCache, channel_id: i64) {
     cache.invalidate_channel(channel_id).await;
 }
 
+/// Invalidate a channel's cached permissions **and those of everything parented
+/// to it**.
+///
+/// Threads and forum posts derive their permissions entirely from the parent
+/// (see [`resolve_permission_gate`]), but the cache is keyed by
+/// `(user_id, channel_id)` — so invalidating only the parent left every child's
+/// entry intact. Revoking someone's access to a private channel therefore kept
+/// serving them its threads' contents for the full cache TTL, and granting
+/// access kept denying them for just as long. Anything that changes a channel's
+/// permission inputs must use this, not [`invalidate_channel`].
+pub async fn invalidate_channel_tree(
+    pool: &DbPool,
+    cache: &PermissionCache,
+    channel_id: i64,
+) -> Result<(), CoreError> {
+    cache.invalidate_channel(channel_id).await;
+    for child in paracord_db::channels::get_child_channel_ids(pool, channel_id).await? {
+        cache.invalidate_channel(child).await;
+    }
+    Ok(())
+}
+
 /// Invalidate all cached permissions for a user across all channels.
 /// Used when a user's roles change.
 pub async fn invalidate_user(cache: &PermissionCache, user_id: i64) {

@@ -117,6 +117,14 @@ async fn ensure_alert_channels_in_guild(
 /// Serialize a list of snowflake-ish strings into the JSON array we persist,
 /// rejecting anything that is not an id so the stored value stays trustworthy.
 fn encode_id_list(values: &[String], label: &str) -> Result<String, ApiError> {
+    // Bounded for the same reason keywords/patterns/actions are: the list is
+    // parsed on every message send for every enabled rule.
+    const MAX_EXEMPT_IDS: usize = 100;
+    if values.len() > MAX_EXEMPT_IDS {
+        return Err(ApiError::BadRequest(format!(
+            "At most {MAX_EXEMPT_IDS} {label} exemptions are allowed"
+        )));
+    }
     let mut ids = Vec::with_capacity(values.len());
     for value in values {
         let parsed: i64 = value

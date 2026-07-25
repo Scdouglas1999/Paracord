@@ -44,6 +44,16 @@ const MAX_PATTERNS: usize = 20;
 const REGEX_CACHE_CAPACITY: u64 = 1024;
 /// Maximum rules a single guild may define.
 pub const MAX_RULES_PER_GUILD: i64 = 50;
+/// Maximum actions attached to one rule.
+///
+/// Capped for the same reason keywords and patterns are: every enabled rule is
+/// deserialized and walked on every message send, so an uncapped list is a
+/// CPU/memory amplifier. There are only three action kinds; a rule needing more
+/// than a handful is misconfigured.
+pub const MAX_ACTIONS: usize = 8;
+/// Maximum characters in an operator-authored block reason. It is echoed
+/// verbatim to the blocked sender, so it must not be unbounded.
+pub const MAX_BLOCK_REASON_LEN: usize = 400;
 /// Excerpt length stored in hit history.
 const EXCERPT_LEN: usize = 180;
 
@@ -264,7 +274,23 @@ impl RuleConfig {
             }
         }
 
+        if self.actions.len() > MAX_ACTIONS {
+            return Err(CoreError::BadRequest(format!(
+                "A rule can hold at most {MAX_ACTIONS} actions"
+            )));
+        }
+
         for action in &self.actions {
+            if let RuleAction::BlockMessage {
+                reason: Some(reason),
+            } = action
+            {
+                if reason.chars().count() > MAX_BLOCK_REASON_LEN {
+                    return Err(CoreError::BadRequest(format!(
+                        "Block reason must be at most {MAX_BLOCK_REASON_LEN} characters"
+                    )));
+                }
+            }
             if let RuleAction::TimeoutMember { duration_seconds } = action {
                 if *duration_seconds == 0 || *duration_seconds > 60 * 60 * 24 * 28 {
                     return Err(CoreError::BadRequest(
@@ -414,19 +440,24 @@ fn mentions_everyone(content: &str) -> bool {
 
 /// Fold text into a comparable form before keyword matching.
 ///
-/// Case-folding alone is not a filter: `bad\u{200b}word`, `ｂａｄｗｏｒｄ` and
-/// `𝐛𝐚𝐝𝐰𝐨𝐫𝐝` all read as the banned word to a human and all sailed past a
-/// naive `to_lowercase()` comparison. This applies NFKC — which maps fullwidth,
-/// mathematical and other compatibility forms onto their ASCII equivalents —
-/// then drops format characters (`Cf`: zero-width space, ZWNJ, word joiner,
-/// RTL override) and combining marks (`Mn`) that can be interleaved to break a
-/// word up invisibly.
+/// Case-folding alone is not a filter: `bad\u{200b}word`, `ｂａｄｗｏｒｄ`,
+/// `𝐛𝐚𝐝𝐰𝐨𝐫𝐝` and `bádword` all read as the banned word to a human and all
+/// sailed past a naive `to_lowercase()` comparison.
+///
+/// This applies **NFKD**, not NFKC. Both map fullwidth and mathematical
+/// compatibility forms onto ASCII, but NFKC *composes* a base character and its
+/// accent into a single precomposed code point (`a` + U+0301 -> `á`), which is
+/// category `Ll`, not `Mn` — so the combining-mark strip below never saw it and
+/// every accented substitution (`bádword`, `badwörd`, `baḍword`) defeated the
+/// filter outright. NFKD decomposes instead, leaving the accent as a separate
+/// `Mn` that is then dropped. Format characters (`Cf`: zero-width space, ZWNJ,
+/// word joiner, RTL override) are dropped the same way.
 ///
 /// Homoglyph substitution across scripts (Cyrillic `а` for Latin `a`) is *not*
 /// covered; that needs a confusables table and is documented as a limitation.
 fn fold_for_match(value: &str) -> String {
     value
-        .nfkc()
+        .nfkd()
         .filter(|c| {
             let cat = c.general_category();
             !matches!(
@@ -658,6 +689,39 @@ mod tests {
                 "evasion not caught: {evasion:?}"
             );
         }
+    }
+
+    #[test]
+    fn diacritic_substitution_does_not_defeat_keyword_matching() {
+        // NFKC composed base+mark into a precomposed char that is not `Mn`, so
+        // the combining-mark strip never saw it and every one of these
+        // delivered. NFKD decomposes first.
+        let t = keyword(&["badword"], false);
+        for evasion in [
+            "bádword",
+            "badwörd",
+            "baḍword",
+            "bådword",
+            "baďword",
+            "b\u{0301}adword",
+        ] {
+            assert!(
+                evaluate_trigger(&t, evasion, None).is_some(),
+                "diacritic evasion not caught: {evasion:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accented_text_does_not_false_positive() {
+        // Folding must not turn unrelated accented words into matches.
+        let t = keyword(&["resume"], true);
+        assert!(
+            evaluate_trigger(&t, "please send your résumé", None).is_some(),
+            "résumé folds to resume — intended"
+        );
+        let t2 = keyword(&["cafe"], true);
+        assert!(evaluate_trigger(&t2, "a totally unrelated sentence", None).is_none());
     }
 
     #[test]

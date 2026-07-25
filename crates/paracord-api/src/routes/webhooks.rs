@@ -908,10 +908,23 @@ pub async fn execute_webhook(
             creator_perms,
         )
         .await;
+        // Apply the whole verdict, not just the block. Recording
+        // `alert_channel`/`timeout_member` in the hit row while silently
+        // dropping them made the audit trail claim actions that never happened —
+        // the same defect the send path was fixed for.
+        paracord_core::automod_enforce::apply_timeouts(&state.db, &verdict.timeouts).await;
+        if !verdict.alerts.is_empty() {
+            crate::routes::channels::dispatch_automod_alerts(
+                &state,
+                webhook.space_id,
+                verdict.alerts,
+            )
+            .await;
+        }
         if let Some(reason) = verdict.blocked_reason {
-            return Err(ApiError::BadRequest(format!(
-                "Message blocked by automod: {reason}"
-            )));
+            // Match the send path: AUTOMOD_BLOCKED / 403, not a generic 400, and
+            // surface the operator's reason verbatim.
+            return Err(ApiError::AutomodBlocked(reason));
         }
     }
 

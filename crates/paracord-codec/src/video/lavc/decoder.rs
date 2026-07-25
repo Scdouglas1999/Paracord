@@ -50,6 +50,10 @@ enum DecodeBackend {
 /// A hardware-preferred video decoder built on in-process libavcodec.
 pub struct LavcDecoder {
     config: DecoderConfig,
+    /// The codec this decoder was opened for, kept so the decoder can be
+    /// reopened on the software backend if the hardware one proves dead
+    /// (see [`LavcDecoder::fall_back_to_software`]).
+    codec: VideoCodec,
     backend: DecodeBackend,
     /// Where decoded frames are placed, fixed at construction (spec §3.2). In
     /// [`DecodeOutput::Gpu`] mode the decode keeps the frame GPU-resident; in
@@ -68,6 +72,22 @@ pub struct LavcDecoder {
     packet: *mut ff::AVPacket,
     sws: *mut ff::SwsContext,
     needs_keyframe: bool,
+    /// True until this decoder has actually produced a frame.
+    ///
+    /// `av_hwdevice_ctx_create` and `avcodec_open2` both succeed against an
+    /// NVIDIA driver whose kernel module and userspace libraries are at
+    /// mismatched versions — a routine state on Linux between a driver update
+    /// and the next reboot. The lie only surfaces on the first
+    /// `avcodec_send_packet`, which fails with `cuvidGetDecoderCaps ->
+    /// CUDA_ERROR_NO_DEVICE`. Construction therefore cannot tell whether the
+    /// backend it selected can decode, so the capability check finishes here:
+    /// a hardware backend that fails before it has ever produced a frame was
+    /// never usable, and the decoder reopens on the software backend once.
+    ///
+    /// This is capability detection completing late, not a running decoder
+    /// degrading — once a frame has been produced the flag is cleared and any
+    /// later failure is a real decode error that propagates.
+    hw_unproven: bool,
 }
 
 // Safety: all raw pointers are accessed only through `&mut self`.
@@ -95,6 +115,20 @@ impl LavcDecoder {
         config: DecoderConfig,
         output: DecodeOutput,
     ) -> Result<Self, VideoError> {
+        Self::open(codec, config, output, false)
+    }
+
+    /// Open the decoder, optionally forcing the software backend.
+    ///
+    /// `force_software` skips hardware probing entirely; it is used to reopen a
+    /// decoder whose hardware backend turned out to be non-functional (see
+    /// [`LavcDecoder::hw_unproven`]).
+    fn open(
+        codec: VideoCodec,
+        config: DecoderConfig,
+        output: DecodeOutput,
+        force_software: bool,
+    ) -> Result<Self, VideoError> {
         let decoder_name = match codec {
             VideoCodec::H264 => "h264",
             VideoCodec::Av1 => "av1",
@@ -111,7 +145,15 @@ impl LavcDecoder {
 
             // Probe hardware decode: find an advertised hw config and create its
             // device. NVDEC (CUDA) first, then VAAPI, then software.
-            let (backend, hw_device, hw_pix) = select_decode_backend(decoder);
+            let (backend, hw_device, hw_pix) = if force_software {
+                (
+                    DecodeBackend::Software,
+                    ptr::null_mut(),
+                    ff::AVPixelFormat::AV_PIX_FMT_NONE,
+                )
+            } else {
+                select_decode_backend(decoder)
+            };
 
             // GPU output demands a hardware backend on a platform we can export
             // from. This decision is made once here; a later export failure is a
@@ -188,6 +230,7 @@ impl LavcDecoder {
 
             Ok(Self {
                 config,
+                codec,
                 backend,
                 output,
                 backend_name,
@@ -199,6 +242,7 @@ impl LavcDecoder {
                 packet,
                 sws: ptr::null_mut(),
                 needs_keyframe: true,
+                hw_unproven: backend != DecodeBackend::Software,
             })
         }
     }
@@ -460,8 +504,21 @@ impl LavcDecoder {
     }
 }
 
-impl VideoDecoder for LavcDecoder {
-    fn decode(&mut self, frame: &EncodedFrame) -> Result<Vec<DecodedFrame>, VideoError> {
+impl LavcDecoder {
+    /// Reopen this decoder on the software backend, discarding the hardware one.
+    ///
+    /// Only called from [`LavcDecoder::decode`] when a hardware backend fails
+    /// before it has ever produced a frame. The old decoder's `Drop` releases
+    /// its codec context and hardware device.
+    fn fall_back_to_software(&mut self) -> Result<(), VideoError> {
+        let replacement = Self::open(self.codec, self.config.clone(), self.output, true)?;
+        let previous = std::mem::replace(self, replacement);
+        drop(previous);
+        Ok(())
+    }
+
+    /// One decode attempt against the currently open backend.
+    fn decode_cpu(&mut self, frame: &EncodedFrame) -> Result<Vec<DecodedFrame>, VideoError> {
         // Same recovery contract as the VP9 decoder: refuse inter frames until a
         // keyframe re-primes reference state so the pipeline requests one.
         if self.needs_keyframe && !frame.is_keyframe {
@@ -535,6 +592,40 @@ impl VideoDecoder for LavcDecoder {
                 decoded.push(result?);
             }
             Ok(decoded)
+        }
+    }
+}
+
+impl VideoDecoder for LavcDecoder {
+    fn decode(&mut self, frame: &EncodedFrame) -> Result<Vec<DecodedFrame>, VideoError> {
+        match self.decode_cpu(frame) {
+            Ok(decoded) => {
+                if !decoded.is_empty() {
+                    // The backend has now demonstrably decoded something, so it
+                    // is real hardware and every later failure is a genuine
+                    // decode error.
+                    self.hw_unproven = false;
+                }
+                Ok(decoded)
+            }
+            // A keyframe request is a protocol state, not a backend failure.
+            Err(VideoError::KeyframeRequired) => Err(VideoError::KeyframeRequired),
+            Err(err) if self.hw_unproven && self.backend != DecodeBackend::Software => {
+                tracing::warn!(
+                    backend = self.backend_name,
+                    error = %err,
+                    "hardware video decode failed on its first frame; the backend \
+                     reported itself available but cannot decode. Reopening on the \
+                     software decoder for the rest of this track."
+                );
+                self.fall_back_to_software()?;
+                let decoded = self.decode_cpu(frame)?;
+                if !decoded.is_empty() {
+                    self.hw_unproven = false;
+                }
+                Ok(decoded)
+            }
+            Err(err) => Err(err),
         }
     }
 
@@ -788,5 +879,50 @@ mod tests {
         // A source with a dimension of 1 has no representable I420 form and is
         // rejected rather than silently producing a zero-sized plane.
         assert_eq!(1u32 & !1, 0);
+    }
+
+    /// A hardware backend that reports itself available but cannot decode must
+    /// not take the track down with it.
+    ///
+    /// `av_hwdevice_ctx_create` and `avcodec_open2` both succeed against an
+    /// NVIDIA driver whose kernel module and userspace libraries are at
+    /// mismatched versions (routine between a driver update and the next
+    /// reboot); the first `avcodec_send_packet` is what fails. Before the
+    /// `hw_unproven` reopen, that killed every VP9/H.264/AV1 frame for the whole
+    /// session — screen share and video calls rendered nothing.
+    #[test]
+    fn dead_hardware_backend_reopens_on_software() {
+        let config = DecoderConfig {
+            pixel_format: PixelFormat::I420,
+            max_dimensions: Some((320, 240)),
+        };
+        let mut decoder = match LavcDecoder::new(VideoCodec::Vp9, config) {
+            Ok(d) => d,
+            // No usable vp9 decoder in this ffmpeg build; nothing to assert.
+            Err(_) => return,
+        };
+
+        // Force the state a dead hardware backend leaves behind, then take the
+        // recovery path the first failed packet takes.
+        decoder.fall_back_to_software().expect("reopen on software");
+
+        assert_eq!(
+            decoder.backend,
+            DecodeBackend::Software,
+            "the reopened decoder must be on the software backend"
+        );
+        assert!(
+            !decoder.is_hardware_accelerated(),
+            "the reopened decoder must no longer claim hardware acceleration"
+        );
+        assert!(
+            !decoder.hw_unproven,
+            "a software backend has nothing left to prove, so it must never \
+             attempt a second reopen"
+        );
+        assert!(
+            decoder.needs_keyframe(),
+            "a freshly opened decoder has no reference state and must request a keyframe"
+        );
     }
 }

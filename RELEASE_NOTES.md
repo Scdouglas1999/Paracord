@@ -56,7 +56,7 @@ A rule is **a trigger, one or more actions, and its exemptions**. Every enabled 
 
 **Design notes.** Patterns are compiled with Rust's `regex` crate, which has no backtracking, so a hostile pattern cannot cause exponential blowup; pattern length and compiled program size are bounded on top of that. Rules are validated once, on write — a stored rule that fails to parse is skipped and logged rather than failing the send. **AutoMod fails open**: if evaluation itself errors, the message goes through. A broken filter must never take chat down.
 
-AutoMod is scoped to human messages sent through the REST API. Operator-authored paths — bots, webhooks, scheduled delivery — are deliberately not filtered.
+AutoMod is scoped to human messages sent through the REST API, plus webhook executions whose creator lacks `MANAGE_GUILD`. Bot messages and scheduled delivery are operator-authored and not filtered.
 
 *Space Settings → AutoMod. Requires `MANAGE_GUILD`.*
 
