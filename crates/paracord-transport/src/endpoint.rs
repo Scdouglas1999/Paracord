@@ -44,6 +44,15 @@ const CLIENT_DATAGRAM_SEND_BUFFER: usize = 8 * 1024 * 1024;
 const RELAY_EGRESS_DATAGRAM_SEND_BUFFER: usize = 1024 * 1024;
 
 /// Receive-side datagram buffer, sized to absorb an ingress keyframe burst.
+///
+/// This is a *ceiling*, not a reservation: quinn queues received datagrams
+/// lazily and drops from the front once the queue exceeds it, so an idle
+/// connection costs nothing. It still bounds how much one connection can pin
+/// before the relay reads from it — including a connection that has completed
+/// the handshake but not yet authenticated. That window is bounded separately by
+/// [`crate::admission::PreAuthAdmission`] (a global and per-IP ceiling on
+/// unauthenticated connections) rather than by shrinking this value, which a
+/// legitimate publisher needs to keep whole keyframes off the floor.
 const DATAGRAM_RECEIVE_BUFFER: usize = 8 * 1024 * 1024;
 
 /// Concurrent unidirectional streams a peer may open toward this endpoint.

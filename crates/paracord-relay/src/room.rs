@@ -13,6 +13,14 @@ use paracord_transport::stream::{
 /// Maximum number of participants per room.
 const MAX_PARTICIPANTS: usize = 50;
 
+/// Count of whole-room deep clones taken via [`MediaRoomManager::get_room`].
+///
+/// Test-only instrumentation: the control plane must never deep-clone a room, so
+/// the availability regression tests drive control messages and assert this
+/// counter does not move.
+#[cfg(test)]
+pub(crate) static GET_ROOM_CLONES: AtomicU64 = AtomicU64::new(0);
+
 /// A media room containing participants who can exchange audio/video.
 #[derive(Debug, Clone)]
 pub struct MediaRoom {
@@ -221,7 +229,15 @@ impl MediaRoomManager {
     }
 
     /// Get a snapshot of a room.
+    ///
+    /// This is a **deep clone** of every participant, published track,
+    /// subscription and stored key ciphertext. Only cold callers may use it; any
+    /// path a peer can drive (media forwarding, the control channel) must use
+    /// [`Self::with_room`] instead. `GET_ROOM_CLONES` lets the availability
+    /// regression tests assert that.
     pub fn get_room(&self, room_id: &str) -> Option<MediaRoom> {
+        #[cfg(test)]
+        GET_ROOM_CLONES.fetch_add(1, Ordering::Relaxed);
         self.rooms.get(room_id).map(|r| r.clone())
     }
 

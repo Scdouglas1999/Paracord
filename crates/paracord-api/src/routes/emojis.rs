@@ -15,6 +15,13 @@ use crate::routes::audit;
 const MAX_EMOJI_NAME_LEN: usize = 32;
 const MAX_EMOJI_IMAGE_SIZE: usize = 256 * 1024; // 256 KB
 
+/// Emoji per space. Each one is up to [`MAX_EMOJI_IMAGE_SIZE`] on disk and,
+/// unlike attachments, emoji files are invisible to the guild storage
+/// accounting (`get_guild_storage_usage` sums `attachments` only), so nothing
+/// else bounds them: one member with MANAGE_EMOJIS could fill the disk at the
+/// per-IP write budget. 250 x 256 KB caps a space at roughly 62 MB of emoji.
+const MAX_EMOJIS_PER_GUILD: usize = 250;
+
 fn emoji_to_json(e: &paracord_db::emojis::EmojiRow) -> Value {
     json!({
         "id": e.id.to_string(),
@@ -76,6 +83,17 @@ pub async fn create_emoji(
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     ensure_emoji_permission(&state, guild_id, auth.user_id).await?;
+
+    // Checked before the body is consumed so a space that is already at its cap
+    // never buffers the image at all.
+    let existing = paracord_db::emojis::get_guild_emojis(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if existing.len() >= MAX_EMOJIS_PER_GUILD {
+        return Err(ApiError::Conflict(format!(
+            "This space already has the maximum of {MAX_EMOJIS_PER_GUILD} custom emoji"
+        )));
+    }
 
     let mut name: Option<String> = None;
     let mut image_data: Option<Vec<u8>> = None;

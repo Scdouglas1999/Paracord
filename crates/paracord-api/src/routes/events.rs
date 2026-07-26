@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::IntoResponse,
     Json,
@@ -18,6 +18,20 @@ const MAX_EVENT_NAME_LEN: usize = 100;
 const MAX_EVENT_DESCRIPTION_LEN: usize = 1000;
 const MAX_EVENT_LOCATION_LEN: usize = 200;
 const MAX_EVENT_IMAGE_URL_LEN: usize = 2_000;
+
+/// Scheduled events accumulate for the life of a space and the listing used to
+/// return all of them, each costing an extra `get_rsvp_count` plus `has_rsvp` --
+/// 2N queries for one request. A page bounds N, so the query fan-out and the
+/// response size are both capped.
+const DEFAULT_EVENT_PAGE: usize = 100;
+const MAX_EVENT_PAGE: usize = 200;
+const MAX_EVENT_OFFSET: usize = 100_000;
+
+#[derive(Deserialize)]
+pub struct ListEventsQuery {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
 
 use paracord_util::validation::contains_dangerous_markup;
 
@@ -479,15 +493,25 @@ pub async fn list_events(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(guild_id): Path<i64>,
+    Query(params): Query<ListEventsQuery>,
 ) -> Result<Json<Value>, ApiError> {
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_EVENT_PAGE)
+        .clamp(1, MAX_EVENT_PAGE);
+    let offset = params.offset.unwrap_or(0).min(MAX_EVENT_OFFSET);
 
     let events = paracord_db::scheduled_events::get_guild_events(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let mut result = Vec::with_capacity(events.len());
-    for event in &events {
+    // Page before the RSVP lookups so the 2-per-row fan-out is bounded.
+    let page: Vec<_> = events.iter().skip(offset).take(limit).collect();
+
+    let mut result = Vec::with_capacity(page.len());
+    for event in page {
         let count = paracord_db::scheduled_events::get_rsvp_count(&state.db, event.id)
             .await
             .unwrap_or(0);

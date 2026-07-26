@@ -39,6 +39,18 @@ const AIMD_UP: f64 = 1.1;
 /// SSRC reuse) rather than a burst of tens of thousands of lost packets.
 const MAX_SEQ_GAP: u16 = 3000;
 
+/// Distinct SSRCs one publisher's loss estimator tracks a sequence number for.
+///
+/// `ssrc` is read straight off the wire, so this map's key is attacker-chosen
+/// and was inserted into on every accepted ingress packet with no eviction — a
+/// publisher rotating it inserted at the relay's full per-sender packet rate.
+/// The bound mirrors the relay's own per-sender fan-out cache: a publisher's
+/// live SSRC set is one per (track, simulcast layer), well under ten in
+/// practice. Eviction is FIFO; an evicted SSRC that reappears is simply treated
+/// as a first arrival (no loss attributed), which is the same behaviour as the
+/// stream genuinely restarting.
+pub(crate) const MAX_TRACKED_SSRCS_PER_PUBLISHER: usize = 32;
+
 /// Publisher-ingress bandwidth estimation at the relay.
 ///
 /// The old estimator sampled the relay's *send-side* congestion window toward
@@ -74,7 +86,10 @@ struct PublisherIngress {
     /// Ring of recent buckets, oldest at the front. Bounded to `NUM_BUCKETS`.
     buckets: VecDeque<WindowBucket>,
     /// Last observed sequence number per SSRC, for wrap-aware gap detection.
+    /// Bounded at [`MAX_TRACKED_SSRCS_PER_PUBLISHER`] entries.
     last_seq: HashMap<u32, u16>,
+    /// SSRCs in `last_seq` in insertion order, oldest first, for FIFO eviction.
+    ssrc_order: VecDeque<u32>,
     /// Last feedback bitrate emitted for this publisher (0 = never emitted).
     last_feedback_kbps: u32,
 }
@@ -84,8 +99,29 @@ impl PublisherIngress {
         Self {
             buckets: VecDeque::new(),
             last_seq: HashMap::new(),
+            ssrc_order: VecDeque::new(),
             last_feedback_kbps: 0,
         }
+    }
+
+    /// Record `sequence` as the newest observation for `ssrc`, returning the
+    /// previous one. Admitting a new SSRC evicts the oldest once the publisher
+    /// is over [`MAX_TRACKED_SSRCS_PER_PUBLISHER`], so the map cannot be grown
+    /// by rotating the wire-supplied `ssrc`.
+    fn observe_seq(&mut self, ssrc: u32, sequence: u16) -> Option<u16> {
+        let previous = self.last_seq.insert(ssrc, sequence);
+        if previous.is_none() {
+            self.ssrc_order.push_back(ssrc);
+            while self.last_seq.len() > MAX_TRACKED_SSRCS_PER_PUBLISHER {
+                match self.ssrc_order.pop_front() {
+                    Some(oldest) => {
+                        self.last_seq.remove(&oldest);
+                    }
+                    None => break,
+                }
+            }
+        }
+        previous
     }
 
     /// Drop buckets that have fallen out of the sliding window ending at `current_epoch`.
@@ -168,7 +204,7 @@ impl PublisherIngress {
     /// previously-counted phantom loss because a late (overtaken) keyframe has now
     /// arrived. In-order keyframes behave exactly like a normal arrival.
     fn keyframe_sequence_delta(&mut self, ssrc: u32, sequence: u16) -> (u64, u64, bool) {
-        match self.last_seq.insert(ssrc, sequence) {
+        match self.observe_seq(ssrc, sequence) {
             None => (1, 0, false),
             Some(previous) => {
                 let forward = sequence.wrapping_sub(previous);
@@ -198,7 +234,7 @@ impl PublisherIngress {
     /// Wrap-aware per-SSRC gap detection. Returns `(expected, lost)` packet
     /// counts to attribute to this arrival.
     fn sequence_delta(&mut self, ssrc: u32, sequence: u16) -> (u64, u64) {
-        match self.last_seq.insert(ssrc, sequence) {
+        match self.observe_seq(ssrc, sequence) {
             None => (1, 0),
             Some(previous) => {
                 let forward = sequence.wrapping_sub(previous);
@@ -367,6 +403,28 @@ impl BandwidthEstimator {
     /// Remove estimate for a disconnected user.
     pub fn remove_user(&self, user_id: i64) {
         self.publishers.remove(&user_id);
+    }
+
+    /// Distinct SSRCs still tracked for one publisher's loss estimate. Bounded
+    /// by [`MAX_TRACKED_SSRCS_PER_PUBLISHER`]; read by the availability
+    /// regression tests to assert that bound holds under SSRC rotation.
+    #[cfg(test)]
+    pub(crate) fn tracked_ssrc_count(&self, user_id: i64) -> usize {
+        self.publishers
+            .get(&user_id)
+            .map(|entry| entry.last_seq.len())
+            .unwrap_or(0)
+    }
+
+    /// Windowed ingress loss ratio for one publisher. Test hook: the SSRC bound
+    /// must not silently stop a real ladder's gaps from being scored as loss.
+    #[cfg(test)]
+    pub(crate) fn windowed_ingress_loss_at(&self, user_id: i64, now: Instant) -> f64 {
+        let epoch = self.epoch(now);
+        self.publishers
+            .get_mut(&user_id)
+            .map(|mut entry| entry.window_stats(epoch).1)
+            .unwrap_or(0.0)
     }
 
     /// Get the last feedback bitrate in kbps for a user, or the default.

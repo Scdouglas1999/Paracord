@@ -62,6 +62,15 @@ pub async fn get_signed_prekey(
 /// duplicate (user_id, id) pairs are silently skipped.
 /// `keys` is a slice of (id, public_key) tuples.
 /// Returns the number of keys actually inserted.
+///
+/// The id is chosen by the client (derived from wall-clock time), so ids
+/// collide across users routinely and are trivially predictable. That is safe
+/// only because `one_time_prekeys` is keyed on `(user_id, id)` -- see
+/// `20260729000001_prekey_per_user_primary_key`. While the table carried a
+/// global primary key on `id`, an id already claimed by *another* user raised a
+/// uniqueness violation that `ON CONFLICT (user_id, id)` does not arbitrate,
+/// aborting the statement and failing the whole upload with a 500; squatting a
+/// range of plausible ids denied victims the ability to publish prekeys at all.
 pub async fn upload_one_time_prekeys(
     pool: &DbPool,
     user_id: i64,
@@ -129,9 +138,12 @@ pub async fn consume_one_time_prekey(
     pool: &DbPool,
     user_id: i64,
 ) -> Result<Option<OneTimePrekeyRow>, DbError> {
+    // The outer DELETE is scoped by `user_id` as well as the subquery: key ids
+    // are only unique per user, so matching on `id` alone would delete another
+    // user's prekey that happens to share the id.
     let row = sqlx::query_as::<_, OneTimePrekeyRow>(
         "DELETE FROM one_time_prekeys
-         WHERE id IN (
+         WHERE user_id = $1 AND id IN (
              SELECT id FROM one_time_prekeys
              WHERE user_id = $1 AND last_resort = 0
              ORDER BY created_at ASC, id ASC
@@ -220,17 +232,18 @@ mod tests {
     async fn test_pool() -> DbPool {
         let pool = crate::create_pool("sqlite::memory:", 1).await.unwrap();
         sqlx::query(
-            // Mirror the production schema after 20260220000001_fix_integer_to_bigint:
-            // id must be BIGINT (not INTEGER) PRIMARY KEY so it is not a rowid alias,
-            // otherwise SQLite discards UNIQUE(user_id, id) as redundant and the
-            // ON CONFLICT (user_id, id) upserts below have no index to target.
+            // Mirror the production schema after
+            // 20260729000001_prekey_per_user_primary_key: the key id is chosen
+            // by the client and only has to be unique within one user's pool,
+            // so `(user_id, id)` is the primary key. A global primary key on
+            // `id` let one user's id squat another's and abort the upload.
             "CREATE TABLE one_time_prekeys (
-                id          BIGINT PRIMARY KEY,
+                id          BIGINT NOT NULL,
                 user_id     BIGINT NOT NULL,
                 public_key  TEXT NOT NULL,
                 created_at  TEXT NOT NULL DEFAULT (datetime('now')),
                 last_resort INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(user_id, id)
+                PRIMARY KEY (user_id, id)
             )",
         )
         .execute(&pool)

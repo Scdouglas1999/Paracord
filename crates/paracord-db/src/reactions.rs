@@ -50,6 +50,17 @@ pub struct ViewerReactionRow {
 
 const MAX_MESSAGE_IDS: usize = 500;
 
+/// Distinct emoji a single message may carry.
+///
+/// Reactions are read on the hottest path in the product: every `GET /messages`
+/// page aggregates them for up to 100 messages at once. Nothing bounded the
+/// number of *distinct* emoji on a message -- the route only limited each
+/// emoji's length -- so one authenticated member could permanently attach an
+/// unbounded set to a message and make every subsequent read of that channel
+/// page proportionally more expensive. 20 matches what clients render before
+/// collapsing and is the same ceiling Discord applies.
+pub const MAX_REACTIONS_PER_MESSAGE: i64 = 20;
+
 pub async fn add_reaction(
     pool: &DbPool,
     message_id: i64,
@@ -57,6 +68,31 @@ pub async fn add_reaction(
     emoji_name: &str,
     emoji_id: Option<i64>,
 ) -> Result<(), DbError> {
+    // Adding to an emoji the message already carries never widens the
+    // aggregate, so only a *new* emoji is gated. Two concurrent inserts can
+    // race past the count and land at cap+1; the read side is bounded
+    // independently, so the overshoot stays cosmetic.
+    let distinct: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT emoji_name) FROM reactions WHERE message_id = $1",
+    )
+    .bind(message_id)
+    .fetch_one(pool)
+    .await?;
+    if distinct >= MAX_REACTIONS_PER_MESSAGE {
+        let already_present: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM reactions WHERE message_id = $1 AND emoji_name = $2",
+        )
+        .bind(message_id)
+        .bind(emoji_name)
+        .fetch_one(pool)
+        .await?;
+        if already_present == 0 {
+            return Err(DbError::LimitReached(format!(
+                "this message already has the maximum of {MAX_REACTIONS_PER_MESSAGE} different reactions"
+            )));
+        }
+    }
+
     sqlx::query(
         "INSERT INTO reactions (message_id, user_id, emoji_name, emoji_id)
          VALUES ($1, $2, $3, $4)
@@ -90,13 +126,17 @@ pub async fn get_message_reactions(
     pool: &DbPool,
     message_id: i64,
 ) -> Result<Vec<ReactionCountRow>, DbError> {
+    // `LIMIT` mirrors the insert-side cap so a message that predates it (or one
+    // that raced past it) cannot make this read unbounded.
     let rows = sqlx::query_as::<_, ReactionCountRow>(
         "SELECT emoji_name, emoji_id, COUNT(*) as count
          FROM reactions WHERE message_id = $1
          GROUP BY emoji_name, emoji_id
-         ORDER BY MIN(created_at)",
+         ORDER BY MIN(created_at)
+         LIMIT $2",
     )
     .bind(message_id)
+    .bind(MAX_REACTIONS_PER_MESSAGE)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -121,18 +161,27 @@ pub async fn get_reactions_for_message_ids(
     }
 
     let placeholders = crate::messages::build_placeholders(1, message_ids.len());
+    // One page of messages can contribute at most `MAX_REACTIONS_PER_MESSAGE`
+    // aggregate rows each. The insert side already enforces that per message,
+    // so this ceiling is unreachable in practice; it exists so rows written
+    // before the cap (or by a racing insert) cannot make the hottest read path
+    // in the product unbounded.
+    let limit = MAX_REACTIONS_PER_MESSAGE.saturating_mul(message_ids.len() as i64);
     let sql = format!(
         "SELECT message_id, emoji_name, emoji_id, COUNT(*) as count
          FROM reactions
          WHERE message_id IN ({})
          GROUP BY message_id, emoji_name, emoji_id
-         ORDER BY message_id, MIN(created_at)",
+         ORDER BY message_id, MIN(created_at)
+         LIMIT ${}",
         placeholders,
+        message_ids.len() + 1,
     );
     let mut query = sqlx::query_as::<_, BatchReactionCountRow>(&sql);
     for message_id in message_ids {
         query = query.bind(message_id);
     }
+    query = query.bind(limit);
     let rows = query.fetch_all(pool).await?;
     Ok(rows)
 }
@@ -156,17 +205,25 @@ pub async fn get_viewer_reactions_for_message_ids(
 
     let placeholders = crate::messages::build_placeholders(1, message_ids.len());
     let viewer_bind_index = message_ids.len() + 1;
+    // Same ceiling as `get_reactions_for_message_ids`: one viewer can hold at
+    // most one row per distinct emoji per message.
+    let limit = MAX_REACTIONS_PER_MESSAGE.saturating_mul(message_ids.len() as i64);
     let sql = format!(
         "SELECT message_id, emoji_name
          FROM reactions
-         WHERE message_id IN ({}) AND user_id = ${}",
-        placeholders, viewer_bind_index,
+         WHERE message_id IN ({}) AND user_id = ${}
+         ORDER BY message_id
+         LIMIT ${}",
+        placeholders,
+        viewer_bind_index,
+        viewer_bind_index + 1,
     );
     let mut query = sqlx::query_as::<_, ViewerReactionRow>(&sql);
     for message_id in message_ids {
         query = query.bind(message_id);
     }
     query = query.bind(viewer_id);
+    query = query.bind(limit);
     let rows = query.fetch_all(pool).await?;
     Ok(rows)
 }

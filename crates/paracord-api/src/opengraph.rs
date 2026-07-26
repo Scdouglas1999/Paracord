@@ -298,14 +298,31 @@ fn parse_og_tags(html: &str, page_url: &str) -> Option<Value> {
     Some(embed)
 }
 
+/// Find `needle` in `haystack`, comparing ASCII letters case-insensitively, and
+/// return the byte offset **into `haystack` itself**.
+///
+/// `str::to_lowercase` is not length-preserving (`İ` U+0130 lowercases to two
+/// chars / three bytes), so an offset found in a lowercased copy cannot be used
+/// to slice the original — it overshoots and lands mid-codepoint or past the
+/// end, which panics. `needle` is always ASCII here, and every ASCII byte in
+/// valid UTF-8 is a complete character, so a match offset found this way is
+/// always a char boundary in the original string.
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    let hay = haystack.as_bytes();
+    let ndl = needle.as_bytes();
+    if ndl.is_empty() || hay.len() < ndl.len() {
+        return None;
+    }
+    (0..=hay.len() - ndl.len()).find(|&i| hay[i..i + ndl.len()].eq_ignore_ascii_case(ndl))
+}
+
 /// Extract an HTML attribute value by name from a raw tag string.
 /// Handles both double-quoted and single-quoted values.
 fn extract_attr(tag: &str, attr: &str) -> Option<String> {
     // Try `attr="..."` or `attr='...'`
-    let lower = tag.to_lowercase();
     for quote in ['"', '\''] {
         let needle = format!("{}={}", attr, quote);
-        if let Some(start) = lower.find(&needle) {
+        if let Some(start) = find_ascii_case_insensitive(tag, &needle) {
             let after = &tag[start + needle.len()..];
             if let Some(end) = after.find(quote) {
                 let val = html_decode(&after[..end]);
@@ -316,6 +333,21 @@ fn extract_attr(tag: &str, attr: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ── Test seams ─────────────────────────────────────────────────────────────
+// The HTML parsing helpers are private; these thin wrappers let the crate's
+// integration tests drive them with hostile input without a network fetch. They
+// do not change runtime behavior.
+
+#[doc(hidden)]
+pub fn test_extract_attr(tag: &str, attr: &str) -> Option<String> {
+    extract_attr(tag, attr)
+}
+
+#[doc(hidden)]
+pub fn test_parse_og_tags(html: &str, page_url: &str) -> Option<Value> {
+    parse_og_tags(html, page_url)
 }
 
 /// Minimal HTML entity decode for common entities.

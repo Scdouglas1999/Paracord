@@ -12,10 +12,22 @@ fn forum_tag_to_json(tag: &paracord_db::channels::ForumTagRow) -> Value {
     })
 }
 
+/// Forum posts are channel rows any member with SEND_MESSAGES can create, so
+/// the table behind this listing grows without bound. It used to be returned
+/// whole on every call. A page reads like the other paginated listings:
+/// `limit` defaults to 50 and clamps to 100, `offset` clamps to
+/// [`MAX_FORUM_POST_OFFSET`] so a deep-paging loop cannot walk an arbitrarily
+/// large table either.
+const DEFAULT_FORUM_POST_PAGE: i64 = 50;
+const MAX_FORUM_POST_PAGE: i64 = 100;
+const MAX_FORUM_POST_OFFSET: i64 = 5_000;
+
 #[derive(Deserialize)]
 pub struct ForumPostQuery {
     pub sort_order: Option<i32>,
     pub include_archived: Option<bool>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -64,11 +76,22 @@ pub async fn get_forum_posts(
         .sort_order
         .unwrap_or(forum_channel.default_sort_order.unwrap_or(0));
     let include_archived = query.include_archived.unwrap_or(false);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_FORUM_POST_PAGE)
+        .clamp(1, MAX_FORUM_POST_PAGE);
+    let offset = query.offset.unwrap_or(0).clamp(0, MAX_FORUM_POST_OFFSET);
 
-    let posts =
-        paracord_db::channels::get_forum_posts(&state.db, channel_id, sort_order, include_archived)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let posts = paracord_db::channels::get_forum_posts_page(
+        &state.db,
+        channel_id,
+        sort_order,
+        include_archived,
+        limit,
+        offset,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     let tags = paracord_db::channels::get_forum_tags(&state.db, channel_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
@@ -77,6 +100,8 @@ pub async fn get_forum_posts(
         "posts": posts.iter().map(channel_to_json).collect::<Vec<Value>>(),
         "tags": tags.iter().map(forum_tag_to_json).collect::<Vec<Value>>(),
         "sort_order": sort_order,
+        "limit": limit,
+        "offset": offset,
     })))
 }
 

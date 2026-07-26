@@ -53,6 +53,17 @@ pub struct DmE2eePayloadRequest {
     pub header: Option<String>,
 }
 
+/// Caps on the id arrays a single send may carry.
+///
+/// Both were `#[serde(default)] Vec<String>` with no bound at all, and the
+/// validation loops below spend one `SELECT` per element on a pooled
+/// connection. At the 2 MiB body ceiling that is roughly 95k ids — about 1.8s
+/// of connection-hold per request, from anyone with SEND_MESSAGES. These are
+/// the per-message limits the composer is modelled on, and they leave the
+/// loops at ten queries and three queries respectively.
+const MAX_MESSAGE_ATTACHMENTS: usize = 10;
+const MAX_MESSAGE_STICKERS: usize = 3;
+
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
     pub content: String,
@@ -422,6 +433,19 @@ pub async fn send_message(
         }
     }
 
+    // Bound the id arrays before anything touches the database: the point of the
+    // cap is that an over-long array never gets to spend pool connections.
+    if body.attachment_ids.len() > MAX_MESSAGE_ATTACHMENTS {
+        return Err(ApiError::BadRequest(format!(
+            "A message may reference at most {MAX_MESSAGE_ATTACHMENTS} attachments"
+        )));
+    }
+    if body.sticker_ids.len() > MAX_MESSAGE_STICKERS {
+        return Err(ApiError::BadRequest(format!(
+            "A message may reference at most {MAX_MESSAGE_STICKERS} stickers"
+        )));
+    }
+
     if body.content.trim().is_empty()
         && body.attachment_ids.is_empty()
         && body.sticker_ids.is_empty()
@@ -543,11 +567,18 @@ pub async fn send_message(
         None => None,
     };
 
-    let mut attachments = Vec::with_capacity(body.attachment_ids.len());
+    let mut attachments: Vec<paracord_db::attachments::AttachmentRow> =
+        Vec::with_capacity(body.attachment_ids.len());
     for attachment_id in &body.attachment_ids {
         let id = attachment_id
             .parse::<i64>()
             .map_err(|_| ApiError::BadRequest("Invalid attachment ID".into()))?;
+        // A repeated id used to re-run the whole lookup and then no-op at link
+        // time, so duplicates cost queries and bought nothing. The array is
+        // capped above, so a linear scan is cheaper than a set.
+        if attachments.iter().any(|existing| existing.id == id) {
+            continue;
+        }
         let attachment = paracord_db::attachments::get_attachment(&state.db, id)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -580,6 +611,12 @@ pub async fn send_message(
             let sticker_id = raw_sticker_id
                 .parse::<i64>()
                 .map_err(|_| ApiError::BadRequest("Invalid sticker ID".into()))?;
+            // `attach_stickers_to_message` is already `ON CONFLICT DO NOTHING`,
+            // so a repeated id only ever bought an extra SELECT and an extra
+            // no-op INSERT.
+            if sticker_ids.contains(&sticker_id) {
+                continue;
+            }
             let sticker = paracord_db::stickers::get_sticker(&state.db, sticker_id)
                 .await
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?

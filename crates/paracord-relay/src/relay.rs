@@ -139,6 +139,18 @@ static RELAY_VIDEO_FORWARD_DEBUG_COUNT: AtomicU32 = AtomicU32::new(0);
 /// browser never makes the relay buffer an unbounded backlog of old keyframes.
 const MAX_BRIDGED_KEYFRAME_STREAMS: usize = 2;
 
+/// Distinct SSRCs a bridged viewer keeps in-flight keyframe-stream queues for.
+///
+/// The queues are keyed by the publisher's `ssrc`, which is a raw wire field, so
+/// a publisher rotating it grew every bridged viewer's map by one entry (plus up
+/// to [`MAX_BRIDGED_KEYFRAME_STREAMS`] spawned tasks) per keyframe, with no
+/// pruning. A viewer only ever watches the tracks it subscribed to — bounded by
+/// the per-participant subscription cap and, in practice, a handful of
+/// (track, layer) pairs. 32 covers a viewer watching many tiles at once while
+/// still capping the map; evicting the oldest SSRC aborts its in-flight streams,
+/// which is exactly what a newer keyframe on that SSRC would have done anyway.
+pub(crate) const MAX_BRIDGED_KEYFRAME_SSRCS: usize = 32;
+
 /// Track a freshly opened keyframe uni-stream task for a bridged viewer, evicting
 /// (aborting) the oldest in-flight stream once more than `cap` are outstanding.
 ///
@@ -155,11 +167,80 @@ fn enqueue_inflight_stream(queue: &mut VecDeque<AbortHandle>, handle: AbortHandl
     }
 }
 
+/// Parse one control frame's body, refusing anything the relay must not act on.
+///
+/// Returns `None` (frame dropped) for a malformed body or for any message
+/// carrying an identifier longer than
+/// [`MAX_IDENTIFIER_LEN`](paracord_transport::protocol::MAX_IDENTIFIER_LEN).
+/// The binary frame path already enforced that cap; the JSON control plane
+/// bounded `stream_id`/`track_id` only by the 256 KiB frame size. Those strings
+/// become `HashMap` keys in room state and are re-broadcast to every
+/// participant, so an uncapped identifier turns a few KB of ingress into
+/// hundreds of megabytes of room state retained for the call.
+pub(crate) fn accept_control_frame(
+    user_id: i64,
+    room_id: &str,
+    body: &[u8],
+) -> Option<ControlMessage> {
+    let message = match serde_json::from_slice::<ControlMessage>(body) {
+        Ok(message) => message,
+        Err(err) => {
+            debug!(user_id, error = %err, "relay: discarding malformed control message");
+            return None;
+        }
+    };
+    if !message.identifiers_within_limits() {
+        warn!(
+            user_id,
+            room_id = %room_id,
+            "relay: rejecting control message with an over-long identifier"
+        );
+        return None;
+    }
+    Some(message)
+}
+
+/// Bounded per-SSRC in-flight keyframe-stream registry for one bridged viewer.
+#[derive(Default)]
+pub(crate) struct BridgedKeyframeStreams {
+    /// In-flight keyframe uni-stream tasks per SSRC, each queue oldest-first and
+    /// bounded at [`MAX_BRIDGED_KEYFRAME_STREAMS`].
+    pub(crate) per_ssrc: HashMap<u32, VecDeque<AbortHandle>>,
+    /// SSRCs present in `per_ssrc`, oldest first, so the map itself is bounded.
+    ssrc_order: VecDeque<u32>,
+}
+
+impl BridgedKeyframeStreams {
+    /// Record `handle` under `ssrc` (evicting that SSRC's oldest in-flight stream
+    /// past [`MAX_BRIDGED_KEYFRAME_STREAMS`]), then drop whole SSRC entries —
+    /// oldest first, aborting whatever they still hold — until at most `ssrc_cap`
+    /// remain. Without the outer bound the map is keyed by an attacker-chosen
+    /// wire field and never shrinks.
+    pub(crate) fn track(&mut self, ssrc: u32, handle: AbortHandle, ssrc_cap: usize) {
+        if !self.per_ssrc.contains_key(&ssrc) {
+            self.ssrc_order.push_back(ssrc);
+        }
+        let queue = self.per_ssrc.entry(ssrc).or_default();
+        enqueue_inflight_stream(queue, handle, MAX_BRIDGED_KEYFRAME_STREAMS);
+
+        while self.per_ssrc.len() > ssrc_cap {
+            let Some(oldest) = self.ssrc_order.pop_front() else {
+                break;
+            };
+            if let Some(stale) = self.per_ssrc.remove(&oldest) {
+                for task in stale {
+                    task.abort();
+                }
+            }
+        }
+    }
+}
+
 /// Precomputed fan-out plan for one `(sender_id, ssrc)` at a fixed room+
 /// connection generation. Rebuilt lazily only when either generation changes,
 /// so the forwarding hot path is one map read plus N `send_datagram` calls
 /// instead of a full room clone per datagram.
-struct CachedRecipients {
+pub(crate) struct CachedRecipients {
     /// Room routing generation this snapshot was computed at.
     room_generation: u64,
     /// Connection-set generation this snapshot was computed at.
@@ -167,7 +248,58 @@ struct CachedRecipients {
     /// The published track this ssrc resolves to, retained for diagnostics.
     published_track: Option<PublishedTrack>,
     /// Resolved recipient connection handles to fan the datagram out to.
-    recipients: Vec<ConnectionHandle>,
+    pub(crate) recipients: Vec<ConnectionHandle>,
+}
+
+/// Distinct SSRCs the relay keeps a cached fan-out plan for, per sender.
+///
+/// `header.ssrc` is a raw 32-bit field read straight off the wire, so the cache
+/// key is attacker-chosen: a sender that changes it on every datagram inserts a
+/// fresh plan (up to `MAX_PARTICIPANTS` connection handles each) at the full
+/// [`MAX_SENDER_PACKETS_PER_SECOND`], and the only eviction was the sender's own
+/// disconnect. Bounding the plans per sender turns that into a fixed ceiling.
+///
+/// Sizing: a publisher's live SSRC set is one per (track, simulcast layer). The
+/// participant-level cap (`MAX_PUBLISHED_TRACKS_PER_PARTICIPANT` in
+/// [`crate::participant`]) is 16 tracks of at most a three-rung ladder, but a
+/// real client publishes microphone plus camera plus screen share — under ten
+/// SSRCs at once. 32 leaves several times that headroom, including the transient
+/// overlap while a re-published track's old SSRCs age out. Eviction is FIFO and
+/// only ever costs a cache miss (the plan is rebuilt from live room state),
+/// never a dropped packet.
+pub(crate) const MAX_CACHED_SSRCS_PER_SENDER: usize = 32;
+
+/// One sender's bounded set of cached fan-out plans, keyed by SSRC.
+///
+/// Insertion order is tracked separately so the oldest SSRC can be evicted in
+/// O(1) once the sender exceeds [`MAX_CACHED_SSRCS_PER_SENDER`].
+#[derive(Default)]
+struct SenderRecipientCache {
+    plans: HashMap<u32, Arc<CachedRecipients>>,
+    /// SSRCs in insertion order, oldest first. Only pushed when `plans` gains a
+    /// key, so it stays exactly as long as `plans`.
+    insertion_order: VecDeque<u32>,
+}
+
+impl SenderRecipientCache {
+    fn get(&self, ssrc: u32) -> Option<&Arc<CachedRecipients>> {
+        self.plans.get(&ssrc)
+    }
+
+    /// Store a plan for `ssrc`, evicting the oldest SSRC while over `cap`.
+    fn insert(&mut self, ssrc: u32, snapshot: Arc<CachedRecipients>, cap: usize) {
+        if self.plans.insert(ssrc, snapshot).is_none() {
+            self.insertion_order.push_back(ssrc);
+        }
+        while self.plans.len() > cap {
+            match self.insertion_order.pop_front() {
+                Some(oldest) => {
+                    self.plans.remove(&oldest);
+                }
+                None => break,
+            }
+        }
+    }
 }
 
 /// Per-sender token-bucket packet-rate limiter keyed by `user_id`.
@@ -254,8 +386,9 @@ enum MediaTransport {
         /// [`MAX_BRIDGED_KEYFRAME_STREAMS`]. Keying per SSRC (not per connection)
         /// keeps the stale-stream cull WITHIN a track: a fresh keyframe on one
         /// track never aborts an undrained, non-superseded keyframe of a
-        /// different track a viewer is watching simultaneously.
-        keyframe_streams: Arc<Mutex<HashMap<u32, VecDeque<AbortHandle>>>>,
+        /// different track a viewer is watching simultaneously. The number of
+        /// SSRCs is itself bounded at [`MAX_BRIDGED_KEYFRAME_SSRCS`].
+        keyframe_streams: Arc<Mutex<BridgedKeyframeStreams>>,
     },
 }
 
@@ -311,7 +444,7 @@ impl ConnectionHandle {
                 outbound_tx,
                 inbound_rx: Arc::new(Mutex::new(inbound_rx)),
                 control_conn,
-                keyframe_streams: Arc::new(Mutex::new(HashMap::new())),
+                keyframe_streams: Arc::new(Mutex::new(BridgedKeyframeStreams::default())),
             },
         }
     }
@@ -487,8 +620,7 @@ impl ConnectionHandle {
                     }
                 });
                 let mut streams = keyframe_streams.lock().await;
-                let queue = streams.entry(ssrc).or_default();
-                enqueue_inflight_stream(queue, task.abort_handle(), MAX_BRIDGED_KEYFRAME_STREAMS);
+                streams.track(ssrc, task.abort_handle(), MAX_BRIDGED_KEYFRAME_SSRCS);
                 Ok(())
             }
         }
@@ -546,8 +678,10 @@ pub struct RelayForwarder {
     /// Per-`(viewer, stream, track)` relay-driven layer selection state,
     /// including any keyframe-gated pending switch (spec §4.2).
     layer_selection: DashMap<(i64, StreamId, TrackId), LayerSelectionState>,
-    /// Precomputed per-`(sender_id, ssrc)` fan-out plans for the hot path.
-    recipient_cache: DashMap<(i64, u32), Arc<CachedRecipients>>,
+    /// Precomputed per-`(sender_id, ssrc)` fan-out plans for the hot path,
+    /// nested per sender so each sender's SSRC set is bounded independently at
+    /// [`MAX_CACHED_SSRCS_PER_SENDER`].
+    recipient_cache: DashMap<i64, SenderRecipientCache>,
     /// Generation bumped whenever the connection set changes, invalidating
     /// every cached recipient snapshot (which holds connection handles).
     conn_generation: AtomicU64,
@@ -633,11 +767,27 @@ impl RelayForwarder {
     }
 
     /// Register a new participant connection for relay forwarding.
+    ///
+    /// The map is keyed by user id, so a user holds exactly one *routable*
+    /// connection. It used to be replaced silently, which left the displaced
+    /// connection fully alive: its QUIC state, its 8 MiB datagram receive buffer
+    /// and its forwarding / control / bandwidth / uni-stream tasks all kept
+    /// running, unreachable and unreferenced. One authenticated user could
+    /// therefore pin an unbounded number of connections by reconnecting in a
+    /// loop. Closing the displaced handle makes each of those tasks' next read
+    /// fail, so they wind down and the effective per-user cap is one.
     pub fn add_connection(&self, handle: ConnectionHandle) {
         let user_id = handle.user_id;
         let room_id = handle.room_id.clone();
         info!(user_id, room_id = %room_id, "relay: participant connected");
-        self.connections.insert(user_id, handle);
+        if let Some(previous) = self.connections.insert(user_id, handle) {
+            info!(
+                user_id,
+                room_id = %previous.room_id,
+                "relay: closing superseded media connection"
+            );
+            previous.close("superseded by a newer media connection");
+        }
         self.invalidate_connection_cache();
     }
 
@@ -661,8 +811,7 @@ impl RelayForwarder {
 
     /// Drop cached fan-out plans keyed by a departed sender to bound cache size.
     fn forget_sender_cache(&self, user_id: i64) {
-        self.recipient_cache
-            .retain(|(sender, _), _| *sender != user_id);
+        self.recipient_cache.remove(&user_id);
     }
 
     /// Drop keyframe throttle + bridge-skip-warning state tied to a departed user
@@ -1134,12 +1283,8 @@ impl RelayForwarder {
                     continue;
                 }
 
-                let message = match serde_json::from_slice::<ControlMessage>(&msg_buf) {
-                    Ok(message) => message,
-                    Err(err) => {
-                        debug!(user_id, error = %err, "relay: discarding malformed control message");
-                        continue;
-                    }
+                let Some(message) = accept_control_frame(user_id, &room_id, &msg_buf) else {
+                    continue;
                 };
 
                 forwarder
@@ -1204,7 +1349,7 @@ impl RelayForwarder {
     }
 
     /// Resolve (from cache, or rebuild) the fan-out plan for `(sender_id, ssrc)`.
-    fn recipient_snapshot(
+    pub(crate) fn recipient_snapshot(
         &self,
         sender_id: i64,
         room_id: &str,
@@ -1214,12 +1359,14 @@ impl RelayForwarder {
         // invalidate the fan-out plan for every sender in every other call.
         let room_generation = self.room_manager.generation(room_id);
         let conn_generation = self.conn_generation.load(Ordering::Acquire);
-        let key = (sender_id, header.ssrc);
 
-        if let Some(entry) = self.recipient_cache.get(&key) {
-            if entry.room_generation == room_generation && entry.conn_generation == conn_generation
-            {
-                return Arc::clone(entry.value());
+        if let Some(sender_cache) = self.recipient_cache.get(&sender_id) {
+            if let Some(entry) = sender_cache.get(header.ssrc) {
+                if entry.room_generation == room_generation
+                    && entry.conn_generation == conn_generation
+                {
+                    return Arc::clone(entry);
+                }
             }
         }
 
@@ -1230,7 +1377,13 @@ impl RelayForwarder {
             room_generation,
             conn_generation,
         ));
-        self.recipient_cache.insert(key, Arc::clone(&snapshot));
+        // Bounded insert: a sender rotating `ssrc` per packet evicts only its own
+        // oldest plans instead of growing the cache without limit.
+        self.recipient_cache.entry(sender_id).or_default().insert(
+            header.ssrc,
+            Arc::clone(&snapshot),
+            MAX_CACHED_SSRCS_PER_SENDER,
+        );
         snapshot
     }
 
@@ -1345,7 +1498,38 @@ impl RelayForwarder {
         self.connections.len()
     }
 
-    async fn handle_control_message(&self, user_id: i64, room_id: &str, message: ControlMessage) {
+    /// Cached fan-out plans currently retained for one sender. Bounded by
+    /// [`MAX_CACHED_SSRCS_PER_SENDER`]; read by the availability regression
+    /// tests to assert that bound holds under SSRC rotation.
+    #[cfg(test)]
+    pub(crate) fn cached_plan_count(&self, sender_id: i64) -> usize {
+        self.recipient_cache
+            .get(&sender_id)
+            .map(|cache| cache.plans.len())
+            .unwrap_or(0)
+    }
+
+    /// Record one downlink path sample for a viewer. Test hook so the
+    /// relay-driven layer selection path can be exercised without a live QUIC
+    /// connection.
+    #[cfg(test)]
+    pub(crate) fn record_downlink_sample_for_test(
+        &self,
+        user_id: i64,
+        cwnd_bytes: u64,
+        rtt: Duration,
+        now: Instant,
+    ) {
+        self.downlink_estimator
+            .record_sample_at(user_id, cwnd_bytes, rtt, 1000, 0, now);
+    }
+
+    pub(crate) async fn handle_control_message(
+        &self,
+        user_id: i64,
+        room_id: &str,
+        message: ControlMessage,
+    ) {
         match message {
             ControlMessage::SessionJoin {
                 room_id: requested_room_id,
@@ -1849,89 +2033,108 @@ impl RelayForwarder {
         }
     }
 
-    async fn broadcast_control_in_room(
+    pub(crate) async fn broadcast_control_in_room(
         &self,
         room_id: &str,
         exclude_user_id: Option<i64>,
         message: &ControlMessage,
     ) {
-        let Some(room) = self.room_manager.get_room(room_id) else {
-            return;
-        };
+        // Borrow the room just long enough to collect recipient ids. Cloning the
+        // whole room (every participant's tracks, subscriptions and stored key
+        // ciphertexts) to read a list of user ids turns any control message that
+        // broadcasts into a whole-room deep clone.
+        let recipients = self
+            .room_manager
+            .with_room(room_id, |room| {
+                room.participants
+                    .keys()
+                    .copied()
+                    .filter(|user_id| exclude_user_id.is_none_or(|excluded| excluded != *user_id))
+                    .collect::<Vec<i64>>()
+            })
+            .unwrap_or_default();
 
-        for participant in room.participants.values() {
-            if exclude_user_id.is_some_and(|excluded| excluded == participant.user_id) {
-                continue;
-            }
-            self.send_control_to_user(participant.user_id, message)
-                .await;
+        for user_id in recipients {
+            self.send_control_to_user(user_id, message).await;
         }
     }
 
     pub async fn send_initial_track_state(&self, handle: &ConnectionHandle) {
-        let Some(room) = self.room_manager.get_room(&handle.room_id) else {
-            return;
-        };
+        // Snapshot only the published tracks (not the whole room) and drop the
+        // read guard before the first await.
+        let published: Vec<(i64, PublishedTrack)> = self
+            .room_manager
+            .with_room(&handle.room_id, |room| {
+                room.participants
+                    .values()
+                    .flat_map(|participant| {
+                        participant
+                            .published_tracks
+                            .values()
+                            .map(|track| (participant.user_id, track.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        for participant in room.participants.values() {
-            for track in participant.published_tracks.values() {
+        for (publisher_user_id, track) in &published {
+            let participant_user_id = *publisher_user_id;
+            if let Err(err) = handle
+                .send_control(&ControlMessage::TrackPublish {
+                    track: track.clone(),
+                })
+                .await
+            {
+                debug!(
+                    recipient = handle.user_id,
+                    publisher = participant_user_id,
+                    error = %err,
+                    "relay: failed to send initial published track state"
+                );
+            }
+            if let Some((epoch, ciphertext)) = self.latest_track_key_delivery(
+                &handle.room_id,
+                track,
+                &track.stream_id,
+                &track.track_id,
+                handle.user_id,
+            ) {
                 if let Err(err) = handle
-                    .send_control(&ControlMessage::TrackPublish {
-                        track: track.clone(),
+                    .send_control(&ControlMessage::StreamKeyDeliver {
+                        stream_id: track.stream_id.clone(),
+                        track_id: track.track_id.clone(),
+                        sender_user_id: participant_user_id,
+                        epoch,
+                        ciphertext,
                     })
                     .await
                 {
                     debug!(
                         recipient = handle.user_id,
-                        publisher = participant.user_id,
+                        publisher = participant_user_id,
                         error = %err,
-                        "relay: failed to send initial published track state"
+                        "relay: failed to send initial track key state"
                     );
                 }
-                if let Some((epoch, ciphertext)) = self.latest_track_key_delivery(
-                    &handle.room_id,
-                    track,
-                    &track.stream_id,
-                    &track.track_id,
-                    handle.user_id,
-                ) {
-                    if let Err(err) = handle
-                        .send_control(&ControlMessage::StreamKeyDeliver {
-                            stream_id: track.stream_id.clone(),
-                            track_id: track.track_id.clone(),
-                            sender_user_id: participant.user_id,
-                            epoch,
-                            ciphertext,
-                        })
-                        .await
-                    {
-                        debug!(
-                            recipient = handle.user_id,
-                            publisher = participant.user_id,
-                            error = %err,
-                            "relay: failed to send initial track key state"
-                        );
-                    }
-                } else if let Some(publisher_handle) = self
-                    .connections
-                    .get(&participant.user_id)
-                    .map(|entry| entry.clone())
+            } else if let Some(publisher_handle) = self
+                .connections
+                .get(&participant_user_id)
+                .map(|entry| entry.clone())
+            {
+                if let Err(err) = publisher_handle
+                    .send_control(&ControlMessage::RequestStreamKey {
+                        stream_id: track.stream_id.clone(),
+                        track_id: track.track_id.clone(),
+                        recipient_user_id: handle.user_id,
+                    })
+                    .await
                 {
-                    if let Err(err) = publisher_handle
-                        .send_control(&ControlMessage::RequestStreamKey {
-                            stream_id: track.stream_id.clone(),
-                            track_id: track.track_id.clone(),
-                            recipient_user_id: handle.user_id,
-                        })
-                        .await
-                    {
-                        debug!(
-                            recipient = handle.user_id,
-                            publisher = participant.user_id,
-                            error = %err,
-                            "relay: failed to request initial track key state"
-                        );
-                    }
+                    debug!(
+                        recipient = handle.user_id,
+                        publisher = participant_user_id,
+                        error = %err,
+                        "relay: failed to request initial track key state"
+                    );
                 }
             }
         }
@@ -2007,12 +2210,15 @@ impl RelayForwarder {
         stream_id: &StreamId,
         track_id: &TrackId,
     ) -> Option<PublishedTrack> {
-        let room = self.room_manager.get_room(room_id)?;
-        room.participants
-            .get(&publisher_user_id)?
-            .published_tracks
-            .get(&(stream_id.clone(), track_id.clone()))
-            .cloned()
+        // Borrowed, not cloned: this is reachable from the control plane
+        // (`TrackLayers`) which a peer can drive at the control-message rate.
+        self.room_manager.with_room(room_id, |room| {
+            room.participants
+                .get(&publisher_user_id)?
+                .published_tracks
+                .get(&(stream_id.clone(), track_id.clone()))
+                .cloned()
+        })?
     }
 
     fn resolve_any_published_track(
@@ -2021,13 +2227,17 @@ impl RelayForwarder {
         stream_id: &StreamId,
         track_id: &TrackId,
     ) -> Option<PublishedTrack> {
-        let room = self.room_manager.get_room(room_id)?;
-        room.participants.values().find_map(|participant| {
-            participant
-                .published_tracks
-                .get(&(stream_id.clone(), track_id.clone()))
-                .cloned()
-        })
+        // Borrowed, not cloned: `SubscribeStream`, `ReceiverReport`,
+        // `RequestKeyframe` and `StreamKeyAnnounce` all land here, so a peer
+        // spamming the control channel must not each time deep-clone the room.
+        self.room_manager.with_room(room_id, |room| {
+            room.participants.values().find_map(|participant| {
+                participant
+                    .published_tracks
+                    .get(&(stream_id.clone(), track_id.clone()))
+                    .cloned()
+            })
+        })?
     }
 
     fn latest_track_key_delivery(
@@ -2059,44 +2269,60 @@ impl RelayForwarder {
     /// Selection defers until the relay has at least one real downlink sample for
     /// the viewer, so a freshly connected viewer is never downswitched off the
     /// pre-measurement default before it has been measured.
-    async fn run_layer_selection(&self, viewer_id: i64, room_id: &str) {
+    pub(crate) async fn run_layer_selection(&self, viewer_id: i64, room_id: &str) {
         if !self.downlink_estimator.is_sampled(viewer_id) {
             return;
         }
-        let Some(room) = self.room_manager.get_room(room_id) else {
-            return;
-        };
-        let Some(participant) = room.participants.get(&viewer_id) else {
-            return;
-        };
         // Snapshot each video subscription (stream/track/viewport/active layer)
-        // so the room clone is not borrowed across the control-send awaits below.
-        let subscriptions: Vec<(StreamId, TrackId, Option<ViewportHint>, Option<u8>)> = participant
-            .track_subscriptions
-            .values()
-            .map(|subscription| {
-                (
-                    subscription.stream_id.clone(),
-                    subscription.track_id.clone(),
-                    subscription.viewport.clone(),
-                    subscription.active_layer,
-                )
+        // *and* the track it resolves to under a single borrow of the room, so
+        // nothing is held across the control-send awaits below. `ReceiverReport`
+        // reaches this from the control channel, so cloning the whole room here
+        // (every participant, published track and stored key ciphertext) let a
+        // few KB/s of ingress drive gigabytes per second of allocation.
+        #[allow(clippy::type_complexity)]
+        let subscriptions: Vec<(
+            StreamId,
+            TrackId,
+            Option<ViewportHint>,
+            Option<u8>,
+            PublishedTrack,
+        )> = self
+            .room_manager
+            .with_room(room_id, |room| {
+                let Some(participant) = room.participants.get(&viewer_id) else {
+                    return Vec::new();
+                };
+                participant
+                    .track_subscriptions
+                    .values()
+                    .filter_map(|subscription| {
+                        let track = find_published_track_in_room(
+                            room,
+                            &subscription.stream_id,
+                            &subscription.track_id,
+                        )?;
+                        // A single-layer track (VP9 floor or a collapsed ladder)
+                        // offers nothing to select between.
+                        if distinct_layer_count(&track) < 2 {
+                            return None;
+                        }
+                        Some((
+                            subscription.stream_id.clone(),
+                            subscription.track_id.clone(),
+                            subscription.viewport.clone(),
+                            subscription.active_layer,
+                            track,
+                        ))
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
 
         let egress_kbps = self.downlink_estimator.estimate_kbps(viewer_id);
         let loss = self.downlink_estimator.windowed_loss(viewer_id);
         let now = Instant::now();
 
-        for (stream_id, track_id, viewport, active_layer) in subscriptions {
-            let Some(track) = find_published_track_in_room(&room, &stream_id, &track_id) else {
-                continue;
-            };
-            // A single-layer track (VP9 floor or a collapsed ladder) offers
-            // nothing to select between.
-            if distinct_layer_count(&track) < 2 {
-                continue;
-            }
+        for (stream_id, track_id, viewport, active_layer, track) in subscriptions {
             self.evaluate_layer_selection(
                 viewer_id,
                 &track,

@@ -100,6 +100,14 @@ pub struct AppState {
     /// Set of user IDs currently connected to the gateway (online).
     pub online_users: Arc<DashSet<i64>>,
     /// Live presence payloads keyed by user ID.
+    ///
+    /// Tracks **online users only** and mirrors `online_users`: the gateway's
+    /// disconnect path removes the entry rather than parking an "offline"
+    /// payload in it. Nothing evicts from this map otherwise, so writing on
+    /// disconnect made it retain one JSON value per user that had ever connected
+    /// and grow without bound for the life of the process. A missing entry means
+    /// "offline"; readers must treat it that way rather than reintroduce a
+    /// stored offline placeholder.
     pub user_presences: Arc<DashMap<i64, serde_json::Value>>,
     /// Cached computed channel permissions: (user_id, channel_id) -> Permissions,
     /// with reverse indexes for targeted invalidation.

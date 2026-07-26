@@ -5,6 +5,35 @@ use crate::permissions;
 use paracord_db::DbPool;
 use paracord_models::permissions::Permissions;
 
+/// Bound on `spaces.icon_hash`.
+///
+/// The column is `TEXT` on purpose — it legitimately holds an inline `data:`
+/// URL as well as a hash — but it was not bounded at all: whatever the caller
+/// sent was stored verbatim and then broadcast in `GUILD_UPDATE` to every
+/// session in the guild, each writer materialising its own copy. One 2 MiB
+/// PATCH therefore cost ~2 MiB of transient egress allocation *per connected
+/// session*. 256 KiB of base64 is roughly 192 KiB of image, comfortably more
+/// than any space icon needs and small enough that the fan-out copy is not a
+/// weapon.
+const MAX_ICON_LEN: usize = 256 * 1024;
+
+/// Bound on the two free-form JSON settings blobs, which are stored and
+/// broadcast on exactly the same path as the icon. A real `hub_settings` or
+/// `bot_settings` object is a few kilobytes; 64 KiB holds a large bot roster
+/// with room to spare.
+const MAX_SETTINGS_LEN: usize = 64 * 1024;
+
+/// Reject an over-long value before it reaches the column, and therefore before
+/// it reaches the `GUILD_UPDATE` fan-out.
+fn ensure_within_len(value: Option<&str>, max: usize, field: &str) -> Result<(), CoreError> {
+    match value {
+        Some(v) if v.len() > max => Err(CoreError::BadRequest(format!(
+            "{field} must be {max} bytes or fewer"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Generate a random invite code.
 pub fn generate_invite_code(length: usize) -> String {
     const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
@@ -35,6 +64,8 @@ pub async fn create_guild_full(
     owner_id: i64,
     icon_hash: Option<&str>,
 ) -> Result<paracord_db::guilds::GuildRow, CoreError> {
+    ensure_within_len(icon_hash, MAX_ICON_LEN, "icon")?;
+
     let guild =
         paracord_db::guilds::create_guild(pool, guild_id, name, owner_id, icon_hash).await?;
 
@@ -109,6 +140,12 @@ pub async fn update_guild(
     discovery_tags: Option<&str>,
     allowed_roles: Option<&str>,
 ) -> Result<paracord_db::guilds::GuildRow, CoreError> {
+    // Length-check before the permission read: an over-long body is rejected
+    // without spending a pool connection on it.
+    ensure_within_len(icon_hash, MAX_ICON_LEN, "icon")?;
+    ensure_within_len(hub_settings, MAX_SETTINGS_LEN, "hub_settings")?;
+    ensure_within_len(bot_settings, MAX_SETTINGS_LEN, "bot_settings")?;
+
     let guild = paracord_db::guilds::get_guild(pool, guild_id)
         .await?
         .ok_or(CoreError::NotFound)?;

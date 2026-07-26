@@ -1512,14 +1512,27 @@ fn user_auth_json(user: &paracord_db::users::UserAuthRow) -> Value {
     })
 }
 
+/// How many open public spaces one registration will auto-join.
+///
+/// Registration is the cheapest request a client can make, and auto-join used
+/// to do two writes for *every* open public space on the instance. On a server
+/// that publishes many spaces that turns each signup into an unbounded write
+/// burst; the cap keeps the cost of a registration constant. Anything past the
+/// cap is still discoverable and joinable by hand.
+const MAX_AUTO_JOIN_SPACES: usize = 25;
+
 async fn auto_join_public_spaces(state: &AppState, user_id: i64) -> Result<(), ApiError> {
     let spaces = paracord_db::guilds::list_all_spaces(&state.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    for space in spaces.iter().filter(|s| {
-        s.visibility == "public"
-            && paracord_db::guilds::parse_allowed_role_ids(&s.allowed_roles).is_empty()
-    }) {
+    for space in spaces
+        .iter()
+        .filter(|s| {
+            s.visibility == "public"
+                && paracord_db::guilds::parse_allowed_role_ids(&s.allowed_roles).is_empty()
+        })
+        .take(MAX_AUTO_JOIN_SPACES)
+    {
         let _ = paracord_db::members::add_member(&state.db, user_id, space.id).await;
         let _ = paracord_db::roles::add_member_role(&state.db, user_id, space.id, space.id).await;
     }

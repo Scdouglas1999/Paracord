@@ -16,11 +16,15 @@ mod session;
 pub use compression::WsCompressor;
 #[doc(hidden)]
 pub use handler::{
-    run_session, test_acquire_preauth_slot, test_acquire_user_connection_slot,
-    test_buffered_event_count, test_drain_event_buffer, test_event_buffer_is_disconnected,
-    test_insert_cached_session, test_max_connections_per_user, test_max_preauth_per_ip,
-    test_push_buffered_event, test_release_event_buffer, test_release_preauth_slot,
-    wait_for_identify_or_resume,
+    run_session, test_acquire_ip_connection_slot, test_acquire_preauth_slot,
+    test_acquire_user_connection_slot, test_allow_gateway_handshake, test_buffered_event_count,
+    test_drain_event_buffer, test_event_buffer_is_disconnected, test_insert_cached_session,
+    test_mark_user_offline, test_max_connections_per_ip, test_max_connections_per_user,
+    test_max_control_frames_per_minute, test_max_guild_member_requests_per_minute,
+    test_max_handshakes_per_minute_per_ip, test_max_heartbeats_per_minute,
+    test_max_media_key_announces_per_minute, test_max_preauth_frames, test_max_preauth_per_ip,
+    test_push_buffered_event, test_release_event_buffer, test_release_ip_connection_slot,
+    test_release_preauth_slot, wait_for_identify_or_resume,
 };
 #[doc(hidden)]
 pub use session::Session;
@@ -172,6 +176,19 @@ async fn ws_upgrade(
     }
 
     let peer_ip = client_ip(&headers, connect_info.0);
+
+    // `/gateway` is merged into the app *after* `build_router()` has baked in its
+    // `.layer(...)` stack, so none of the HTTP middleware — rate limiting
+    // included — ever runs for this route. Meter the handshake here instead:
+    // enforcing it in the gateway itself also survives any future re-ordering of
+    // that merge, and is where the socket's own budgets already live.
+    if !handler::allow_gateway_handshake(peer_ip.as_deref()) {
+        tracing::warn!(
+            peer_ip = ?peer_ip,
+            "gateway: rejecting upgrade, per-IP handshake rate exceeded"
+        );
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
 
     let compress = params
         .get("compress")

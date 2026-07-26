@@ -393,9 +393,25 @@ async fn resolve_registered_peer_name(
     if candidate.is_empty() {
         return Ok(None);
     }
-    let peers = paracord_db::federation::list_federated_servers(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    // Reject over-long identifiers before touching the database at all. This
+    // runs pre-authentication on every transport request (the origin header has
+    // to be resolved before the right verification key can be looked up), and
+    // no registered peer can exceed the VARCHAR(255) identifier columns, so an
+    // over-long candidate is a guaranteed miss that need not cost a query.
+    if candidate.chars().count() > MAX_FEDERATION_IDENTIFIER_LEN {
+        return Ok(None);
+    }
+    // Targeted lookup rather than `list_federated_servers`: this used to
+    // materialize every registered peer on every request, including the ones
+    // about to be rejected, which handed an unauthenticated attacker a
+    // full-table scan per junk request.
+    let peers = paracord_db::federation::find_federated_servers_by_name_or_domain(
+        &state.db,
+        candidate,
+        &candidate.to_ascii_lowercase(),
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
     // Exact server_name first, then a case-insensitive server_name, then the
     // `domain` alias — the same precedence the alias-resolving helpers use.
     if let Some(peer) = peers.iter().find(|peer| peer.server_name == candidate) {
@@ -573,6 +589,13 @@ struct FederationTransportHeaders {
     /// unsigned and matches case-insensitively (and by `domain` alias), so it is
     /// never safe as a per-peer key.
     origin: String,
+    /// The `x-paracord-origin` header exactly as presented, before
+    /// canonicalization. Handlers that bind a request body's self-declared
+    /// `origin_server` to the signer compare against THIS, not [`Self::origin`]:
+    /// the body claim and the header are both unsigned peer input and the check
+    /// is that they agree, so folding either through alias resolution first
+    /// would let a peer's `domain` alias satisfy a `server_name` claim.
+    presented_origin: String,
     key_id: String,
     timestamp_ms: i64,
     signature_hex: String,
@@ -624,6 +647,7 @@ fn parse_transport_headers(headers: &HeaderMap) -> Result<FederationTransportHea
         .filter(|v| !v.is_empty())
         .map(|v| v.to_ascii_lowercase());
     Ok(FederationTransportHeaders {
+        presented_origin: origin.clone(),
         origin,
         key_id,
         timestamp_ms,
@@ -633,6 +657,26 @@ fn parse_transport_headers(headers: &HeaderMap) -> Result<FederationTransportHea
     })
 }
 
+/// Bind a parsed request body's self-declared `origin_server` to the peer that
+/// actually signed the transport.
+///
+/// Callers used to get this by handing `verify_transport_request` an
+/// `expected_origin`, which forced them to `serde_json::from_slice` the body
+/// *before* any signature was checked — up to the full request body limit of
+/// unauthenticated parsing on six internet-reachable endpoints. The transport
+/// signature covers the raw bytes and needs nothing from the parsed body, so
+/// verification now runs first and this check runs after, on the same exact
+/// string comparison as before.
+fn ensure_body_origin_matches_transport(
+    transport: &FederationTransportHeaders,
+    body_origin: &str,
+) -> Result<(), ApiError> {
+    if transport.presented_origin != body_origin {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(())
+}
+
 async fn verify_transport_request(
     state: &AppState,
     service: &FederationService,
@@ -640,7 +684,6 @@ async fn verify_transport_request(
     method: &str,
     path: &str,
     body_bytes: &[u8],
-    expected_origin: Option<&str>,
     enforce_replay_protection: bool,
 ) -> Result<FederationTransportHeaders, ApiError> {
     let mut transport = parse_transport_headers(headers)?;
@@ -650,11 +693,6 @@ async fn verify_transport_request(
             transport.protocol_version,
             paracord_federation::FEDERATION_PROTOCOL_SUPPORTED.join(", ")
         )));
-    }
-    if let Some(expected) = expected_origin {
-        if transport.origin != expected {
-            return Err(ApiError::Forbidden);
-        }
     }
 
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -949,6 +987,14 @@ async fn ingest_verified_payload(
     transport_origin: Option<&str>,
 ) -> Result<bool, ApiError> {
     validate_envelope_identifier_lengths(&payload)?;
+    // Applied HERE, not in the `POST /event` handler, for the same reason as the
+    // identifier check above: the catch-up puller
+    // (`run_federation_catchup_once`) ingests envelopes it pulled from a peer
+    // and never went through that handler, so the 1 MiB / depth-32 / 10k-element
+    // caps were simply absent on that path. A trusted peer could answer a
+    // catch-up fetch with oversized `content` and have it persisted and fanned
+    // out. Every ingest path funnels through this function.
+    validate_federation_content(&payload.content)?;
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -1089,19 +1135,55 @@ async fn ingest_verified_payload(
 
         // Relay newly accepted events to other trusted peers so non-full-mesh
         // topologies can still converge. Skip the immediate sender hop.
-        let relay_state = state.clone();
-        let relay_service = service.clone();
-        let relay_payload = payload.clone();
-        let skip_server = transport_origin.map(str::to_string);
-        tokio::spawn(async move {
-            relay_service
-                .forward_envelope_to_peers_except(
-                    &relay_state.db,
-                    &relay_payload,
-                    skip_server.as_deref(),
-                )
-                .await;
-        });
+        //
+        // Admission-controlled: this spawn was previously unbounded, one task
+        // per accepted event, each holding a full envelope clone and walking
+        // every trusted peer sequentially. Receivers re-relay what they accept
+        // and membership events go to every peer, so the mesh amplifies
+        // O(peers²) and a single peer's event stream could pin arbitrarily many
+        // tasks and outbound sockets. Shed rather than queue when the ceiling is
+        // reached — see `try_acquire_relay_fanout_slot` for why that is
+        // recoverable.
+        match paracord_federation::try_acquire_relay_fanout_slot() {
+            Some(permit) => {
+                let relay_state = state.clone();
+                let relay_service = service.clone();
+                let relay_payload = payload.clone();
+                let skip_server = transport_origin.map(str::to_string);
+                tokio::spawn(async move {
+                    // The permit is released when this task ends, including on
+                    // the deadline below — a mesh of black-holing peers must not
+                    // be able to hold a slot for the full retry budget of every
+                    // hop.
+                    let _permit = permit;
+                    let relayed = tokio::time::timeout(
+                        paracord_federation::RELAY_FANOUT_DEADLINE,
+                        relay_service.forward_envelope_to_peers_except(
+                            &relay_state.db,
+                            &relay_payload,
+                            skip_server.as_deref(),
+                        ),
+                    )
+                    .await;
+                    if relayed.is_err() {
+                        tracing::warn!(
+                            "federation: relay fan-out for event {} hit the {:?} deadline; \
+                             remaining peers will converge through the outbound queue and catch-up",
+                            relay_payload.event_id,
+                            paracord_federation::RELAY_FANOUT_DEADLINE,
+                        );
+                    }
+                });
+            }
+            None => {
+                tracing::warn!(
+                    "federation: shedding relay fan-out for event {} from {} — all {} fan-out slots are busy",
+                    payload.event_id,
+                    payload.origin_server,
+                    paracord_federation::MAX_CONCURRENT_RELAY_FANOUTS,
+                );
+            }
+        }
     }
 
     Ok(inserted)
@@ -1178,7 +1260,6 @@ pub async fn ingest_event(
         "POST",
         "/_paracord/federation/v1/event",
         &raw_body,
-        None,
         true,
     )
     .await?;
@@ -1219,9 +1300,8 @@ pub async fn ingest_event(
         }
     }
 
-    // Validate content size and depth
-    validate_federation_content(&payload.content)?;
-
+    // Content size/depth/collection caps are enforced by
+    // `ingest_verified_payload` so that the catch-up puller gets them too.
     verify_envelope_origin_signature(&state, &service, &payload).await?;
     let inserted =
         ingest_verified_payload(&state, &service, payload.clone(), Some(&transport.origin)).await?;
@@ -2751,7 +2831,7 @@ async fn authorize_federation_read_request(
     }
 
     let transport =
-        verify_transport_request(state, service, headers, "GET", path, &[], None, false).await?;
+        verify_transport_request(state, service, headers, "GET", path, &[], false).await?;
     Ok(FederationReadAuth::Peer {
         origin: transport.origin,
     })
@@ -2845,19 +2925,23 @@ pub async fn invite(
         return Err(ApiError::Forbidden);
     }
 
-    let body: FederationInviteRequest = serde_json::from_slice(&raw_body)
-        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
-    verify_transport_request(
+    // Verify the signature over the raw bytes BEFORE parsing them: this endpoint
+    // is unauthenticated and internet-reachable, so parsing first meant any
+    // anonymous caller could spend a full request body's worth of JSON parsing
+    // per request.
+    let transport = verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/invite",
         &raw_body,
-        Some(body.origin_server.as_str()),
         true,
     )
     .await?;
+    let body: FederationInviteRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
+    ensure_body_origin_matches_transport(&transport, &body.origin_server)?;
 
     let guild_id = parse_local_room_guild_id(&service, &body.room_id)
         .ok_or(ApiError::BadRequest("Invalid room_id format".to_string()))?;
@@ -2896,19 +2980,20 @@ pub async fn join(
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
-    let body: FederationJoinRequest = serde_json::from_slice(&raw_body)
-        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
-    verify_transport_request(
+    // Signature first, parse second — see `invite`.
+    let transport = verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/join",
         &raw_body,
-        Some(body.origin_server.as_str()),
         true,
     )
     .await?;
+    let body: FederationJoinRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
+    ensure_body_origin_matches_transport(&transport, &body.origin_server)?;
 
     let identity = FederatedIdentity::parse(&body.user_id)
         .ok_or(ApiError::BadRequest("Invalid user_id".to_string()))?;
@@ -2977,19 +3062,20 @@ pub async fn leave(
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
-    let body: FederationLeaveRequest = serde_json::from_slice(&raw_body)
-        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
-    verify_transport_request(
+    // Signature first, parse second — see `invite`.
+    let transport = verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/leave",
         &raw_body,
-        Some(body.origin_server.as_str()),
         true,
     )
     .await?;
+    let body: FederationLeaveRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
+    ensure_body_origin_matches_transport(&transport, &body.origin_server)?;
 
     let identity = FederatedIdentity::parse(&body.user_id)
         .ok_or(ApiError::BadRequest("Invalid user_id".to_string()))?;
@@ -3044,19 +3130,20 @@ pub async fn media_token(
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
-    let body: FederationMediaTokenRequest = serde_json::from_slice(&raw_body)
-        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
-    verify_transport_request(
+    // Signature first, parse second — see `invite`.
+    let transport = verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/media/token",
         &raw_body,
-        Some(body.origin_server.as_str()),
         true,
     )
     .await?;
+    let body: FederationMediaTokenRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
+    ensure_body_origin_matches_transport(&transport, &body.origin_server)?;
 
     let identity = FederatedIdentity::parse(&body.user_id)
         .ok_or(ApiError::BadRequest("Invalid user_id".to_string()))?;
@@ -3145,19 +3232,20 @@ pub async fn media_relay(
     if !service.is_enabled() {
         return Err(ApiError::Forbidden);
     }
-    let body: FederationMediaRelayRequest = serde_json::from_slice(&raw_body)
-        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
-    verify_transport_request(
+    // Signature first, parse second — see `invite`.
+    let transport = verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/media/relay",
         &raw_body,
-        Some(body.origin_server.as_str()),
         true,
     )
     .await?;
+    let body: FederationMediaRelayRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
+    ensure_body_origin_matches_transport(&transport, &body.origin_server)?;
 
     let identity = FederatedIdentity::parse(&body.user_id)
         .ok_or(ApiError::BadRequest("Invalid user_id".to_string()))?;
@@ -3515,12 +3603,34 @@ fn normalize_moderation_action(action: &str, allow_unblock: bool) -> Option<&'st
     }
 }
 
+/// Maximum number of entries a single moderation-list apply may carry.
+///
+/// Each entry costs a peer-name resolution plus a trust-state upsert, so the
+/// batch is a direct multiplier on database work. The remote path is fed by a
+/// subscribed source that is admin-configured but may be hostile or
+/// compromised, and its body cap ([`MODERATION_LIST_RESPONSE_BODY_LIMIT`], 4
+/// MiB) permits well over a hundred thousand minimal entries — enough to tie up
+/// the background sync loop indefinitely. Real published blocklists are in the
+/// hundreds to low thousands, so 10k leaves an order of magnitude of headroom.
+const MAX_MODERATION_ENTRIES_PER_APPLY: usize = 10_000;
+
 async fn apply_moderation_entries(
     state: &AppState,
     source: &str,
     entries: &[ModerationListEntry],
     allow_unblock: bool,
 ) -> Result<usize, ApiError> {
+    // Refuse rather than truncate: silently applying the first 10k entries of a
+    // larger list would leave the operator believing a block landed when it did
+    // not. The admin path surfaces this as a 400 telling them to split the
+    // batch; the subscription path records it in `last_error`.
+    if entries.len() > MAX_MODERATION_ENTRIES_PER_APPLY {
+        return Err(ApiError::BadRequest(format!(
+            "moderation list contains {} entries, which exceeds the maximum of {} per apply",
+            entries.len(),
+            MAX_MODERATION_ENTRIES_PER_APPLY
+        )));
+    }
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut applied = 0usize;
     for entry in entries {
@@ -3979,19 +4089,20 @@ pub async fn file_token(
         return Err(ApiError::Forbidden);
     }
 
-    let body: FederationFileTokenRequest = serde_json::from_slice(&raw_body)
-        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
-    verify_transport_request(
+    // Signature first, parse second — see `invite`.
+    let transport = verify_transport_request(
         &state,
         &service,
         &headers,
         "POST",
         "/_paracord/federation/v1/file/token",
         &raw_body,
-        Some(body.origin_server.as_str()),
         true,
     )
     .await?;
+    let body: FederationFileTokenRequest = serde_json::from_slice(&raw_body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid request body: {e}")))?;
+    ensure_body_origin_matches_transport(&transport, &body.origin_server)?;
 
     let identity = FederatedIdentity::parse(&body.user_id)
         .ok_or(ApiError::BadRequest("Invalid user_id".to_string()))?;

@@ -39,7 +39,49 @@ pub mod routes;
 pub mod secure_tokens;
 
 const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
+/// Outer wall on an attachment request body.
+///
+/// This is a backstop, not the policy: the upload handler resolves the real
+/// ceiling from `min(config.max_upload_size, guild policy max_file_size)` and
+/// enforces it *while reading*, so an over-limit body is refused before it is
+/// fully resident. This constant only has to sit above any value an operator
+/// would plausibly configure.
+///
+/// It is deliberately not derived from config — the router is built once, and a
+/// per-request limit would have to come from state the layer cannot see. An
+/// operator who sets `max_upload_size` above this still gets a hard refusal at
+/// the router, which is the safe direction; `resolve_upload_limits` is what
+/// makes lowering the knob actually bound memory.
 const ATTACHMENT_REQUEST_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Wall-clock ceiling on a single HTTP request.
+///
+/// There was no ceiling at all: a handler that ran long ran to completion, and
+/// because a handler holds a database connection for the whole time it queries,
+/// a few slow requests could occupy the entire pool while the rest of the
+/// server waited. This bounds how long any one request can hold that hardware.
+///
+/// 30s is deliberately far above every network timeout the API sets for itself
+/// (OpenGraph 5s, Tenor 5s, the LiveKit Twirp proxy 10s) and above the pool's
+/// own 5s acquire timeout, so a slow-but-finite request still returns its real
+/// error rather than a spurious 503. Anything that legitimately runs longer is
+/// listed in [`request_timeout_exempt`].
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Resolve the request timeout, honouring `PARACORD_HTTP_REQUEST_TIMEOUT_SECS`.
+///
+/// Read once per [`build_router`] call and captured by the layer rather than
+/// memoised in a `OnceLock` like the other env knobs in this crate: routers are
+/// built more than once per process (every integration test builds its own), and
+/// a memoised value would freeze whatever the first builder happened to see.
+fn resolve_request_timeout() -> Duration {
+    std::env::var("PARACORD_HTTP_REQUEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT)
+}
 const TRACE_ID_HEADER: &str = "x-paracord-trace-id";
 const ACCESS_COOKIE_NAME: &str = "paracord_access";
 const CSRF_COOKIE_NAME: &str = "paracord_csrf";
@@ -47,6 +89,7 @@ const CSRF_HEADER_NAME: &str = "x-paracord-csrf";
 
 pub fn build_router() -> Router<AppState> {
     let cors = build_cors_layer();
+    let request_timeout = resolve_request_timeout();
     Router::new()
         // Health
         .route("/health", get(health))
@@ -899,6 +942,9 @@ pub fn build_router() -> Router<AppState> {
         )
         // Middleware layers
         .layer(DefaultBodyLimit::max(DEFAULT_REQUEST_BODY_LIMIT_BYTES))
+        .layer(from_fn(move |req, next| {
+            request_timeout_middleware(request_timeout, req, next)
+        }))
         .layer(from_fn(metrics_middleware))
         .layer(from_fn(rate_limit_middleware))
         .layer(from_fn(csrf_middleware))
@@ -1348,6 +1394,72 @@ pub fn spawn_http_rate_limiter_cleanup(shutdown: Arc<Notify>) {
             }
         }
     });
+}
+
+/// Route templates deliberately left outside the request timeout, because their
+/// duration is set by the client or the operator rather than by server work:
+///
+/// * `/api/v2/rt/events` — the SSE event stream, long-lived by design.
+/// * `/livekit/...` — voice signaling, including the WebSocket upgrade.
+/// * the attachment upload — the handler reads up to 64 MiB of multipart body
+///   at whatever rate the uploader can manage.
+/// * the federated file proxy — it fetches from another, possibly slow, server.
+/// * the channel summary — it calls an LLM under its own configurable timeout
+///   (`ai_timeout_seconds`, which clamps as high as 120s).
+/// * the admin backup/restore endpoints — archiving or restoring the whole
+///   database and media tree legitimately takes minutes, and they are reachable
+///   only by an operator, who is not the threat here.
+///
+/// Everything else is bounded. Note that only the *response future* is timed:
+/// once a handler has returned, a streaming body (SSE, `download_backup`) runs
+/// to completion on its own, so this list covers handlers that are slow before
+/// they respond, not responses that are slow to drain.
+fn request_timeout_exempt(path: &str) -> bool {
+    if path == "/livekit" || path.starts_with("/livekit/") {
+        return true;
+    }
+    matches!(
+        path,
+        "/api/v2/rt/events"
+            | "/api/v1/channels/{channel_id}/attachments"
+            | "/api/v1/channels/{channel_id}/summary"
+            | "/api/v1/federated-files/{origin_server}/{attachment_id}"
+            | "/api/v1/admin/backup"
+            | "/api/v1/admin/restore"
+            | "/api/v1/admin/backups/{name}"
+    )
+}
+
+async fn request_timeout_middleware(timeout: Duration, req: Request, next: Next) -> Response {
+    // Route templates, not concrete paths: the exempt set is expressed in terms
+    // of the router's own patterns so a renamed path parameter cannot silently
+    // drop an entry.
+    let path = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(axum::extract::MatchedPath::as_str)
+        .unwrap_or_else(|| req.uri().path())
+        .to_string();
+    if request_timeout_exempt(&path) {
+        return next.run(req).await;
+    }
+
+    let method = req.method().clone();
+    match tokio::time::timeout(timeout, next.run(req)).await {
+        Ok(response) => response,
+        Err(_) => {
+            // Dropping the handler future here releases whatever it was holding
+            // — most importantly its database connection, which is the resource
+            // this bound exists to protect.
+            tracing::error!(
+                %method,
+                path = %path,
+                timeout_secs = timeout.as_secs(),
+                "request exceeded the global timeout and was aborted"
+            );
+            crate::error::ApiError::ServiceUnavailable("request timed out".into()).into_response()
+        }
+    }
 }
 
 async fn rate_limit_middleware(req: Request, next: Next) -> Response {

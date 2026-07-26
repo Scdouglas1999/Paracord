@@ -15,6 +15,13 @@ const MAX_STICKER_NAME_LEN: usize = 64;
 const MAX_STICKER_DESCRIPTION_LEN: usize = 200;
 const MAX_STICKER_IMAGE_SIZE: usize = 1024 * 1024; // 1MB
 
+/// Stickers per space. Sticker assets go through the storage backend but are
+/// not attachments, so the per-guild storage accounting never sees them and
+/// nothing else bounded their count: one member with MANAGE_EMOJIS could fill
+/// the disk 1 MB at a time. 60 x 1 MB caps a space at roughly 60 MB of
+/// stickers, in the same range as the emoji cap.
+const MAX_STICKERS_PER_GUILD: usize = 60;
+
 fn sticker_to_json(sticker: &paracord_db::stickers::StickerRow) -> Value {
     json!({
         "id": sticker.id.to_string(),
@@ -73,6 +80,17 @@ pub async fn create_sticker(
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     ensure_manage_stickers(&state, guild_id, auth.user_id).await?;
+
+    // Checked before the body is consumed so a space that is already at its cap
+    // never buffers the image at all.
+    let existing = paracord_db::stickers::list_stickers(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if existing.len() >= MAX_STICKERS_PER_GUILD {
+        return Err(ApiError::Conflict(format!(
+            "This space already has the maximum of {MAX_STICKERS_PER_GUILD} stickers"
+        )));
+    }
 
     let mut name: Option<String> = None;
     let mut description: Option<String> = None;

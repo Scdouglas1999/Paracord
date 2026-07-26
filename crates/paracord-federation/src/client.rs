@@ -21,6 +21,77 @@ const MAX_DOWNLOAD_REDIRECTS: usize = 3;
 /// limit should pass it via [`FederationClient::download_federated_file_with_limit`].
 const DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 
+/// Cap on a buffered federation control-plane JSON response (1 MiB).
+///
+/// Every read below used to be a bare `resp.json()`, which buffers to end of
+/// stream with no ceiling. The peer on the other end of a federation read is
+/// trusted to *speak the protocol*, not to be well behaved: a hostile or
+/// compromised peer could answer any of these with an endless body and exhaust
+/// this server's memory, at 15s per attempt with no size gate at all. 1 MiB is
+/// far above the largest legitimate control response — a key bundle, a join
+/// ack, a 50-entry discovery page.
+const MAX_CONTROL_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// Cap on a single fetched event envelope (2 MiB). Matches the inbound request
+/// body limit, so a peer cannot hand back an envelope larger than one it could
+/// have legitimately POSTed to us in the first place.
+const MAX_EVENT_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Cap on a paginated batch of event envelopes from `/events` (8 MiB).
+///
+/// The catch-up puller asks for at most 500 events per room and every accepted
+/// envelope's `content` is capped at 1 MiB by the ingest validator, so a
+/// legitimate batch of text messages is orders of magnitude below this. The cap
+/// exists because the peer chooses the response size, not us: `limit` in the
+/// query string is a request, and a hostile peer may return however much it
+/// likes.
+const MAX_EVENTS_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Buffer a response body with a hard byte ceiling, then deserialize it.
+///
+/// `reqwest::Response::json()` reads to end of stream with no limit, so it is
+/// never safe against a remote we do not control. The advertised
+/// `Content-Length` is rejected up front and the body is then streamed with a
+/// running counter, so a response that omits or understates it still cannot
+/// exhaust memory — the same shape as
+/// [`FederationClient::download_federated_file_with_limit`].
+///
+/// `what` names the response for error messages ("keys response", "server
+/// info", …) and is rendered as `invalid {what}: {cause}`.
+async fn read_json_capped<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+    max_bytes: usize,
+    what: &str,
+) -> Result<T, FederationError> {
+    let too_large = || {
+        FederationError::RemoteError(format!(
+            "{what} exceeds the maximum accepted size of {max_bytes} bytes"
+        ))
+    };
+    if resp
+        .content_length()
+        .is_some_and(|len| len > max_bytes as u64)
+    {
+        return Err(too_large());
+    }
+
+    let mut resp = resp;
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| FederationError::Http(e.to_string()))?
+    {
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    serde_json::from_slice(&body)
+        .map_err(|e| FederationError::RemoteError(format!("invalid {what}: {e}")))
+}
+
 #[derive(Debug, Clone)]
 struct TransportSigner {
     origin: String,
@@ -106,11 +177,7 @@ impl FederationClient {
             base_url.trim_end_matches('/')
         );
         let resp = self.get_with_retry(&url).await?;
-        let info: ServerInfo = resp
-            .json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid server info: {e}")))?;
-        Ok(info)
+        read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "server info").await
     }
 
     /// Fetch the public keys of a remote server.
@@ -120,11 +187,7 @@ impl FederationClient {
     ) -> Result<FederationKeysResponse, FederationError> {
         let url = format!("{}/keys", federation_endpoint.trim_end_matches('/'));
         let resp = self.get_with_retry(&url).await?;
-        let keys: FederationKeysResponse = resp
-            .json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid keys response: {e}")))?;
-        Ok(keys)
+        read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "keys response").await
     }
 
     /// Send a federation event envelope to a remote server.
@@ -137,11 +200,7 @@ impl FederationClient {
         let body_bytes =
             serde_json::to_vec(envelope).map_err(|e| FederationError::Http(e.to_string()))?;
         let resp = self.post_with_retry(&url, body_bytes).await?;
-        let body: PostEventResponse = resp
-            .json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid event response: {e}")))?;
-        Ok(body)
+        read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "event response").await
     }
 
     /// Send a federated event (higher-level type) to a remote server by
@@ -185,9 +244,7 @@ impl FederationClient {
         let resp = self
             .get_with_retry_with_headers(&url, &extra_headers)
             .await?;
-        resp.json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid event response: {e}")))
+        read_json_capped(resp, MAX_EVENT_RESPONSE_BYTES, "event response").await
     }
 
     /// Fetch messages/events from a remote server for a given room, paginated.
@@ -206,11 +263,14 @@ impl FederationClient {
             limit
         );
         let resp = self.get_with_retry_with_headers(&url, &[]).await?;
-        let events: FederationEventsResponse = resp
-            .json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid events response: {e}")))?;
-        Ok(events.events)
+        let events: FederationEventsResponse =
+            read_json_capped(resp, MAX_EVENTS_RESPONSE_BYTES, "events response").await?;
+        // `limit` in the query string is a request, not a constraint the peer is
+        // obliged to honour. Truncate to what we asked for so one hostile peer
+        // cannot make the caller's per-room catch-up loop unboundedly long.
+        let mut events = events.events;
+        events.truncate(limit.clamp(1, i64::from(u32::MAX)) as usize);
+        Ok(events)
     }
 
     pub async fn send_invite(
@@ -221,9 +281,7 @@ impl FederationClient {
         let url = format!("{}/invite", federation_endpoint.trim_end_matches('/'));
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
         let resp = self.post_with_retry(&url, body).await?;
-        resp.json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid invite response: {e}")))
+        read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "invite response").await
     }
 
     pub async fn send_join(
@@ -234,9 +292,7 @@ impl FederationClient {
         let url = format!("{}/join", federation_endpoint.trim_end_matches('/'));
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
         let resp = self.post_with_retry(&url, body).await?;
-        resp.json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid join response: {e}")))
+        read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "join response").await
     }
 
     pub async fn send_leave(
@@ -247,9 +303,7 @@ impl FederationClient {
         let url = format!("{}/leave", federation_endpoint.trim_end_matches('/'));
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
         let resp = self.post_with_retry(&url, body).await?;
-        resp.json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid leave response: {e}")))
+        read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "leave response").await
     }
 
     pub async fn request_media_token(
@@ -260,9 +314,7 @@ impl FederationClient {
         let url = format!("{}/media/token", federation_endpoint.trim_end_matches('/'));
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
         let resp = self.post_with_retry(&url, body).await?;
-        resp.json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid media token response: {e}")))
+        read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "media token response").await
     }
 
     pub async fn relay_media_action(
@@ -273,9 +325,7 @@ impl FederationClient {
         let url = format!("{}/media/relay", federation_endpoint.trim_end_matches('/'));
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
         let resp = self.post_with_retry(&url, body).await?;
-        resp.json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid media relay response: {e}")))
+        read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "media relay response").await
     }
 
     pub async fn request_file_token(
@@ -286,9 +336,7 @@ impl FederationClient {
         let url = format!("{}/file/token", federation_endpoint.trim_end_matches('/'));
         let body = serde_json::to_vec(payload).map_err(|e| FederationError::Http(e.to_string()))?;
         let resp = self.post_with_retry(&url, body).await?;
-        resp.json()
-            .await
-            .map_err(|e| FederationError::RemoteError(format!("invalid file token response: {e}")))
+        read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "file token response").await
     }
 
     /// Fetch a peer's discoverable guilds over the signed federation transport.
@@ -326,9 +374,8 @@ impl FederationClient {
         }
 
         let resp = self.get_with_retry_with_headers(&url, &[]).await?;
-        let payload: serde_json::Value = resp.json().await.map_err(|e| {
-            FederationError::RemoteError(format!("invalid peer discovery response: {e}"))
-        })?;
+        let payload: serde_json::Value =
+            read_json_capped(resp, MAX_CONTROL_RESPONSE_BYTES, "peer discovery response").await?;
         Ok(payload
             .get("guilds")
             .and_then(|v| v.as_array())

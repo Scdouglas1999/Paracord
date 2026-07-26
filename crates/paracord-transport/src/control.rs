@@ -268,7 +268,119 @@ pub enum ControlError {
     Io(#[from] std::io::Error),
 }
 
+/// Whether one identifier string is short enough to accept off the wire.
+fn identifier_ok(value: &str) -> bool {
+    value.len() <= crate::protocol::MAX_IDENTIFIER_LEN
+}
+
+fn track_identifiers_ok(track: &PublishedTrack) -> bool {
+    identifier_ok(&track.stream_id.0) && identifier_ok(&track.track_id.0)
+}
+
 impl ControlMessage {
+    /// Whether every identifier this message carries is within
+    /// [`MAX_IDENTIFIER_LEN`](crate::protocol::MAX_IDENTIFIER_LEN).
+    ///
+    /// The binary frame path already refuses over-long `stream_id`/`track_id`
+    /// (they are `u8`-length-prefixed and checked in
+    /// [`VideoFrameMetadata`](crate::protocol::VideoFrameMetadata)), but the JSON
+    /// control plane bounded the same strings only by [`MAX_MESSAGE_SIZE`]
+    /// (256 KiB). Those identifiers become `HashMap` keys in room state
+    /// (`published_tracks`, `track_subscriptions`), are re-broadcast to every
+    /// participant, and are retained for the lifetime of the call — so a peer
+    /// could turn ~10 KB/s of ingress into hundreds of megabytes of retained room
+    /// state. The same reasoning covers `room_id`/`session_id`, which are stored
+    /// per participant and echoed in `SessionState`.
+    ///
+    /// The match is exhaustive on purpose: a new variant carrying an identifier
+    /// must make an explicit decision here rather than defaulting to unbounded.
+    pub fn identifiers_within_limits(&self) -> bool {
+        match self {
+            Self::SessionJoin {
+                room_id,
+                session_id,
+                ..
+            }
+            | Self::SessionLeave {
+                room_id,
+                session_id,
+            } => identifier_ok(room_id) && identifier_ok(session_id),
+            Self::SessionState { participants } => participants
+                .iter()
+                .all(|participant| identifier_ok(&participant.session_id)),
+            Self::SessionParticipantJoin { participant } => identifier_ok(&participant.session_id),
+            Self::TrackPublish { track } => track_identifiers_ok(track),
+            Self::SubscribeStream { subscription } => {
+                identifier_ok(&subscription.stream_id.0) && identifier_ok(&subscription.track_id.0)
+            }
+            Self::TrackUnpublish {
+                stream_id,
+                track_id,
+            }
+            | Self::UnsubscribeStream {
+                stream_id,
+                track_id,
+            }
+            | Self::SubscriptionAck {
+                stream_id,
+                track_id,
+                ..
+            }
+            | Self::TrackLayers {
+                stream_id,
+                track_id,
+                ..
+            }
+            | Self::StreamKeyAnnounce {
+                stream_id,
+                track_id,
+                ..
+            }
+            | Self::StreamKeyDeliver {
+                stream_id,
+                track_id,
+                ..
+            }
+            | Self::RequestStreamKey {
+                stream_id,
+                track_id,
+                ..
+            }
+            | Self::ReceiverReport {
+                stream_id,
+                track_id,
+                ..
+            }
+            | Self::RequestKeyframe {
+                stream_id,
+                track_id,
+                ..
+            } => identifier_ok(&stream_id.0) && identifier_ok(&track_id.0),
+            // No identifier that is retained as a key or re-broadcast: the auth
+            // token is validated and dropped, key material is length-bounded by
+            // its own caps, and the file-transfer ids/tokens are scoped to a
+            // single stream handled outside the relay's room state.
+            Self::Auth { .. }
+            | Self::Subscribe { .. }
+            | Self::Unsubscribe { .. }
+            | Self::SessionParticipantLeave { .. }
+            | Self::KeyAnnounce { .. }
+            | Self::KeyDeliver { .. }
+            | Self::BandwidthFeedback { .. }
+            | Self::Ping
+            | Self::Pong
+            | Self::FileTransferInit { .. }
+            | Self::FileTransferAccept { .. }
+            | Self::FileTransferReject { .. }
+            | Self::FileDownloadRequest { .. }
+            | Self::FileDownloadAccept { .. }
+            | Self::FileTransferProgress { .. }
+            | Self::FileTransferDone { .. }
+            | Self::FileTransferError { .. }
+            | Self::FileTransferCancel { .. } => true,
+        }
+    }
+
     /// Encode a control message into a length-prefixed frame.
     pub fn encode(&self) -> Result<Bytes, ControlError> {
         let json = serde_json::to_vec(self)?;

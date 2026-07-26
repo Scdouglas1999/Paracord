@@ -517,7 +517,8 @@ pub async fn get_channel_threads_typed(
                  FROM channels
                  WHERE parent_id = $1
                    AND channel_type = 6
-                   AND COALESCE((thread_metadata::jsonb ->> 'archived')::boolean, FALSE) = FALSE
+                   AND COALESCE(CASE WHEN thread_metadata LIKE '{%' \
+                       THEN (thread_metadata::jsonb ->> 'archived')::boolean END, FALSE) = FALSE
                  ORDER BY created_at DESC",
             )
             .bind(parent_channel_id)
@@ -564,7 +565,8 @@ pub async fn get_archived_threads_typed(
 ) -> Result<Vec<ChannelRow>, DbError> {
     let archived_predicate = match crate::active_database_engine() {
         crate::DatabaseEngine::Postgres => {
-            "COALESCE((thread_metadata::jsonb ->> 'archived')::boolean, FALSE) = TRUE"
+            "COALESCE(CASE WHEN thread_metadata LIKE '{%' \
+             THEN (thread_metadata::jsonb ->> 'archived')::boolean END, FALSE) = TRUE"
         }
         crate::DatabaseEngine::Sqlite => {
             "COALESCE(json_extract(thread_metadata, '$.archived'), 0) = 1"
@@ -814,13 +816,24 @@ pub async fn create_forum_post(
     .await
 }
 
-/// Get forum posts (threads) under a forum channel, sorted by latest activity or creation.
+/// Hard ceiling for callers that ask for "every" post under a forum channel.
+///
+/// Forum posts are channel rows a member can create without limit, so an
+/// unpaginated read grew with the table forever. Callers that genuinely want a
+/// whole-forum view (the forum-wide message search) stop at this many rows;
+/// user-facing listings page with [`get_forum_posts_page`] instead.
+pub const MAX_FORUM_POSTS_SCAN: i64 = 500;
+
+/// Get one page of forum posts (threads) under a forum channel, sorted by
+/// latest activity or creation.
 /// sort_order: 0 = latest activity (last_message_id desc), 1 = creation date desc
-pub async fn get_forum_posts_typed(
+pub async fn get_forum_posts_page_typed(
     pool: &DbPool,
     forum_channel_id: ChannelId,
     sort_order: i32,
     include_archived: bool,
+    limit: i64,
+    offset: i64,
 ) -> Result<Vec<ChannelRow>, DbError> {
     let order = if sort_order == 1 {
         "created_at DESC"
@@ -833,7 +846,17 @@ pub async fn get_forum_posts_typed(
     } else {
         match crate::active_database_engine() {
             crate::DatabaseEngine::Postgres => {
-                " AND COALESCE((thread_metadata::jsonb ->> 'archived')::boolean, FALSE) = FALSE"
+                // The cast has to be guarded. `thread_metadata` is TEXT, and a
+                // row holding an empty string makes `''::jsonb` raise
+                // "invalid input syntax for type json", which fails the whole
+                // query rather than that one row. SQLite's `json_extract`
+                // returns NULL for anything unparseable and carries on, so the
+                // engines disagreed and this was a PostgreSQL-only 500.
+                // `LIKE '{%'` keeps the cast off every value that cannot be a
+                // JSON object; anything else is treated as not archived, which
+                // is what SQLite already did.
+                " AND COALESCE(CASE WHEN thread_metadata LIKE '{%' \
+                   THEN (thread_metadata::jsonb ->> 'archived')::boolean END, FALSE) = FALSE"
                     .to_string()
             }
             crate::DatabaseEngine::Sqlite => {
@@ -846,15 +869,58 @@ pub async fn get_forum_posts_typed(
         "SELECT id, space_id, name, topic, channel_type, position, parent_id, CASE WHEN nsfw THEN 1 ELSE 0 END AS nsfw, rate_limit_per_user, bitrate, user_limit, last_message_id, required_role_ids, thread_metadata, owner_id, message_count, applied_tags, default_sort_order, created_at
          FROM channels
          WHERE parent_id = $1 AND channel_type = 6{}
-         ORDER BY {}",
+         ORDER BY {}
+         LIMIT $2 OFFSET $3",
         archive_filter, order
     );
 
     let rows = sqlx::query_as::<_, ChannelRow>(&sql)
         .bind(forum_channel_id)
+        .bind(limit.max(0))
+        .bind(offset.max(0))
         .fetch_all(pool)
         .await?;
     Ok(rows)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn get_forum_posts_page(
+    pool: &DbPool,
+    forum_channel_id: i64,
+    sort_order: i32,
+    include_archived: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ChannelRow>, DbError> {
+    get_forum_posts_page_typed(
+        pool,
+        ChannelId::new(forum_channel_id),
+        sort_order,
+        include_archived,
+        limit,
+        offset,
+    )
+    .await
+}
+
+/// Get forum posts (threads) under a forum channel, capped at
+/// [`MAX_FORUM_POSTS_SCAN`]. For callers that want a whole-forum view; anything
+/// user-facing should page with [`get_forum_posts_page`].
+pub async fn get_forum_posts_typed(
+    pool: &DbPool,
+    forum_channel_id: ChannelId,
+    sort_order: i32,
+    include_archived: bool,
+) -> Result<Vec<ChannelRow>, DbError> {
+    get_forum_posts_page_typed(
+        pool,
+        forum_channel_id,
+        sort_order,
+        include_archived,
+        MAX_FORUM_POSTS_SCAN,
+        0,
+    )
+    .await
 }
 
 /// Raw i64 shim kept for API compat.
@@ -879,7 +945,7 @@ pub async fn get_forum_tags_typed(
     channel_id: ChannelId,
 ) -> Result<Vec<ForumTagRow>, DbError> {
     let rows = sqlx::query_as::<_, ForumTagRow>(
-        "SELECT id, channel_id, name, emoji, CASE WHEN moderated THEN 1 ELSE 0 END AS moderated, position, created_at
+        "SELECT id, channel_id, name, emoji, CASE WHEN moderated <> 0 THEN 1 ELSE 0 END AS moderated, position, created_at
          FROM forum_tags WHERE channel_id = $1 ORDER BY position",
     )
     .bind(channel_id)
@@ -910,7 +976,7 @@ pub async fn create_forum_tag_typed(
     let row = sqlx::query_as::<_, ForumTagRow>(
         "INSERT INTO forum_tags (id, channel_id, name, emoji, moderated, position)
          VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, channel_id, name, emoji, CASE WHEN moderated THEN 1 ELSE 0 END AS moderated, position, created_at",
+         RETURNING id, channel_id, name, emoji, CASE WHEN moderated <> 0 THEN 1 ELSE 0 END AS moderated, position, created_at",
     )
     .bind(id)
     .bind(channel_id)

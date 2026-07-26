@@ -214,6 +214,41 @@ pub async fn list_federated_servers(pool: &DbPool) -> Result<Vec<FederatedServer
     .await
 }
 
+/// Candidate rows whose `server_name` or `domain` could name `candidate`.
+///
+/// This exists so peer-name canonicalization does not have to pull the whole
+/// `federated_servers` table into memory. That resolution runs on EVERY
+/// federation transport request — including the ones that are about to be
+/// rejected — so an unauthenticated attacker could drive a full-table scan plus
+/// a full row materialization per request just by POSTing junk at an endpoint.
+///
+/// `lowered_candidate` must be the ASCII-lowercased form of `candidate`; both
+/// are bound so the exact match can use the unique `server_name` index and the
+/// case-insensitive arms can use the `LOWER(...)` expression indexes added
+/// alongside this function. SQLite's `LOWER` is ASCII-only, which is exactly the
+/// `eq_ignore_ascii_case` rule the caller applies; PostgreSQL's is
+/// locale-aware and therefore returns a superset for non-ASCII names, which the
+/// caller then narrows. Ordering matches `list_federated_servers` so tie-breaks
+/// between two rows resolve the same way they always did.
+pub async fn find_federated_servers_by_name_or_domain(
+    pool: &DbPool,
+    candidate: &str,
+    lowered_candidate: &str,
+) -> Result<Vec<FederatedServerRow>, sqlx::Error> {
+    sqlx::query_as::<_, FederatedServerRow>(
+        "SELECT id, server_name, domain, federation_endpoint, public_key_hex, key_id, CASE WHEN trusted THEN 1 ELSE 0 END AS trusted, last_seen_at, created_at
+         FROM federated_servers
+         WHERE server_name = $1
+            OR LOWER(server_name) = $2
+            OR LOWER(domain) = $2
+         ORDER BY created_at ASC",
+    )
+    .bind(candidate)
+    .bind(lowered_candidate)
+    .fetch_all(pool)
+    .await
+}
+
 /// List only trusted federated servers.
 pub async fn list_trusted_federated_servers(
     pool: &DbPool,
@@ -1007,6 +1042,25 @@ pub async fn purge_expired_outbound_events(
     .execute(pool)
     .await?
     .rows_affected();
+    Ok(rows)
+}
+
+/// Purge delivery-attempt records older than `cutoff_ms`.
+///
+/// `record_delivery_attempt` appends one row per outbound POST and nothing ever
+/// removed them, so the table grew without bound — a peer that is simply
+/// unreachable produced a row per event per retry, forever. Retention is
+/// driven by `paracord_federation::DELIVERY_ATTEMPT_RETENTION_MS` from the same
+/// background pass that purges the outbound queue.
+pub async fn purge_expired_delivery_attempts(
+    pool: &DbPool,
+    cutoff_ms: i64,
+) -> Result<u64, sqlx::Error> {
+    let rows = sqlx::query("DELETE FROM federation_delivery_attempts WHERE attempted_at_ms < $1")
+        .bind(cutoff_ms)
+        .execute(pool)
+        .await?
+        .rows_affected();
     Ok(rows)
 }
 

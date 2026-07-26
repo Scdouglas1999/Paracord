@@ -474,6 +474,15 @@ pub async fn deanonymize_message(
     })))
 }
 
+/// Cap on the envelopes one publish may carry.
+///
+/// The array was unbounded and every element cost a `SELECT` *and* an UPSERT —
+/// a write — on a pooled connection, reachable by any participant in the DM. A
+/// group DM is hard-capped at ten members (`add_group_dm_recipient`), so a real
+/// rotation publishes at most nine envelopes; 32 leaves room for multi-device
+/// recipients without letting a 2 MiB body become tens of thousands of writes.
+const MAX_SENDER_KEY_ENVELOPES: usize = 32;
+
 #[derive(Deserialize)]
 pub struct GroupSenderKeysPostRequest {
     pub epoch: i32,
@@ -510,6 +519,13 @@ pub async fn post_group_sender_keys(
     if body.envelopes.is_empty() {
         return Err(ApiError::BadRequest("envelopes cannot be empty".into()));
     }
+    // Bounded before any database work, so an over-long array never gets to
+    // spend pool connections on its own validation.
+    if body.envelopes.len() > MAX_SENDER_KEY_ENVELOPES {
+        return Err(ApiError::BadRequest(format!(
+            "at most {MAX_SENDER_KEY_ENVELOPES} envelopes may be published at once"
+        )));
+    }
 
     let channel = paracord_db::channels::get_channel(&state.db, channel_id)
         .await
@@ -520,13 +536,20 @@ pub async fn post_group_sender_keys(
             "group sender keys are currently supported for DM channels".into(),
         ));
     }
-    if !paracord_db::dms::is_dm_recipient(&state.db, channel_id, auth.user_id)
+    // One read for the whole recipient set instead of one `is_dm_recipient` per
+    // envelope; membership is then an in-memory test.
+    let recipients = paracord_db::dms::get_dm_recipient_ids(&state.db, channel_id)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-    {
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if !recipients.contains(&auth.user_id) {
         return Err(ApiError::Forbidden);
     }
 
+    // Deduplicate by recipient. `upsert_sender_key` conflicts on
+    // (channel, sender, recipient, epoch), so a repeated recipient only ever
+    // left the last envelope stored — keeping the last one preserves that while
+    // collapsing the repeats into a single write.
+    let mut targets: Vec<(i64, &GroupSenderKeyEnvelope)> = Vec::with_capacity(body.envelopes.len());
     for envelope in &body.envelopes {
         let recipient_id = envelope
             .recipient_id
@@ -535,14 +558,18 @@ pub async fn post_group_sender_keys(
         if recipient_id == auth.user_id {
             continue;
         }
-        if !paracord_db::dms::is_dm_recipient(&state.db, channel_id, recipient_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
-        {
+        if !recipients.contains(&recipient_id) {
             return Err(ApiError::BadRequest(
                 "recipient must be a member of the DM channel".into(),
             ));
         }
+        match targets.iter_mut().find(|(id, _)| *id == recipient_id) {
+            Some(slot) => slot.1 = envelope,
+            None => targets.push((recipient_id, envelope)),
+        }
+    }
+
+    for (recipient_id, envelope) in targets {
         paracord_db::group_e2ee::upsert_sender_key(
             &state.db,
             paracord_util::snowflake::generate(1),

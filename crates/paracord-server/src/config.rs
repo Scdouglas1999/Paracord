@@ -728,6 +728,10 @@ permission_cache_max_entries = {permission_cache_max_entries}
 [database]
 engine = "{db_engine}"
 url = "{db_url}"
+# Connection pool size. Every in-flight handler holds one connection for as long
+# as it is querying, so this is also the cap on concurrent database work: set it
+# too low and a handful of slow requests starve everything else. Waiting for a
+# free slot is bounded (5s) rather than queued indefinitely.
 max_connections = {max_connections}
 # Optional PostgreSQL per-connection tuning (0 keeps server defaults).
 work_mem_mb = {work_mem_mb}

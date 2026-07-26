@@ -53,7 +53,20 @@ pub mod webhooks;
 use sha2::{Digest, Sha256};
 use sqlx::any::AnyPoolOptions;
 use std::sync::OnceLock;
+use std::time::Duration;
 use thiserror::Error;
+
+/// How long a caller waits for a free pool connection before giving up.
+///
+/// sqlx defaults to 30 seconds, and the default is the wrong shape for this
+/// server: once the pool is saturated every further request parks on the queue
+/// for up to half a minute *while still holding its request task, its buffered
+/// body and its event-bus subscriptions*, so a burst that outruns the pool
+/// turns into a growing backlog instead of a few fast failures. Five seconds is
+/// far longer than any healthy query on either engine (SQLite writers already
+/// have `busy_timeout = 5000`, PostgreSQL has `lock_timeout = '10s'`), so it
+/// only fires under genuine saturation — where shedding is the correct answer.
+const POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type DbPool = sqlx::AnyPool;
 
@@ -170,6 +183,7 @@ pub async fn create_pool_full(
         matches!(engine, DatabaseEngine::Sqlite) && is_in_memory_sqlite_url(&connect_url);
     AnyPoolOptions::new()
         .max_connections(max_connections)
+        .acquire_timeout(POOL_ACQUIRE_TIMEOUT)
         .after_connect(move |conn, _meta| {
             let sqlite_key_hex = after_connect_key.clone();
             let sqlite_db = matches!(engine, DatabaseEngine::Sqlite);

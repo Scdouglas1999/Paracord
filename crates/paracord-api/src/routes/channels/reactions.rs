@@ -37,9 +37,13 @@ pub async fn add_reaction(
         return Err(ApiError::NotFound);
     }
 
+    // A per-message distinct-emoji cap surfaces as DbError::LimitReached, which
+    // the From<DbError> impl maps to 409 Conflict. Without it one member could
+    // pin an unbounded set of emoji to a message and tax every later read of
+    // the channel page it sits on.
     paracord_db::reactions::add_reaction(&state.db, message_id, auth.user_id, &emoji, None)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+        .map_err(ApiError::from)?;
 
     let emoji_for_federation = emoji.clone();
     let guild_id = channel.guild_id();

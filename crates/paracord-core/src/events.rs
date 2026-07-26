@@ -16,6 +16,33 @@ pub struct ServerEvent {
     pub serialized_payload: Option<Arc<String>>,
 }
 
+/// Per-session event queue depth used by [`EventBus::default`].
+///
+/// `tokio::sync::broadcast` allocates its whole ring up front, and
+/// [`EventBus::register_session`] creates one channel per connection. Measured
+/// on this `ServerEvent` (80 bytes) the ring costs ~105 bytes per slot, so the
+/// previous 4096 reserved ~420 KiB for *every* socket — about 840 MB of empty
+/// buffer at the gateway's 2000-connection cap, on a server that is meant to run
+/// on modest hardware.
+///
+/// 1024 keeps ~104 KiB per socket (~208 MB at the cap) while still queueing ten
+/// times the gateway's `MAX_REPLAY_EVENTS` (100) — a client that falls further
+/// behind than that has to re-IDENTIFY on its next RESUME regardless, so the
+/// extra depth bought nothing but memory. Overflow behaviour is unchanged: the
+/// receiver sees `RecvError::Lagged` and the gateway closes with 1013 so the
+/// client reconnects and re-fetches. Raise with `PARACORD_EVENT_BUS_CAPACITY`
+/// for deployments with unusually bursty guilds.
+pub const DEFAULT_EVENT_BUS_CAPACITY: usize = 1024;
+
+/// Resolve the configured per-session queue depth.
+pub fn default_event_bus_capacity() -> usize {
+    std::env::var("PARACORD_EVENT_BUS_CAPACITY")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_EVENT_BUS_CAPACITY)
+}
+
 /// Broadcast-based event bus for real-time dispatch.
 #[derive(Clone)]
 pub struct EventBus {
@@ -43,6 +70,11 @@ impl EventBus {
             user_sessions: Arc::new(DashMap::new()),
             system_sender,
         }
+    }
+
+    /// Per-session event queue depth this bus hands to `register_session`.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub fn subscribe_system(&self) -> broadcast::Receiver<ServerEvent> {
@@ -317,7 +349,7 @@ impl EventBus {
 
 impl Default for EventBus {
     fn default() -> Self {
-        Self::new(4096)
+        Self::new(default_event_bus_capacity())
     }
 }
 

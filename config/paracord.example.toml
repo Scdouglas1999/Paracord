@@ -40,7 +40,12 @@ renew_interval_seconds = 43200
 [database]
 engine = "sqlite" # "sqlite" or "postgres"
 url = "sqlite://./data/paracord.db?mode=rwc"
-max_connections = 5
+# Matches the built-in default. A handler that holds a connection while doing
+# slow work starves every other request once the pool is exhausted, so this
+# should not be tuned down without reason: SQLite serialises writers behind WAL
+# so spare slots cost little, and 20 PostgreSQL backends sits well inside PG's
+# stock max_connections = 100.
+max_connections = 20
 # PostgreSQL example:
 #   engine = "postgres"
 #   url = "postgresql://user:password@localhost:5432/paracord?sslmode=prefer"

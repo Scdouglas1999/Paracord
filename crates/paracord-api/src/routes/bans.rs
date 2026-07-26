@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -14,12 +14,29 @@ use crate::routes::mod_log;
 
 const MAX_BAN_REASON_LEN: usize = 512;
 
+/// The ban list is one row per banned account with no ceiling, and each row
+/// used to cost an extra `get_user_by_id`. A moderator who bans in bulk (or an
+/// automated raid response) therefore turned one cheap request into an
+/// arbitrarily long chain of queries and an arbitrarily large JSON body.
+/// Pagination bounds both: at most `MAX_BAN_PAGE` rows, so at most that many
+/// user lookups.
+const DEFAULT_BAN_PAGE: usize = 100;
+const MAX_BAN_PAGE: usize = 200;
+const MAX_BAN_OFFSET: usize = 100_000;
+
 use paracord_util::validation::contains_dangerous_markup;
+
+#[derive(Deserialize)]
+pub struct ListBansQuery {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
 
 pub async fn list_bans(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(guild_id): Path<i64>,
+    Query(params): Query<ListBansQuery>,
 ) -> Result<Json<Value>, ApiError> {
     // Verify user has BAN_MEMBERS permission
     let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
@@ -41,12 +58,22 @@ pub async fn list_bans(
         paracord_models::permissions::Permissions::BAN_MEMBERS,
     )?;
 
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_BAN_PAGE)
+        .clamp(1, MAX_BAN_PAGE);
+    let offset = params.offset.unwrap_or(0).min(MAX_BAN_OFFSET);
+
     let bans = paracord_db::bans::get_guild_bans(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let mut result: Vec<Value> = Vec::with_capacity(bans.len());
-    for b in bans {
+    // Rows arrive newest-first; the page is taken before the per-row user
+    // lookup so the query count and the response size are both bounded.
+    let page: Vec<paracord_db::bans::BanRow> = bans.into_iter().skip(offset).take(limit).collect();
+
+    let mut result: Vec<Value> = Vec::with_capacity(page.len());
+    for b in page {
         let user = paracord_db::users::get_user_by_id(&state.db, b.user_id)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;

@@ -2691,13 +2691,32 @@ fn spawn_auto_backup(
 /// inspect the negotiated ALPN, and route to the appropriate handler:
 /// - `h3` → WebTransport (browser clients)
 /// - anything else (or no ALPN) → raw QUIC (desktop/federation)
+///
+/// Everything past authentication is bounded per participant (per-sender rate
+/// limits, the 50-participant room cap, the relay's per-sender caches). This
+/// loop is the only place an *unauthenticated* peer allocates server state, so
+/// it enforces two bounds of its own:
+///
+/// 1. QUIC address validation (`Incoming::retry`). Without it a peer spoofing
+///    source addresses makes the server allocate connection state for addresses
+///    that never proved reachability. A retry costs one round trip and quinn
+///    handles the token transparently, so legitimate clients only notice an
+///    extra RTT on the very first connection.
+/// 2. A [`PreAuthAdmission`] slot, global and per-IP, held from the start of the
+///    handshake until the connection authenticates. Each pre-auth connection can
+///    buffer up to the endpoint's datagram receive window before the relay is
+///    willing to read anything from it, so the slot count is what converts
+///    attacker uplink into server memory.
 async fn unified_media_accept_loop(
     endpoint: Arc<paracord_transport::endpoint::MediaEndpoint>,
     relay: Arc<paracord_relay::relay::RelayForwarder>,
     jwt_secret: String,
     db: paracord_db::DbPool,
 ) {
+    let admission = Arc::new(paracord_transport::admission::PreAuthAdmission::new());
     tracing::info!(
+        max_pending = paracord_transport::admission::MAX_PENDING_CONNECTIONS,
+        max_pending_per_ip = paracord_transport::admission::MAX_PENDING_CONNECTIONS_PER_IP,
         "Unified media accept loop started (ALPN routing: h3 → WebTransport, other → raw QUIC)"
     );
     loop {
@@ -2709,10 +2728,40 @@ async fn unified_media_accept_loop(
             }
         };
 
+        // Address validation first: an unvalidated source gets a Retry, which
+        // costs the server nothing but a token and proves the peer can receive
+        // at the address it claims. Only validated peers reach the admission
+        // ceiling below, so a spoofed source can never consume a slot.
+        if !incoming.remote_address_validated() {
+            if let Err(err) = incoming.retry() {
+                tracing::debug!("Media incoming retry failed: {}", err);
+            }
+            continue;
+        }
+
+        let remote_ip = incoming.remote_address().ip();
+        let permit = match admission.try_admit(remote_ip) {
+            Ok(permit) => permit,
+            Err(refusal) => {
+                tracing::warn!(
+                    addr = %incoming.remote_address(),
+                    pending = admission.pending(),
+                    "Media connection refused: {}",
+                    refusal
+                );
+                incoming.refuse();
+                continue;
+            }
+        };
+
         let relay = Arc::clone(&relay);
         let jwt_secret = jwt_secret.clone();
         let db = db.clone();
         tokio::spawn(async move {
+            // `permit` is moved into whichever handler runs and released the
+            // moment that connection authenticates, so an established call never
+            // occupies a pre-auth slot for its lifetime. Every early return below
+            // drops it here instead.
             let conn = match incoming.accept() {
                 Ok(connecting) => match connecting.await {
                     Ok(conn) => conn,
@@ -2736,20 +2785,25 @@ async fn unified_media_accept_loop(
             let is_h3 = alpn.as_deref() == Some(b"h3");
 
             if is_h3 {
-                handle_webtransport_connection(conn, relay, jwt_secret, db).await;
+                handle_webtransport_connection(conn, relay, jwt_secret, db, permit).await;
             } else {
-                handle_raw_quic_connection(conn, relay, jwt_secret, db).await;
+                handle_raw_quic_connection(conn, relay, jwt_secret, db, permit).await;
             }
         });
     }
 }
 
 /// Handle a raw QUIC media connection (desktop Tauri clients, federation).
+///
+/// `permit` is the pre-auth admission slot from [`unified_media_accept_loop`];
+/// it is released as soon as the JWT validates so an established call does not
+/// occupy a slot for its lifetime.
 async fn handle_raw_quic_connection(
     conn: quinn::Connection,
     relay: Arc<paracord_relay::relay::RelayForwarder>,
     jwt_secret: String,
     db: paracord_db::DbPool,
+    permit: paracord_transport::admission::AdmissionGuard,
 ) {
     let remote_addr = conn.remote_address();
     tracing::info!(addr = %remote_addr, "QUIC: new raw media connection");
@@ -2769,6 +2823,9 @@ async fn handle_raw_quic_connection(
     };
 
     let user_id = media_conn.meta().user_id;
+    // Authenticated: release the pre-auth slot. Everything below this point is
+    // bounded per user by the relay's own limits.
+    drop(permit);
     tracing::info!(user_id, addr = %remote_addr, "QUIC: authenticated");
 
     let session_id = match media_conn.meta().session_id.as_deref() {
@@ -3061,6 +3118,7 @@ async fn handle_webtransport_connection(
     relay: Arc<paracord_relay::relay::RelayForwarder>,
     jwt_secret: String,
     db: paracord_db::DbPool,
+    permit: paracord_transport::admission::AdmissionGuard,
 ) {
     let remote_addr = conn.remote_address();
     tracing::info!(addr = %remote_addr, "WebTransport: new HTTP/3 connection");
@@ -3296,6 +3354,9 @@ async fn handle_webtransport_connection(
             },
         }
     }
+
+    // Authenticated: release the pre-auth slot (see `unified_media_accept_loop`).
+    drop(permit);
 
     tracing::info!(
         user_id,

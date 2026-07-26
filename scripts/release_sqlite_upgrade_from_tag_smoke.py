@@ -50,6 +50,26 @@ def canonical_sql(sql: str) -> str:
     return sql.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def repaired_migration_versions() -> set[int]:
+    """Versions the runtime deliberately allows to differ from their shipped form.
+
+    `REPAIRED_SQLITE_MIGRATIONS` in crates/paracord-db/src/lib.rs pins the exact
+    pre-fix checksum of migrations that were corrected because the original file
+    destroyed data on upgrade. The migrator rewrites those ledger rows before
+    running, so a difference here is expected and is the whole point of the
+    mechanism. Parsed from the Rust source rather than duplicated, so the two
+    lists cannot drift apart.
+
+    Every other migration must still match the tag byte for byte.
+    """
+    src = (ROOT / "crates" / "paracord-db" / "src" / "lib.rs").read_text(encoding="utf-8")
+    start = src.find("const REPAIRED_SQLITE_MIGRATIONS")
+    if start == -1:
+        raise RuntimeError("REPAIRED_SQLITE_MIGRATIONS not found; update this script")
+    end = src.find("];", start)
+    return {int(m) for m in re.findall(r"^\s*(\d{14}),", src[start:end], re.MULTILINE)}
+
+
 def sha384_bytes(sql: str) -> bytes:
     # Official release artifacts should be built from normalized git blobs. Avoid
     # treating a developer checkout's CRLF conversion as migration content drift.
@@ -147,6 +167,7 @@ def main() -> int:
             try:
                 ensure_sqlx_ledger(conn)
                 tag_versions: set[int] = set()
+                repaired = repaired_migration_versions()
 
                 for tag_path in tag_migrations:
                     version, description = parse_migration_name(tag_path)
@@ -158,10 +179,21 @@ def main() -> int:
                         )
                     current_sql = current_path.read_text(encoding="utf-8")
                     if sha384_bytes(tag_sql) != sha384_bytes(current_sql):
-                        raise RuntimeError(
-                            "current migration checksum differs from tag for "
-                            f"{Path(tag_path).name}; SQLx would reject an upgrade"
-                        )
+                        if version in repaired:
+                            # Deliberately corrected because the shipped file
+                            # destroyed data; the migrator repairs the ledger row
+                            # before running. Seed the ledger with the ORIGINAL
+                            # text so the upgrade path being exercised is the
+                            # real one an existing deployment takes.
+                            print(
+                                f"[sqlite-upgrade-from-tag] {Path(tag_path).name} "
+                                "differs from tag (known repaired migration)"
+                            )
+                        else:
+                            raise RuntimeError(
+                                "current migration checksum differs from tag for "
+                                f"{Path(tag_path).name}; SQLx would reject an upgrade"
+                            )
                     apply_migration(conn, version, description, tag_sql)
                     tag_versions.add(version)
 

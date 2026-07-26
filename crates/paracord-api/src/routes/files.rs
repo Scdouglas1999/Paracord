@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Multipart, Path, Query, State},
+    extract::{multipart::Field, Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
@@ -473,77 +473,204 @@ fn mime_matches_pattern(content_type: &str, pattern: &str) -> bool {
     content_type == pattern
 }
 
+/// The limits that apply to one upload into one channel, resolved *before* the
+/// request body is read so the byte ceiling can bound the read itself.
+struct UploadLimits {
+    guild_id: Option<i64>,
+    policy: Option<paracord_db::guild_storage_policies::GuildStoragePolicyRow>,
+    /// Hard ceiling on a single upload's bytes.
+    max_bytes: u64,
+    /// Whether `max_bytes` came from the guild's own policy rather than the
+    /// server-wide `max_upload_size`, so a rejection names the right limit.
+    from_guild_policy: bool,
+}
+
+impl UploadLimits {
+    fn too_large(&self) -> ApiError {
+        if self.from_guild_policy {
+            ApiError::BadRequest(format!(
+                "File exceeds this server's per-guild maximum of {}",
+                format_byte_size(self.max_bytes)
+            ))
+        } else {
+            file_too_large_error(self.max_bytes)
+        }
+    }
+
+    /// Everything that can only be decided once the bytes are in hand: the
+    /// final size, the per-guild storage quota, and the MIME allow/block lists.
+    async fn check(
+        &self,
+        state: &AppState,
+        file_size: u64,
+        content_type: &str,
+    ) -> Result<(), ApiError> {
+        if file_size > self.max_bytes {
+            return Err(self.too_large());
+        }
+
+        let Some(guild_id) = self.guild_id else {
+            return Ok(());
+        };
+
+        if let Some(quota) = effective_storage_quota(state, self.policy.as_ref()).await {
+            let current_usage =
+                paracord_db::guild_storage_policies::get_guild_storage_usage(&state.db, guild_id)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+            if (current_usage.max(0) as u64).saturating_add(file_size) > quota {
+                return Err(ApiError::BadRequest(
+                    "Upload would exceed guild storage quota".into(),
+                ));
+            }
+        }
+
+        let Some(policy) = self.policy.as_ref() else {
+            return Ok(());
+        };
+
+        if let Some(ref allowed_json) = policy.allowed_types {
+            if let Ok(allowed) = serde_json::from_str::<Vec<String>>(allowed_json) {
+                if !allowed.is_empty()
+                    && !allowed
+                        .iter()
+                        .any(|pattern| mime_matches_pattern(content_type, pattern))
+                {
+                    return Err(ApiError::BadRequest(
+                        "File type not allowed by guild policy".into(),
+                    ));
+                }
+            }
+        }
+
+        if let Some(ref blocked_json) = policy.blocked_types {
+            if let Ok(blocked) = serde_json::from_str::<Vec<String>>(blocked_json) {
+                if blocked
+                    .iter()
+                    .any(|pattern| mime_matches_pattern(content_type, pattern))
+                {
+                    return Err(ApiError::BadRequest(
+                        "File type blocked by guild policy".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Total bytes one space may store, or `None` for unlimited.
+///
+/// The per-guild policy row is optional and used to be the *only* thing that
+/// enforced a quota, so the default posture -- no policy rows -- had no disk
+/// ceiling at all and the advertised `max_guild_storage_quota` never reached an
+/// upload: any member could fill the disk at the per-IP write budget. The
+/// server ceiling now always applies, narrowed by the guild's own policy when
+/// that sets something smaller (the same `min` the storage-settings endpoint
+/// reports). `0` means unlimited, matching the documented config semantics, and
+/// the admin dashboard's `server_settings` override wins over the config value
+/// so changing it takes effect without a restart.
+async fn effective_storage_quota(
+    state: &AppState,
+    policy: Option<&paracord_db::guild_storage_policies::GuildStoragePolicyRow>,
+) -> Option<u64> {
+    let server = paracord_db::server_settings::get_u64_setting(
+        &state.db,
+        "max_guild_storage_quota",
+        state.config.max_guild_storage_quota,
+    )
+    .await;
+    let guild = policy
+        .and_then(|p| p.storage_quota)
+        .map(|quota| quota.max(0) as u64);
+    match (server, guild) {
+        (0, guild) => guild,
+        (server, None) => Some(server),
+        (server, Some(guild)) => Some(server.min(guild)),
+    }
+}
+
+/// Resolve the limits for an upload into `channel_id` without touching the body.
+async fn resolve_upload_limits(
+    state: &AppState,
+    channel_id: i64,
+) -> Result<UploadLimits, ApiError> {
+    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let guild_id = channel.as_ref().and_then(|c| c.guild_id());
+
+    let policy = match guild_id {
+        Some(guild_id) => {
+            paracord_db::guild_storage_policies::get_guild_storage_policy(&state.db, guild_id)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        }
+        None => None,
+    };
+
+    let mut max_bytes = state.config.max_upload_size;
+    let mut from_guild_policy = false;
+    if let Some(guild_max) = policy.as_ref().and_then(|p| p.max_file_size) {
+        let guild_max = guild_max.max(0) as u64;
+        if guild_max < max_bytes {
+            max_bytes = guild_max;
+            from_guild_policy = true;
+        }
+    }
+
+    Ok(UploadLimits {
+        guild_id,
+        policy,
+        max_bytes,
+        from_guild_policy,
+    })
+}
+
 async fn check_guild_upload_policy(
     state: &AppState,
     channel_id: i64,
     file_size: u64,
     content_type: &str,
 ) -> Result<(), ApiError> {
-    let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+    resolve_upload_limits(state, channel_id)
+        .await?
+        .check(state, file_size, content_type)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let guild_id = match channel.as_ref().and_then(|c| c.guild_id()) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
+}
 
-    let policy = paracord_db::guild_storage_policies::get_guild_storage_policy(&state.db, guild_id)
+/// Read a multipart field body, refusing it the moment it passes `max_bytes`.
+///
+/// `Field::bytes()` aggregates the entire part and only *then* returns it, so
+/// the size check ran against a body that was already fully resident -- and it
+/// ran against a route-level 64 MiB body limit that no configuration knob
+/// touches, not the configured `max_upload_size`. Because the rate limiter caps
+/// request *rate* rather than concurrency, a single authenticated client could
+/// hold dozens of those buffers alive at once. Reading chunk by chunk bounds an
+/// in-flight upload to `max_bytes` plus one chunk, drops the extra copies
+/// aggregation makes, and rejects an over-limit body before the remainder is
+/// read off the socket.
+async fn read_field_within_limit(
+    field: &mut Field<'_>,
+    max_bytes: u64,
+    too_large: impl Fn() -> ApiError,
+) -> Result<Vec<u8>, ApiError> {
+    // Deliberately not pre-sized from Content-Length: the header is
+    // client-controlled and pre-allocating from it is the same exhaustion bug
+    // one indirection further down.
+    let mut data: Vec<u8> = Vec::new();
+    while let Some(chunk) = field
+        .chunk()
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-
-    let Some(policy) = policy else {
-        return Ok(());
-    };
-
-    if let Some(max_file_size) = policy.max_file_size {
-        if file_size > max_file_size as u64 {
-            return Err(ApiError::BadRequest(format!(
-                "File exceeds this server's per-guild maximum of {}",
-                format_byte_size(max_file_size as u64)
-            )));
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?
+    {
+        if data.len() as u64 + chunk.len() as u64 > max_bytes {
+            return Err(too_large());
         }
+        data.extend_from_slice(&chunk);
     }
-
-    if let Some(storage_quota) = policy.storage_quota {
-        let current_usage =
-            paracord_db::guild_storage_policies::get_guild_storage_usage(&state.db, guild_id)
-                .await
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-        if (current_usage as u64).saturating_add(file_size) > storage_quota as u64 {
-            return Err(ApiError::BadRequest(
-                "Upload would exceed guild storage quota".into(),
-            ));
-        }
-    }
-
-    if let Some(ref allowed_json) = policy.allowed_types {
-        if let Ok(allowed) = serde_json::from_str::<Vec<String>>(allowed_json) {
-            if !allowed.is_empty()
-                && !allowed
-                    .iter()
-                    .any(|pattern| mime_matches_pattern(content_type, pattern))
-            {
-                return Err(ApiError::BadRequest(
-                    "File type not allowed by guild policy".into(),
-                ));
-            }
-        }
-    }
-
-    if let Some(ref blocked_json) = policy.blocked_types {
-        if let Ok(blocked) = serde_json::from_str::<Vec<String>>(blocked_json) {
-            if blocked
-                .iter()
-                .any(|pattern| mime_matches_pattern(content_type, pattern))
-            {
-                return Err(ApiError::BadRequest(
-                    "File type blocked by guild policy".into(),
-                ));
-            }
-        }
-    }
-
-    Ok(())
+    Ok(data)
 }
 
 async fn cleanup_expired_pending_attachments(state: &AppState) {
@@ -620,7 +747,12 @@ pub async fn upload_file(
         return Err(ApiError::Forbidden);
     }
 
-    let field = multipart
+    // Resolved before a byte of the body is read so the size ceiling can bound
+    // the read itself rather than being checked against an already-resident
+    // buffer.
+    let limits = resolve_upload_limits(&state, channel_id).await?;
+
+    let mut field = multipart
         .next_field()
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?
@@ -628,10 +760,7 @@ pub async fn upload_file(
 
     let filename = field.file_name().unwrap_or("upload").to_string();
     let claimed_content_type = field.content_type().map(|s| s.to_string());
-    let data = field
-        .bytes()
-        .await
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let data = read_field_within_limit(&mut field, limits.max_bytes, || limits.too_large()).await?;
 
     let size =
         u64::try_from(data.len()).map_err(|_| ApiError::BadRequest("File too large".into()))?;
@@ -640,9 +769,6 @@ pub async fn upload_file(
         return Err(ApiError::BadRequest("Empty file".into()));
     }
 
-    if size > state.config.max_upload_size {
-        return Err(file_too_large_error(state.config.max_upload_size));
-    }
     let db_size = i32::try_from(size).map_err(|_| ApiError::BadRequest("File too large".into()))?;
 
     // Compute SHA-256 content hash
@@ -656,7 +782,7 @@ pub async fn upload_file(
     let content_type =
         resolve_stored_content_type(&filename, claimed_content_type.as_deref(), &data);
     validate_attachment_metadata(&filename, &content_type)?;
-    check_guild_upload_policy(&state, channel_id, size, &content_type).await?;
+    limits.check(&state, size, &content_type).await?;
 
     // Store file via storage backend
     let attachment_id = paracord_util::snowflake::generate(1);
@@ -675,7 +801,9 @@ pub async fn upload_file(
             .encrypt_with_aad(&data, aad.as_bytes())
             .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?
     } else {
-        data.to_vec()
+        // The plaintext body is handed straight to the backend rather than
+        // copied, keeping one upload to one buffer.
+        data
     };
 
     state

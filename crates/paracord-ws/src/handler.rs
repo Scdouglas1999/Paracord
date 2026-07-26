@@ -34,7 +34,43 @@ const WS_MAX_PREAUTH_CONNECTIONS_DEFAULT: usize = 512;
 // handshake releases its slot within milliseconds (right after IDENTIFY), so this
 // is generous for legitimate NAT'd clients while still bounding a single source.
 const WS_MAX_PREAUTH_PER_IP_DEFAULT: usize = 32;
+/// Concurrent *authenticated* gateway connections permitted from one client IP.
+///
+/// The per-user cap only bounds a single account, so ~400 accounts sharing one
+/// source could still fill the entire global pool; the gateway route is also
+/// merged after `build_router()`'s layer stack, so no HTTP-level rate limit ever
+/// sees it. 128 is 25 accounts at the per-user cap of 5 — far above any real
+/// household or small office behind one NAT — and is raised with
+/// `PARACORD_WS_MAX_CONNECTIONS_PER_IP` when a deployment legitimately needs more.
+const WS_MAX_CONNECTIONS_PER_IP_DEFAULT: usize = 128;
+/// Gateway upgrades accepted per minute from one client IP. Bounds the
+/// connect/disconnect churn the missing HTTP middleware would otherwise have
+/// limited: every cycle costs an upgrade, a HELLO and a fresh session. A client
+/// connects once and RESUMEs, so even a NAT-wide reconnect storm stays far below
+/// this.
+const WS_MAX_HANDSHAKES_PER_MINUTE_PER_IP_DEFAULT: u32 = 120;
 const WS_MAX_MESSAGES_PER_MINUTE_DEFAULT: u32 = 240;
+/// Heartbeats (op 1) deliberately sit outside the general message budget — a
+/// client that spends its 240/min elsewhere must still be able to keep the
+/// socket alive — but they were previously not metered at all, so an authed
+/// socket could spin op 1 as fast as it could write and get a parse plus an ACK
+/// echo for each. The advertised interval is `HEARTBEAT_INTERVAL_MS` (~1.5/min),
+/// so 120/min leaves roughly 80x headroom for jitter and immediate re-heartbeats.
+const WS_MAX_HEARTBEATS_PER_MINUTE_DEFAULT: u32 = 120;
+/// Per-connection budget for inbound non-Text frames (Ping/Pong/Binary). Nothing
+/// in the gateway parses these, so they never reach the per-user opcode limiters,
+/// yet each one still costs a frame decode and (for Ping) an automatic Pong.
+/// The server pings every 20s (3/min) and clients answer in kind, so 240/min is
+/// ~40x a legitimate client's control-frame rate.
+const WS_MAX_CONTROL_FRAMES_PER_MINUTE_DEFAULT: u32 = 240;
+/// Media sender-key announces per minute per user. A key rotation happens on
+/// room membership changes, not continuously, so one every second is generous.
+const WS_MAX_MEDIA_KEY_ANNOUNCES_PER_MINUTE_DEFAULT: u32 = 60;
+/// `OP_REQUEST_GUILD_MEMBERS` responses per minute per user. Each one can read
+/// and serialize up to 1000 member rows, which is far too expensive to leave on
+/// the shared 240/min budget. A client requests a chunk when a member list is
+/// opened, so 30/min (one every two seconds) covers normal browsing.
+const WS_MAX_GUILD_MEMBER_REQUESTS_PER_MINUTE_DEFAULT: u32 = 30;
 /// Frames a socket may send before it has authenticated. The identify handshake
 /// needs exactly one; anything beyond this is a client that is spinning the
 /// pre-auth loop (which parses JSON twice per frame) for the full 30s timeout.
@@ -62,6 +98,16 @@ const WS_CLOSE_AUTH_REVOKED: u16 = 4004;
 const WS_MAX_PRESENCE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
 const WS_MAX_TYPING_EVENTS_PER_MINUTE_DEFAULT: u32 = 120;
 const WS_MAX_VOICE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
+/// Hard ceiling on the per-recipient key list in one `OP_MEDIA_KEY_ANNOUNCE`.
+///
+/// The array was walked uncapped, emitting a log line *and* an event-bus publish
+/// per element, so a single 32 KiB frame produced thousands of both. A legitimate
+/// announce carries at most one key per other participant in the room, which the
+/// relay already bounds by `native_media_max_participants`; this floor keeps the
+/// check meaningful even when that setting is small or unset.
+const WS_MEDIA_KEY_RECIPIENTS_FLOOR: usize = 64;
+/// Window the per-connection non-Text frame budget is measured over.
+const CONTROL_FRAME_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 struct CachedSession {
@@ -76,6 +122,10 @@ static USER_CONNECTIONS: OnceLock<dashmap::DashMap<i64, usize>> = OnceLock::new(
 static PREAUTH_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 /// Concurrent in-flight (unauthenticated) handshakes per client IP.
 static PREAUTH_IP_CONNECTIONS: OnceLock<dashmap::DashMap<String, usize>> = OnceLock::new();
+/// Concurrent *authenticated* connections per client IP.
+static IP_CONNECTIONS: OnceLock<dashmap::DashMap<String, usize>> = OnceLock::new();
+/// Gateway upgrade attempts per client IP, used to bound connect/disconnect churn.
+static IP_HANDSHAKE_LIMITER: OnceLock<DefaultKeyedRateLimiter<String>> = OnceLock::new();
 
 struct BufferedEvent {
     sequence: u64,
@@ -225,10 +275,16 @@ struct WsLimits {
     max_connections_per_user: usize,
     max_preauth_connections: usize,
     max_preauth_per_ip: usize,
+    max_connections_per_ip: usize,
+    max_handshakes_per_minute_per_ip: u32,
     max_messages_per_minute: u32,
+    max_heartbeats_per_minute: u32,
+    max_control_frames_per_minute: u32,
     max_presence_updates_per_minute: u32,
     max_typing_events_per_minute: u32,
     max_voice_updates_per_minute: u32,
+    max_media_key_announces_per_minute: u32,
+    max_guild_member_requests_per_minute: u32,
     session_cache_max_entries: usize,
     max_disconnected_event_buffers: usize,
     max_preauth_frames: u32,
@@ -279,9 +335,25 @@ fn ws_limits() -> WsLimits {
             "PARACORD_WS_MAX_PREAUTH_PER_IP",
             WS_MAX_PREAUTH_PER_IP_DEFAULT,
         ),
+        max_connections_per_ip: env_usize(
+            "PARACORD_WS_MAX_CONNECTIONS_PER_IP",
+            WS_MAX_CONNECTIONS_PER_IP_DEFAULT,
+        ),
+        max_handshakes_per_minute_per_ip: env_u32(
+            "PARACORD_WS_MAX_HANDSHAKES_PER_MINUTE_PER_IP",
+            WS_MAX_HANDSHAKES_PER_MINUTE_PER_IP_DEFAULT,
+        ),
         max_messages_per_minute: env_u32(
             "PARACORD_WS_MAX_MESSAGES_PER_MINUTE",
             WS_MAX_MESSAGES_PER_MINUTE_DEFAULT,
+        ),
+        max_heartbeats_per_minute: env_u32(
+            "PARACORD_WS_MAX_HEARTBEATS_PER_MINUTE",
+            WS_MAX_HEARTBEATS_PER_MINUTE_DEFAULT,
+        ),
+        max_control_frames_per_minute: env_u32(
+            "PARACORD_WS_MAX_CONTROL_FRAMES_PER_MINUTE",
+            WS_MAX_CONTROL_FRAMES_PER_MINUTE_DEFAULT,
         ),
         max_presence_updates_per_minute: env_u32(
             "PARACORD_WS_MAX_PRESENCE_UPDATES_PER_MINUTE",
@@ -294,6 +366,14 @@ fn ws_limits() -> WsLimits {
         max_voice_updates_per_minute: env_u32(
             "PARACORD_WS_MAX_VOICE_UPDATES_PER_MINUTE",
             WS_MAX_VOICE_UPDATES_PER_MINUTE_DEFAULT,
+        ),
+        max_media_key_announces_per_minute: env_u32(
+            "PARACORD_WS_MAX_MEDIA_KEY_ANNOUNCES_PER_MINUTE",
+            WS_MAX_MEDIA_KEY_ANNOUNCES_PER_MINUTE_DEFAULT,
+        ),
+        max_guild_member_requests_per_minute: env_u32(
+            "PARACORD_WS_MAX_GUILD_MEMBER_REQUESTS_PER_MINUTE",
+            WS_MAX_GUILD_MEMBER_REQUESTS_PER_MINUTE_DEFAULT,
         ),
         session_cache_max_entries: env_usize(
             "PARACORD_WS_SESSION_CACHE_MAX_ENTRIES",
@@ -509,6 +589,8 @@ struct ConnectionGuard {
     global_acquired: bool,
     preauth_acquired: bool,
     preauth_ip: Option<String>,
+    /// Client IP holding an authenticated per-IP connection slot, if one was taken.
+    connection_ip: Option<String>,
 }
 
 impl ConnectionGuard {
@@ -518,6 +600,7 @@ impl ConnectionGuard {
             global_acquired: false,
             preauth_acquired: false,
             preauth_ip: None,
+            connection_ip: None,
         }
     }
 
@@ -537,6 +620,9 @@ impl ConnectionGuard {
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         self.release_preauth();
+        if let Some(ip) = self.connection_ip.take() {
+            release_ip_connection(&ip);
+        }
         if let Some(user_id) = self.user_id.take() {
             if let Some(mut count) = user_connections().get_mut(&user_id) {
                 if *count <= 1 {
@@ -628,6 +714,91 @@ fn release_preauth_ip(ip: &str) {
     }
 }
 
+fn ip_connections() -> &'static dashmap::DashMap<String, usize> {
+    IP_CONNECTIONS.get_or_init(dashmap::DashMap::new)
+}
+
+/// Whether per-IP gateway limits apply to this resolved client address.
+///
+/// Loopback is exempt on purpose. When a reverse proxy terminates on the same
+/// host and `PARACORD_TRUST_PROXY`/`PARACORD_TRUSTED_PROXY_IPS` are not
+/// configured, `client_ip` resolves *every* client to 127.0.0.1, so a per-IP cap
+/// would silently become a cap on the whole server. Loopback is also never the
+/// remote source these bounds exist to contain.
+fn per_ip_limits_apply(ip: &str) -> bool {
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(addr) => !addr.is_loopback(),
+        // `normalize_for_rate_limit` emits `<prefix>/64` for IPv6 sources, which
+        // does not parse as a bare address; those are always remote.
+        Err(_) => true,
+    }
+}
+
+/// Reserve an authenticated connection slot for a client IP.
+///
+/// Runs at IDENTIFY/RESUME time, after the pre-auth handshake slot has done its
+/// job. `None` (no resolvable peer, e.g. tests driving the router directly) and
+/// loopback are not metered; see `per_ip_limits_apply`.
+fn try_acquire_ip_connection_slot(peer_ip: Option<&str>) -> bool {
+    let Some(ip) = peer_ip.filter(|ip| per_ip_limits_apply(ip)) else {
+        return true;
+    };
+    let limits = ws_limits();
+    let mut entry = ip_connections().entry(ip.to_string()).or_insert(0);
+    if *entry >= limits.max_connections_per_ip {
+        return false;
+    }
+    *entry += 1;
+    true
+}
+
+fn release_ip_connection(ip: &str) {
+    if let Some(mut count) = ip_connections().get_mut(ip) {
+        if *count <= 1 {
+            drop(count);
+            ip_connections().remove(ip);
+        } else {
+            *count -= 1;
+        }
+    }
+}
+
+fn ip_handshake_limiter() -> &'static DefaultKeyedRateLimiter<String> {
+    IP_HANDSHAKE_LIMITER.get_or_init(|| {
+        let quota = Quota::per_minute(
+            NonZeroU32::new(ws_limits().max_handshakes_per_minute_per_ip)
+                .expect("handshake quota is validated non-zero by env_u32"),
+        );
+        let limiter = RateLimiter::keyed(quota);
+
+        // The keyed limiter allocates a bucket per source address; without this
+        // the map would retain one entry per IP that has ever connected.
+        tokio::spawn(async {
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                let limiter = ip_handshake_limiter();
+                limiter.retain_recent();
+                limiter.shrink_to_fit();
+            }
+        });
+
+        limiter
+    })
+}
+
+/// Whether a gateway upgrade from this address is within the per-IP handshake
+/// rate. `/gateway` is merged after `build_router()` has already baked in its
+/// layer stack, so nothing at the HTTP level meters it; enforcing here also
+/// survives any future re-ordering of that merge.
+pub(crate) fn allow_gateway_handshake(peer_ip: Option<&str>) -> bool {
+    let Some(ip) = peer_ip.filter(|ip| per_ip_limits_apply(ip)) else {
+        return true;
+    };
+    ip_handshake_limiter().check_key(&ip.to_string()).is_ok()
+}
+
 fn try_acquire_user_connection_slot(user_id: i64) -> bool {
     let limits = ws_limits();
     let mut count = user_connections().entry(user_id).or_insert(0);
@@ -643,12 +814,22 @@ fn try_acquire_user_connection_slot(user_id: i64) -> bool {
 struct UserRateLimits {
     /// General messages (any opcode except heartbeat): 240/min per user
     messages: DefaultKeyedRateLimiter<i64>,
+    /// Heartbeats: 120/min per user. Deliberately a *separate* bucket from
+    /// `messages` — a client that exhausts its general budget must still be able
+    /// to keep its socket alive — but no longer an unmetered one.
+    heartbeat: DefaultKeyedRateLimiter<i64>,
     /// Presence updates: 60/min per user
     presence: DefaultKeyedRateLimiter<i64>,
     /// Typing events: 120/min per user
     typing: DefaultKeyedRateLimiter<i64>,
     /// Voice state updates: 60/min per user
     voice: DefaultKeyedRateLimiter<i64>,
+    /// Media sender-key announces: 60/min per user. Each one fans a per-recipient
+    /// key out over the event bus, so it needs a tighter bound than `messages`.
+    media_key: DefaultKeyedRateLimiter<i64>,
+    /// Guild member chunk requests: 30/min per user. Each one can read and
+    /// serialize up to 1000 member rows.
+    guild_members: DefaultKeyedRateLimiter<i64>,
 }
 
 static USER_RATE_LIMITS: OnceLock<UserRateLimits> = OnceLock::new();
@@ -660,6 +841,9 @@ fn user_rate_limits() -> &'static UserRateLimits {
             messages: RateLimiter::keyed(Quota::per_minute(
                 NonZeroU32::new(limits.max_messages_per_minute).unwrap(),
             )),
+            heartbeat: RateLimiter::keyed(Quota::per_minute(
+                NonZeroU32::new(limits.max_heartbeats_per_minute).unwrap(),
+            )),
             presence: RateLimiter::keyed(Quota::per_minute(
                 NonZeroU32::new(limits.max_presence_updates_per_minute).unwrap(),
             )),
@@ -668,6 +852,12 @@ fn user_rate_limits() -> &'static UserRateLimits {
             )),
             voice: RateLimiter::keyed(Quota::per_minute(
                 NonZeroU32::new(limits.max_voice_updates_per_minute).unwrap(),
+            )),
+            media_key: RateLimiter::keyed(Quota::per_minute(
+                NonZeroU32::new(limits.max_media_key_announces_per_minute).unwrap(),
+            )),
+            guild_members: RateLimiter::keyed(Quota::per_minute(
+                NonZeroU32::new(limits.max_guild_member_requests_per_minute).unwrap(),
             )),
         };
 
@@ -679,13 +869,19 @@ fn user_rate_limits() -> &'static UserRateLimits {
                 interval.tick().await;
                 let rl = user_rate_limits();
                 rl.messages.retain_recent();
+                rl.heartbeat.retain_recent();
                 rl.presence.retain_recent();
                 rl.typing.retain_recent();
                 rl.voice.retain_recent();
+                rl.media_key.retain_recent();
+                rl.guild_members.retain_recent();
                 rl.messages.shrink_to_fit();
+                rl.heartbeat.shrink_to_fit();
                 rl.presence.shrink_to_fit();
                 rl.typing.shrink_to_fit();
                 rl.voice.shrink_to_fit();
+                rl.media_key.shrink_to_fit();
+                rl.guild_members.shrink_to_fit();
                 tracing::trace!("rate limiter cleanup: pruned stale entries");
             }
         });
@@ -712,6 +908,8 @@ impl UserRateLimits {
             OP_PRESENCE_UPDATE => self.presence.check_key(&user_id).err(),
             OP_TYPING_START => self.typing.check_key(&user_id).err(),
             OP_VOICE_STATE_UPDATE => self.voice.check_key(&user_id).err(),
+            OP_MEDIA_KEY_ANNOUNCE => self.media_key.check_key(&user_id).err(),
+            OP_REQUEST_GUILD_MEMBERS => self.guild_members.check_key(&user_id).err(),
             _ => None,
         };
 
@@ -720,6 +918,18 @@ impl UserRateLimits {
             Err(wait.as_millis().max(1) as u64)
         } else {
             Ok(())
+        }
+    }
+
+    /// Check the dedicated heartbeat budget. Kept off `check` because heartbeats
+    /// must not draw on (or be starved by) the general message budget.
+    fn check_heartbeat(&self, user_id: i64) -> Result<(), u64> {
+        match self.heartbeat.check_key(&user_id) {
+            Ok(()) => Ok(()),
+            Err(not_until) => {
+                let wait = not_until.wait_time_from(DefaultClock::default().now());
+                Err(wait.as_millis().max(1) as u64)
+            }
         }
     }
 }
@@ -805,6 +1015,24 @@ fn build_presence_payload(
         "custom_status": custom_status.map(|v| truncate_for_presence(v, MAX_ACTIVITY_TEXT_LEN)),
         "activities": extract_activities(activities),
     })
+}
+
+/// Apply the offline transition for a user and return the presence payload to
+/// fan out.
+///
+/// The entry is *removed* from `user_presences` rather than overwritten with an
+/// offline payload. Nothing ever evicted from that map, so it retained one JSON
+/// value per user that had ever connected and grew without bound for the life of
+/// the process. Removing is also behaviourally identical to what was stored:
+/// READY only reads presences for users listed in `online_users`, and the
+/// reconnect merge in `handle_connection` reconstructs exactly
+/// `default_presence_payload(user, "online")` when the entry is absent — the
+/// stored offline payload had already cleared `custom_status` and `activities`.
+/// The map now tracks online users only, mirroring `online_users`.
+fn mark_user_offline(state: &AppState, user_id: i64) -> Value {
+    state.online_users.remove(&user_id);
+    state.user_presences.remove(&user_id);
+    default_presence_payload(user_id, "offline")
 }
 
 fn default_presence_payload(user_id: i64, status: &str) -> Value {
@@ -962,6 +1190,9 @@ pub async fn handle_connection(
         return;
     }
     connection_guard.preauth_acquired = true;
+    // Kept for the authenticated per-IP cap taken after IDENTIFY; the pre-auth
+    // reservation in the guard is released as soon as the socket authenticates.
+    let authenticated_ip = peer_ip.clone();
     connection_guard.preauth_ip = peer_ip;
 
     if compress {
@@ -1018,8 +1249,34 @@ pub async fn handle_connection(
         }
     };
 
-    // Client authenticated: promote from the pre-auth handshake budget to a real
-    // authenticated global slot, then drop the pre-auth reservation.
+    // Client authenticated: bound how much of the global pool one source address
+    // may hold. The per-user cap alone lets a few hundred accounts behind one IP
+    // consume every slot, and `/gateway` is merged outside the HTTP layer stack
+    // so no middleware limits it either.
+    if !try_acquire_ip_connection_slot(authenticated_ip.as_deref()) {
+        tracing::warn!(
+            peer_ip = ?authenticated_ip,
+            limit = ws_limits().max_connections_per_ip,
+            "gateway: refusing connection, per-IP connection cap reached. If this \
+             server sits behind a reverse proxy, set PARACORD_TRUST_PROXY and \
+             PARACORD_TRUSTED_PROXY_IPS so clients are bucketed by their real \
+             address, or raise PARACORD_WS_MAX_CONNECTIONS_PER_IP"
+        );
+        let _ = send_ws_close_logged(
+            &mut sender,
+            1013,
+            "Too many concurrent connections from this address",
+            Some(session.user_id),
+            Some(session.session_id.as_str()),
+            "ip_capacity_close",
+        )
+        .await;
+        return;
+    }
+    connection_guard.connection_ip = authenticated_ip;
+
+    // Promote from the pre-auth handshake budget to a real authenticated global
+    // slot, then drop the pre-auth reservation.
     if !try_acquire_global_connection_slot() {
         let _ = send_ws_close_logged(
             &mut sender,
@@ -1180,17 +1437,12 @@ pub async fn handle_connection(
             json!({"id": session.user_id.to_string()})
         };
 
-        // Snapshot of currently online users for building presence lists
-        let online_snapshot: std::collections::HashSet<i64> = state
-            .online_users
-            .iter()
-            .map(|entry| *entry.key())
-            .collect();
-        let presence_snapshot: std::collections::HashMap<i64, Value> = state
-            .user_presences
-            .iter()
-            .map(|entry| (*entry.key(), entry.value().clone()))
-            .collect();
+        // Presence for READY is read straight out of the shared maps, one member
+        // at a time. Snapshotting `online_users` and `user_presences` into owned
+        // collections copied every presence payload on the server once, and then
+        // copied *both* snapshots again for each of the user's guilds — so a
+        // single connect allocated `guilds * total_users` JSON values before it
+        // had looked at a single member.
 
         // Fetch guild data for READY with bounded concurrency.
         //
@@ -1208,8 +1460,6 @@ pub async fn handle_connection(
             .map(|g| {
                 let state = state.clone();
                 let sem = sem.clone();
-                let online_snapshot = online_snapshot.clone();
-                let presence_snapshot = presence_snapshot.clone();
                 let g = g.clone();
                 async move {
                     let _permit = sem.acquire_owned().await.ok()?;
@@ -1277,19 +1527,25 @@ pub async fn handle_connection(
                         })
                         .collect();
 
-                    // Build presences from member IDs (lightweight query)
+                    // Build presences from member IDs (lightweight query). Direct
+                    // lookups only touch the members of this guild who are
+                    // actually online; no guard is held across an await.
                     let presences_json: Vec<Value> = member_ids
                         .iter()
-                        .filter(|uid| online_snapshot.contains(uid))
+                        .filter(|uid| state.online_users.contains(uid))
                         .map(|uid| {
-                            presence_snapshot.get(uid).cloned().unwrap_or_else(|| {
-                                json!({
-                                    "user_id": uid.to_string(),
-                                    "status": "online",
-                                    "custom_status": Value::Null,
-                                    "activities": [],
+                            state
+                                .user_presences
+                                .get(uid)
+                                .map(|entry| entry.value().clone())
+                                .unwrap_or_else(|| {
+                                    json!({
+                                        "user_id": uid.to_string(),
+                                        "status": "online",
+                                        "custom_status": Value::Null,
+                                        "activities": [],
+                                    })
                                 })
-                            })
                         })
                         .collect();
 
@@ -1512,11 +1768,7 @@ pub async fn handle_connection(
                     return;
                 }
 
-                state_clone.online_users.remove(&session_user_id);
-                let offline_presence = default_presence_payload(session_user_id, "offline");
-                state_clone
-                    .user_presences
-                    .insert(session_user_id, offline_presence.clone());
+                let offline_presence = mark_user_offline(&state_clone, session_user_id);
 
                 let friend_ids = match cached_friend_ids {
                     Some(friend_ids) => friend_ids,
@@ -1558,15 +1810,18 @@ pub async fn wait_for_identify_or_resume(
     let max_preauth_frames = ws_limits().max_preauth_frames;
     let mut preauth_frames: u32 = 0;
     while let Some(Ok(msg)) = receiver.next().await {
+        // Count *every* frame, not just Text. The budget previously only saw
+        // Text, so binary/ping frames were free and an unauthenticated socket
+        // could still spin the pre-auth path for the whole 30s identify timeout.
+        preauth_frames = preauth_frames.saturating_add(1);
+        if preauth_frames > max_preauth_frames {
+            tracing::debug!(
+                frames = preauth_frames,
+                "closing socket: too many frames before IDENTIFY/RESUME"
+            );
+            return None;
+        }
         if let Message::Text(text) = msg {
-            preauth_frames = preauth_frames.saturating_add(1);
-            if preauth_frames > max_preauth_frames {
-                tracing::debug!(
-                    frames = preauth_frames,
-                    "closing socket: too many frames before IDENTIFY/RESUME"
-                );
-                return None;
-            }
             // Parse once, and never log the raw frame: IDENTIFY carries the
             // access token in `d.token` and the wire-trace preview truncates but
             // does not redact.
@@ -1822,6 +2077,13 @@ pub async fn run_session(
     // teardown below can make sure the client cannot RESUME back into it.
     let mut credential_terminated = false;
 
+    // Fixed-window budget for inbound non-Text frames. Per connection rather than
+    // per user: these are transport-level frames, and a legitimate client emits
+    // only the Pongs answering our 20s Ping plus any pings of its own.
+    let control_frame_limit = ws_limits().max_control_frames_per_minute;
+    let mut control_frames: u32 = 0;
+    let mut control_window_start = Instant::now();
+
     let (disconnect_reason, heartbeat_timed_out) = loop {
         tokio::select! {
             msg = receiver.next() => {
@@ -1840,42 +2102,52 @@ pub async fn run_session(
                             &redact_gateway_credentials(parsed_payload.as_ref().ok(), &text),
                             "client_message",
                         );
-                        // Heartbeats are never rate limited
-                        if opcode != OP_HEARTBEAT {
-                            if let Err(retry_after_ms) = rate_limits.check(session.user_id, opcode) {
-                                match opcode {
-                                    OP_PRESENCE_UPDATE | OP_TYPING_START | OP_VOICE_STATE_UPDATE => {
-                                        // Silent drop for high-frequency events
-                                        tracing::debug!(
-                                            user_id = session.user_id,
-                                            opcode,
-                                            "rate limited (silent drop)"
-                                        );
-                                        continue;
-                                    }
-                                    _ => {
-                                        let error_payload = json!({
-                                            "op": OP_DISPATCH,
-                                            "t": "RATE_LIMIT",
-                                            "d": {
-                                                "retry_after": retry_after_ms,
-                                                "type": "messages"
-                                            }
-                                        });
-                                        let _ = send_ws_text_logged(
-                                            &mut sender,
-                                            error_payload.to_string(),
-                                            compressor,
-                                            Some(session.user_id),
-                                            Some(session.session_id.as_str()),
-                                            "rate_limit",
-                                            Some(OP_DISPATCH),
-                                            Some("RATE_LIMIT"),
-                                            None,
-                                        )
-                                        .await;
-                                        continue;
-                                    }
+                        // Heartbeats keep their own budget so a client that has
+                        // spent its general allowance can still hold the socket
+                        // open, but they are no longer unmetered: op 1 costs a
+                        // JSON parse and an ACK echo, and nothing bounded how
+                        // fast a socket could ask for that.
+                        if opcode == OP_HEARTBEAT {
+                            if rate_limits.check_heartbeat(session.user_id).is_err() {
+                                tracing::debug!(
+                                    user_id = session.user_id,
+                                    "heartbeat rate limited (silent drop)"
+                                );
+                                continue;
+                            }
+                        } else if let Err(retry_after_ms) = rate_limits.check(session.user_id, opcode) {
+                            match opcode {
+                                OP_PRESENCE_UPDATE | OP_TYPING_START | OP_VOICE_STATE_UPDATE => {
+                                    // Silent drop for high-frequency events
+                                    tracing::debug!(
+                                        user_id = session.user_id,
+                                        opcode,
+                                        "rate limited (silent drop)"
+                                    );
+                                    continue;
+                                }
+                                _ => {
+                                    let error_payload = json!({
+                                        "op": OP_DISPATCH,
+                                        "t": "RATE_LIMIT",
+                                        "d": {
+                                            "retry_after": retry_after_ms,
+                                            "type": "messages"
+                                        }
+                                    });
+                                    let _ = send_ws_text_logged(
+                                        &mut sender,
+                                        error_payload.to_string(),
+                                        compressor,
+                                        Some(session.user_id),
+                                        Some(session.session_id.as_str()),
+                                        "rate_limit",
+                                        Some(OP_DISPATCH),
+                                        Some("RATE_LIMIT"),
+                                        None,
+                                    )
+                                    .await;
+                                    continue;
                                 }
                             }
                         }
@@ -1906,7 +2178,38 @@ pub async fn run_session(
                     None => {
                         break ("websocket stream ended".to_string(), false);
                     }
-                    _ => {}
+                    Some(Ok(_control_or_binary)) => {
+                        // Ping/Pong/Binary. The gateway does not parse or answer
+                        // these itself, so the per-user opcode limiters never see
+                        // them — but each still costs a frame decode, and the
+                        // websocket layer answers every Ping with a Pong. Meter
+                        // them per connection so a socket cannot buy unbounded
+                        // work by simply not sending Text.
+                        if control_window_start.elapsed() >= CONTROL_FRAME_WINDOW {
+                            control_window_start = Instant::now();
+                            control_frames = 0;
+                        }
+                        control_frames = control_frames.saturating_add(1);
+                        if control_frames > control_frame_limit {
+                            let _ = send_ws_close_logged(
+                                &mut sender,
+                                1008,
+                                "Too many control frames",
+                                Some(session.user_id),
+                                Some(session.session_id.as_str()),
+                                "control_frame_flood_close",
+                            )
+                            .await;
+                            break (
+                                format!(
+                                    "control frame flood: {control_frames} non-text frames within \
+                                     {}s (limit {control_frame_limit})",
+                                    CONTROL_FRAME_WINDOW.as_secs()
+                                ),
+                                false,
+                            );
+                        }
+                    }
                 }
             }
             event = event_rx.recv() => {
@@ -2798,6 +3101,23 @@ async fn handle_client_message(
             // participants in the same room via the event bus.
             if let Some(d) = payload.get("d") {
                 if let Ok(announce) = serde_json::from_value::<MediaKeyAnnounce>(d.clone()) {
+                    // Reject an oversized key list before doing any work. One
+                    // announce carries at most one key per *other* participant,
+                    // and the relay caps a room at `native_media_max_participants`;
+                    // walking the array uncapped meant a single 32 KiB frame cost
+                    // thousands of log lines and event-bus publishes.
+                    let max_recipients = WS_MEDIA_KEY_RECIPIENTS_FLOOR
+                        .max(state.config.native_media_max_participants as usize);
+                    if announce.encrypted_keys.len() > max_recipients {
+                        tracing::warn!(
+                            user_id = session.user_id,
+                            recipients = announce.encrypted_keys.len(),
+                            max_recipients,
+                            "OP_MEDIA_KEY_ANNOUNCE rejected: recipient list exceeds the room cap"
+                        );
+                        return;
+                    }
+
                     // Verify sender is in an active voice channel
                     let voice_state = paracord_db::voice_states::get_user_voice_state(
                         &state.db,
@@ -2838,13 +3158,12 @@ async fn handle_client_message(
                         };
 
                     // Deliver each per-recipient key, but only to users in the same room
+                    let mut skipped_recipients = 0usize;
                     for encrypted_key in &announce.encrypted_keys {
                         if !room_user_ids.contains(&encrypted_key.recipient_user_id) {
-                            tracing::warn!(
-                                "OP_MEDIA_KEY_ANNOUNCE: skipping recipient {} not in same voice room as sender {}",
-                                encrypted_key.recipient_user_id,
-                                session.user_id
-                            );
+                            // Counted and reported once below. Logging per element
+                            // let a single frame write one line per array entry.
+                            skipped_recipients += 1;
                             continue;
                         }
                         let deliver = json!({
@@ -2863,6 +3182,13 @@ async fn handle_client_message(
                             EVENT_MEDIA_KEY_DELIVER,
                             deliver,
                             vec![encrypted_key.recipient_user_id],
+                        );
+                    }
+                    if skipped_recipients > 0 {
+                        tracing::warn!(
+                            user_id = session.user_id,
+                            skipped = skipped_recipients,
+                            "OP_MEDIA_KEY_ANNOUNCE: skipped recipients not in the sender's voice room"
                         );
                     }
                 }
@@ -3079,6 +3405,76 @@ pub fn test_release_preauth_slot(peer_ip: &str) {
 #[doc(hidden)]
 pub fn test_max_preauth_per_ip() -> usize {
     ws_limits().max_preauth_per_ip
+}
+
+/// Exercise the authenticated per-IP connection cap from integration tests.
+/// Tests must pass a unique `peer_ip` so their bucket is isolated, and release
+/// every granted slot. Not part of the supported public API.
+#[doc(hidden)]
+pub fn test_acquire_ip_connection_slot(peer_ip: Option<&str>) -> bool {
+    try_acquire_ip_connection_slot(peer_ip)
+}
+
+#[doc(hidden)]
+pub fn test_release_ip_connection_slot(peer_ip: &str) {
+    release_ip_connection(peer_ip);
+}
+
+/// The configured per-IP authenticated connection cap.
+#[doc(hidden)]
+pub fn test_max_connections_per_ip() -> usize {
+    ws_limits().max_connections_per_ip
+}
+
+/// The configured per-IP gateway handshake rate (upgrades per minute).
+#[doc(hidden)]
+pub fn test_max_handshakes_per_minute_per_ip() -> u32 {
+    ws_limits().max_handshakes_per_minute_per_ip
+}
+
+/// Per-connection non-Text frame budget, so tests assert against the effective
+/// limit rather than a hard-coded constant.
+#[doc(hidden)]
+pub fn test_max_control_frames_per_minute() -> u32 {
+    ws_limits().max_control_frames_per_minute
+}
+
+/// Per-user heartbeat budget.
+#[doc(hidden)]
+pub fn test_max_heartbeats_per_minute() -> u32 {
+    ws_limits().max_heartbeats_per_minute
+}
+
+/// Per-user `OP_REQUEST_GUILD_MEMBERS` budget.
+#[doc(hidden)]
+pub fn test_max_guild_member_requests_per_minute() -> u32 {
+    ws_limits().max_guild_member_requests_per_minute
+}
+
+/// Per-user `OP_MEDIA_KEY_ANNOUNCE` budget.
+#[doc(hidden)]
+pub fn test_max_media_key_announces_per_minute() -> u32 {
+    ws_limits().max_media_key_announces_per_minute
+}
+
+/// The pre-auth frame budget (all frame types, not just Text).
+#[doc(hidden)]
+pub fn test_max_preauth_frames() -> u32 {
+    ws_limits().max_preauth_frames
+}
+
+/// Drive the per-IP gateway handshake rate limiter directly. Tests must pass a
+/// unique `peer_ip` so their bucket is isolated.
+#[doc(hidden)]
+pub fn test_allow_gateway_handshake(peer_ip: Option<&str>) -> bool {
+    allow_gateway_handshake(peer_ip)
+}
+
+/// Run the disconnect-time offline transition (the seam used by the deferred
+/// `PresenceManager` callback) so tests can assert `user_presences` eviction.
+#[doc(hidden)]
+pub fn test_mark_user_offline(state: &AppState, user_id: i64) -> Value {
+    mark_user_offline(state, user_id)
 }
 
 #[cfg(test)]

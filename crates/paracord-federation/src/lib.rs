@@ -53,6 +53,59 @@ pub const FEDERATION_EVENT_RETENTION_MS: i64 = 30 * 86_400_000; // 30 days
 
 const _: () = assert!(FEDERATION_EVENT_RETENTION_MS > MAX_INBOUND_EVENT_AGE_MS);
 
+/// How long per-attempt delivery records are kept before they are purged.
+///
+/// `federation_delivery_attempts` is an append-only audit/diagnostic log: one
+/// row per outbound POST, success or failure, with nothing reading it back on
+/// the hot path. It had no deletion path at all, so a peer that is simply down
+/// wrote a row per event per retry forever. 7 days is well past the 24h the
+/// outbox itself retains an undelivered event, so an operator investigating a
+/// peer that stopped working still has the full attempt history for every
+/// event that could still be queued.
+pub const DELIVERY_ATTEMPT_RETENTION_MS: i64 = 7 * 86_400_000; // 7 days
+
+/// Maximum number of inbound-triggered relay fan-outs allowed to be in flight
+/// at once, process-wide.
+///
+/// Every accepted inbound event used to `tokio::spawn` an unbounded fan-out
+/// task holding a full clone of the envelope (up to the 1 MiB content cap) and
+/// walking every trusted peer sequentially. Because receivers re-relay what
+/// they accept, and membership events legitimately go to *all* peers, one
+/// hostile peer's event stream multiplies into an O(peers²) mesh of concurrent
+/// tasks and outbound requests with nothing to stop it. This is the ceiling.
+pub const MAX_CONCURRENT_RELAY_FANOUTS: usize = 32;
+
+/// Wall-clock ceiling on a single relay fan-out.
+///
+/// `forward_envelope_to_peers_inner` walks peers sequentially and each hop can
+/// burn up to `MAX_RETRIES` × the 15s client timeout, so a large mesh of
+/// black-holing peers could otherwise pin a [`MAX_CONCURRENT_RELAY_FANOUTS`]
+/// slot for hours. Peers reached before the deadline are already staged in the
+/// outbound queue and the queue processor retries them; peers not reached are
+/// re-converged by the catch-up puller.
+pub const RELAY_FANOUT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(180);
+
+fn relay_fanout_slots() -> &'static std::sync::Arc<tokio::sync::Semaphore> {
+    static SLOTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+        std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| {
+        std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_RELAY_FANOUTS))
+    })
+}
+
+/// Reserve one of the [`MAX_CONCURRENT_RELAY_FANOUTS`] relay slots, or `None`
+/// when they are all taken.
+///
+/// Deliberately non-blocking: an inbound event whose relay cannot be admitted is
+/// SHED, not queued, because queueing would simply move the unbounded growth
+/// from tasks into a backlog of retained envelopes. Shedding is recoverable —
+/// the event is still persisted, dispatched to local clients, and re-pulled by
+/// peers through `run_federation_catchup_once`, which exists precisely to
+/// converge history a peer did not receive by push.
+pub fn try_acquire_relay_fanout_slot() -> Option<tokio::sync::OwnedSemaphorePermit> {
+    relay_fanout_slots().clone().try_acquire_owned().ok()
+}
+
 /// Returns `true` when `origin_ts` falls inside the accepted freshness window
 /// relative to `now_ms`.
 pub fn event_origin_ts_is_fresh(origin_ts: i64, now_ms: i64) -> bool {
@@ -690,6 +743,33 @@ impl FederationService {
             }
             Err(e) => {
                 tracing::warn!("federation: failed to purge expired outbound events: {}", e);
+            }
+            _ => {}
+        }
+
+        // Bound the delivery-attempt audit log on the same cadence. One row is
+        // written per attempt and nothing ever deleted them, so a single peer
+        // that black-holes traffic wrote ~13 rows per event (1 immediate +
+        // MAX_RETRY_ATTEMPTS) and kept them forever. The outbox itself is
+        // already bounded by the purge above, so retention only has to outlive
+        // an operator's window for diagnosing a failing peer.
+        match paracord_db::federation::purge_expired_delivery_attempts(
+            pool,
+            now_ms - DELIVERY_ATTEMPT_RETENTION_MS,
+        )
+        .await
+        {
+            Ok(purged) if purged > 0 => {
+                tracing::info!(
+                    "federation: purged {} expired delivery attempt records",
+                    purged
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "federation: failed to purge expired delivery attempts: {}",
+                    e
+                );
             }
             _ => {}
         }
