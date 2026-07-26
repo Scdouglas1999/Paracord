@@ -1,6 +1,6 @@
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GuildSettingsPage } from './GuildSettingsPage';
 import { useUIStore } from '../stores/uiStore';
@@ -11,8 +11,8 @@ const OTHER_GUILD_ID = 'guild-2';
 // Navigation is asserted via a spy so we can prove the windowed overlay never
 // navigates while the standalone route instance does.
 const navigateSpy = vi.fn();
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return { ...actual, useNavigate: () => navigateSpy };
 });
 

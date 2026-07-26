@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Users, MessageSquare, X, Search, Check, UserPlus, UserRoundPlus, Inbox, Ban, ArrowUpRight } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useRelationshipStore } from '../stores/relationshipStore';
 import { usePresenceStore } from '../stores/presenceStore';
 import { useServerListStore } from '../stores/serverListStore';

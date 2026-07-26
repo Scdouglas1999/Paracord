@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { RoomCard } from './RoomCard';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { ChannelType, type Channel, type VoiceState } from '../../types';

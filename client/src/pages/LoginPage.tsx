@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useAuthStore } from '../stores/authStore';
 import { useAccountStore } from '../stores/accountStore';
 import { useServerListStore } from '../stores/serverListStore';

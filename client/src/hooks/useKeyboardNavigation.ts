@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { useChannelStore } from '../stores/channelStore';
 import { useGuildStore } from '../stores/guildStore';
 import { useUIStore } from '../stores/uiStore';

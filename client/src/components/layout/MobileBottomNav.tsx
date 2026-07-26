@@ -1,4 +1,4 @@
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { Home, MessageSquare, Hash, Users, Settings } from 'lucide-react';
 import { useGuildStore } from '../../stores/guildStore';
 import { useUIStore } from '../../stores/uiStore';

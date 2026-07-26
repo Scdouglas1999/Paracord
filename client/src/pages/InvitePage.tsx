@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router';
 import { ArrowRight, Hash, Users } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { inviteApi } from '../api/invites';

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 import { X, Shield, ShieldAlert, Users, Hash, Link, Gavel, ScrollText, RefreshCw, Smile, Calendar, Bot, ArrowLeft, HardDrive, LayoutTemplate, MessageSquare, TrendingUp } from 'lucide-react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { guildApi } from '../../api/guilds';
 import { inviteApi } from '../../api/invites';
 import { webhookApi } from '../../api/webhooks';

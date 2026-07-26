@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Loader2, RefreshCw, Server, Sparkles, X } from 'lucide-react';
 import { useServerListStore, resolveDefaultServerTarget } from '../stores/serverListStore';
 import { gateway } from '../gateway/manager';

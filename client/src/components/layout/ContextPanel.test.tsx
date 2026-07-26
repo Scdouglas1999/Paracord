@@ -9,7 +9,7 @@ const navigateMock = vi.fn();
 
 // Isolate ContextPanel from the (heavy, store/router-bound) wrapped surfaces:
 // every mode should resolve to exactly one of these stand-ins.
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,
 }));
 

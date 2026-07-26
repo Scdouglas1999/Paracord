@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileText, Trash2, Upload, Hash, Volume2, Megaphone, Folder, MessagesSquare, Search, Shield } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { templateApi, type GuildTemplate } from '../api/templates';
 import { useAuthStore } from '../stores/authStore';
 import { useGuildStore } from '../stores/guildStore';

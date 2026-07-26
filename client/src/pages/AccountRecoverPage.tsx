@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useAccountStore } from '../stores/accountStore';
 import { MIN_PASSWORD_LENGTH } from '../lib/constants';
 import { ErrorBanner } from '../components/ui/Feedback';

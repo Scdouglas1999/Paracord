@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Search, X } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { channelApi } from '../../../api/channels';
 import type { Message } from '../../../types';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';

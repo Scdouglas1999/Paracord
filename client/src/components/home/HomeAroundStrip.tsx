@@ -1,5 +1,5 @@
 import { Users } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { usePresenceStore } from '../../stores/presenceStore';
 import { Tooltip } from '../ui/Tooltip';
 import { HomeSectionHeader } from './HomeSectionHeader';

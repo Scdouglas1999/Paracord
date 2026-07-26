@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ArrowLeft, Users, Server, Settings, BarChart3, Shield, HardDrive, Globe2, type LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { isAdmin } from '../types';

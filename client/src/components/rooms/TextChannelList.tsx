@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router';
 import { Bell, Hash, MessageSquare, MessagesSquare } from 'lucide-react';
 import { buildChannelGroups } from '../../lib/features/channelGroups';
 import { useUnreadCounts } from '../../hooks/useUnreadCounts';

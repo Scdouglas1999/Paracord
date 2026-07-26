@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Bell, BellOff, CheckCheck, LogOut, Plus, Settings } from 'lucide-react';
 import { useServerListStore } from '../../../stores/serverListStore';
 import { useChannelStore } from '../../../stores/channelStore';

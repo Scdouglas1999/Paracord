@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { TopBar } from '../components/layout/TopBar';
 import { ForumView } from '../components/channel/ForumView';
 import { useChannelStore } from '../stores/channelStore';

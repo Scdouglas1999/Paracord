@@ -14,7 +14,7 @@ const fetchChannels = vi.fn();
 const selectGuild = vi.fn();
 const selectChannel = vi.fn();
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router', () => ({
   useNavigate: () => navigate,
 }));
 

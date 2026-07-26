@@ -1,4 +1,4 @@
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router';
 import { Home, Users, MessageCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '../../../lib/utils';

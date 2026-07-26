@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ArrowLeft, CalendarDays, Compass, Globe2, Search, Server, Users } from 'lucide-react';
 import { extractApiError } from '../api/client';
 import { getApi } from '../api/activeClient';

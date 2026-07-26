@@ -26,7 +26,7 @@ import {
   Settings,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { extractApiError } from '../../api/client';
 import { channelApi } from '../../api/channels';
 import { authApi } from '../../api/auth';

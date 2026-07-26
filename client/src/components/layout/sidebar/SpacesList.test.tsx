@@ -10,8 +10,8 @@ import type { GuildSummary } from '../../../hooks/useUnifiedConversations';
 const navigate = vi.fn();
 const canAccessSync = vi.hoisted(() => vi.fn<(guildId: string) => boolean>(() => false));
 
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return { ...actual, useNavigate: () => navigate };
 });
 

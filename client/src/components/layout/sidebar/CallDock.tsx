@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Radio } from 'lucide-react';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import { MiniVoiceBar } from '../../voice/MiniVoiceBar';

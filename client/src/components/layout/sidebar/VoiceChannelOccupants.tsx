@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useGuildStore } from '../../../stores/guildStore';
 import { useVoiceStore } from '../../../stores/voiceStore';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';

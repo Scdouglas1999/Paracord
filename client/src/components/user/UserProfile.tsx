@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { MessageSquare, UserPlus, Ban, Users, CalendarDays, Link2, ShieldCheck, ShieldAlert, QrCode, Copy, Flag, Radio, BadgeCheck, StickyNote, UserCheck, UserX, UserMinus } from 'lucide-react';
 import { isAdmin, type User } from '../../types/index';
 import { extractApiError } from '../../api/client';

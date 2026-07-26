@@ -2,7 +2,7 @@ import { useRef, useEffect, useMemo, useState, useReducer, useCallback, type CSS
 import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown, ArrowRight, Smile, Reply, MoreHorizontal, Hash, Check, X as XIcon, Pencil, Pin, PinOff, Copy, Clipboard, Trash2, MessageSquare, Send, Eye, Loader2, Bookmark, BookmarkCheck } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import { useMessages } from '../../hooks/useMessages';
 import { useTypingStore } from '../../stores/typingStore';
 import { useAuthStore } from '../../stores/authStore';

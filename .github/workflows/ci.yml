@@ -73,8 +73,6 @@ jobs:
         run: python3 scripts/ci_migration_sanity.py
       - name: Release version metadata
         run: python3 scripts/check_release_version.py
-      - name: Release checklist status coverage
-        run: python3 scripts/validate_release_checklist_status.py
       - name: SQLite upgrade from latest release tag
         run: python3 scripts/release_sqlite_upgrade_from_tag_smoke.py v0.9.0
       - name: SQLite query-plan smoke

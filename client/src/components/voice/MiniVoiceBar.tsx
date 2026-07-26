@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Radio, Video, VideoOff } from 'lucide-react';
 import { ConnectionQuality, RoomEvent } from 'livekit-client';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';

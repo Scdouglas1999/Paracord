@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router';
 import { motion, useReducedMotion } from 'framer-motion';
 import { AppMark } from './pages/authScaffold';
 import { LoginPage } from './pages/LoginPage';

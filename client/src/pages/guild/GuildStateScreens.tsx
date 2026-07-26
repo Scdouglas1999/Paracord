@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Compass } from 'lucide-react';
 import { TopBar } from '../../components/layout/TopBar';
 import { Button } from '../../components/ui/Button';

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Search, Hash, Volume2, Settings, Home, Shield, MessageCircle, ArrowRight, Bot, UserPlus, Users, MessagesSquare, MessageSquarePlus } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import { DmPickerModal } from '../message/DmPickerModal';

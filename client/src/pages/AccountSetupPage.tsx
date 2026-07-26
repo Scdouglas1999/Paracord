@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Check, Copy, KeyRound, ShieldAlert } from 'lucide-react';
 import { useAccountStore } from '../stores/accountStore';
 import { useAuthStore } from '../stores/authStore';

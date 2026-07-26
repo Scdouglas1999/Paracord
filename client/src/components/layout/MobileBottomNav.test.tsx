@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useGuildStore } from '../../stores/guildStore';
 import { useUIStore } from '../../stores/uiStore';

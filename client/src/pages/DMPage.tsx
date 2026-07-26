@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { MessagesSquare, Users, PenSquare, Hash, Search, X } from 'lucide-react';
 import { TopBar } from '../components/layout/TopBar';
 import { MessageList } from '../components/message/MessageList';

@@ -13,7 +13,7 @@ const voiceState = vi.hoisted(() => ({ current: {} as Record<string, unknown> })
 const channelState = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const authState = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 
-vi.mock('react-router-dom', () => ({ useNavigate: () => navigateSpy }));
+vi.mock('react-router', () => ({ useNavigate: () => navigateSpy }));
 vi.mock('../../hooks/useVoice', () => ({ useVoice: () => voiceHook.current }));
 vi.mock('../../stores/voiceStore', () => ({
   useVoiceStore: Object.assign(

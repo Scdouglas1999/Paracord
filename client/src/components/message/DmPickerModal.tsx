@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Check, Search, User, UserPlus, Users } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useRelationshipStore } from '../../stores/relationshipStore';

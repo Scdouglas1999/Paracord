@@ -11,7 +11,7 @@ import { useUIStore } from '../../stores/uiStore';
 import { inviteApi } from '../../api/invites';
 import { extractApiError } from '../../api/client';
 import { getApi } from '../../api/activeClient';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { isAllowedImageMimeType } from '../../lib/security';
 import { cn } from '../../lib/utils';
 

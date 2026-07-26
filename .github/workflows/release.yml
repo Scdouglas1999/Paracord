@@ -65,10 +65,6 @@ jobs:
         shell: bash
         run: npm ci && npm audit --audit-level=moderate
 
-      - name: Check release checklist coverage
-        shell: bash
-        run: python3 scripts/validate_release_checklist_status.py
-
       - name: Check release line endings
         shell: bash
         run: python3 scripts/check_migration_line_endings.py

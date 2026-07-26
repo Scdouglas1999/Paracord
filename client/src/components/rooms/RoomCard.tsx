@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Hash, Play, Radio, Users, Volume2 } from 'lucide-react';
 import { useVoice } from '../../hooks/useVoice';
 import { useVoiceStore } from '../../stores/voiceStore';

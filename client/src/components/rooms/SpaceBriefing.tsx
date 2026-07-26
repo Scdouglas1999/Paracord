@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Bell, BookOpen, Hash, MessageSquare, MoveRight } from 'lucide-react';
 import { safeStoredImageDataUrl } from '../../lib/security';
 import { ChannelType, type Channel, type HubSettings } from '../../types';

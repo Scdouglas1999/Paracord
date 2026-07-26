@@ -1,5 +1,5 @@
 import { act, render, screen, fireEvent } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { UnifiedSidebar } from './UnifiedSidebar';

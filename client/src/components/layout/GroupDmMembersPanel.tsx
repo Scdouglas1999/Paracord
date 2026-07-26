@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { LogOut, UserMinus, UserPlus, Users, X } from 'lucide-react';
 import { useChannelStore } from '../../stores/channelStore';
 import { useAuthStore } from '../../stores/authStore';

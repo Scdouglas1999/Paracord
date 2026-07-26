@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { RecentList } from './RecentList';
 import { usePresenceStore } from '../../../stores/presenceStore';
 import type { ConversationEntry } from '../../../lib/attention/conversationModel';

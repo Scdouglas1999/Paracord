@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Hash, MessageSquare, X } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import type { Message } from '../../types';

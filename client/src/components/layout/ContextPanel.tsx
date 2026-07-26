@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { AlertCircle, Archive, Coins, Loader2, MessageSquare, Users, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import type { Channel, Message } from '../../types';
 import { useUIStore } from '../../stores/uiStore';
 import { useChannelStore } from '../../stores/channelStore';

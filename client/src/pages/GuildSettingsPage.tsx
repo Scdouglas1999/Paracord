@@ -1,5 +1,5 @@
 import { GuildSettings } from '../components/guild/GuildSettings';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { useGuildStore } from '../stores/guildStore';
 import { usePermissions } from '../hooks/usePermissions';

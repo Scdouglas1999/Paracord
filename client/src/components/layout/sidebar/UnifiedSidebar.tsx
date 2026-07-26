@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router';
 import { Search, Home, Users, MessageCircle, Plus } from 'lucide-react';
 
 import { useUIStore } from '../../../stores/uiStore';

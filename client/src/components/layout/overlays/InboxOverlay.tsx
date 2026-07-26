@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { Bookmark, Check, CheckCheck, Hash, Inbox, Loader2, MessageSquare, Trash2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import type { Message, ReadState } from '../../../types';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
 import { extractApiError } from '../../../api/client';
