@@ -16,7 +16,6 @@
     "test:contrast": "node ./scripts/contrast-audit.mjs",
     "test:e2e": "playwright test",
     "build": "tsc -b && vite build",
-    "screenshots:release": "node ./scripts/capture-release-screenshots.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
