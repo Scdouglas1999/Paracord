@@ -212,7 +212,10 @@ describe('LoginPage password reset and MFA flows', () => {
     await user.type(screen.getByLabelText(/^Password/), 'OriginalPass123!');
     await user.click(screen.getByRole('button', { name: 'Log In' }));
 
-    await waitFor(() => expect(authApi.attachPublicKey).toHaveBeenCalledWith('a'.repeat(64)));
+    // The password must travel with the key — see authApi.attachPublicKey.
+    await waitFor(() =>
+      expect(authApi.attachPublicKey).toHaveBeenCalledWith('a'.repeat(64), 'OriginalPass123!'),
+    );
     expect(setAccessToken).toHaveBeenLastCalledWith('rotated-access-token');
     expect(setRefreshToken).toHaveBeenLastCalledWith('rotated-refresh-token');
     expect(await screen.findByText('App shell')).toBeInTheDocument();

@@ -160,7 +160,9 @@ describe('RegisterPage', () => {
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
     await waitFor(() => {
-      expect(authApi.attachPublicKey).toHaveBeenCalledWith('public-key-1');
+      // The password must travel with the key: the server re-authenticates
+      // before accepting a standalone credential that outlives a password change.
+      expect(authApi.attachPublicKey).toHaveBeenCalledWith('public-key-1', 'ValidPass123');
     });
   });
 });

@@ -14,14 +14,7 @@ use crate::routes::mod_log;
 
 const MAX_BAN_REASON_LEN: usize = 512;
 
-fn contains_dangerous_markup(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("<script")
-        || lower.contains("javascript:")
-        || lower.contains("onerror=")
-        || lower.contains("onload=")
-        || lower.contains("<iframe")
-}
+use paracord_util::validation::contains_dangerous_markup;
 
 pub async fn list_bans(
     State(state): State<AppState>,
@@ -34,14 +27,15 @@ pub async fn list_bans(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    let roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms = paracord_core::permissions::compute_permissions_from_roles(
-        &roles,
+    // Guild-scoped gate: `compute_guild_permissions` also applies the bot
+    // install-permission cap, which the raw role fold cannot.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
-    );
+    )
+    .await?;
     paracord_core::permissions::require_permission(
         perms,
         paracord_models::permissions::Permissions::BAN_MEMBERS,

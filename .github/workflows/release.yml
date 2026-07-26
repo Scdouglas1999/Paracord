@@ -5,8 +5,10 @@ on:
     tags:
       - "v*"
 
+# Least privilege by default: only the job that publishes the release needs to
+# write to the repository, and it grants itself `contents: write` locally.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,8 +17,12 @@ env:
   # libopus (audiopus_sys) bundles a pre-3.5 CMakeLists; CMake 4.x (Windows
   # runner) removed that compatibility. Configure it anyway per CMake's guidance.
   CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+  # NOTE: the Tauri updater signing key is deliberately NOT declared here. A
+  # workflow-level `env` puts the private key in the environment of every step
+  # of every job, so any compromised build dependency anywhere in the release
+  # (cargo, npm, choco, vcpkg …) could read it and ship signed updates to every
+  # user. It is injected only into the single `npx tauri build` step of each
+  # client job — the only step that actually signs anything.
 
 jobs:
   validate-release-version:
@@ -241,18 +247,25 @@ jobs:
     name: Build Client (Windows x64)
     runs-on: windows-latest
     needs: validate-release-version
+    env:
+      # Presence flag only — never the key itself. Steps that merely need to
+      # know whether signing is configured read this; the key material stays
+      # scoped to the build step below.
+      HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to commit SHAs in the jobs that hold the signing key:
+      # a moved tag would otherwise be enough to run attacker code beside it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: "1.91"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: client/src-tauri
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
@@ -291,13 +304,16 @@ jobs:
         run: npm ci
 
       - name: Enable signed updater artifacts
-        if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        if: ${{ env.HAS_SIGNING_KEY == 'true' }}
         shell: pwsh
         run: |
           node -e "const fs=require('fs'); const p='client/src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.bundle.createUpdaterArtifacts=true; fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');"
 
       - name: Build Tauri bundles (Windows)
         working-directory: client
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build
 
       - name: Download WebView2 bootstrapper
@@ -326,14 +342,14 @@ jobs:
           & "$env:ISCC_EXE" /DAppVersion=$version installer/paracord-client.iss
 
       - name: Upload client installer (Inno)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: client-windows-installer
           path: installer/output/Paracord-Setup-*.exe
           if-no-files-found: error
 
       - name: Upload client MSI
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: client-windows-msi
           path: |
@@ -345,8 +361,13 @@ jobs:
     name: Build Client (Linux x64)
     runs-on: ubuntu-latest
     needs: validate-release-version
+    env:
+      # Presence flag only — never the key itself. See build-client-windows.
+      HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to commit SHAs in the jobs that hold the signing key:
+      # a moved tag would otherwise be enough to run attacker code beside it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Linux dependencies for Tauri
         run: |
@@ -378,15 +399,15 @@ jobs:
             sudo apt-get install -y libappindicator3-dev
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: "1.91"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: client/src-tauri
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
@@ -395,16 +416,19 @@ jobs:
         run: npm ci
 
       - name: Enable signed updater artifacts
-        if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        if: ${{ env.HAS_SIGNING_KEY == 'true' }}
         run: |
           node -e "const fs=require('fs'); const p='client/src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.bundle.createUpdaterArtifacts=true; fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');"
 
       - name: Build Tauri bundles (AppImage + deb)
         working-directory: client
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --bundles appimage,deb
 
       - name: Upload client AppImage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: client-linux-appimage
           path: |
@@ -413,7 +437,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload client deb
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: client-linux-deb
           path: |
@@ -429,6 +453,10 @@ jobs:
       - build-client-windows
       - build-client-linux
     runs-on: ubuntu-latest
+    # The only job that mutates the repository: it deletes stale release assets
+    # and publishes the new ones.
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

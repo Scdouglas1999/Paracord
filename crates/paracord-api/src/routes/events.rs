@@ -19,14 +19,7 @@ const MAX_EVENT_DESCRIPTION_LEN: usize = 1000;
 const MAX_EVENT_LOCATION_LEN: usize = 200;
 const MAX_EVENT_IMAGE_URL_LEN: usize = 2_000;
 
-fn contains_dangerous_markup(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("<script")
-        || lower.contains("javascript:")
-        || lower.contains("onerror=")
-        || lower.contains("onload=")
-        || lower.contains("<iframe")
-}
+use paracord_util::validation::contains_dangerous_markup;
 
 fn normalize_event_image_url(raw: &str) -> Result<String, ApiError> {
     let trimmed = raw.trim();
@@ -382,11 +375,15 @@ async fn ensure_manage_events(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let roles = paracord_db::roles::get_member_roles(&state.db, user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms =
-        paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
+    // Guild-scoped gate: `compute_guild_permissions` also applies the bot
+    // install-permission cap, which the raw role fold cannot.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
     // MANAGE_EVENTS maps to MANAGE_GUILD for now
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
     Ok(())

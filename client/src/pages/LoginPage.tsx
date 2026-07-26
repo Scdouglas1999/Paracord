@@ -136,7 +136,8 @@ export function LoginPage() {
       const account = useAccountStore.getState();
       if (account.isUnlocked && account.publicKey) {
         try {
-          const { data } = await authApi.attachPublicKey(account.publicKey);
+          // Password required — see authApi.attachPublicKey.
+          const { data } = await authApi.attachPublicKey(account.publicKey, password);
           if (data.token && data.user) {
             setAccessToken(data.token);
             if (data.refresh_token) setRefreshToken(data.refresh_token);

@@ -22,9 +22,14 @@ fn stage_instance_to_json(s: &paracord_db::stage_instances::StageInstanceRow) ->
     })
 }
 
+/// Every stage operation acts on one specific stage channel, so the gate is
+/// channel-scoped: `compute_channel_permissions` honors a per-channel
+/// MANAGE_CHANNELS deny (which the raw guild role fold cannot see) and also
+/// applies the bot install-permission cap.
 async fn ensure_manage_channels(
     state: &AppState,
     guild_id: i64,
+    channel_id: i64,
     user_id: i64,
 ) -> Result<(), ApiError> {
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
@@ -32,11 +37,14 @@ async fn ensure_manage_channels(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let roles = paracord_db::roles::get_member_roles(&state.db, user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms =
-        paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_CHANNELS)?;
     Ok(())
 }
@@ -236,7 +244,7 @@ pub async fn create_stage_instance(
         "Stage channels must be in a guild".into(),
     ))?;
 
-    ensure_manage_channels(&state, guild_id, auth.user_id).await?;
+    ensure_manage_channels(&state, guild_id, channel_id, auth.user_id).await?;
 
     // Check if a stage instance already exists for this channel
     let existing =
@@ -289,7 +297,7 @@ pub async fn update_stage_instance(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    ensure_manage_channels(&state, instance.guild_id, auth.user_id).await?;
+    ensure_manage_channels(&state, instance.guild_id, instance.channel_id, auth.user_id).await?;
 
     if let Some(pl) = body.privacy_level {
         if pl != 1 && pl != 2 {
@@ -327,7 +335,7 @@ pub async fn delete_stage_instance(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    ensure_manage_channels(&state, instance.guild_id, auth.user_id).await?;
+    ensure_manage_channels(&state, instance.guild_id, instance.channel_id, auth.user_id).await?;
 
     paracord_db::stage_instances::delete_stage_instance(&state.db, stage_id)
         .await
@@ -356,7 +364,7 @@ pub async fn invite_speaker(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    ensure_manage_channels(&state, instance.guild_id, auth.user_id).await?;
+    ensure_manage_channels(&state, instance.guild_id, instance.channel_id, auth.user_id).await?;
 
     get_stage_voice_state(&state, &instance, user_id).await?;
     ensure_target_can_speak(&state, &instance, user_id).await?;
@@ -382,7 +390,7 @@ pub async fn remove_speaker(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    ensure_manage_channels(&state, instance.guild_id, auth.user_id).await?;
+    ensure_manage_channels(&state, instance.guild_id, instance.channel_id, auth.user_id).await?;
 
     get_stage_voice_state(&state, &instance, user_id).await?;
     set_stage_publish_permission(&state, &instance, user_id, false).await;
@@ -461,7 +469,7 @@ pub async fn dismiss_speaker_request(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    ensure_manage_channels(&state, instance.guild_id, auth.user_id).await?;
+    ensure_manage_channels(&state, instance.guild_id, instance.channel_id, auth.user_id).await?;
     get_stage_voice_state(&state, &instance, user_id).await?;
     paracord_db::voice_states::clear_request_to_speak(
         &state.db,

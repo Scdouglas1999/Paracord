@@ -132,14 +132,7 @@ const MAX_POLL_DURATION_MINUTES: i64 = 60 * 24 * 14; // 14 days
 const MAX_MESSAGE_NONCE_LEN: usize = 64;
 const MAX_FORUM_SEARCH_POSTS: usize = 250;
 
-fn contains_dangerous_markup(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("<script")
-        || lower.contains("javascript:")
-        || lower.contains("onerror=")
-        || lower.contains("onload=")
-        || lower.contains("<iframe")
-}
+use paracord_util::validation::contains_dangerous_markup;
 
 fn parse_optional_datetime_param(
     raw: Option<&str>,
@@ -291,14 +284,14 @@ async fn normalize_required_role_ids(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let actor_roles = paracord_db::roles::get_member_roles(&state.db, actor_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let actor_perms = paracord_core::permissions::compute_permissions_from_roles(
-        &actor_roles,
+    // Capped fold — see `compute_guild_permissions`.
+    let actor_perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         actor_id,
-    );
+    )
+    .await?;
     if !paracord_core::permissions::is_server_admin(actor_perms) {
         return Err(ApiError::Forbidden);
     }
@@ -1262,14 +1255,14 @@ pub async fn upsert_channel_overwrite(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let actor_perms = paracord_core::permissions::compute_permissions_from_roles(
-        &roles,
+    // Capped fold — see `compute_guild_permissions`.
+    let actor_perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
-    );
+    )
+    .await?;
     validate_overwrite_permission_bits(
         guild.owner_id,
         auth.user_id,
@@ -1348,7 +1341,15 @@ pub async fn delete_channel_overwrite(
 // ── Federation message forwarding ────────────────────────────────────────────
 
 /// Build a FederationService from environment variables (same pattern as the
-/// federation routes use) and forward a message envelope to all trusted peers.
+/// federation routes use) and forward a message envelope to the peers that
+/// participate in this guild's room.
+///
+/// The two gates below are the outbound counterpart of the inbound ingest
+/// checks. Without them, enabling federation and trusting a single peer
+/// transmitted every message in every local guild to that peer in plaintext —
+/// including guilds the operator never federated and private channels inside
+/// guilds that were federated. The gates live here rather than at the call site
+/// so every future caller inherits them.
 ///
 /// This function is designed to be called inside `tokio::spawn` so it never
 /// returns errors -- all failures are logged.
@@ -1361,6 +1362,16 @@ async fn federation_forward_message(
     content: &Value,
     timestamp_ms: i64,
 ) {
+    // Gate 1: the same default-deny guild allowlist the ingest path enforces
+    // (`PARACORD_FEDERATION_ALLOWED_GUILD_IDS`). A guild the operator never
+    // opted into federation emits nothing.
+    if crate::routes::federation::ensure_federation_guild_allowed(guild_id).is_err() {
+        tracing::debug!(
+            "federation: not forwarding message {message_id}: guild {guild_id} is not federation-allowed"
+        );
+        return;
+    }
+
     // Look up the author's username for the federated identity
     let username = match paracord_db::users::get_user_by_id(&state.db, author_id).await {
         Ok(Some(user)) => user.username,
@@ -1385,6 +1396,24 @@ async fn federation_forward_message(
         .await
         .ok()
         .flatten();
+
+    // Gate 2: channel privacy. Peers cannot evaluate local roles or overwrites,
+    // so only channels visible to `@everyone` may be mirrored. Fail closed when
+    // the channel row cannot be read at all.
+    let Some(channel_row) = channel_meta.as_ref() else {
+        tracing::warn!(
+            "federation: not forwarding message {message_id}: channel {channel_id} not found"
+        );
+        return;
+    };
+    if !crate::routes::federation::federation_channel_is_public(state, channel_row, guild_id).await
+    {
+        tracing::debug!(
+            "federation: not forwarding message {message_id}: channel {channel_id} is not visible to @everyone"
+        );
+        return;
+    }
+
     let guild_meta = paracord_db::guilds::get_guild(&state.db, guild_id)
         .await
         .ok()

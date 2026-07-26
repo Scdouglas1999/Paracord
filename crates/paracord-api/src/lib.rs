@@ -1447,25 +1447,44 @@ async fn rate_limit_middleware(req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
+/// Read a cookie, scanning **every** `Cookie` header field.
+///
+/// This used to read only `headers.get(COOKIE)` — the first field — while the
+/// auth extractor (`middleware.rs`) iterates all of them. A request that put its
+/// access cookie in a second `Cookie` field therefore authenticated ambiently
+/// while the CSRF check believed no cookie was present and waved it through.
 fn get_cookie_value(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
-    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
-    for part in raw.split(';') {
-        let trimmed = part.trim();
-        let Some((name, value)) = trimmed.split_once('=') else {
+    for raw in headers.get_all(header::COOKIE).iter() {
+        let Ok(raw) = raw.to_str() else {
             continue;
         };
-        if name == cookie_name {
-            return Some(value.to_string());
+        for part in raw.split(';') {
+            let trimmed = part.trim();
+            let Some((name, value)) = trimmed.split_once('=') else {
+                continue;
+            };
+            if name == cookie_name {
+                return Some(value.to_string());
+            }
         }
     }
     None
 }
 
+/// Whether the `Authorization` header will actually carry this request's
+/// credential, making it non-ambient and therefore not CSRF-prone.
+///
+/// This must mirror `validate_auth`'s precedence exactly, and that precedence is
+/// **`Bearer` only**: any other scheme falls through to the access cookie. This
+/// used to accept `Bot ` as well, so `Authorization: Bot <anything>` — the value
+/// never validated — made the CSRF check skip while the request went on to
+/// authenticate ambiently from the cookie. A bot client sends a `Bot` token and
+/// no cookie, so it is unaffected by the tightening.
 fn has_header_auth(headers: &HeaderMap) -> bool {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .map(|raw| raw.starts_with("Bearer ") || raw.starts_with("Bot "))
+        .map(|raw| raw.starts_with("Bearer "))
         .unwrap_or(false)
 }
 
@@ -1513,7 +1532,19 @@ async fn csrf_middleware(req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-async fn security_headers_middleware(req: Request, next: Next) -> Response {
+/// Attach the security response headers.
+///
+/// Exported because `build_router`'s `.layer(...)` stack only wraps the routes
+/// registered *before* it, and the web UI is attached afterwards in
+/// `paracord-server` (`fallback_service` / `merge`). That left the SPA document
+/// and every static asset outside this middleware entirely — no
+/// `X-Frame-Options`, no `frame-ancestors`, no `nosniff`, no COOP/CORP — so the
+/// authenticated UI was frameable and clickjackable even though the branch below
+/// had always computed the right headers for it. The server re-applies this (and
+/// only this — not CSRF or the rate limiter, which must not run twice) to the
+/// UI routes. `HeaderMap::insert` overwrites, so a double application is a
+/// no-op.
+pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let is_https = req
         .headers()

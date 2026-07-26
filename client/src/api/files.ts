@@ -11,8 +11,9 @@ import {
   hasQuicTransport,
 } from '../lib/media/transport/fileTransportManager';
 import { isTauri } from '../lib/tauriEnv';
-import { resolveResourceUrl } from '../lib/config/apiBaseUrl';
+import { resolveApiOrigin, resolveResourceUrl } from '../lib/config/apiBaseUrl';
 import { ensureDownloadTicket, getDownloadTicket } from '../lib/downloadTicket';
+import { useServerListStore } from '../stores/serverListStore';
 
 /**
  * Encode raw bytes as a base64 string. Chunked to stay well under the argument
@@ -38,6 +39,9 @@ function bytesToBase64(bytes: Uint8Array): string {
  * ensures uploads/attachments target the same origin as the REST request that
  * authorized them. Falls back to the current window origin when the active
  * client's baseURL is relative (e.g. the Vite dev proxy).
+ *
+ * The URL is only half of the pairing: whatever addresses this origin must also
+ * carry that origin's own credential — see {@link resolveTokenForOrigin}.
  */
 export function resolveActiveApiOrigin(): string {
   const base = getApi().defaults.baseURL ?? '';
@@ -86,15 +90,57 @@ function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-function authHeaders(): Record<string, string> {
+/** http(s) origin of `url`, or null when it has neither. */
+function httpOriginOf(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return /^https?:$/.test(parsed.protocol) ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The bearer token this client holds *for* `targetOrigin`, or null when it
+ * holds none.
+ *
+ * A credential may only ever be presented to the server that issued it.
+ * `getAccessToken()` returns the process-global token, which belongs to the
+ * home/LOCAL server alone (see the invariant documented in ./client.ts), while
+ * the URLs on these paths come from the ACTIVE server — and, for attachments
+ * and avatars, are ultimately chosen by whoever authored the message. Pairing
+ * the two handed the home token to any origin a hostile server cared to name.
+ */
+function resolveTokenForOrigin(targetOrigin: string): string | null {
+  for (const server of useServerListStore.getState().servers) {
+    if (server.token && httpOriginOf(server.url) === targetOrigin) {
+      return server.token;
+    }
+  }
+  if (resolveApiOrigin() === targetOrigin) {
+    return getAccessToken();
+  }
+  return null;
+}
+
+/**
+ * Auth headers for a request to `targetUrl`.
+ *
+ * Authorization is resolved from the target's own origin, so an origin we hold
+ * no credential for gets an unauthenticated request rather than someone else's
+ * token. The CSRF double-submit value only means anything alongside the session
+ * it protects, so it travels with that credential and never on its own.
+ */
+function authHeaders(targetUrl: string): Record<string, string> {
   const headers: Record<string, string> = {};
-  const token = getAccessToken();
+  const origin = httpOriginOf(targetUrl);
+  const token = origin ? resolveTokenForOrigin(origin) : null;
   if (token && token !== 'null' && token !== 'undefined') {
     headers.Authorization = `Bearer ${token}`;
-  }
-  const csrf = getCsrfToken();
-  if (csrf) {
-    headers['X-Paracord-CSRF'] = csrf;
+    const csrf = getCsrfToken();
+    if (csrf) {
+      headers['X-Paracord-CSRF'] = csrf;
+    }
   }
   return headers;
 }
@@ -173,7 +219,7 @@ async function tauriUpload(
   const { invoke } = await import('@tauri-apps/api/core');
   const url = resolveActiveV1ApiUrl(`/channels/${channelId}/attachments`);
 
-  const headers = authHeaders();
+  const headers = authHeaders(url);
 
   onProgress?.(0);
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -223,7 +269,7 @@ async function tauriDownload(
     req: {
       url,
       headers: (() => {
-        const headers = authHeaders();
+        const headers = authHeaders(url);
         return Object.keys(headers).length > 0 ? headers : null;
       })(),
     },
@@ -331,7 +377,7 @@ export const fileApi = {
       }
       const { invoke } = await import('@tauri-apps/api/core');
       const absoluteUrl = toAbsoluteAttachmentUrl(url);
-      const headers = authHeaders();
+      const headers = authHeaders(absoluteUrl);
       const resp = (await invoke('native_download_file', {
         req: {
           url: absoluteUrl,
@@ -363,7 +409,7 @@ export const fileApi = {
     const ticketed = resolveResourceUrl(toAbsoluteAttachmentUrl(url), getDownloadTicket());
     const resp = await fetch(ticketed, {
       credentials: 'include',
-      headers: authHeaders(),
+      headers: authHeaders(ticketed),
     });
     if (!resp.ok) {
       throw new Error(`Request failed with status code ${resp.status}`);

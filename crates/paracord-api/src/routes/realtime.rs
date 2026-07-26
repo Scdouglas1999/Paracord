@@ -222,6 +222,79 @@ const MAX_STREAM_LIFETIME: Duration = Duration::from_secs(15 * 60);
 /// active. Cheap (one indexed lookup) relative to the stream's lifetime.
 const STREAM_REVALIDATE_INTERVAL: Duration = Duration::from_secs(60);
 
+// ── Owner-bound realtime session ids ────────────────────────────────────────
+//
+// A realtime session id is the key into the process-wide event-bus session map,
+// a keyspace the WebSocket gateway shares. `stream_events` takes the id straight
+// from the query string, so an id carrying no proof of ownership let any caller
+// register a session that had been issued to somebody else — and session ids are
+// disclosed to co-members, because READY publishes every visible voice state's
+// `session_id`.
+//
+// Every id the server hands out is therefore `"<base>.<tag>"`, where the tag is
+// an HMAC-SHA256 over the owner's user id and the base, keyed with the server's
+// JWT secret. Forging an id for a user requires that secret, and replaying
+// another user's id fails because the tag is verified against the *caller's*
+// user id. The base stays stable per login session so reconnects keep landing on
+// the same channel (and so keep their replay buffer and cursor).
+
+/// Bytes of HMAC output retained in a session-id tag (rendered as hex). 128 bits
+/// is far beyond guessing range for an online check.
+const SESSION_ID_TAG_BYTES: usize = 16;
+
+fn session_id_tag(secret: &str, user_id: i64, base: &str) -> String {
+    use hmac::{Hmac, Mac};
+    type HmacSha256 = Hmac<sha2::Sha256>;
+
+    // `new_from_slice` only fails for key lengths this HMAC accepts anyway.
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts a key of any length");
+    mac.update(b"paracord-realtime-session-v1:");
+    mac.update(user_id.to_string().as_bytes());
+    mac.update(b":");
+    mac.update(base.as_bytes());
+    mac.finalize().into_bytes()[..SESSION_ID_TAG_BYTES]
+        .iter()
+        .fold(
+            String::with_capacity(SESSION_ID_TAG_BYTES * 2),
+            |mut out, byte| {
+                use std::fmt::Write;
+                let _ = write!(out, "{byte:02x}");
+                out
+            },
+        )
+}
+
+/// Mint a realtime session id bound to `user_id`. `base` is the stable part
+/// (the login-session id when the caller has one), so the same login session
+/// keeps landing on the same channel across reconnects.
+fn mint_session_id(state: &AppState, user_id: i64, base: &str) -> String {
+    format!(
+        "{base}.{}",
+        session_id_tag(&state.config.jwt_secret, user_id, base)
+    )
+}
+
+/// Whether `session_id` is one this server issued to `user_id`.
+fn session_id_issued_to(state: &AppState, session_id: &str, user_id: i64) -> bool {
+    let Some((base, tag)) = session_id.rsplit_once('.') else {
+        return false;
+    };
+    if base.is_empty() {
+        return false;
+    }
+    let expected = session_id_tag(&state.config.jwt_secret, user_id, base);
+    // Length is public; compare the contents without an early exit.
+    if expected.len() != tag.len() {
+        return false;
+    }
+    expected
+        .bytes()
+        .zip(tag.bytes())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
+}
+
 /// Per-user count of attached SSE connections, enforcing
 /// `MAX_SSE_ATTACHMENTS_PER_USER`.
 fn user_attachment_counts() -> &'static DashMap<i64, usize> {
@@ -551,6 +624,13 @@ fn remove_session_channel(session_id: &str) {
 /// so a caller cannot attach to another user's session by guessing/replaying its
 /// `session_id`. Creation is capped per user to bound resource usage.
 ///
+/// The *vacant* path used to have no such check: it registered whatever id the
+/// caller supplied into the (gateway-shared) event bus under the caller's user
+/// id, which is how a co-member who learned a victim's session id could claim
+/// it — locking the victim out of realtime and diverting their user-targeted
+/// events. Every id is now owner-bound (see `session_id_issued_to`) and that is
+/// verified up front, before either branch runs.
+///
 /// The spawned pump holds only a `Weak` reference to the channel, so the channel
 /// (and thus its Drop-based cleanup) is not kept alive by the pump.
 fn get_or_create_channel(
@@ -560,6 +640,13 @@ fn get_or_create_channel(
     guild_ids: &[i64],
     guild_owner_ids: HashMap<i64, i64>,
 ) -> Result<Arc<SessionChannel>, ApiError> {
+    if !session_id_issued_to(state, session_id, user_id) {
+        tracing::warn!(
+            user_id,
+            "realtime: refusing a session id that was not issued to this user"
+        );
+        return Err(ApiError::Forbidden);
+    }
     match session_channels().entry(session_id.to_string()) {
         Entry::Occupied(entry) => {
             let channel = Arc::clone(entry.get());
@@ -576,10 +663,20 @@ fn get_or_create_channel(
                 return Err(ApiError::RateLimited(0));
             }
 
-            let receiver =
+            // Refused when the id is live on the gateway under a different user.
+            // Bail out before the channel exists, so its Drop cannot unregister
+            // the incumbent's subscription on the way out.
+            let Some(receiver) =
                 state
                     .event_bus
-                    .register_session(session_id.to_string(), user_id, guild_ids);
+                    .register_session(session_id.to_string(), user_id, guild_ids)
+            else {
+                tracing::warn!(
+                    user_id,
+                    "realtime: session id is already registered to another user"
+                );
+                return Err(ApiError::Forbidden);
+            };
             let (live_tx, _) = broadcast::channel::<Arc<BufferedSseEvent>>(MAX_REPLAY_EVENTS);
             let channel = Arc::new(SessionChannel {
                 session_id: session_id.to_string(),
@@ -613,6 +710,37 @@ fn get_or_create_channel(
     }
 }
 
+/// Whether a session owned by `user_id`, a member of the guilds `is_member_of`
+/// answers `true` for, should receive an event with this scope.
+///
+/// This is `paracord_ws::session::Session::should_receive_event` for the SSE
+/// transport. The pump used to have no equivalent — it trusted the event bus's
+/// routing completely and filtered only on channel permissions — so anything
+/// that reached its receiver, including a user-targeted DM addressed to somebody
+/// else, was rendered straight into this session's buffer. The event bus's
+/// indexes are the only thing that decided delivery, and those indexes are
+/// exactly what a session-id takeover corrupts. Re-checking the recipient here
+/// means a desynced index cannot become a delivery.
+///
+/// Exposed (as `#[doc(hidden)]`) so the crate's integration tests can drive the
+/// decision directly; not part of the supported public API.
+#[doc(hidden)]
+pub fn session_should_receive_event(
+    user_id: i64,
+    is_member_of: impl Fn(i64) -> bool,
+    guild_id: Option<i64>,
+    target_user_ids: Option<&[i64]>,
+) -> bool {
+    // A targeted event goes to its targets and nobody else, whatever its guild.
+    if let Some(targets) = target_user_ids {
+        return targets.contains(&user_id);
+    }
+    match guild_id {
+        None => true,
+        Some(guild_id) => is_member_of(guild_id),
+    }
+}
+
 /// Background pump: owns the event-bus receiver for a session's whole lifetime,
 /// applies permission filtering + guild-scope mutations, assigns sequences, and
 /// records rendered frames into the session's ring buffer.
@@ -632,6 +760,16 @@ async fn session_pump(
                 let Some(channel) = channel.upgrade() else {
                     break;
                 };
+                // ── Recipient filtering (mirrors the gateway) ──
+                if !session_should_receive_event(
+                    user_id,
+                    |gid| guild_owner_ids.contains_key(&gid),
+                    event.guild_id,
+                    event.target_user_ids.as_deref(),
+                ) {
+                    continue;
+                }
+
                 // ── Channel permission filtering (mirrors WS handler) ──
                 if let Some(guild_id) = event.guild_id {
                     if let Some(channel_id) =
@@ -741,9 +879,17 @@ async fn apply_guild_scope_update(
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<i64>().ok())
                 {
-                    if let Ok(Some(guild)) = paracord_db::guilds::get_guild(&state.db, gid).await {
-                        guild_owner_ids.insert(gid, guild.owner_id);
-                    }
+                    // `guild_owner_ids` doubles as this pump's guild-membership
+                    // set, so the key must land even when the owner lookup
+                    // fails; 0 is the same fallback the permission check
+                    // already applies for a missing owner.
+                    let owner_id = paracord_db::guilds::get_guild(&state.db, gid)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|guild| guild.owner_id)
+                        .unwrap_or(0);
+                    guild_owner_ids.insert(gid, owner_id);
                     state.event_bus.add_session_guild(session_id, gid);
                 }
             }
@@ -1069,10 +1215,13 @@ pub async fn create_session(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
-    let session_id = auth
+    // Owner-bound id: stable per login session (so reconnects reuse the same
+    // channel, buffer and cursor) but unforgeable by anyone else.
+    let session_base = auth
         .session_id
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let session_id = mint_session_id(&state, auth.user_id, &session_base);
     let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into())
         .await
         .unwrap_or_default();
@@ -1124,10 +1273,29 @@ pub async fn stream_events(
     }
     let attach_guard = AttachmentGuard { user_id };
 
-    let session_id = query
-        .session_id
-        .filter(|sid| !sid.trim().is_empty())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    // A supplied `session_id` is only honored when this server issued it to the
+    // ticket's user; anything else is refused outright rather than silently
+    // swapped for a fresh id, so a takeover attempt is a visible 403 instead of
+    // a working stream. Callers that supply nothing get an id minted here,
+    // keyed off their login session so it matches what `create_session` mints.
+    let session_id = match query.session_id.filter(|sid| !sid.trim().is_empty()) {
+        Some(supplied) => {
+            if !session_id_issued_to(&state, &supplied, user_id) {
+                tracing::warn!(
+                    user_id,
+                    "realtime: stream requested with a session id not issued to this user"
+                );
+                return Err(ApiError::Forbidden);
+            }
+            supplied
+        }
+        None => {
+            let base = auth_session_id
+                .clone()
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            mint_session_id(&state, user_id, &base)
+        }
+    };
     let guild_rows = paracord_db::guilds::get_user_guilds(&state.db, user_id.into())
         .await
         .unwrap_or_default();

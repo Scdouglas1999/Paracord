@@ -103,11 +103,17 @@ pub async fn create_role(
     let user_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms = paracord_core::permissions::compute_permissions_from_roles(
-        &user_roles,
+    // The role list is still needed below for the hierarchy cap, but the *gate*
+    // is guild-scoped and must go through `compute_guild_permissions` so the bot
+    // install-permission cap applies; the raw fold over `user_roles` cannot
+    // apply it and let a `permissions=0` bot wield its roles' full authority.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
-    );
+    )
+    .await?;
     paracord_core::permissions::require_permission(
         perms,
         paracord_models::permissions::Permissions::MANAGE_ROLES,
@@ -209,11 +215,15 @@ pub async fn update_role(
     let user_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms = paracord_core::permissions::compute_permissions_from_roles(
-        &user_roles,
+    // Guild-scoped gate: see `create_role` — the raw fold cannot apply the bot
+    // install-permission cap. `user_roles` is retained for the hierarchy check.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
-    );
+    )
+    .await?;
     paracord_core::permissions::require_permission(
         perms,
         paracord_models::permissions::Permissions::MANAGE_ROLES,
@@ -318,11 +328,15 @@ pub async fn delete_role(
     let user_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms = paracord_core::permissions::compute_permissions_from_roles(
-        &user_roles,
+    // Guild-scoped gate: see `create_role` — the raw fold cannot apply the bot
+    // install-permission cap. `user_roles` is retained for the hierarchy check.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
-    );
+    )
+    .await?;
     paracord_core::permissions::require_permission(
         perms,
         paracord_models::permissions::Permissions::MANAGE_ROLES,

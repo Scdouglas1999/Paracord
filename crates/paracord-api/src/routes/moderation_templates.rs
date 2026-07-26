@@ -59,11 +59,15 @@ async fn ensure_manage_guild(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let roles = paracord_db::roles::get_member_roles(&state.db, user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms =
-        paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
+    // Guild-scoped gate: `compute_guild_permissions` also applies the bot
+    // install-permission cap, which the raw role fold cannot.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
     Ok(())
 }
@@ -183,6 +187,17 @@ pub async fn apply_template(
         return Err(ApiError::NotFound);
     }
 
+    // The target must belong to the acting guild. `ensure_manage_guild` above
+    // only proves the *actor* holds MANAGE_GUILD in their own space; without
+    // this check the WARN branch changes no state and so never reaches the
+    // membership/hierarchy checks inside `paracord_core::admin`, and the
+    // MOD_ACTION_NOTICE dispatched at the end of this handler routes purely by
+    // user id — so anyone could stand up a space and deliver attacker-authored
+    // text to any account on the instance.
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, target_user_id)
+        .await
+        .map_err(|_| ApiError::NotFound)?;
+
     let target_user = paracord_db::users::get_user_by_id(&state.db, target_user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
@@ -250,12 +265,16 @@ pub async fn apply_template(
             paracord_core::admin::kick_member(&state.db, guild_id, auth.user_id, target_user_id)
                 .await?;
             state.member_index.remove_member(guild_id, target_user_id);
+            // No `reason`: this event is guild-scoped, so every member receives
+            // it, and the moderator's private justification for a kick is not
+            // for them. `bans::ban_member` already omits it on the same event
+            // pair; the moderator-facing copies are the mod-log entry and the
+            // audit log, both of which are gated.
             state.event_bus.dispatch(
                 "GUILD_MEMBER_REMOVE",
                 json!({
                     "guild_id": guild_id.to_string(),
                     "user_id": target_user_id.to_string(),
-                    "reason": rendered_reason,
                 }),
                 Some(guild_id),
             );
@@ -271,12 +290,12 @@ pub async fn apply_template(
             )
             .await?;
             state.member_index.remove_member(guild_id, target_user_id);
+            // No `reason` — see the GUILD_MEMBER_REMOVE branch above.
             state.event_bus.dispatch(
                 "GUILD_BAN_ADD",
                 json!({
                     "guild_id": guild_id.to_string(),
                     "user_id": target_user_id.to_string(),
-                    "reason": rendered_reason,
                 }),
                 Some(guild_id),
             );

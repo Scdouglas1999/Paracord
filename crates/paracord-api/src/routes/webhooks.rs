@@ -189,6 +189,13 @@ fn webhook_to_json(w: &paracord_db::webhooks::WebhookRow, token: Option<&str>) -
     v
 }
 
+/// Guild-scoped MANAGE_WEBHOOKS gate.
+///
+/// Only correct for operations that are not bound to a single channel (there is
+/// exactly one: listing every webhook in the space, which additionally filters
+/// its rows per channel). Anything that reads or writes a specific channel's
+/// webhooks must use [`require_manage_webhooks_in_channel`], otherwise a
+/// per-channel deny is unenforceable.
 async fn require_manage_webhooks(
     state: &AppState,
     guild_id: i64,
@@ -201,13 +208,72 @@ async fn require_manage_webhooks(
 
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
 
-    let roles = paracord_db::roles::get_member_roles(&state.db, user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms =
-        paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
+    // `compute_guild_permissions` rather than the raw role fold: only the
+    // former applies the bot install-permission cap.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_WEBHOOKS)?;
     Ok(())
+}
+
+/// Channel-scoped MANAGE_WEBHOOKS gate.
+///
+/// Every webhook belongs to exactly one channel, and a webhook token is a
+/// standing licence to post into that channel under an arbitrary name and
+/// avatar. Gating those operations on *guild* permissions made a channel
+/// overwrite denying MANAGE_WEBHOOKS a no-op: a role granted the bit
+/// space-wide but denied it on `#general` could still mint a webhook there,
+/// receive its token and post as anyone. `compute_channel_permissions` honors
+/// the overwrite (and also applies the bot install-permission cap).
+async fn require_manage_webhooks_in_channel(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: i64,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
+
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
+    paracord_core::permissions::require_permission(perms, Permissions::MANAGE_WEBHOOKS)?;
+    Ok(())
+}
+
+/// Does `user_id` hold MANAGE_WEBHOOKS in `channel_id`? Used to filter listings
+/// (which must omit rather than reject), so a lookup failure reads as "no".
+async fn can_manage_webhooks_in_channel(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: i64,
+    guild_owner_id: i64,
+    user_id: i64,
+) -> bool {
+    paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild_owner_id,
+        user_id,
+    )
+    .await
+    .map(|perms| perms.contains(Permissions::MANAGE_WEBHOOKS))
+    .unwrap_or(false)
 }
 
 #[derive(Deserialize)]
@@ -222,7 +288,10 @@ pub async fn create_webhook(
     Path(guild_id): Path<i64>,
     Json(body): Json<CreateWebhookRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    require_manage_webhooks(&state, guild_id, auth.user_id).await?;
+    // Membership first so a non-member cannot probe the guild's channel list
+    // through the error messages below; the real gate is the channel-scoped
+    // check further down, once the target channel is known.
+    paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
 
     let name = body.name.trim();
     if name.is_empty() || name.len() > 80 {
@@ -259,6 +328,11 @@ pub async fn create_webhook(
             "Channel does not belong to this guild".into(),
         ));
     }
+
+    // The authorization gate. `channel_id` is body-supplied, so it has to be
+    // checked *after* it is resolved -- and against the channel, so that a
+    // per-channel MANAGE_WEBHOOKS deny actually blocks minting a token there.
+    require_manage_webhooks_in_channel(&state, guild_id, channel_id, auth.user_id).await?;
 
     let id = paracord_util::snowflake::generate(1);
     let token = crate::secure_tokens::generate_secure_token();
@@ -301,11 +375,32 @@ pub async fn list_guild_webhooks(
 ) -> Result<Json<Value>, ApiError> {
     require_manage_webhooks(&state, guild_id, auth.user_id).await?;
 
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+
     let webhooks = paracord_db::webhooks::get_guild_webhooks(&state.db, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let result: Vec<Value> = webhooks.iter().map(|w| webhook_to_json(w, None)).collect();
+    // Guild-wide MANAGE_WEBHOOKS gets past the gate above, but a per-channel
+    // deny still has to hide that channel's webhooks: listing them names the
+    // integrations wired into a channel the caller was explicitly denied.
+    let mut result: Vec<Value> = Vec::with_capacity(webhooks.len());
+    for w in &webhooks {
+        if can_manage_webhooks_in_channel(
+            &state,
+            guild_id,
+            w.channel_id,
+            guild.owner_id,
+            auth.user_id,
+        )
+        .await
+        {
+            result.push(webhook_to_json(w, None));
+        }
+    }
     Ok(Json(json!(result)))
 }
 
@@ -320,7 +415,7 @@ pub async fn list_channel_webhooks(
         .ok_or(ApiError::NotFound)?;
 
     if let Some(guild_id) = channel.guild_id() {
-        require_manage_webhooks(&state, guild_id, auth.user_id).await?;
+        require_manage_webhooks_in_channel(&state, guild_id, channel_id, auth.user_id).await?;
     }
 
     let webhooks = paracord_db::webhooks::get_channel_webhooks(&state.db, channel_id)
@@ -341,7 +436,8 @@ pub async fn get_webhook(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    require_manage_webhooks(&state, webhook.space_id, auth.user_id).await?;
+    require_manage_webhooks_in_channel(&state, webhook.space_id, webhook.channel_id, auth.user_id)
+        .await?;
 
     Ok(Json(webhook_to_json(&webhook, None)))
 }
@@ -363,7 +459,8 @@ pub async fn update_webhook(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    require_manage_webhooks(&state, webhook.space_id, auth.user_id).await?;
+    require_manage_webhooks_in_channel(&state, webhook.space_id, webhook.channel_id, auth.user_id)
+        .await?;
 
     if let Some(ref name) = body.name {
         let trimmed = name.trim();
@@ -424,7 +521,8 @@ pub async fn delete_webhook(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    require_manage_webhooks(&state, webhook.space_id, auth.user_id).await?;
+    require_manage_webhooks_in_channel(&state, webhook.space_id, webhook.channel_id, auth.user_id)
+        .await?;
 
     paracord_db::webhooks::delete_webhook(&state.db, webhook_id)
         .await

@@ -105,7 +105,6 @@ pub(crate) fn ensure_native_fetch_target_is_trusted(uri: &str) -> Result<(), Str
 
 /// Hosts of every currently-trusted server origin, lowercased and without IPv6
 /// brackets (the same normalisation [`pin_host_from_url`] applies).
-#[allow(dead_code)] // used by ensure_native_media_endpoint_is_trusted (see below)
 fn trusted_server_hosts() -> HashSet<String> {
     TRUSTED_SERVER_ORIGINS
         .read()
@@ -124,7 +123,6 @@ fn trusted_server_hosts() -> HashSet<String> {
 /// `normalizeNativeRelayEndpoint` in the renderer), so `Url::parse` alone is not
 /// enough — `chat.example:9443` parses as a URL with scheme `chat.example` and
 /// no host at all.
-#[allow(dead_code)] // used by ensure_native_media_endpoint_is_trusted (see below)
 fn native_endpoint_host(endpoint: &str) -> Option<String> {
     let trimmed = endpoint.trim();
     if trimmed.is_empty() {
@@ -177,13 +175,12 @@ fn native_endpoint_host(endpoint: &str) -> Option<String> {
 /// what the caller-supplied `cert_hash` cannot do — a pin chosen by the caller
 /// is not a control.
 ///
-/// PENDING WIRE-UP: the QUIC commands in `native_media/commands.rs` still accept
-/// a renderer-supplied `endpoint` with no gate at all. `start_voice_session`,
-/// `quic_upload_file` and `quic_download_file` must each call this before
-/// touching the endpoint, exactly as the HTTP/SSE commands in this file call
-/// `ensure_native_fetch_target_is_trusted`. The `allow(dead_code)` here goes
-/// away with those call sites.
-#[allow(dead_code)]
+/// Every QUIC command in `native_media/commands.rs` that accepts a
+/// renderer-supplied `endpoint` calls this first — `start_voice_session`,
+/// `quic_upload_file` and `quic_download_file` — exactly as the HTTP/SSE
+/// commands in this file call `ensure_native_fetch_target_is_trusted`. Removing
+/// any of those call sites reopens renderer-chosen dialling; they are load
+/// bearing, not defensive decoration.
 pub(crate) fn ensure_native_media_endpoint_is_trusted(endpoint: &str) -> Result<(), String> {
     let Some(host) = native_endpoint_host(endpoint) else {
         return Err("Native media endpoint must be a host:port address".to_string());

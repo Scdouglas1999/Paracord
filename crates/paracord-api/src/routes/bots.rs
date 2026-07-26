@@ -26,14 +26,7 @@ const MAX_REDIRECT_URI_LEN: usize = 2_000;
 /// denylist is a coarse secondary guard to reject blatant injection attempts
 /// early; it is intentionally incomplete and MUST NOT be treated as the sole
 /// gate for any stored value. Do not rely on it to sanitize output.
-fn contains_dangerous_markup(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("<script")
-        || lower.contains("javascript:")
-        || lower.contains("onerror=")
-        || lower.contains("onload=")
-        || lower.contains("<iframe")
-}
+use paracord_util::validation::contains_dangerous_markup;
 
 fn parse_permission_bits(raw: &str, field_name: &str) -> Result<i64, ApiError> {
     let parsed = raw
@@ -186,11 +179,16 @@ async fn ensure_manage_guild(
 
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, user_id).await?;
 
-    let roles = paracord_db::roles::get_member_roles(&state.db, user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms =
-        paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
+    // Guild-scoped gate: `compute_guild_permissions` also applies the bot
+    // install-permission cap, which the raw role fold cannot -- without it a
+    // bot installed with `permissions=0` could install further bots.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
     Ok(())
 }
@@ -714,14 +712,16 @@ pub async fn oauth2_authorize(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let authorizer_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let authorizer_bits = paracord_core::permissions::compute_permissions_from_roles(
-        &authorizer_roles,
+    // Guild-scoped: `compute_guild_permissions` also applies the authorizer's
+    // own bot install-permission cap, so a bot acting as the authorizer cannot
+    // grant more than it was itself installed with.
+    let authorizer_bits = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
     )
+    .await?
     .bits();
     let effective_permissions = requested_permissions.unwrap_or(app.permissions) & authorizer_bits;
     let _ = paracord_db::bot_applications::add_bot_to_guild(

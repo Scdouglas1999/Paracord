@@ -1,5 +1,26 @@
 use super::*;
 
+/// Markup screen for **message content** specifically.
+///
+/// Deliberately not `paracord_util::validation::contains_dangerous_markup`:
+/// that one rejects `<` and `>` outright, which is correct for names and labels
+/// but not for chat, where `a < b` and pasted code are ordinary. No validator
+/// can make raw markup safe on this surface — the control is escaping at render
+/// (the client renders messages through JSX; the single
+/// `dangerouslySetInnerHTML` in the tree is DOMPurify-locked to
+/// `<span class="hljs-*">`).
+///
+/// This is therefore a coarse screen for the most obvious injection attempts,
+/// NOT a security boundary, and it is named so no caller mistakes it for one.
+fn message_content_has_dangerous_markup(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("<script")
+        || lower.contains("javascript:")
+        || lower.contains("onerror=")
+        || lower.contains("onload=")
+        || lower.contains("<iframe")
+}
+
 #[derive(Deserialize)]
 pub struct MessageQuery {
     pub before: Option<i64>,
@@ -412,7 +433,7 @@ pub async fn send_message(
     }
     if body.e2ee.is_none()
         && !body.content.trim().is_empty()
-        && contains_dangerous_markup(&body.content)
+        && message_content_has_dangerous_markup(&body.content)
     {
         return Err(ApiError::BadRequest(
             "Message contains unsafe markup".into(),
@@ -852,7 +873,7 @@ pub async fn edit_message(
             ApiError::BadRequest("Message content must be 1-2000 characters".into())
         })?;
     }
-    if body.e2ee.is_none() && contains_dangerous_markup(&body.content) {
+    if body.e2ee.is_none() && message_content_has_dangerous_markup(&body.content) {
         return Err(ApiError::BadRequest(
             "Message contains unsafe markup".into(),
         ));

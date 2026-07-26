@@ -464,6 +464,62 @@ pub async fn compute_guild_permissions(
     cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, None).await
 }
 
+/// Does this permission set make its holder a moderator for the purposes of
+/// moderation-report visibility?
+///
+/// `routes/reports.rs` gates its whole REST surface on exactly this predicate.
+/// The realtime copy of a report (`GUILD_REPORT_CREATE` / `GUILD_REPORT_UPDATE`)
+/// has to agree with it, or a plain member receives over the gateway the
+/// reporter identity and confidential reason that REST refuses them. Keeping
+/// the predicate here — rather than inline in each dispatcher — is what stops
+/// the two from drifting apart again.
+pub fn is_report_moderator(perms: Permissions) -> bool {
+    perms.intersects(
+        Permissions::MANAGE_MESSAGES
+            | Permissions::BAN_MEMBERS
+            | Permissions::KICK_MEMBERS
+            | Permissions::MANAGE_GUILD
+            | Permissions::ADMINISTRATOR,
+    )
+}
+
+/// Every member of `guild_id` who satisfies [`is_report_moderator`], plus the
+/// guild owner.
+///
+/// Used to target moderation-report events at the people allowed to read them
+/// instead of dispatching them guild-wide. Roles are loaded for the whole guild
+/// in one query; the bot install-permission cap is then applied only to the
+/// members that cleared the role fold, so an uninstalled or `permissions=0` bot
+/// never lands in the recipient list.
+pub async fn report_moderator_user_ids(
+    pool: &DbPool,
+    guild_id: i64,
+) -> Result<Vec<i64>, CoreError> {
+    let Some(guild) = paracord_db::guilds::get_guild(pool, guild_id).await? else {
+        return Ok(Vec::new());
+    };
+    let roles_by_user = paracord_db::roles::get_member_roles_for_guild(pool, guild_id).await?;
+
+    let mut recipients: Vec<i64> = Vec::new();
+    for (user_id, roles) in roles_by_user {
+        let perms = compute_permissions_from_roles(&roles, guild.owner_id, user_id);
+        if !is_report_moderator(perms) {
+            continue;
+        }
+        let perms =
+            cap_bot_install_permissions_hinted(pool, guild_id, user_id, perms, None).await?;
+        if is_report_moderator(perms) {
+            recipients.push(user_id);
+        }
+    }
+    // The owner is a moderator by definition even if the membership join above
+    // somehow missed them (owner rows are written separately from role rows).
+    if !recipients.contains(&guild.owner_id) {
+        recipients.push(guild.owner_id);
+    }
+    Ok(recipients)
+}
+
 pub async fn compute_channel_permissions(
     pool: &DbPool,
     guild_id: i64,

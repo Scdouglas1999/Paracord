@@ -72,12 +72,7 @@ fn settings_route_slow_ms() -> u64 {
 // consumers that might place the value directly into an href/src. The
 // first-party React client already escapes these, so this is defense-in-depth
 // for external consumers and does not alter stored text.
-fn contains_dangerous_markup(value: &str) -> bool {
-    if value.contains('<') || value.contains('>') {
-        return true;
-    }
-    value.to_ascii_lowercase().contains("javascript:")
-}
+use paracord_util::validation::contains_dangerous_markup;
 
 // Canonicalize CSS escape sequences the same way the browser tokenizer does, so
 // escaped spellings such as `\75rl(` (\75 = 'u') or `@\69mport` normalize to their
@@ -167,6 +162,13 @@ fn profile_pronouns_from_notifications(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        // `display_name`, `bio` and `custom_status` all run through this guard,
+        // but pronouns ride in as a member of the free-form `notifications`
+        // blob, which is stored verbatim — so this field skipped validation
+        // entirely and was then republished on the public profile that *other*
+        // users fetch. Filtered on read so values already in the database are
+        // covered too, not just new writes.
+        .filter(|value| !contains_dangerous_markup(value))
         .map(|value| value.chars().take(MAX_PROFILE_PRONOUNS_LEN).collect())
 }
 
@@ -187,7 +189,10 @@ fn profile_linked_accounts_from_notifications(
                 .get("label")
                 .and_then(|v| v.as_str())
                 .map(str::trim)
-                .filter(|value| !value.is_empty())?;
+                .filter(|value| !value.is_empty())
+                // The sibling `url` is validated below; the label beside it was
+                // not, and is served cross-user just the same.
+                .filter(|value| !contains_dangerous_markup(value))?;
             let url = entry
                 .get("url")
                 .and_then(|v| v.as_str())
@@ -263,6 +268,11 @@ pub async fn get_me(
         "linked_accounts": linked_accounts,
         "created_at": user.created_at.to_rfc3339(),
         "email_verified": user.email_verified,
+        // An attached Ed25519 key logs this account in on its own through
+        // `POST /auth/verify`. The owner has to be able to see that one exists
+        // — and which one — or a planted key stays invisible.
+        "public_key": user.public_key,
+        "has_public_key": user.public_key.is_some(),
     })))
 }
 
@@ -1205,6 +1215,16 @@ pub async fn change_password(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    // Rotating the password is half of the standard recovery flow; revoking the
+    // other sessions below is the other half. Neither touches an attached
+    // Ed25519 key, which authenticates the account on its own via
+    // `POST /auth/verify` and mints a brand-new session each time — so a key
+    // planted through one stolen session would survive the whole recovery. Drop
+    // it with the password. Re-attaching requires this same password.
+    let public_key_removed = paracord_db::users::clear_user_public_key(&state.db, auth.user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
     let now = chrono::Utc::now();
     let _ = paracord_db::sessions::revoke_all_user_sessions_except(
         &state.db,
@@ -1223,7 +1243,10 @@ pub async fn change_password(
         auth.session_id.as_deref(),
         Some(&headers),
         Some(peer_ip.as_str()),
-        Some(json!({ "revoked_other_sessions": true })),
+        Some(json!({
+            "revoked_other_sessions": true,
+            "public_key_removed": public_key_removed,
+        })),
     )
     .await;
 

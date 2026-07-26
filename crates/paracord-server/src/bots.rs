@@ -356,10 +356,31 @@ async fn create_automod_quarantine_report(
         return;
     };
 
-    state.event_bus.dispatch(
+    // Moderators only. This payload is strictly more sensitive than a member
+    // report -- `changes` carries `original_content` plus a 512-char evidence
+    // excerpt lifted from the quarantined message -- and a guild-scoped
+    // dispatch handed all of it to every session in the space, including the
+    // author whose message was just quarantined. The gateway's per-channel
+    // VIEW_CHANNEL filter cannot help: there is no top-level `channel_id`.
+    let recipients =
+        match paracord_core::permissions::report_moderator_user_ids(&state.db, guild_id).await {
+            Ok(recipients) => recipients,
+            Err(err) => {
+                tracing::warn!(
+                    guild_id,
+                    %err,
+                    "failed to resolve report moderators; skipping automod report dispatch"
+                );
+                return;
+            }
+        };
+    if recipients.is_empty() {
+        return;
+    }
+    state.event_bus.dispatch_to_users(
         "GUILD_REPORT_CREATE",
         report_entry_to_json(&entry),
-        Some(guild_id),
+        recipients,
     );
 }
 

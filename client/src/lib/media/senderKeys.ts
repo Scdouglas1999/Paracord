@@ -373,12 +373,34 @@ export class SenderKeyManager {
    * the previously emitted one. `<` (not `<=`) is used so retransmitting the
    * same sequence in send order does not bump the ROC.
    */
+  /**
+   * Advance the rollover counter for a send, refusing to emit a duplicate nonce.
+   *
+   * Mirrors `FrameEncryptor::next_roc` in `crates/paracord-codec/src/crypto.rs`,
+   * including its refusal: a sequence repeated for the same `(ssrc, epoch)`
+   * throws rather than silently producing a byte-identical nonce.
+   *
+   * That refusal is the whole point. The nonce is a pure function of
+   * `(ssrc, epoch, sequence, roc)` and the key is fixed for an epoch, so a
+   * repeat reuses an AES-GCM `(key, nonce)` pair — which yields the XOR of the
+   * two plaintexts *and* the GHASH subkey `H = E_K(0^128)`, letting an observer
+   * forge authenticated frames for the rest of the epoch. Only bumping the ROC
+   * on a *strictly* backwards sequence (as this did) left the exact-repeat case
+   * silent, and the browser publisher was hitting it on every multi-fragment
+   * frame. Failing the send loudly is always better than emitting the duplicate.
+   */
   private nextRoc(ssrc: number, epoch: number, sequence: number): number {
     const stateKey = `${ssrc}:${epoch}`;
     const state = this.sendRocState.get(stateKey);
     if (!state) {
       this.sendRocState.set(stateKey, { roc: 0, seq: sequence });
       return 0;
+    }
+    if (sequence === state.seq) {
+      throw new Error(
+        `refusing to encrypt: sequence ${sequence} was already used for ssrc ${ssrc} ` +
+          `epoch ${epoch} — this would reuse an AES-GCM (key, nonce) pair`,
+      );
     }
     if (sequence < state.seq) {
       state.roc = (state.roc + 1) >>> 0;

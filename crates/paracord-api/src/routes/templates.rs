@@ -42,14 +42,7 @@ struct TemplateChannelInput {
     parent_name: Option<String>,
 }
 
-fn contains_dangerous_markup(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("<script")
-        || lower.contains("javascript:")
-        || lower.contains("onerror=")
-        || lower.contains("onload=")
-        || lower.contains("<iframe")
-}
+use paracord_util::validation::contains_dangerous_markup;
 
 fn validate_template_name(value: &str, field: &str) -> Result<String, ApiError> {
     let trimmed = value.trim();
@@ -161,13 +154,16 @@ pub async fn create_template_from_guild(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    // Require MANAGE_GUILD
-    let roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id).await?;
-    let perms = paracord_core::permissions::compute_permissions_from_roles(
-        &roles,
+    // Require MANAGE_GUILD. Guild-scoped gate, so `compute_guild_permissions`
+    // and not the raw role fold: only the former applies the bot
+    // install-permission cap.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
-    );
+    )
+    .await?;
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
 
     // Snapshot channels
@@ -230,6 +226,31 @@ pub async fn create_template_from_guild(
 
     let result = template_to_json(&tmpl);
     Ok((StatusCode::CREATED, Json(result)))
+}
+
+/// May `user_id` see `tmpl`?
+///
+/// Visibility is derived from what the caller already legitimately knows:
+/// templates they created, and templates snapshotted from a guild they are
+/// currently a member of. `list_templates` and `apply_template` must agree on
+/// this — a template embeds the full channel tree plus every role name and raw
+/// permission bitmask of its source guild, and applying one materializes all of
+/// it, so an apply that skipped the check was a read of the hidden list by
+/// another route.
+async fn template_is_visible_to(
+    state: &AppState,
+    tmpl: &paracord_db::guild_templates::GuildTemplateRow,
+    user_id: i64,
+) -> Result<bool, ApiError> {
+    if tmpl.creator_id == user_id {
+        return Ok(true);
+    }
+    let Some(source_guild_id) = tmpl.source_guild_id else {
+        return Ok(false);
+    };
+    paracord_core::permissions::is_guild_member(&state.db, source_guild_id, user_id)
+        .await
+        .map_err(ApiError::from)
 }
 
 /// GET /templates  --  list the templates the caller is allowed to see.
@@ -297,6 +318,15 @@ pub async fn apply_template(
     let tmpl = paracord_db::guild_templates::get_by_id(&state.db, template_id)
         .await?
         .ok_or(ApiError::NotFound)?;
+
+    // `get_by_id` filters on id alone. Apply must enforce the same visibility
+    // rule as `list_templates`, or a non-member, non-creator can materialize a
+    // victim's channel tree and role permission bitmasks straight out of a
+    // template they were never allowed to see. 404, not 403: a template the
+    // caller cannot see should not be confirmed to exist.
+    if !template_is_visible_to(&state, &tmpl, auth.user_id).await? {
+        return Err(ApiError::NotFound);
+    }
 
     let data: Value = serde_json::from_str(&tmpl.template_data)
         .map_err(|_| ApiError::BadRequest("Invalid template data".into()))?;

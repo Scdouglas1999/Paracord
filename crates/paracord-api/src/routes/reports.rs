@@ -4,7 +4,6 @@ use axum::{
     Json,
 };
 use paracord_core::{AppState, USER_FLAG_BOT};
-use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -42,14 +41,7 @@ pub struct ResolveReportRequest {
     pub mute_minutes: Option<i64>,
 }
 
-fn contains_dangerous_markup(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("<script")
-        || lower.contains("javascript:")
-        || lower.contains("onerror=")
-        || lower.contains("onload=")
-        || lower.contains("<iframe")
-}
+use paracord_util::validation::contains_dangerous_markup;
 
 async fn ensure_reporter_member(
     state: &AppState,
@@ -65,17 +57,19 @@ async fn ensure_moderator(state: &AppState, guild_id: i64, user_id: i64) -> Resu
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let roles = paracord_db::roles::get_member_roles(&state.db, user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms =
-        paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
-    let can_moderate = perms.contains(Permissions::MANAGE_MESSAGES)
-        || perms.contains(Permissions::BAN_MEMBERS)
-        || perms.contains(Permissions::KICK_MEMBERS)
-        || perms.contains(Permissions::MANAGE_GUILD)
-        || perms.contains(Permissions::ADMINISTRATOR)
-        || user_id == guild.owner_id;
+    // Guild-scoped gate: `compute_guild_permissions` also applies the bot
+    // install-permission cap, which the raw role fold cannot. The predicate
+    // itself lives in `paracord_core` so the gateway fan-out of
+    // GUILD_REPORT_* (see `dispatch_report_event`) cannot drift from it.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
+    let can_moderate =
+        paracord_core::permissions::is_report_moderator(perms) || user_id == guild.owner_id;
     if !can_moderate {
         return Err(ApiError::Forbidden);
     }
@@ -235,6 +229,40 @@ fn report_entry_to_json(entry: &paracord_db::audit_log::AuditLogEntryRow) -> Val
     })
 }
 
+/// Deliver a moderation-report event to the guild's moderators only.
+///
+/// A report names the reporter, the reported user and the confidential reason,
+/// and `changes` can carry an evidence excerpt from a channel the recipient
+/// cannot even view. The REST copy of exactly this JSON is behind
+/// [`ensure_moderator`], but the realtime copy used to be a guild-scoped
+/// `dispatch`, which fans out to *every* session in the space — the reported
+/// user included. The payload also carries no top-level `channel_id`, so the
+/// gateway's per-channel VIEW_CHANNEL filter finds nothing to filter on and
+/// waves it through; user-targeted delivery is the only thing that scopes it.
+async fn dispatch_report_event(state: &AppState, guild_id: i64, event_type: &str, payload: Value) {
+    let recipients =
+        match paracord_core::permissions::report_moderator_user_ids(&state.db, guild_id).await {
+            Ok(recipients) => recipients,
+            Err(err) => {
+                // Fail closed: a lookup failure must not degrade into a
+                // guild-wide broadcast of confidential moderation data.
+                tracing::warn!(
+                    guild_id,
+                    event_type,
+                    %err,
+                    "failed to resolve report moderators; skipping realtime dispatch"
+                );
+                return;
+            }
+        };
+    if recipients.is_empty() {
+        return;
+    }
+    state
+        .event_bus
+        .dispatch_to_users(event_type, payload, recipients);
+}
+
 pub async fn create_report(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -302,11 +330,13 @@ pub async fn create_report(
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    state.event_bus.dispatch(
+    dispatch_report_event(
+        &state,
+        guild_id,
         "GUILD_REPORT_CREATE",
         report_entry_to_json(&entry),
-        Some(guild_id),
-    );
+    )
+    .await;
 
     let report_kind = entry
         .changes
@@ -602,11 +632,13 @@ pub async fn resolve_report(
     )
     .await;
 
-    state.event_bus.dispatch(
+    dispatch_report_event(
+        &state,
+        guild_id,
         "GUILD_REPORT_UPDATE",
         report_entry_to_json(&report),
-        Some(guild_id),
-    );
+    )
+    .await;
 
     Ok(Json(report_entry_to_json(&report)))
 }

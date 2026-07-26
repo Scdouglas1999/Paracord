@@ -104,6 +104,69 @@ pub async fn resolve_slash_command(
     Ok(available.into_iter().find(|cmd| cmd.name == command_name))
 }
 
+/// Authorize a bot about to write into an interaction's channel.
+///
+/// The interaction token is a bearer credential minted 15 minutes earlier; it
+/// says nothing about whether the bot is *still* installed, or whether it may
+/// speak in `token_row.channel_id` now. Every callback that materializes a
+/// message has to clear the same bar `create_followup_message` already does:
+///
+///  1. the application is still installed in the guild,
+///  2. the channel still exists, and
+///  3. the bot itself holds VIEW_CHANNEL **and** SEND_MESSAGES there.
+///
+/// `compute_channel_permissions` applies channel overwrites and caps the result
+/// by the bot's install-time grant, so a bot installed with `permissions=0`
+/// fails (3) even when its roles would allow it.
+///
+/// DM interactions (`guild_id == None`) have no guild permissions to evaluate;
+/// they still get the channel-existence check.
+async fn ensure_bot_can_write_response(
+    state: &AppState,
+    token_row: &paracord_db::interaction_tokens::InteractionTokenRow,
+    bot_user_id: i64,
+) -> Result<(), CoreError> {
+    if let Some(guild_id) = token_row.guild_id {
+        let is_installed = paracord_db::bot_applications::is_bot_in_guild(
+            &state.db,
+            token_row.application_id,
+            guild_id,
+        )
+        .await
+        .map_err(|e| CoreError::Internal(e.to_string()))?;
+        if !is_installed {
+            return Err(CoreError::Forbidden);
+        }
+    }
+
+    let _channel = paracord_db::channels::get_channel(&state.db, token_row.channel_id)
+        .await
+        .map_err(|e| CoreError::Internal(e.to_string()))?
+        .ok_or(CoreError::NotFound)?;
+
+    if let Some(guild_id) = token_row.guild_id {
+        let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))?
+            .ok_or(CoreError::NotFound)?;
+
+        let bot_perms = crate::permissions::compute_channel_permissions(
+            &state.db,
+            guild_id,
+            token_row.channel_id,
+            guild.owner_id,
+            bot_user_id,
+        )
+        .await?;
+
+        if !bot_perms.contains(Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES) {
+            return Err(CoreError::MissingPermission);
+        }
+    }
+
+    Ok(())
+}
+
 /// Process a bot's interaction response (callback).
 /// Returns a message JSON if the callback creates or updates a message.
 pub async fn process_interaction_response(
@@ -124,46 +187,8 @@ pub async fn process_interaction_response(
     match callback_type {
         // CHANNEL_MESSAGE_WITH_SOURCE (4)
         4 => {
-            // H4-H5: Permission checks before creating message
-            // 1. Verify bot is still installed in guild
-            if let Some(guild_id) = token_row.guild_id {
-                let is_installed = paracord_db::bot_applications::is_bot_in_guild(
-                    &state.db,
-                    token_row.application_id,
-                    guild_id,
-                )
-                .await
-                .map_err(|e| CoreError::Internal(e.to_string()))?;
-                if !is_installed {
-                    return Err(CoreError::Forbidden);
-                }
-            }
-
-            // 2. Verify channel exists and bot has VIEW_CHANNEL permission
-            let _channel = paracord_db::channels::get_channel(&state.db, token_row.channel_id)
-                .await
-                .map_err(|e| CoreError::Internal(e.to_string()))?
-                .ok_or(CoreError::NotFound)?;
-
-            if let Some(guild_id) = token_row.guild_id {
-                let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
-                    .await
-                    .map_err(|e| CoreError::Internal(e.to_string()))?
-                    .ok_or(CoreError::NotFound)?;
-
-                let bot_perms = crate::permissions::compute_channel_permissions(
-                    &state.db,
-                    guild_id,
-                    token_row.channel_id,
-                    guild.owner_id,
-                    author_id,
-                )
-                .await?;
-
-                if !bot_perms.contains(Permissions::VIEW_CHANNEL) {
-                    return Err(CoreError::MissingPermission);
-                }
-            }
+            // H4-H5: install + channel + bot-permission checks before writing.
+            ensure_bot_can_write_response(state, token_row, author_id).await?;
 
             let data = callback_data.ok_or_else(|| {
                 CoreError::BadRequest("callback data required for message response".into())
@@ -245,6 +270,13 @@ pub async fn process_interaction_response(
         }
         // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE (5) - acknowledge, bot will edit later
         5 => {
+            // A deferral is not a no-op: it writes a (blank) bot message into
+            // `token_row.channel_id` and broadcasts MESSAGE_CREATE for it. This
+            // branch used to do no install check, no channel check and no
+            // permission compute at all, making it the cheapest way for a
+            // token-holding bot to place a message somewhere it may not speak.
+            ensure_bot_can_write_response(state, token_row, author_id).await?;
+
             // Create a placeholder message (type 20) so there's something to edit later
             let message_id = paracord_util::snowflake::generate(1);
             let msg = paracord_db::messages::create_message(
@@ -292,46 +324,8 @@ pub async fn process_interaction_response(
         6 => Ok(None),
         // UPDATE_MESSAGE (7)
         7 => {
-            // H4-H5: Permission checks before updating message
-            // 1. Verify bot is still installed in guild
-            if let Some(guild_id) = token_row.guild_id {
-                let is_installed = paracord_db::bot_applications::is_bot_in_guild(
-                    &state.db,
-                    token_row.application_id,
-                    guild_id,
-                )
-                .await
-                .map_err(|e| CoreError::Internal(e.to_string()))?;
-                if !is_installed {
-                    return Err(CoreError::Forbidden);
-                }
-            }
-
-            // 2. Verify channel exists and bot has VIEW_CHANNEL permission
-            let _channel = paracord_db::channels::get_channel(&state.db, token_row.channel_id)
-                .await
-                .map_err(|e| CoreError::Internal(e.to_string()))?
-                .ok_or(CoreError::NotFound)?;
-
-            if let Some(guild_id) = token_row.guild_id {
-                let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
-                    .await
-                    .map_err(|e| CoreError::Internal(e.to_string()))?
-                    .ok_or(CoreError::NotFound)?;
-
-                let bot_perms = crate::permissions::compute_channel_permissions(
-                    &state.db,
-                    guild_id,
-                    token_row.channel_id,
-                    guild.owner_id,
-                    author_id,
-                )
-                .await?;
-
-                if !bot_perms.contains(Permissions::VIEW_CHANNEL) {
-                    return Err(CoreError::MissingPermission);
-                }
-            }
+            // H4-H5: install + channel + bot-permission checks before writing.
+            ensure_bot_can_write_response(state, token_row, author_id).await?;
 
             let data = callback_data.ok_or_else(|| {
                 CoreError::BadRequest("callback data required for update message response".into())

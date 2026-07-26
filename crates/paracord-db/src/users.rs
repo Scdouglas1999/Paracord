@@ -839,6 +839,33 @@ pub async fn update_user_public_key(
     update_user_public_key_typed(pool, UserId::new(id), public_key).await
 }
 
+/// Detach the Ed25519 login key from an account. Returns `true` when a key was
+/// actually removed.
+///
+/// An attached `public_key` is a standalone login credential: `POST
+/// /api/v1/auth/verify` resolves an account purely from the presented key and
+/// mints a fresh session, so revoking sessions does not evict it and rotating
+/// the password does not either. Every account-recovery action therefore has to
+/// be able to clear it, otherwise a key planted through one stolen session
+/// outlives the victim's full recovery flow.
+/// Core implementation using newtype ID.
+pub async fn clear_user_public_key_typed(pool: &DbPool, id: UserId) -> Result<bool, DbError> {
+    let result = sqlx::query(
+        "UPDATE users SET public_key = NULL, updated_at = $2
+         WHERE id = $1 AND public_key IS NOT NULL",
+    )
+    .bind(id)
+    .bind(datetime_to_db_text(Utc::now()))
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Raw i64 shim kept for API compat.
+pub async fn clear_user_public_key(pool: &DbPool, id: i64) -> Result<bool, DbError> {
+    clear_user_public_key_typed(pool, UserId::new(id)).await
+}
+
 /// Core implementation using newtype ID.
 pub async fn update_user_password_hash_typed(
     pool: &DbPool,

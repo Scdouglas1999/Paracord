@@ -49,14 +49,47 @@ impl EventBus {
         self.system_sender.subscribe()
     }
 
+    /// Register (or re-register) a session and return its event receiver.
+    ///
+    /// Returns `None` when `session_id` is already registered to a *different*
+    /// user. This id space is shared by the WebSocket gateway and the SSE
+    /// transport, and session ids are disclosed to co-members (READY publishes
+    /// every visible voice state's `session_id`), so a blind insert let anyone
+    /// who learned another user's id re-point that id at their own receiver:
+    /// `user_sessions` still listed the id under the original owner, so the
+    /// victim's user-targeted events — DM `MESSAGE_CREATE` included — were then
+    /// delivered to the claimant. Callers must treat `None` as "refuse the
+    /// connection", never as "retry with the same id".
+    ///
+    /// The same user re-attaching (gateway RESUME, SSE reconnect) is allowed and
+    /// replaces the previous registration; the old one is unregistered first so
+    /// the guild/user indexes cannot retain entries from its guild set.
     pub fn register_session(
         &self,
         session_id: impl Into<String>,
         user_id: i64,
         guild_ids: &[i64],
-    ) -> broadcast::Receiver<ServerEvent> {
-        let (sender, receiver) = broadcast::channel(self.capacity.max(256));
+    ) -> Option<broadcast::Receiver<ServerEvent>> {
         let sid = session_id.into();
+        // Bound to a local first: a `match` scrutinee's temporaries live for the
+        // whole match, and holding a DashMap read guard across the
+        // `unregister_session` (a write on the same shard) below would deadlock.
+        let existing_owner = self.sessions.get(&sid).map(|sub| sub.user_id);
+        match existing_owner {
+            Some(owner) if owner != user_id => {
+                tracing::warn!(
+                    session_id = %sid,
+                    owner_user_id = owner,
+                    claimed_by_user_id = user_id,
+                    "refused to re-register a session id owned by another user"
+                );
+                return None;
+            }
+            Some(_) => self.unregister_session(&sid),
+            None => {}
+        }
+
+        let (sender, receiver) = broadcast::channel(self.capacity.max(256));
         let subscription = SessionSubscription {
             user_id,
             guild_ids: guild_ids.iter().copied().collect(),
@@ -78,7 +111,7 @@ impl EventBus {
             .insert(sid.clone());
 
         self.sessions.insert(sid, subscription);
-        receiver
+        Some(receiver)
     }
 
     pub fn unregister_session(&self, session_id: &str) {
@@ -319,7 +352,7 @@ mod tests {
     #[test]
     fn add_session_guild_after_unregister_leaves_no_phantom() {
         let bus = EventBus::new(16);
-        let _rx = bus.register_session("s1", 100, &[1]);
+        let _rx = bus.register_session("s1", 100, &[1]).expect("register");
 
         bus.unregister_session("s1");
 
@@ -334,7 +367,7 @@ mod tests {
     #[test]
     fn unregister_clears_guild_and_user_indexes() {
         let bus = EventBus::new(16);
-        let _rx = bus.register_session("s1", 100, &[1, 2]);
+        let _rx = bus.register_session("s1", 100, &[1, 2]).expect("register");
         bus.add_session_guild("s1", 3);
 
         assert_eq!(bus.guild_sessions.len(), 3);
@@ -354,8 +387,8 @@ mod tests {
     #[test]
     fn guild_scoped_publish_reaches_only_guild_sessions() {
         let bus = EventBus::new(16);
-        let mut rx_in = bus.register_session("in", 1, &[10]);
-        let mut rx_out = bus.register_session("out", 2, &[20]);
+        let mut rx_in = bus.register_session("in", 1, &[10]).expect("register");
+        let mut rx_out = bus.register_session("out", 2, &[20]).expect("register");
 
         bus.publish(test_event(Some(10), None));
 
@@ -372,8 +405,8 @@ mod tests {
     #[test]
     fn user_targeted_publish_reaches_only_targeted_users() {
         let bus = EventBus::new(16);
-        let mut rx_a = bus.register_session("a", 1, &[]);
-        let mut rx_b = bus.register_session("b", 2, &[]);
+        let mut rx_a = bus.register_session("a", 1, &[]).expect("register");
+        let mut rx_b = bus.register_session("b", 2, &[]).expect("register");
 
         bus.publish(test_event(None, Some(vec![1])));
 
@@ -390,7 +423,7 @@ mod tests {
     #[test]
     fn publish_reaps_session_whose_receiver_is_gone() {
         let bus = EventBus::new(16);
-        let rx = bus.register_session("dead", 7, &[9]);
+        let rx = bus.register_session("dead", 7, &[9]).expect("register");
 
         // Gateway loop exited: the receiver is dropped but unregister has not
         // (yet) run. A publish must self-heal the leaked indexes.
@@ -407,8 +440,8 @@ mod tests {
     #[test]
     fn global_publish_reaps_dead_sessions() {
         let bus = EventBus::new(16);
-        let mut rx_live = bus.register_session("live", 1, &[]);
-        let rx_dead = bus.register_session("dead", 2, &[]);
+        let mut rx_live = bus.register_session("live", 1, &[]).expect("register");
+        let rx_dead = bus.register_session("dead", 2, &[]).expect("register");
         drop(rx_dead);
 
         bus.publish(test_event(None, None));
@@ -422,7 +455,7 @@ mod tests {
     #[test]
     fn add_session_guild_routes_publish_to_added_guild() {
         let bus = EventBus::new(16);
-        let mut rx = bus.register_session("s1", 1, &[]);
+        let mut rx = bus.register_session("s1", 1, &[]).expect("register");
 
         bus.add_session_guild("s1", 55);
         bus.publish(test_event(Some(55), None));

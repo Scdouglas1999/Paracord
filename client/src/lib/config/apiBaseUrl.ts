@@ -12,6 +12,7 @@ import {
   removeVersionedStorageItem,
   setVersionedStorageItem,
 } from '../versionedStorage';
+import { useServerListStore } from '../../stores/serverListStore';
 
 export const SERVER_URL_KEY = 'server-url';
 
@@ -209,13 +210,8 @@ export function resolveServerRootUrl(path: string): string {
   return `${origin}${normalizedPath}`;
 }
 
-/**
- * The origin of the API server this client is talking to, or null when it
- * cannot be determined. Used to decide who is allowed to receive a download
- * ticket.
- */
-export function resolveApiOrigin(): string | null {
-  const base = resolveApiBaseUrl();
+/** Origin of an API base URL; a relative base means "same origin as the page". */
+function originOfApiBase(base: string): string | null {
   if (base.startsWith('http')) {
     try {
       return new URL(base).origin;
@@ -223,30 +219,77 @@ export function resolveApiOrigin(): string | null {
       return null;
     }
   }
-  // A relative base means "same origin as the page".
   if (typeof window === 'undefined') return null;
   if (!/^https?:$/.test(window.location.protocol)) return null;
   return window.location.origin;
 }
 
 /**
+ * The origin of the HOME server — the one the connect screen stored — or null
+ * when it cannot be determined.
+ *
+ * This is NOT the server whose data is currently on screen; see
+ * {@link resolveActiveServerOrigin}. The home server is the only origin the
+ * process-global access token (`authToken`) was ever issued for.
+ */
+export function resolveApiOrigin(): string | null {
+  return originOfApiBase(resolveApiBaseUrl());
+}
+
+/**
+ * The `/api/v1` base URL of the server the UI is currently focused on.
+ *
+ * `resolveApiBaseUrl()` answers a different question — "which server did the
+ * connect screen store" — and under multi-server the two diverge the moment the
+ * user switches spaces: `activeServerId` moves and the stored URL does not.
+ * Anything that pairs a credential with a target (a download ticket appended to
+ * a resource URL) has to follow the *active* server, otherwise a ticket minted
+ * at one server is attached to a URL served by another.
+ */
+function resolveActiveServerBaseUrl(): string {
+  const { servers, activeServerId } = useServerListStore.getState();
+  const activeUrl = activeServerId
+    ? servers.find((s) => s.id === activeServerId)?.url?.trim()
+    : undefined;
+  if (activeUrl) {
+    return `${normalizeServerBaseUrl(activeUrl)}/api/v1`;
+  }
+  // No active entry (bootstrap, or the LOCAL-only connection) — the home
+  // server is the active one.
+  return resolveApiBaseUrl();
+}
+
+/**
+ * The origin of the active server, or null when it cannot be determined. Used
+ * to decide who is allowed to receive a download ticket.
+ */
+export function resolveActiveServerOrigin(): string | null {
+  return originOfApiBase(resolveActiveServerBaseUrl());
+}
+
+/**
  * Build an absolute resource URL suitable for `<img>` src and similar
  * browser-native fetches that cannot carry an Authorization header.
  *
- * Appends `?ticket=<download_ticket>` ONLY when the target origin is the user's
- * own API server. The download ticket is a multi-use bearer credential accepted
- * on attachment/emoji/sticker/avatar/federated-file endpoints, so "origin
- * differs from the page" is not a sufficient test: values such as
- * `avatar_hash` may be arbitrary absolute URLs chosen by another user, and on
- * desktop the page origin is `tauri://localhost`, which differs from *every*
- * http(s) origin. Attaching the ticket on that basis handed it to any host an
- * attacker could name.
+ * Relative paths resolve against the ACTIVE server, and `?ticket=<download_ticket>`
+ * is appended ONLY when the target origin is that same active server. Tickets
+ * are minted and cached per active server (see `lib/downloadTicket`), so any
+ * other target origin — including the home server the connect screen stored —
+ * would receive a credential it did not issue.
+ *
+ * The download ticket is a multi-use bearer credential accepted on
+ * attachment/emoji/sticker/avatar/federated-file endpoints, so "origin differs
+ * from the page" is not a sufficient test: values such as `avatar_hash` may be
+ * arbitrary absolute URLs chosen by another user, and on desktop the page
+ * origin is `tauri://localhost`, which differs from *every* http(s) origin.
+ * Attaching the ticket on that basis handed it to any host an attacker could
+ * name.
  *
  * @param path - relative path, absolute path, or full URL
- * @param ticket - download ticket to append for same-API-origin auth
+ * @param ticket - download ticket to append for same-active-server auth
  */
 export function resolveResourceUrl(path: string, ticket?: string | null): string {
-  const base = resolveApiBaseUrl();
+  const base = resolveActiveServerBaseUrl();
   let url: string;
   if (path.startsWith('http://') || path.startsWith('https://')) {
     url = path;
@@ -265,13 +308,13 @@ export function resolveResourceUrl(path: string, ticket?: string | null): string
   } else {
     url = `${base}/${path}`;
   }
-  // Append the download ticket only for our own API server, and only when the
-  // browser will not already authenticate the request with cookies.
+  // Append the download ticket only for the server that minted it, and only
+  // when the browser will not already authenticate the request with cookies.
   const authTicket = ticket ?? null;
   if (authTicket && url.startsWith('http')) {
     try {
       const parsed = new URL(url);
-      const apiOrigin = resolveApiOrigin();
+      const apiOrigin = resolveActiveServerOrigin();
       const pageOrigin = typeof window !== 'undefined' ? window.location.origin : null;
       if (apiOrigin && parsed.origin === apiOrigin && parsed.origin !== pageOrigin) {
         parsed.searchParams.set('ticket', authTicket);

@@ -19,14 +19,7 @@ const MAX_SELECT_VALUES: usize = 25;
 const MAX_MODAL_INPUTS: usize = 5;
 const MAX_MODAL_VALUE_LEN: usize = 4_000;
 
-fn contains_dangerous_markup(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("<script")
-        || lower.contains("javascript:")
-        || lower.contains("onerror=")
-        || lower.contains("onload=")
-        || lower.contains("<iframe")
-}
+use paracord_util::validation::contains_dangerous_markup;
 
 fn validate_component_url(raw: &str) -> Result<(), ApiError> {
     let trimmed = raw.trim();
@@ -596,6 +589,67 @@ async fn ensure_channel_access(
     Ok(())
 }
 
+/// Enforce a command's own invocation gates before an interaction is created.
+///
+/// `default_member_permissions` and `nsfw` were written, validated, stored and
+/// returned by the command CRUD routes, but nothing ever *read* them as a gate:
+/// invoking only required guild membership plus VIEW_CHANNEL, so a default-role
+/// member could run a command registered with
+/// `default_member_permissions: "8"` (ADMINISTRATOR) and the bot would dispatch
+/// it. The bits are evaluated against the caller's *channel* permissions, which
+/// is where a command actually runs, so a per-channel overwrite counts.
+///
+/// `Some(0)` is the Discord "disabled for everyone" encoding — an empty bitmask
+/// is contained by every permission set, so it has to be special-cased or it
+/// would read as "no requirement". Administrators still bypass, as they do for
+/// every other gate.
+async fn ensure_command_invocable(
+    state: &AppState,
+    guild_id: i64,
+    channel_id: i64,
+    user_id: i64,
+    cmd: &paracord_db::application_commands::ApplicationCommandRow,
+) -> Result<(), ApiError> {
+    if cmd.nsfw {
+        let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?;
+        if !channel.nsfw {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
+    let Some(required_bits) = cmd.default_member_permissions else {
+        return Ok(());
+    };
+
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let perms = paracord_core::permissions::compute_channel_permissions(
+        &state.db,
+        guild_id,
+        channel_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await
+    .map_err(ApiError::from)?;
+
+    let required = Permissions::from_bits_truncate(required_bits);
+    let allowed = if required.is_empty() {
+        perms.contains(Permissions::ADMINISTRATOR)
+    } else {
+        perms.contains(required)
+    };
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(())
+}
+
 /// Strip the raw interaction token from a payload before it is returned over
 /// HTTP to the member who triggered the interaction.
 ///
@@ -664,6 +718,9 @@ pub async fn invoke_interaction(
                     .await
                     .map_err(ApiError::from)?
                     .ok_or_else(|| ApiError::NotFound)?;
+
+            // The command's own `default_member_permissions` / `nsfw` gates.
+            ensure_command_invocable(&state, guild_id, channel_id, auth.user_id, &cmd).await?;
 
             // Look up the bot application to get the bot_user_id
             let bot_app =
@@ -827,6 +884,11 @@ pub async fn invoke_interaction(
                     .await
                     .map_err(ApiError::from)?
                     .ok_or(ApiError::NotFound)?;
+
+            // Autocomplete resolves and dispatches the same command, so it is
+            // subject to the same gates — otherwise it becomes the way to reach
+            // a command whose direct invocation is denied.
+            ensure_command_invocable(&state, guild_id, channel_id, auth.user_id, &cmd).await?;
 
             let bot_app =
                 paracord_db::bot_applications::get_bot_application(&state.db, cmd.application_id)
@@ -1056,6 +1118,24 @@ pub async fn edit_original_response(
         if !is_installed {
             return Err(ApiError::Forbidden);
         }
+
+        // Installation alone was the entire gate here, so a bot that had since
+        // been denied the channel (or installed with `permissions=0`) could
+        // still rewrite its response message there and rebroadcast
+        // MESSAGE_UPDATE. Hold the edit to the same bar as
+        // `create_followup_message` and the callback path.
+        let bot_app = paracord_db::bot_applications::get_bot_application(&state.db, app_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?;
+        ensure_channel_access(
+            &state,
+            guild_id,
+            token_row.channel_id,
+            bot_app.bot_user_id,
+            Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES,
+        )
+        .await?;
     }
 
     let content = body.content.as_deref().unwrap_or("");

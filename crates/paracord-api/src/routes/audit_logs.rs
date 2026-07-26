@@ -29,14 +29,16 @@ pub async fn get_audit_logs(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    let roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms = paracord_core::permissions::compute_permissions_from_roles(
-        &roles,
+    // Guild-scoped gate: `compute_guild_permissions` and not the raw role fold,
+    // so a bot installed with restricted permissions cannot read the audit log
+    // just because one of its guild roles carries VIEW_AUDIT_LOG.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
-    );
+    )
+    .await?;
     paracord_core::permissions::require_permission(perms, Permissions::VIEW_AUDIT_LOG)?;
 
     let limit = params.limit.unwrap_or(50).clamp(1, 100);

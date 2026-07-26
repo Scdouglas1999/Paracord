@@ -75,6 +75,37 @@ export function shouldSendVideoFrameOnStream(
   return isKeyframe || fragmentCount > STREAM_FRAGMENT_THRESHOLD;
 }
 
+/** Bytes of encoded payload that fit in one datagram fragment. */
+export function maxVideoFragmentPayload(): number {
+  return VIDEO_MAX_DATAGRAM_SIZE - HEADER_SIZE - VIDEO_GCM_TAG_SIZE - 128;
+}
+
+/** Datagram fragments a frame of `byteLength` splits into. */
+export function videoFragmentCount(byteLength: number): number {
+  return Math.max(1, Math.ceil(byteLength / maxVideoFragmentPayload()));
+}
+
+/**
+ * How many sequence numbers one encoded frame consumes.
+ *
+ * The AES-GCM nonce is a pure function of `(ssrc, epoch, sequence, roc)`, so a
+ * sequence number may be used exactly once per `(ssrc, epoch)` — reusing one
+ * reuses a `(key, nonce)` pair, which leaks the plaintext XOR *and* the GHASH
+ * subkey, letting an observer forge authenticated frames for the whole epoch.
+ *
+ * A datagram frame emits `fragmentCount` packets at `seq + fragmentIndex`, so it
+ * consumes that many; a stream frame is a single AEAD and consumes one. Callers
+ * MUST advance their counter by this, not by 1 — advancing by 1 makes every
+ * multi-fragment frame overlap its successor. The native publisher gets this
+ * right by incrementing inside its fragment loop
+ * (`client/src-tauri/src/native_media/video_pipeline.rs`); this is the shared
+ * helper that keeps the browser publisher honest.
+ */
+export function videoSequenceSpan(byteLength: number, isKeyframe: boolean): number {
+  const fragmentCount = videoFragmentCount(byteLength);
+  return shouldSendVideoFrameOnStream(isKeyframe, fragmentCount) ? 1 : fragmentCount;
+}
+
 /**
  * A whole-frame uni-stream message: cleartext 16-byte header (the relay routes on
  * `ssrc`) + cleartext {@link VideoFrameMetadata} + the still-encrypted whole-frame
@@ -564,7 +595,13 @@ export class BrowserMediaEngine implements MediaEngine {
 
     this.screenEncoder.onEncoded((data) => {
       this.sendEncodedVideo(data, this.screenSequence, true);
-      this.screenSequence++;
+      // Advance by the number of sequence numbers this frame actually consumes.
+      // Advancing by 1 made every multi-fragment frame overlap its successor and
+      // reuse an AES-GCM (key, nonce) pair. See videoSequenceSpan.
+      this.screenSequence =
+        (this.screenSequence +
+          videoSequenceSpan(data.chunk.byteLength, data.chunk.type === 'key')) &
+        0xffff;
     });
 
     // Notify the server that screen share has started
@@ -865,7 +902,11 @@ export class BrowserMediaEngine implements MediaEngine {
       });
       this.videoEncoder.onEncoded((data) => {
         this.sendEncodedVideo(data, this.videoSequence, false);
-        this.videoSequence++;
+        // See videoSequenceSpan: advancing by 1 reused (key, nonce) pairs.
+        this.videoSequence =
+          (this.videoSequence +
+            videoSequenceSpan(data.chunk.byteLength, data.chunk.type === 'key')) &
+          0xffff;
       });
       this.startVideoFrameCapture();
       await this.republishLocalTrack(this.buildLocalCameraTrack(width, height, this.videoEncoder.codec));
@@ -890,7 +931,11 @@ export class BrowserMediaEngine implements MediaEngine {
       });
       this.screenEncoder.onEncoded((data) => {
         this.sendEncodedVideo(data, this.screenSequence, true);
-        this.screenSequence++;
+        // See videoSequenceSpan: advancing by 1 reused (key, nonce) pairs.
+        this.screenSequence =
+          (this.screenSequence +
+            videoSequenceSpan(data.chunk.byteLength, data.chunk.type === 'key')) &
+          0xffff;
       });
       this.startScreenFrameCapture();
       await this.republishLocalTrack(this.buildLocalScreenTrack(width, height, this.screenEncoder.codec));
@@ -1326,7 +1371,11 @@ export class BrowserMediaEngine implements MediaEngine {
 
     this.videoEncoder.onEncoded((data) => {
       this.sendEncodedVideo(data, this.videoSequence, false);
-      this.videoSequence++;
+      // See videoSequenceSpan: advancing by 1 reused (key, nonce) pairs.
+      this.videoSequence =
+        (this.videoSequence +
+          videoSequenceSpan(data.chunk.byteLength, data.chunk.type === 'key')) &
+        0xffff;
     });
 
     // Notify the server that video is enabled

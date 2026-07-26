@@ -12,6 +12,10 @@ vi.mock('../../api/emojis', () => ({
 
 vi.mock('../../lib/config/apiBaseUrl', () => ({
   resolveApiBaseUrl: () => '/api/v1',
+  // The download-ticket cache keys itself on the active server's origin, so the
+  // stub has to answer that too (same-origin here, which is what a relative
+  // `/api/v1` base means).
+  resolveActiveServerOrigin: () => window.location.origin,
   resolveResourceUrl: (path: string, ticket?: string | null) =>
     ticket ? `/api/v1/${path}?ticket=${encodeURIComponent(ticket)}` : `/api/v1/${path}`,
 }));

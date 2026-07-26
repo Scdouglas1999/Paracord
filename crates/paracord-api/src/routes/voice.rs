@@ -187,22 +187,32 @@ pub async fn evict_user_from_guild_media(state: &AppState, guild_id: i64, user_i
     }
 
     // Notify remaining members that the user left voice so their UIs update.
-    state.event_bus.dispatch(
-        "VOICE_STATE_UPDATE",
-        json!({
-            "user_id": user_id.to_string(),
-            "channel_id": null,
-            "guild_id": guild_id.to_string(),
-            "self_mute": false,
-            "self_deaf": false,
-            "self_stream": false,
-            "self_video": false,
-            "suppress": false,
-            "mute": false,
-            "deaf": false,
-        }),
-        Some(guild_id),
-    );
+    //
+    // One event per departed channel, each carrying `prior_channel_id`: a leave
+    // has a null `channel_id`, so that is the only field the gateway's
+    // per-channel VIEW_CHANNEL filter can key on
+    // (`extract_channel_id_from_event`). Without it the leave fans out
+    // guild-wide and discloses presence in a hidden voice channel that the
+    // matching join was correctly filtered out of.
+    for channel_id in &channels {
+        state.event_bus.dispatch(
+            "VOICE_STATE_UPDATE",
+            json!({
+                "user_id": user_id.to_string(),
+                "channel_id": null,
+                "prior_channel_id": channel_id.to_string(),
+                "guild_id": guild_id.to_string(),
+                "self_mute": false,
+                "self_deaf": false,
+                "self_stream": false,
+                "self_video": false,
+                "suppress": false,
+                "mute": false,
+                "deaf": false,
+            }),
+            Some(guild_id),
+        );
+    }
 }
 
 fn livekit_url_candidates(headers: &HeaderMap, fallback: &str) -> Vec<String> {
@@ -1064,6 +1074,27 @@ pub async fn stop_stream(
 
     let guild_id = channel.guild_id();
 
+    // Stopping a stream ends with a guild-wide VOICE_STATE_UPDATE naming the
+    // caller in this channel. With only the channel-type check above, any
+    // authenticated account -- member or not -- could forge that voice state
+    // for a channel it cannot see. Mirror `start_stream`'s gate.
+    if let Some(guild_id) = guild_id {
+        paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
+        let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?;
+        let perms = paracord_core::permissions::compute_channel_permissions(
+            &state.db,
+            guild_id,
+            channel_id,
+            guild.owner_id,
+            auth.user_id,
+        )
+        .await?;
+        paracord_core::permissions::require_permission(perms, Permissions::VIEW_CHANNEL)?;
+    }
+
     if let Some(guild_id) = guild_id {
         let federation_service = crate::routes::federation::build_federation_service();
         if federation_service.is_enabled() {
@@ -1214,11 +1245,15 @@ pub async fn leave_voice(
         .await
         .ok()
         .flatten();
+    // `prior_channel_id` is the only handle the gateway's per-channel
+    // VIEW_CHANNEL filter has on a leave (its `channel_id` is null); omitting it
+    // fans the leave out guild-wide and leaks presence in hidden voice channels.
     state.event_bus.dispatch(
         "VOICE_STATE_UPDATE",
         json!({
             "user_id": auth.user_id.to_string(),
             "channel_id": null,
+            "prior_channel_id": channel_id.to_string(),
             "guild_id": guild_id.map(|id| id.to_string()),
             "self_mute": false,
             "self_deaf": false,
@@ -1331,11 +1366,15 @@ pub async fn livekit_webhook(
             .await
             .ok()
             .flatten();
+        // See `leave_voice`: a leave's `channel_id` is null, so
+        // `prior_channel_id` is what keeps the gateway's per-channel
+        // VIEW_CHANNEL filter able to scope it.
         state_clone.event_bus.dispatch(
             "VOICE_STATE_UPDATE",
             json!({
                 "user_id": user_id.to_string(),
                 "channel_id": null,
+                "prior_channel_id": channel_id.to_string(),
                 "guild_id": guild_id.map(|id| id.to_string()),
                 "self_mute": false,
                 "self_deaf": false,

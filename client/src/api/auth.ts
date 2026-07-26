@@ -61,7 +61,16 @@ export const authApi = {
   logout: () => getApi().post('/auth/logout'),
   listSessions: () => getApi().get<AuthSession[]>('/auth/sessions'),
   revokeSession: (sessionId: string) => getApi().delete(`/auth/sessions/${sessionId}`),
-  attachPublicKey: async (publicKey: string) => {
+  /**
+   * Attach an Ed25519 public key to the signed-in account.
+   *
+   * The account password (and a second factor when MFA is on) is REQUIRED: an
+   * attached key authenticates the account on its own, indefinitely, and used to
+   * survive a password change, a password reset, and "sign out everywhere". A
+   * session alone must not be able to install a credential that outlives the
+   * recovery flow, so the server re-authenticates before accepting one.
+   */
+  attachPublicKey: async (publicKey: string, password: string, mfaCode?: string) => {
     const challenge = await requestAuthChallenge();
     const signature = await signServerChallengeWithUnlockedKey(
       challenge.nonce,
@@ -73,8 +82,18 @@ export const authApi = {
       nonce: challenge.nonce,
       timestamp: challenge.timestamp,
       signature,
+      password,
+      ...(mfaCode ? { mfa_code: mfaCode } : {}),
     });
   },
+
+  /** Remove the attached key, revoking every session in the process. */
+  detachPublicKey: async (password: string, mfaCode?: string) =>
+    getApi().post('/auth/attach-public-key', {
+      detach: true,
+      password,
+      ...(mfaCode ? { mfa_code: mfaCode } : {}),
+    }),
   getMe: () => getApi().get<User>('/users/@me'),
   updateMe: (data: Partial<User>) => getApi().patch<User>('/users/@me', data),
   uploadAvatar: (file: File) => {

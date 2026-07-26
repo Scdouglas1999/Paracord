@@ -115,11 +115,16 @@ pub async fn update_member(
     let actor_roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let actor_perms = paracord_core::permissions::compute_permissions_from_roles(
-        &actor_roles,
+    // Guild-scoped gate: `compute_guild_permissions` also applies the bot
+    // install-permission cap, which the raw fold over `actor_roles` cannot.
+    // `actor_roles` is still needed below for the role-hierarchy comparison.
+    let actor_perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
-    );
+    )
+    .await?;
 
     // The actor must be a member of the guild, and the target must exist as a
     // member (404 otherwise) — mutating a non-member would silently insert a
@@ -130,22 +135,37 @@ pub async fn update_member(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
 
-    if body.nick.is_some() && auth.user_id != user_id {
-        paracord_core::permissions::require_permission(
-            actor_perms,
-            paracord_models::permissions::Permissions::MANAGE_NICKNAMES,
-        )?;
-        // Renaming another member is a moderation action and must obey the same
-        // owner immunity and role hierarchy as kick/ban/timeout. The bare
-        // MANAGE_NICKNAMES check let a junior moderator rename the guild owner
-        // or anyone ranked above them.
-        paracord_core::admin::ensure_actor_can_moderate_target(
-            &state.db,
-            guild_id,
-            auth.user_id,
-            user_id,
-        )
-        .await?;
+    if body.nick.is_some() {
+        if auth.user_id != user_id {
+            paracord_core::permissions::require_permission(
+                actor_perms,
+                paracord_models::permissions::Permissions::MANAGE_NICKNAMES,
+            )?;
+            // Renaming another member is a moderation action and must obey the same
+            // owner immunity and role hierarchy as kick/ban/timeout. The bare
+            // MANAGE_NICKNAMES check let a junior moderator rename the guild owner
+            // or anyone ranked above them.
+            paracord_core::admin::ensure_actor_can_moderate_target(
+                &state.db,
+                guild_id,
+                auth.user_id,
+                user_id,
+            )
+            .await?;
+        } else {
+            // Renaming *yourself* is what CHANGE_NICKNAME governs. The branch
+            // used to check nothing at all, so revoking the bit from @everyone
+            // had no effect anywhere on the instance. A nickname is a
+            // guild-visible label, so a timed-out member must not be able to
+            // rewrite it either — the same reasoning that puts thread creation
+            // and renaming behind `ensure_not_timed_out`.
+            paracord_core::permissions::require_permission(
+                actor_perms,
+                paracord_models::permissions::Permissions::CHANGE_NICKNAME,
+            )?;
+            paracord_core::permissions::ensure_not_timed_out(&state.db, guild_id, auth.user_id)
+                .await?;
+        }
     }
 
     let mut role_ids: Vec<String> =

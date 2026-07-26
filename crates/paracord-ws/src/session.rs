@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 /// The subset of a guild row the READY payload needs.
@@ -26,6 +27,12 @@ pub struct Session {
     /// connection must carry it as `auth_sid` so the native-media transport can
     /// verify the login session is still active (see `is_media_session_active`).
     pub auth_session_id: String,
+    /// Absolute expiry of the access token this connection authenticated with
+    /// (the JWT `exp` claim). The gateway re-checks it periodically so a socket
+    /// cannot outlive the credential that opened it. `None` only for sessions
+    /// constructed in-crate without a credential (tests); every production path
+    /// goes through `wait_for_identify_or_resume`, which always sets it.
+    pub token_expires_at: Option<DateTime<Utc>>,
     pub sequence: u64,
     /// Cached friend user ids for presence fan-out, loaded lazily on the first
     /// presence transition and invalidated when a relationship-change event is
@@ -44,6 +51,7 @@ impl Session {
             guild_owner_ids,
             session_id: uuid::Uuid::new_v4().to_string(),
             auth_session_id: String::new(),
+            token_expires_at: None,
             sequence: 0,
             friend_ids: None,
             ready_guilds: Vec::new(),

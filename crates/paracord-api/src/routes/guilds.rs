@@ -51,14 +51,7 @@ fn channel_route_slow_ms() -> u64 {
     })
 }
 
-fn contains_dangerous_markup(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("<script")
-        || lower.contains("javascript:")
-        || lower.contains("onerror=")
-        || lower.contains("onload=")
-        || lower.contains("<iframe")
-}
+use paracord_util::validation::contains_dangerous_markup;
 
 fn parse_discovery_tags(raw: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
@@ -480,6 +473,9 @@ pub struct ChannelPositionEntry {
     pub parent_id: Option<String>,
 }
 
+/// `ChannelType::Category` — the only thing a channel's `parent_id` may point at.
+const CHANNEL_TYPE_CATEGORY: i16 = 4;
+
 pub async fn update_channel_positions(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -501,14 +497,16 @@ pub async fn update_channel_positions(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let roles = paracord_db::roles::get_member_roles(&state.db, auth.user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms = paracord_core::permissions::compute_permissions_from_roles(
-        &roles,
+    // `compute_guild_permissions`, not the raw fold: it applies the bot
+    // install-permission cap, so a bot installed with `permissions=0` cannot
+    // borrow a role's authority here.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
         guild.owner_id,
         auth.user_id,
-    );
+    )
+    .await?;
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_CHANNELS)?;
 
     let mut updates = Vec::with_capacity(body.len());
@@ -529,12 +527,94 @@ pub async fn update_channel_positions(
             }
             None => None,
         };
+
+        // `parent_id` used to be written straight to the row from the request
+        // body, unvalidated. For a thread that is the *entire* access-control
+        // input — `resolve_permission_gate` reads a thread's overwrites and
+        // required roles through `parent_id` — so re-pointing a thread at a
+        // public channel collapsed its ACL and published the contents of a
+        // private channel's thread to everyone who could see the new parent.
+        // A moderator scoped out of the private channel could do it, because the
+        // gate above is the guild-level fold and never saw the channel deny.
+        let channel = paracord_db::channels::get_channel(&state.db, channel_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+            .ok_or(ApiError::NotFound)?;
+        if channel.guild_id() != Some(guild_id) {
+            return Err(ApiError::NotFound);
+        }
+
+        // Re-check per channel so a channel-level MANAGE_CHANNELS deny actually
+        // blocks the move, and so a bot stays capped to its install permissions
+        // — the same rule `paracord_core::channel::update_channel` applies.
+        let perms = paracord_core::permissions::compute_channel_permissions(
+            &state.db,
+            guild_id,
+            channel_id,
+            guild.owner_id,
+            auth.user_id,
+        )
+        .await?;
+        paracord_core::permissions::require_permission(perms, Permissions::MANAGE_CHANNELS)?;
+
+        if let Some(Some(new_parent)) = parent_id {
+            // A thread's parent is its ACL, not a layout choice, and this route
+            // exists to order channels within categories. Moving a thread here
+            // is never legitimate.
+            if channel.channel_type == paracord_core::permissions::CHANNEL_TYPE_THREAD {
+                return Err(ApiError::BadRequest(
+                    "A thread's parent channel cannot be changed".into(),
+                ));
+            }
+            let parent = paracord_db::channels::get_channel(&state.db, new_parent)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+                .ok_or_else(|| ApiError::BadRequest("Invalid parent_id".into()))?;
+            if parent.guild_id() != Some(guild_id) {
+                return Err(ApiError::BadRequest(
+                    "parent_id must be a category in this space".into(),
+                ));
+            }
+            if parent.channel_type != CHANNEL_TYPE_CATEGORY {
+                return Err(ApiError::BadRequest("parent_id must be a category".into()));
+            }
+            // The caller has to be able to manage the category they are moving
+            // a channel into, or this is a way to place a channel under a
+            // category whose overwrites they could not otherwise apply.
+            let parent_perms = paracord_core::permissions::compute_channel_permissions(
+                &state.db,
+                guild_id,
+                new_parent,
+                guild.owner_id,
+                auth.user_id,
+            )
+            .await?;
+            paracord_core::permissions::require_permission(
+                parent_perms,
+                Permissions::MANAGE_CHANNELS,
+            )?;
+        }
+
         updates.push((channel_id, entry.position, parent_id));
     }
 
     let changed = paracord_db::channels::update_channel_positions(&state.db, guild_id, &updates)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    // Moving a channel changes what its children inherit, so the cached
+    // decisions for it and everything under it have to go.
+    for channel in &changed {
+        if let Err(err) = paracord_core::permissions::invalidate_channel_tree(
+            &state.db,
+            &state.permission_cache,
+            channel.id,
+        )
+        .await
+        {
+            tracing::warn!(channel_id = channel.id, error = %err, "failed to invalidate permission cache");
+        }
+    }
 
     for channel in &changed {
         let channel_json = crate::routes::channels::channel_to_json(channel);
@@ -680,11 +760,14 @@ async fn require_manage_guild(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
         .ok_or(ApiError::NotFound)?;
-    let roles = paracord_db::roles::get_member_roles(&state.db, user_id, guild_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
-    let perms =
-        paracord_core::permissions::compute_permissions_from_roles(&roles, guild.owner_id, user_id);
+    // Capped fold — see `compute_guild_permissions`.
+    let perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
+        guild.owner_id,
+        user_id,
+    )
+    .await?;
     paracord_core::permissions::require_permission(perms, Permissions::MANAGE_GUILD)?;
     Ok(())
 }

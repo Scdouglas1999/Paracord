@@ -77,7 +77,10 @@ export function AccountSetupPage() {
         const publicKey = useAccountStore.getState().publicKey;
         if (publicKey) {
           try {
-            await authApi.attachPublicKey(publicKey);
+            // The password is required: the server re-authenticates before
+            // accepting a key, because an attached key is a standalone
+            // credential that outlives a password change.
+            await authApi.attachPublicKey(publicKey, password);
           } catch {
             // Non-fatal — server may not support it yet
           }

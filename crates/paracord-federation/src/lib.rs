@@ -528,11 +528,24 @@ impl FederationService {
                 std::collections::HashSet::new()
             }
         };
+        // Membership events are how a room's participant set is announced in the
+        // first place, so they are the one category that legitimately goes to
+        // every trusted peer. Everything else — message bodies, edits, reactions
+        // — is room content and only the servers recorded as participants of
+        // this room may receive it.
         let membership_event = matches!(
             envelope.event_type.as_str(),
             "m.member.join" | "m.member.leave"
         );
-        let has_scoped_targets = !membership_event && !scoped_targets.is_empty();
+        // Scope content to room participants and FAIL CLOSED on an empty set.
+        // This was `!membership_event && !scoped_targets.is_empty()`, so a room
+        // with no recorded remote members disabled the filter entirely and the
+        // envelope went to every trusted peer. Every purely-local guild has an
+        // empty participant set, which meant enabling federation and trusting
+        // one peer shipped that peer every message in every local guild. No
+        // recorded participants now means no recipients — including when the
+        // lookup above failed, where an empty set is the safe interpretation.
+        let scope_to_room_members = !membership_event;
 
         let client = match self.build_signed_client() {
             Ok(c) => c,
@@ -554,7 +567,7 @@ impl FederationService {
             if skip_server.is_some_and(|name| name == peer.server_name) {
                 continue;
             }
-            if has_scoped_targets {
+            if scope_to_room_members {
                 let peer_server = peer.server_name.to_ascii_lowercase();
                 let peer_domain = peer.domain.to_ascii_lowercase();
                 if !scoped_targets.contains(&peer_server) && !scoped_targets.contains(&peer_domain)

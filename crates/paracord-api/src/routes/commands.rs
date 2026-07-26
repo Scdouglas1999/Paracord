@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use paracord_core::AppState;
+use paracord_models::permissions::Permissions;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -441,15 +442,46 @@ pub async fn list_guild_available_commands_handler(
     // Verify the user is a member of this guild
     paracord_core::permissions::ensure_guild_member(&state.db, guild_id, auth.user_id).await?;
 
+    let guild = paracord_db::guilds::get_guild(&state.db, guild_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    let member_perms = paracord_core::permissions::compute_guild_permissions(
+        &state.db,
+        guild_id,
+        guild.owner_id,
+        auth.user_id,
+    )
+    .await?;
+
     let rows =
         paracord_db::application_commands::list_guild_available_commands(&state.db, guild_id)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    Ok(Json(json!(rows
+    // Hide commands the caller cannot invoke. `default_member_permissions` is
+    // enforced per channel at invoke time (see
+    // `routes::interactions::ensure_command_invocable`); this list has no
+    // channel context, so it filters on the caller's guild-level permissions —
+    // enough to keep an admin-only command out of a default member's picker.
+    // `Some(0)` is the "disabled for everyone but administrators" encoding.
+    let visible: Vec<Value> = rows
         .iter()
+        .filter(|row| match row.default_member_permissions {
+            None => true,
+            Some(bits) => {
+                let required = Permissions::from_bits_truncate(bits);
+                if required.is_empty() {
+                    member_perms.contains(Permissions::ADMINISTRATOR)
+                } else {
+                    member_perms.contains(required)
+                }
+            }
+        })
         .map(command_row_to_json)
-        .collect::<Vec<Value>>())))
+        .collect();
+
+    Ok(Json(json!(visible)))
 }
 
 // ── Guild command endpoints ─────────────────────────────────────────────────

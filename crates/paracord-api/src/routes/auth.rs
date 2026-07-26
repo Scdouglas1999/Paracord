@@ -2,7 +2,7 @@ use axum::{
     body::to_bytes,
     extract::{ConnectInfo, Path, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{AppendHeaders, IntoResponse},
+    response::{AppendHeaders, IntoResponse, Response},
     Json,
 };
 use chrono::{Duration, Utc};
@@ -1256,6 +1256,150 @@ async fn issue_auth_session(
     ))
 }
 
+/// What a login path must do once the primary credential has checked out but
+/// before a session is minted.
+enum LoginGate {
+    /// Every gate passed; issue the session.
+    Proceed,
+    /// The account carries a second factor. Hand back this single-use ticket
+    /// and wait for `POST /api/v1/auth/mfa/login`.
+    MfaRequired(String),
+}
+
+/// Apply the gates that stand between a verified primary credential and a
+/// session: email verification first, then MFA.
+///
+/// Every login path routes through here so the password path and the public-key
+/// path cannot drift apart. `/api/v1/auth/verify` used to skip both, which made
+/// a planted Ed25519 key a way around an account's TOTP requirement and around
+/// the server's `require_email_verification` setting.
+///
+/// The MFA read fails **closed**. `Err` is not "no second factor": it is a
+/// pool-acquire timeout, a dropped backend connection, or an undecodable row,
+/// and none of those may hand out a session on the primary credential alone.
+async fn apply_login_gates(
+    state: &AppState,
+    user_id: i64,
+    email_verified: bool,
+) -> Result<LoginGate, ApiError> {
+    if state.config.require_email_verification && !email_verified {
+        return Err(ApiError::BadRequest(
+            "Email verification required before logging in".into(),
+        ));
+    }
+
+    let mfa_config = paracord_db::mfa::get_mfa_config(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if mfa_config.is_some_and(|config| config.enabled) {
+        let ticket = Uuid::new_v4().to_string();
+        state.mfa_tickets.insert(ticket.clone(), user_id).await;
+        return Ok(LoginGate::MfaRequired(ticket));
+    }
+
+    Ok(LoginGate::Proceed)
+}
+
+/// The response every login path returns while a second factor is outstanding:
+/// no token, a single-use ticket, and cleared session cookies so a stale
+/// pre-existing session cannot pass for the completed login.
+fn mfa_required_response(
+    state: &AppState,
+    ticket: &str,
+) -> Result<
+    (
+        AppendHeaders<[(header::HeaderName, HeaderValue); 3]>,
+        Json<AuthResponse>,
+    ),
+    ApiError,
+> {
+    let secure = should_use_secure_cookie(state);
+    Ok((
+        AppendHeaders([
+            (
+                header::SET_COOKIE,
+                header_value(&build_access_cookie_clear(secure))?,
+            ),
+            (
+                header::SET_COOKIE,
+                header_value(&build_refresh_cookie_clear(secure))?,
+            ),
+            (
+                header::SET_COOKIE,
+                header_value(&build_csrf_cookie_clear(secure))?,
+            ),
+        ]),
+        Json(AuthResponse {
+            token: String::new(),
+            user: json!({
+                "mfa_required": true,
+                "mfa_ticket": ticket,
+            }),
+            refresh_token: None,
+        }),
+    ))
+}
+
+/// Re-authenticate the caller with their account password, plus a second factor
+/// when the account has one, before a credential-level change.
+///
+/// A bearer session is not authority enough to install or remove an Ed25519 login
+/// key. The key authenticates the account on its own through
+/// `POST /api/v1/auth/verify` and survives session revocation, so a single stolen
+/// session must not be able to plant one — nor to quietly overwrite the key the
+/// account already trusts.
+///
+/// An account with no usable password has nothing to re-authenticate against and
+/// is refused, matching `change_password` and `change_email`.
+async fn reauthenticate_for_credential_change(
+    state: &AppState,
+    user_id: i64,
+    password: &str,
+    mfa_code: Option<&str>,
+) -> Result<(), ApiError> {
+    let user = paracord_db::users::get_user_auth_by_id(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
+        .ok_or(ApiError::NotFound)?;
+    if user.password_hash.trim().is_empty() {
+        return Err(ApiError::Forbidden);
+    }
+    if !paracord_core::auth::verify_password(password, &user.password_hash).unwrap_or(false) {
+        return Err(ApiError::Unauthorized);
+    }
+
+    // Fails closed for the same reason `apply_login_gates` does.
+    let mfa_config = paracord_db::mfa::get_mfa_config(&state.db, user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    let Some(mfa_config) = mfa_config.filter(|config| config.enabled) else {
+        return Ok(());
+    };
+
+    let code = mfa_code.map(str::trim).unwrap_or_default();
+    if code.is_empty() {
+        return Err(ApiError::BadRequest(
+            "MFA code required for this change".into(),
+        ));
+    }
+
+    let totp_secret = decrypt_totp_secret(state, &mfa_config.totp_secret)?;
+    if verify_totp_code(user_id, &totp_secret, code, &user.email)? {
+        return Ok(());
+    }
+
+    let code_hash = sha256_hex(&normalize_backup_code(code));
+    let consumed =
+        paracord_db::mfa::consume_backup_code(&state.db, user_id, &code_hash, Utc::now())
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+    if consumed {
+        Ok(())
+    } else {
+        Err(ApiError::Unauthorized)
+    }
+}
+
 /// Result: (access_token, access_cookie, refresh_cookie, csrf_cookie, session_id, raw_new_refresh_token)
 async fn rotate_auth_session(
     state: &AppState,
@@ -1917,30 +2061,14 @@ pub async fn login(
         return Err(ApiError::Unauthorized);
     }
 
-    if state.config.require_email_verification && !user.email_verified {
-        // Correct credentials should clear auth-guard counters even when login
-        // is blocked pending verification.
-        auth_guard_record_success(
-            &state,
-            &headers,
-            Some(peer_ip.as_str()),
-            Some(&normalized_identifier),
-        )
-        .await;
-        return Err(ApiError::BadRequest(
-            "Email verification required before logging in".into(),
-        ));
-    }
-
-    // Check if user has MFA enabled — require TOTP before issuing tokens
-    if let Ok(Some(mfa_config)) = paracord_db::mfa::get_mfa_config(&state.db, user.id).await {
-        if mfa_config.enabled {
-            let ticket = Uuid::new_v4().to_string();
-            state.mfa_tickets.insert(ticket.clone(), user.id).await;
-            let secure = should_use_secure_cookie(&state);
-            let clear_access_cookie = build_access_cookie_clear(secure);
-            let clear_refresh_cookie = build_refresh_cookie_clear(secure);
-            let clear_csrf_cookie = build_csrf_cookie_clear(secure);
+    // Email verification and MFA are applied by the shared gate so this path and
+    // the public-key path (`verify`) enforce exactly the same rules. The gate
+    // fails closed on a database error rather than treating it as "no MFA".
+    match apply_login_gates(&state, user.id, user.email_verified).await {
+        Ok(LoginGate::Proceed) => {}
+        Ok(LoginGate::MfaRequired(ticket)) => {
+            // Correct credentials should clear auth-guard counters even though
+            // the login stops here pending the second factor.
             auth_guard_record_success(
                 &state,
                 &headers,
@@ -1948,21 +2076,19 @@ pub async fn login(
                 Some(&normalized_identifier),
             )
             .await;
-            return Ok((
-                AppendHeaders([
-                    (header::SET_COOKIE, header_value(&clear_access_cookie)?),
-                    (header::SET_COOKIE, header_value(&clear_refresh_cookie)?),
-                    (header::SET_COOKIE, header_value(&clear_csrf_cookie)?),
-                ]),
-                Json(AuthResponse {
-                    token: String::new(),
-                    user: json!({
-                        "mfa_required": true,
-                        "mfa_ticket": ticket,
-                    }),
-                    refresh_token: None,
-                }),
-            ));
+            return mfa_required_response(&state, &ticket);
+        }
+        Err(err) => {
+            // Ditto when login is blocked pending email verification, or when
+            // the MFA read failed and this path refused to fall through.
+            auth_guard_record_success(
+                &state,
+                &headers,
+                Some(peer_ip.as_str()),
+                Some(&normalized_identifier),
+            )
+            .await;
+            return Err(err);
         }
     }
 
@@ -2212,10 +2338,29 @@ pub async fn revoke_session(
 
 #[derive(Deserialize)]
 pub struct AttachPublicKeyRequest {
+    /// Set to `true` to REMOVE the account's attached key instead of installing
+    /// one. The challenge fields are then unused — there is no new key to prove
+    /// ownership of — but the re-authentication below still applies.
+    #[serde(default)]
+    pub detach: bool,
+    #[serde(default)]
     pub public_key: String,
+    #[serde(default)]
     pub nonce: String,
+    #[serde(default)]
     pub timestamp: i64,
+    #[serde(default)]
     pub signature: String,
+    /// Current account password. Required: this endpoint installs (or removes) a
+    /// credential that authenticates the account on its own forever through
+    /// `POST /api/v1/auth/verify`, so a bearer session is not sufficient
+    /// authority. Signing the challenge only proves the caller holds the NEW
+    /// key, which an attacker planting one trivially does.
+    #[serde(default)]
+    pub password: String,
+    /// Current TOTP or backup code. Required when the account has MFA enabled.
+    #[serde(default)]
+    pub mfa_code: Option<String>,
 }
 
 pub async fn attach_public_key(
@@ -2224,8 +2369,70 @@ pub async fn attach_public_key(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<AttachPublicKeyRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<Response, ApiError> {
     let peer_ip = addr.ip().to_string();
+
+    // Re-authenticate before touching the key, in both directions. Attaching
+    // installs a permanent standalone login credential; detaching removes one.
+    // Neither may rest on a bearer session alone, and this is also what stops an
+    // attach from silently overwriting the key the account already trusts.
+    reauthenticate_for_credential_change(
+        &state,
+        auth.user_id,
+        &body.password,
+        body.mfa_code.as_deref(),
+    )
+    .await?;
+
+    if body.detach {
+        let removed = paracord_db::users::clear_user_public_key(&state.db, auth.user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+        // Trust material changed: drop every session, this one included. Any
+        // session minted through the key goes with it.
+        let _ = paracord_db::sessions::revoke_all_user_sessions_except(
+            &state.db,
+            auth.user_id,
+            None,
+            "public_key_detached",
+            Utc::now(),
+        )
+        .await;
+
+        security::log_security_event(
+            &state,
+            "auth.public_key.detach",
+            Some(auth.user_id),
+            Some(auth.user_id),
+            auth.session_id.as_deref(),
+            Some(&headers),
+            Some(peer_ip.as_str()),
+            Some(json!({ "removed": removed, "sessions_revoked": true })),
+        )
+        .await;
+
+        let secure = should_use_secure_cookie(&state);
+        return Ok((
+            StatusCode::NO_CONTENT,
+            AppendHeaders([
+                (
+                    header::SET_COOKIE,
+                    header_value(&build_access_cookie_clear(secure))?,
+                ),
+                (
+                    header::SET_COOKIE,
+                    header_value(&build_refresh_cookie_clear(secure))?,
+                ),
+                (
+                    header::SET_COOKIE,
+                    header_value(&build_csrf_cookie_clear(secure))?,
+                ),
+            ]),
+        )
+            .into_response());
+    }
+
     verify_pubkey_challenge_proof(
         &state,
         &headers,
@@ -2309,7 +2516,8 @@ pub async fn attach_public_key(
                 raw_refresh,
             ),
         }),
-    ))
+    )
+        .into_response())
 }
 
 // --- Password reset flow ---
@@ -2526,6 +2734,15 @@ pub async fn reset_password(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
 
+    // A password reset is the user saying "I have been compromised". An attached
+    // Ed25519 key is a standalone login credential that outlives both the old
+    // password and every revoked session, so recovery has to evict it too —
+    // otherwise whoever planted one keeps a way back in.
+    let public_key_removed =
+        paracord_db::users::clear_user_public_key(&state.db, token_row.user_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?;
+
     // Revoke all existing sessions to force re-login with new password.
     let _ = paracord_db::sessions::revoke_all_user_sessions_except(
         &state.db,
@@ -2544,7 +2761,11 @@ pub async fn reset_password(
         None,
         Some(&headers),
         Some(peer_ip.as_str()),
-        Some(serde_json::json!({ "ip": peer_ip, "sessions_revoked": true })),
+        Some(serde_json::json!({
+            "ip": peer_ip,
+            "sessions_revoked": true,
+            "public_key_removed": public_key_removed,
+        })),
     )
     .await;
 
@@ -3370,7 +3591,45 @@ pub async fn verify(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.to_string())))?
     {
-        Some(user) => user,
+        Some(user) => {
+            // A key is a login credential, not a bypass. An existing account
+            // reached through one must clear exactly the gates the password path
+            // applies — its second factor, and the server's email-verification
+            // requirement — or MFA would be enforced on `/auth/login` and
+            // skipped here.
+            //
+            // The auto-registration branch below is deliberately not gated: the
+            // account is created in this very request with a `<key>@pubkey`
+            // placeholder address that can never be verified, so gating it would
+            // lock every key-registered account out permanently. That matches
+            // `register`, which also issues a session before verification.
+            match apply_login_gates(&state, user.id, user.email_verified).await {
+                Ok(LoginGate::Proceed) => {}
+                Ok(LoginGate::MfaRequired(ticket)) => {
+                    // A valid signature is a correct credential, so clear the
+                    // auth-guard counters even though login stops here.
+                    auth_guard_record_success(
+                        &state,
+                        &headers,
+                        Some(peer_ip.as_str()),
+                        Some(&body.public_key),
+                    )
+                    .await;
+                    return mfa_required_response(&state, &ticket);
+                }
+                Err(err) => {
+                    auth_guard_record_success(
+                        &state,
+                        &headers,
+                        Some(peer_ip.as_str()),
+                        Some(&body.public_key),
+                    )
+                    .await;
+                    return Err(err);
+                }
+            }
+            user
+        }
         None => {
             if !state.runtime.read().await.registration_enabled {
                 auth_guard_record_failure(

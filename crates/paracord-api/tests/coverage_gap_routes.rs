@@ -2428,7 +2428,13 @@ async fn guild_template_apply_rejects_malicious_stored_data_without_partial_guil
 async fn moderation_templates_can_be_created_applied_and_deleted() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
     let guild_id = create_guild(&ctx, "Moderation Template Guild").await?;
+    let guild_id_i64 = guild_id.parse::<i64>()?;
     let target_user_id = create_external_user(&ctx, "template_target").await?;
+    // `apply_template` requires the target to be a member of the acting guild
+    // (see `moderation_templates_apply_timed_mute`, which already joins its
+    // target). Without the join the WARN branch changes no state and so used to
+    // slip past every membership check in `paracord_core::admin`.
+    paracord_db::members::add_member(&ctx.db, target_user_id, guild_id_i64).await?;
 
     let (status, payload) = ctx
         .request_json(

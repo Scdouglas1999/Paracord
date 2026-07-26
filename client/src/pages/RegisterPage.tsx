@@ -73,7 +73,8 @@ export function RegisterPage() {
         const account = useAccountStore.getState();
         if (account.isUnlocked && account.publicKey) {
           try {
-            await authApi.attachPublicKey(account.publicKey);
+            // Password required — see authApi.attachPublicKey.
+            await authApi.attachPublicKey(account.publicKey, password);
           } catch {
             // Non-fatal
           }

@@ -732,18 +732,32 @@ async fn main() -> Result<()> {
         .with_state(state);
 
     // ── Web UI serving ───────────────────────────────────────────────────────
+    // `build_router` applies its middleware with `.layer(...)`, which only wraps
+    // the routes registered before it. The UI is attached here, afterwards, so
+    // it was landing OUTSIDE the security-header middleware: the SPA document
+    // and every static asset came back with no `X-Frame-Options`, no
+    // `frame-ancestors`, no `nosniff` and no COOP/CORP, leaving the
+    // authenticated UI frameable. The document's `<meta>` CSP still constrained
+    // `script-src`, but a meta tag cannot express `frame-ancestors`.
+    //
+    // Only the header middleware is re-applied — never CSRF or the rate
+    // limiter, which would double-count.
     let web_ui_status;
     let app = if let Some(ref dir) = web_dir {
         let index_path = dir.join("index.html");
         let spa_fallback = tower_http::services::ServeFile::new(&index_path);
         let serve_dir = tower_http::services::ServeDir::new(dir).not_found_service(spa_fallback);
         web_ui_status = format!("Serving from {:?}", dir);
-        router.fallback_service(serve_dir)
+        router.fallback_service(axum::Router::new().fallback_service(serve_dir).layer(
+            axum::middleware::from_fn(paracord_api::security_headers_middleware),
+        ))
     } else {
         #[cfg(feature = "embed-ui")]
         {
             web_ui_status = "Embedded".to_string();
-            router.merge(embedded_ui::router())
+            router.merge(embedded_ui::router().layer(axum::middleware::from_fn(
+                paracord_api::security_headers_middleware,
+            )))
         }
         #[cfg(not(feature = "embed-ui"))]
         {

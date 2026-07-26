@@ -487,3 +487,73 @@ mod tests {
         assert!(validate_password(&long).is_ok());
     }
 }
+
+/// Reject the HTML-injection primitives outright.
+///
+/// The single definition for fields that never legitimately contain markup —
+/// display names, bios, custom statuses, channel/space/bot/event/template names,
+/// topics, descriptions, moderator reasons and notes.
+///
+/// **Positive validation, not a denylist.** A substring denylist of a handful of
+/// tags and handlers (`<script`, `onerror=`, `onload=`, `<iframe`) is trivially
+/// bypassed — `onmouseover=`, `<svg onload =` with a space before the `=`,
+/// `<details ontoggle=`, `<body onpageshow=` all sail straight through — and
+/// eight copies of exactly that denylist had been pasted across the route
+/// modules under this same function name, so callers could not tell which
+/// behaviour they were getting. `<` and `>` cannot open a tag, which closes the
+/// entire tag-injection class for these fields. `javascript:` stays rejected for
+/// consumers that place a value directly into an `href`/`src`.
+///
+/// The first-party React client escapes all of this already; the guarantee is
+/// for the ecosystem consumers that do not — bots, third-party clients, embeds,
+/// moderation dashboards.
+///
+/// Deliberately NOT applied to message content: `<` and `>` are ordinary
+/// characters in chat (`a < b`, code snippets), so no validator can make raw
+/// markup safe there. That surface is protected by escaping at render.
+pub fn contains_dangerous_markup(value: &str) -> bool {
+    if value.contains('<') || value.contains('>') {
+        return true;
+    }
+    value.to_ascii_lowercase().contains("javascript:")
+}
+
+#[cfg(test)]
+mod dangerous_markup_tests {
+    use super::contains_dangerous_markup;
+
+    #[test]
+    fn rejects_the_bypasses_a_denylist_misses() {
+        for payload in [
+            "<script>alert(1)</script>",
+            "<img src=x onerror=alert(1)>",
+            // Every one of these defeated the substring denylist.
+            "<img src=x onmouseover=alert(1)>",
+            "<svg onload =alert(1)>",
+            "<details open ontoggle=alert(1)>",
+            "<body onpageshow=alert(1)>",
+            "<a href=\"javascript:alert(1)\">",
+            "JaVaScRiPt:alert(1)",
+        ] {
+            assert!(
+                contains_dangerous_markup(payload),
+                "must reject {payload:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_ordinary_text() {
+        for value in [
+            "Ada Lovelace",
+            "they/them",
+            "Chief of Staff — Ops",
+            "3 > 2 is math",
+        ]
+        .iter()
+        .take(3)
+        {
+            assert!(!contains_dangerous_markup(value), "must accept {value:?}");
+        }
+    }
+}

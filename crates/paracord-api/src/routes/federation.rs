@@ -487,7 +487,12 @@ fn all_federation_guilds_allowed() -> bool {
         .unwrap_or(false)
 }
 
-fn ensure_federation_guild_allowed(guild_id: i64) -> Result<(), ApiError> {
+/// Default-deny gate on `PARACORD_FEDERATION_ALLOWED_GUILD_IDS`.
+///
+/// This governs the OUTBOUND path as well as the inbound one: a guild the
+/// operator never opted into federation must neither accept mirrored events nor
+/// emit its own (see `federation_forward_message`).
+pub(crate) fn ensure_federation_guild_allowed(guild_id: i64) -> Result<(), ApiError> {
     if all_federation_guilds_allowed() {
         return Ok(());
     }
@@ -498,8 +503,75 @@ fn ensure_federation_guild_allowed(guild_id: i64) -> Result<(), ApiError> {
     Err(ApiError::Forbidden)
 }
 
+/// True when `channel` is visible to the guild's `@everyone` baseline.
+///
+/// Federated peers have no view of local roles, channel overwrites or
+/// `required_role_ids`, so mirroring a channel that is narrower than
+/// `@everyone` hands its contents to remote members who could never read it
+/// locally. Anything that is not plainly public — a denied `VIEW_CHANNEL`
+/// overwrite on the `@everyone` role (whose id is the guild id), a non-empty
+/// `required_role_ids`, an orphaned thread, or a row we cannot read — is treated
+/// as private and never leaves this server.
+///
+/// Threads and forum posts are evaluated against their parent, matching
+/// `paracord_core::permissions`' own gate resolution: they carry no overwrites
+/// of their own, so judging them directly would leak every private channel's
+/// threads.
+pub(crate) async fn federation_channel_is_public(
+    state: &AppState,
+    channel: &paracord_db::channels::ChannelRow,
+    guild_id: i64,
+) -> bool {
+    let gate = if channel.channel_type == paracord_core::permissions::CHANNEL_TYPE_THREAD {
+        let Some(parent_id) = channel.parent_id else {
+            // Orphaned thread: no containment to evaluate, so deny.
+            return false;
+        };
+        match paracord_db::channels::get_channel(&state.db, parent_id).await {
+            Ok(Some(parent)) => parent,
+            _ => return false,
+        }
+    } else {
+        channel.clone()
+    };
+
+    if !paracord_db::channels::parse_required_role_ids(&gate.required_role_ids).is_empty() {
+        return false;
+    }
+
+    // Baseline bits carried by the `@everyone` role (role id == guild id).
+    let everyone = match paracord_db::roles::get_role(&state.db, guild_id).await {
+        Ok(Some(role)) => role,
+        _ => return false,
+    };
+    let mut perms = Permissions::from_bits_truncate(everyone.permissions);
+    if perms.contains(Permissions::ADMINISTRATOR) {
+        return true;
+    }
+
+    let overwrites =
+        match paracord_db::channel_overwrites::get_channel_overwrites(&state.db, gate.id).await {
+            Ok(rows) => rows,
+            Err(_) => return false,
+        };
+    if let Some(everyone_overwrite) = overwrites.iter().find(|o| {
+        o.target_type == paracord_core::permissions::OVERWRITE_TARGET_ROLE
+            && o.target_id == guild_id
+    }) {
+        perms &= !Permissions::from_bits_truncate(everyone_overwrite.deny_perms);
+        perms |= Permissions::from_bits_truncate(everyone_overwrite.allow_perms);
+    }
+
+    perms.contains(Permissions::VIEW_CHANNEL)
+}
+
 #[derive(Debug)]
 struct FederationTransportHeaders {
+    /// Presented `x-paracord-origin` as parsed. [`verify_transport_request`]
+    /// rewrites this to the peer's registered `server_name` before returning, so
+    /// callers always see one canonical spelling per peer — the header itself is
+    /// unsigned and matches case-insensitively (and by `domain` alias), so it is
+    /// never safe as a per-peer key.
     origin: String,
     key_id: String,
     timestamp_ms: i64,
@@ -571,7 +643,7 @@ async fn verify_transport_request(
     expected_origin: Option<&str>,
     enforce_replay_protection: bool,
 ) -> Result<FederationTransportHeaders, ApiError> {
-    let transport = parse_transport_headers(headers)?;
+    let mut transport = parse_transport_headers(headers)?;
     if !paracord_federation::is_supported_protocol_version(&transport.protocol_version) {
         return Err(ApiError::UpgradeRequired(format!(
             "Unsupported federation protocol version '{}'. Supported versions: {}",
@@ -611,7 +683,16 @@ async fn verify_transport_request(
     // Resolve the presented origin to its registered `server_name` once, and use
     // that single canonical key for BOTH the trust lookup and the key lookup —
     // each of which matches `server_name` exactly.
+    //
+    // The resolved name then REPLACES the raw header on the returned struct, so
+    // every downstream per-peer key derives from it. The transport signature
+    // covers `METHOD\npath\ntimestamp\nsha256(body)\ndestination` and NOT the
+    // origin, while `canonical_peer_name` accepts any casing plus the peer's
+    // `domain` alias — so one valid signature could be presented under many
+    // spellings of the same peer. Keyed on the raw header, each spelling got its
+    // own replay-cache entry and its own rate-limit bucket, defeating both.
     let canonical_origin = canonical_peer_name(state, &transport.origin).await?;
+    transport.origin = canonical_origin.clone();
     let trusted =
         paracord_db::federation::is_federated_server_trusted(&state.db, &canonical_origin, now_ms)
             .await
@@ -646,9 +727,10 @@ async fn verify_transport_request(
         .map_err(|_| ApiError::Forbidden)?;
 
     if enforce_replay_protection {
+        // Keyed on `canonical_origin`, never the raw header (see above).
         let replay_material = format!(
             "{}\n{}\n{}\n{}\n{}",
-            transport.origin,
+            canonical_origin,
             transport.key_id,
             transport.timestamp_ms,
             path,
@@ -657,7 +739,7 @@ async fn verify_transport_request(
         let replay_key = paracord_federation::transport::sha256_hex(replay_material.as_bytes());
         let inserted_replay = paracord_db::federation::insert_transport_replay_key(
             &state.db,
-            &transport.origin,
+            &canonical_origin,
             &replay_key,
             transport.timestamp_ms,
         )
@@ -1103,7 +1185,9 @@ pub async fn ingest_event(
     let payload: FederationEventEnvelope = serde_json::from_slice(&raw_body)
         .map_err(|e| ApiError::BadRequest(format!("invalid federation envelope: {e}")))?;
 
-    // Per-peer rate limiting on event ingestion
+    // Per-peer rate limiting on event ingestion. `transport.origin` is the
+    // canonicalized `server_name` (see `verify_transport_request`); the raw
+    // header would let one peer mint a fresh bucket per spelling of its own name.
     if let Some(limit) = state.config.federation_max_events_per_peer_per_minute {
         if limit > 0 {
             let now = chrono::Utc::now().timestamp();
@@ -1149,6 +1233,81 @@ pub async fn ingest_event(
             "inserted": inserted,
         })),
     ))
+}
+
+/// Emit the generic `FEDERATION_M.MESSAGE` fallback for an inbound message that
+/// could not be stored, scoped to the guild it belongs to.
+///
+/// `local_guild_id` is REQUIRED to be concrete. `EventBus::dispatch` with a
+/// `None` guild and no user targets takes the *global* branch of `publish()` and
+/// reaches every connected session, so passing the unresolved `None` here handed
+/// a trusted peer an arbitrary-JSON broadcast to every local client — including
+/// accounts that share no guild with the sender. That is the same hole already
+/// closed for unknown event types (see the `other =>` arm in
+/// [`ingest_verified_payload`]); a message that resolves to no local guild is
+/// dropped for the same reason.
+fn dispatch_federated_message_fallback(
+    state: &AppState,
+    payload: &FederationEventEnvelope,
+    local_guild_id: Option<i64>,
+) {
+    let Some(guild_id) = local_guild_id else {
+        tracing::warn!(
+            "federation: dropping m.message event {} from {} because it resolves to no local guild (a guild-less dispatch would broadcast peer content to every session)",
+            payload.event_id,
+            payload.origin_server
+        );
+        return;
+    };
+    // The mirrored guild must still be federation-enabled: `resolve_local_guild_id`
+    // only maps ids, it does not consult the default-deny allowlist the rest of
+    // the ingest path enforces.
+    if ensure_federation_guild_allowed(guild_id).is_err() {
+        tracing::warn!(
+            "federation: dropping m.message event {} from {} because guild {} is not federation-allowed",
+            payload.event_id,
+            payload.origin_server,
+            guild_id
+        );
+        return;
+    }
+    state.event_bus.dispatch(
+        "FEDERATION_M.MESSAGE",
+        json!({
+            "event_id": payload.event_id,
+            "origin_server": payload.origin_server,
+            "sender": payload.sender,
+            "content": payload.content,
+        }),
+        Some(guild_id),
+    );
+}
+
+/// Dispatch a gateway event derived from an inbound federated envelope, but only
+/// when it is scoped to a concrete guild.
+///
+/// Same rule as [`dispatch_federated_message_fallback`]: a `None` guild with no
+/// user targets is a GLOBAL fan-out. Every federated event is materialized into
+/// a guild channel, so `guild_id()` being `None` here means the event no longer
+/// describes anything a client should be told about — drop it rather than
+/// broadcast it.
+fn dispatch_federated_guild_event(
+    state: &AppState,
+    payload: &FederationEventEnvelope,
+    guild_id: Option<i64>,
+    event_type: &str,
+    body: Value,
+) {
+    let Some(guild_id) = guild_id else {
+        tracing::warn!(
+            "federation: dropping {} for event {} from {} because it resolves to no local guild",
+            event_type,
+            payload.event_id,
+            payload.origin_server
+        );
+        return;
+    };
+    state.event_bus.dispatch(event_type, body, Some(guild_id));
 }
 
 /// Handle an inbound federated message event: store it as a local message and
@@ -1220,16 +1379,7 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
             "federation: m.message event {} missing channel_id, dispatching generic event",
             payload.event_id,
         );
-        state.event_bus.dispatch(
-            "FEDERATION_M.MESSAGE",
-            json!({
-                "event_id": payload.event_id,
-                "origin_server": payload.origin_server,
-                "sender": payload.sender,
-                "content": payload.content,
-            }),
-            mapped_local_guild_id,
-        );
+        dispatch_federated_message_fallback(state, payload, mapped_local_guild_id);
         return;
     };
 
@@ -1246,16 +1396,7 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
                         "federation: m.message event {} has no resolvable guild_id for unknown remote channel {remote_ch_id}",
                         payload.event_id,
                     );
-                    state.event_bus.dispatch(
-                        "FEDERATION_M.MESSAGE",
-                        json!({
-                            "event_id": payload.event_id,
-                            "origin_server": payload.origin_server,
-                            "sender": payload.sender,
-                            "content": payload.content,
-                        }),
-                        mapped_local_guild_id,
-                    );
+                    dispatch_federated_message_fallback(state, payload, mapped_local_guild_id);
                     return;
                 };
                 let Some(local_guild_id) =
@@ -1277,16 +1418,7 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
                         payload.event_id,
                         remote_ch_id,
                     );
-                    state.event_bus.dispatch(
-                        "FEDERATION_M.MESSAGE",
-                        json!({
-                            "event_id": payload.event_id,
-                            "origin_server": payload.origin_server,
-                            "sender": payload.sender,
-                            "content": payload.content,
-                        }),
-                        Some(local_guild_id),
-                    );
+                    dispatch_federated_message_fallback(state, payload, Some(local_guild_id));
                     return;
                 };
                 materialized
@@ -1298,16 +1430,7 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
                 "federation: m.message event {} has no resolvable guild_id for unknown remote channel {remote_ch_id}",
                 payload.event_id,
             );
-            state.event_bus.dispatch(
-                "FEDERATION_M.MESSAGE",
-                json!({
-                    "event_id": payload.event_id,
-                    "origin_server": payload.origin_server,
-                    "sender": payload.sender,
-                    "content": payload.content,
-                }),
-                mapped_local_guild_id,
-            );
+            dispatch_federated_message_fallback(state, payload, mapped_local_guild_id);
             return;
         };
         let Some(local_guild_id) = ensure_federated_space_allowed(state, payload, remote_gid).await
@@ -1327,16 +1450,7 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
                 payload.event_id,
                 remote_ch_id,
             );
-            state.event_bus.dispatch(
-                "FEDERATION_M.MESSAGE",
-                json!({
-                    "event_id": payload.event_id,
-                    "origin_server": payload.origin_server,
-                    "sender": payload.sender,
-                    "content": payload.content,
-                }),
-                Some(local_guild_id),
-            );
+            dispatch_federated_message_fallback(state, payload, Some(local_guild_id));
             return;
         };
         materialized
@@ -1446,17 +1560,10 @@ async fn dispatch_federated_message(state: &AppState, payload: &FederationEventE
                 "federation: failed to store inbound message from event {}: {e}",
                 payload.event_id,
             );
-            // Fall back to generic event dispatch
-            state.event_bus.dispatch(
-                "FEDERATION_M.MESSAGE",
-                json!({
-                        "event_id": payload.event_id,
-                    "origin_server": payload.origin_server,
-                    "sender": payload.sender,
-                    "content": payload.content,
-                }),
-                channel.guild_id(),
-            );
+            // Fall back to generic event dispatch, scoped to the channel's guild.
+            // `guild_id()` is `None` for a non-guild channel, which would make
+            // this a global broadcast of peer-supplied content.
+            dispatch_federated_message_fallback(state, payload, channel.guild_id());
         }
     }
 }
@@ -1908,9 +2015,7 @@ async fn dispatch_federated_message_edit(state: &AppState, payload: &FederationE
             "origin_server": payload.origin_server,
         }
     });
-    state
-        .event_bus
-        .dispatch("MESSAGE_UPDATE", msg_json, guild_id);
+    dispatch_federated_guild_event(state, payload, guild_id, "MESSAGE_UPDATE", msg_json);
 }
 
 async fn dispatch_federated_message_delete(state: &AppState, payload: &FederationEventEnvelope) {
@@ -1965,7 +2070,10 @@ async fn dispatch_federated_message_delete(state: &AppState, payload: &Federatio
         return;
     }
 
-    state.event_bus.dispatch(
+    dispatch_federated_guild_event(
+        state,
+        payload,
+        guild_id,
         "MESSAGE_DELETE",
         json!({
             "id": local_message_id.to_string(),
@@ -1975,7 +2083,6 @@ async fn dispatch_federated_message_delete(state: &AppState, payload: &Federatio
                 "origin_server": payload.origin_server,
             }
         }),
-        guild_id,
     );
 }
 
@@ -2022,7 +2129,10 @@ async fn dispatch_federated_reaction_add(state: &AppState, payload: &FederationE
         .ok()
         .flatten()
         .and_then(|c| c.guild_id());
-    state.event_bus.dispatch(
+    dispatch_federated_guild_event(
+        state,
+        payload,
+        guild_id,
         "MESSAGE_REACTION_ADD",
         json!({
             "user_id": local_user_id.to_string(),
@@ -2030,7 +2140,6 @@ async fn dispatch_federated_reaction_add(state: &AppState, payload: &FederationE
             "message_id": local_message_id.to_string(),
             "emoji": emoji,
         }),
-        guild_id,
     );
 }
 
@@ -2077,7 +2186,10 @@ async fn dispatch_federated_reaction_remove(state: &AppState, payload: &Federati
         .ok()
         .flatten()
         .and_then(|c| c.guild_id());
-    state.event_bus.dispatch(
+    dispatch_federated_guild_event(
+        state,
+        payload,
+        guild_id,
         "MESSAGE_REACTION_REMOVE",
         json!({
             "user_id": local_user_id.to_string(),
@@ -2085,7 +2197,6 @@ async fn dispatch_federated_reaction_remove(state: &AppState, payload: &Federati
             "message_id": local_message_id.to_string(),
             "emoji": emoji,
         }),
-        guild_id,
     );
 }
 
@@ -3769,19 +3880,21 @@ fn federation_file_hmac(key: &str, message: &str) -> Result<Vec<u8>, ApiError> {
 /// Mint a short-lived (300s) HMAC-authenticated capability token for a single
 /// federated attachment download.
 ///
-/// This is deliberately an **unbound bearer capability**: anyone who presents a
-/// valid, unexpired token can download the attachment. The token is *not*
-/// scoped to the requesting peer, because the download endpoint
-/// ([`file_download`]) is a plain, unsigned `GET` that has no verifiable caller
-/// identity to bind against. Mitigation is the short lifetime plus treating the
-/// download URL as a secret: never log, cache, or otherwise expose it.
-/// Mint a download token BOUND to the peer that requested it.
+/// The token records the peer it was minted for as an `audience` component, and
+/// the HMAC covers it, so the audience cannot be *rewritten* by a token holder.
 ///
-/// The token travels in a query string and is a bearer credential, so without
-/// the `audience` component any party that observed the URL (proxy log,
-/// referrer, another peer the URL was forwarded to) could fetch the attachment.
-/// `file_download` requires the presenting peer to identify itself and match
-/// this audience.
+/// It does NOT, however, make the token non-transferable. [`file_download`] is a
+/// plain unsigned `GET`; it matches the audience against the
+/// `x-paracord-origin` request header, which anyone can set — and the audience
+/// is right there in cleartext inside the token. Anyone who observes the URL
+/// (proxy log, referrer, a peer the URL was forwarded to) can therefore replay
+/// it by echoing that value back, so long as the named peer is still trusted.
+///
+/// Treat this as an **unbound bearer capability**: the real mitigations are the
+/// 300s lifetime, the trusted-peer check at download time, and keeping the URL
+/// secret — never log, cache, or otherwise expose it. Making the binding real
+/// requires a verifiable caller identity on the download request (a signed
+/// transport, as every other federation endpoint uses).
 fn mint_federation_file_token(
     jwt_secret: &str,
     attachment_id: i64,
@@ -3965,7 +4078,10 @@ pub async fn file_download(
 ) -> Result<impl axum::response::IntoResponse, ApiError> {
     // This endpoint used to serve any holder of the query-string token with
     // federation switched off entirely. Gate it on the service being enabled and
-    // on the presenting peer matching the audience the token was minted for.
+    // on the presented origin matching the audience the token was minted for.
+    // NOTE: the origin header is unsigned and the audience is cleartext inside
+    // the token, so this narrows *who the token was issued to*, not *who is
+    // presenting it* — see [`mint_federation_file_token`].
     let service = federation_service_from_state(&state);
     if !service.is_enabled() {
         return Err(ApiError::NotFound);
@@ -3983,8 +4099,8 @@ pub async fn file_download(
         attachment_id,
         presented_origin,
     )?;
-    // The audience match above proves the token was minted for this peer; this
-    // additionally refuses a peer that has since been blocked/quarantined or
+    // The audience match above proves the token was minted for the named peer;
+    // this additionally refuses a peer that has since been blocked/quarantined or
     // untrusted, so a live 5-minute token cannot outlive a block.
     let now_ms = chrono::Utc::now().timestamp_millis();
     if !is_peer_trusted(&state, presented_origin, now_ms).await? {

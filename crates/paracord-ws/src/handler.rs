@@ -39,6 +39,26 @@ const WS_MAX_MESSAGES_PER_MINUTE_DEFAULT: u32 = 240;
 /// needs exactly one; anything beyond this is a client that is spinning the
 /// pre-auth loop (which parses JSON twice per frame) for the full 30s timeout.
 const WS_MAX_PREAUTH_FRAMES_DEFAULT: u32 = 16;
+/// How often a live gateway connection re-checks that the login session it
+/// authenticated with is still active (not logged out, revoked or expired) and
+/// that its access token has not expired.
+///
+/// A socket authenticates exactly once, in `wait_for_identify_or_resume`; before
+/// this existed nothing revalidated it, so `POST /auth/logout`, a password
+/// change and "revoke my other sessions" all left the socket delivering events
+/// (including DMs) and accepting writes, long past the access token's own `exp`.
+/// Matches the SSE transport's `STREAM_REVALIDATE_INTERVAL` so both realtime
+/// transports drop a revoked session inside the same window.
+const WS_SESSION_REVALIDATE_MS_DEFAULT: u64 = 60_000;
+/// Consecutive revalidation *errors* (database unreachable, not a revoked
+/// session) tolerated before the socket is closed anyway. A transient blip must
+/// not disconnect every client, but a check that never succeeds must not keep
+/// unauthenticated sockets alive indefinitely either.
+const WS_MAX_REVALIDATION_FAILURES: u32 = 5;
+/// Close code sent when revalidation fails. Matches the "authentication failed"
+/// slot of the 4000-range gateway codes; the client reconnects and re-IDENTIFYs,
+/// which re-runs the full token check.
+const WS_CLOSE_AUTH_REVOKED: u16 = 4004;
 const WS_MAX_PRESENCE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
 const WS_MAX_TYPING_EVENTS_PER_MINUTE_DEFAULT: u32 = 120;
 const WS_MAX_VOICE_UPDATES_PER_MINUTE_DEFAULT: u32 = 60;
@@ -212,6 +232,7 @@ struct WsLimits {
     session_cache_max_entries: usize,
     max_disconnected_event_buffers: usize,
     max_preauth_frames: u32,
+    session_revalidate_ms: u64,
 }
 
 static WS_LIMITS: OnceLock<WsLimits> = OnceLock::new();
@@ -228,6 +249,14 @@ fn env_u32(name: &str, default: u32) -> u32 {
     std::env::var(name)
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|v| *v > 0)
         .unwrap_or(default)
 }
@@ -277,6 +306,10 @@ fn ws_limits() -> WsLimits {
         max_preauth_frames: env_u32(
             "PARACORD_WS_MAX_PREAUTH_FRAMES",
             WS_MAX_PREAUTH_FRAMES_DEFAULT,
+        ),
+        session_revalidate_ms: env_u64(
+            "PARACORD_WS_SESSION_REVALIDATE_MS",
+            WS_SESSION_REVALIDATE_MS_DEFAULT,
         ),
     })
 }
@@ -1572,6 +1605,11 @@ pub async fn wait_for_identify_or_resume(
                         if !active {
                             return None;
                         }
+                        // Carried onto the session so the live loop can enforce
+                        // the token's own lifetime; a socket must never outlive
+                        // the credential that opened it.
+                        let token_expires_at =
+                            chrono::DateTime::<chrono::Utc>::from_timestamp(claims.exp as i64, 0);
                         let op = payload.get("op").and_then(|v| v.as_u64())?;
                         if op == OP_IDENTIFY as u64 {
                             let guilds =
@@ -1583,6 +1621,7 @@ pub async fn wait_for_identify_or_resume(
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
                             let mut session = Session::new(claims.sub, guild_ids, guild_owner_ids);
                             session.auth_session_id = session_id.to_string();
+                            session.token_expires_at = token_expires_at;
                             // Keep the rows we already paid for; READY reads
                             // them instead of re-fetching each guild.
                             session.ready_guilds = ready_guilds_from_rows(&guilds);
@@ -1637,6 +1676,7 @@ pub async fn wait_for_identify_or_resume(
                                         reattach_event_buffer(&requested_session_id);
                                         resumed.session_id = requested_session_id;
                                         resumed.auth_session_id = session_id.to_string();
+                                        resumed.token_expires_at = token_expires_at;
                                         resumed.sequence = cached.sequence.max(requested_seq);
                                         return Some((resumed, true, requested_seq));
                                     } else {
@@ -1664,6 +1704,7 @@ pub async fn wait_for_identify_or_resume(
                                 guilds.iter().map(|g| (g.id, g.owner_id)).collect();
                             let mut session = Session::new(claims.sub, guild_ids, guild_owner_ids);
                             session.auth_session_id = session_id.to_string();
+                            session.token_expires_at = token_expires_at;
                             session.ready_guilds = ready_guilds_from_rows(&guilds);
                             return Some((session, false, 0));
                         }
@@ -1675,6 +1716,60 @@ pub async fn wait_for_identify_or_resume(
     None
 }
 
+/// Outcome of a periodic credential re-check on a live gateway connection.
+enum CredentialCheck {
+    /// The login session is still live and the access token has not expired.
+    Active,
+    /// The connection must be closed; the payload is the log/close reason.
+    Terminate(&'static str),
+    /// The check itself could not be completed (database error).
+    Failed,
+}
+
+/// Re-verify the credential a live connection authenticated with.
+///
+/// Mirrors the SSE transport's `stream_should_terminate`: the login session must
+/// still exist, belong to this user, and be neither revoked nor expired. The
+/// access token's own `exp` is enforced as well, so a socket can never outlive
+/// the token that opened it. The session's `current_jti` is deliberately *not*
+/// compared — a token refresh rotates it, and a client refreshing its access
+/// token must not have its gateway connection torn down for it.
+async fn revalidate_session_credential(state: &AppState, session: &Session) -> CredentialCheck {
+    let now = chrono::Utc::now();
+    if let Some(expires_at) = session.token_expires_at {
+        if now >= expires_at {
+            return CredentialCheck::Terminate("access token expired");
+        }
+    }
+    // Sessions built in-crate without a credential (tests) have nothing to
+    // re-check against; every production session carries an `auth_session_id`
+    // because IDENTIFY/RESUME refuses a token without `sid`/`jti`.
+    if session.auth_session_id.is_empty() {
+        return CredentialCheck::Active;
+    }
+    match paracord_db::sessions::get_session_by_id(&state.db, &session.auth_session_id).await {
+        Ok(Some(row)) => {
+            if row.user_id != session.user_id {
+                CredentialCheck::Terminate("login session belongs to another user")
+            } else if row.revoked_at.is_some() {
+                CredentialCheck::Terminate("login session revoked")
+            } else if row.expires_at <= now {
+                CredentialCheck::Terminate("login session expired")
+            } else {
+                CredentialCheck::Active
+            }
+        }
+        Ok(None) => CredentialCheck::Terminate("login session no longer exists"),
+        Err(err) => {
+            tracing::warn!(
+                auth_session_id = %session.auth_session_id,
+                "gateway: login session revalidation failed: {err}"
+            );
+            CredentialCheck::Failed
+        }
+    }
+}
+
 #[doc(hidden)] // internal seam exposed for the crate's integration tests
 pub async fn run_session(
     mut sender: impl SinkExt<Message> + Unpin,
@@ -1683,17 +1778,49 @@ pub async fn run_session(
     state: AppState,
     compressor: &WsCompressor,
 ) -> Session {
-    let mut event_rx = state.event_bus.register_session(
+    let Some(mut event_rx) = state.event_bus.register_session(
         session.session_id.clone(),
         session.user_id,
         &session.guild_ids,
-    );
+    ) else {
+        // The id is already registered to a different user. Refuse rather than
+        // take it over, and leave the incumbent registration untouched (so no
+        // unregister/cache write on the way out).
+        tracing::warn!(
+            user_id = session.user_id,
+            session_id = %session.session_id,
+            "gateway: refusing session id already registered to another user"
+        );
+        let _ = send_ws_close_logged(
+            &mut sender,
+            WS_CLOSE_AUTH_REVOKED,
+            "Session id is not available",
+            Some(session.user_id),
+            Some(session.session_id.as_str()),
+            "session_id_conflict_close",
+        )
+        .await;
+        return session;
+    };
     let heartbeat_timeout = Duration::from_millis(HEARTBEAT_TIMEOUT_MS);
     let rate_limits = user_rate_limits();
     let mut ws_ping_interval = tokio::time::interval(Duration::from_secs(20));
     ws_ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let heartbeat_sleep = tokio::time::sleep(heartbeat_timeout);
     tokio::pin!(heartbeat_sleep);
+
+    // Periodically re-check the credential this socket authenticated with. The
+    // heartbeat timeout is the only other thing that can end an idle connection,
+    // and the client resets that with every op 1, so without this a revoked
+    // session kept its gateway forever.
+    let revalidate_period = Duration::from_millis(ws_limits().session_revalidate_ms);
+    let mut revalidate_interval =
+        tokio::time::interval_at(Instant::now() + revalidate_period, revalidate_period);
+    revalidate_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut revalidation_failures: u32 = 0;
+    // Set when the loop ends because the credential is no longer valid, so the
+    // teardown below can make sure the client cannot RESUME back into it.
+    let mut credential_terminated = false;
 
     let (disconnect_reason, heartbeat_timed_out) = loop {
         tokio::select! {
@@ -1946,6 +2073,47 @@ pub async fn run_session(
                     break ("websocket ping send error".to_string(), false);
                 }
             }
+            _ = revalidate_interval.tick() => {
+                match revalidate_session_credential(&state, &session).await {
+                    CredentialCheck::Active => {
+                        revalidation_failures = 0;
+                    }
+                    CredentialCheck::Terminate(reason) => {
+                        credential_terminated = true;
+                        let _ = send_ws_close_logged(
+                            &mut sender,
+                            WS_CLOSE_AUTH_REVOKED,
+                            "Session is no longer authenticated",
+                            Some(session.user_id),
+                            Some(session.session_id.as_str()),
+                            "credential_revoked_close",
+                        )
+                        .await;
+                        break (format!("credential no longer valid: {reason}"), false);
+                    }
+                    CredentialCheck::Failed => {
+                        revalidation_failures = revalidation_failures.saturating_add(1);
+                        if revalidation_failures >= WS_MAX_REVALIDATION_FAILURES {
+                            credential_terminated = true;
+                            let _ = send_ws_close_logged(
+                                &mut sender,
+                                WS_CLOSE_AUTH_REVOKED,
+                                "Session could not be revalidated",
+                                Some(session.user_id),
+                                Some(session.session_id.as_str()),
+                                "credential_recheck_failed_close",
+                            )
+                            .await;
+                            break (
+                                format!(
+                                    "credential revalidation failed {revalidation_failures} times in a row"
+                                ),
+                                false,
+                            );
+                        }
+                    }
+                }
+            }
         }
     };
     if heartbeat_timed_out {
@@ -1962,6 +2130,16 @@ pub async fn run_session(
         );
     }
     state.event_bus.unregister_session(&session.session_id);
+    if credential_terminated {
+        // A socket closed because its credential is gone must not be able to
+        // RESUME straight back into the same state. Dropping the cached session
+        // and its replay buffer forces the client through a fresh IDENTIFY,
+        // which re-runs the full token/session check before anything is
+        // delivered.
+        session_cache().invalidate(&session.session_id).await;
+        event_buffers().remove(&session.session_id);
+        return session;
+    }
     session_cache()
         .insert(
             session.session_id.clone(),
