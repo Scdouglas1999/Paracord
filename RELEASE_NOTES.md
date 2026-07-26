@@ -21,7 +21,7 @@ Full compare: **[v1.0.0...v2.0.0](https://github.com/Scdouglas1999/Paracord/comp
 | **Security** | Hardening across authentication, authorization, media encryption, federation and the desktop client |
 | **Resilience** | Every request path, upload, media buffer and federation queue now carries an explicit bound |
 
-> Verified at release: **61 Rust suites / 1,238 tests** green on SQLite; the API suite (**349**) green against a real `postgres:16`; **169 client files / 1,204 tests** green; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean; `tsc --noEmit` clean; both end-to-end suites passing. See [Verification](#verification).
+> Verified at release: **62 Rust suites / 1,241 tests** green on SQLite; the API suite (**349**) green against a real `postgres:16`; **169 client files / 1,205 tests** green; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean; `tsc --noEmit` clean; both end-to-end suites passing. See [Verification](#verification).
 
 ---
 
@@ -164,6 +164,20 @@ The gateway's `READY` payload carries the *public* projection of your account �
 
 Since `flags` is what gates the control plane, a genuine server administrator would load `/app/admin` and be told **"Access denied."** Fixed on both sides: the client merges the `READY` projection into the authoritative profile instead of clobbering it, and the server includes the connecting user's own `flags` in `READY` so a cold start is correct too.
 
+### Everyone appeared offline — high severity
+
+Presence was tracked only by the WebSocket gateway, but the client connects over the realtime stream transport. Nothing on that path ever recorded a connected user as online: the set of online users was read by discovery and federation and written by nobody. A person actively using the app was therefore absent from it for their entire session, and everybody else saw them as offline. The client could not compensate either — the code that announces an initial presence only ran in the desktop build, so browser clients said nothing at all.
+
+Observed before the fix: three people signed in and using the app never appeared online to a fourth, not after thirty seconds and not after a full reload. The only accounts showing as online were leftovers from sessions that no longer existed.
+
+Attaching the realtime stream is what "this person is here" means, so it now carries the same transition the gateway always applied. Connecting marks you online and notifies the people entitled to see it — those sharing a space with you, and your friends. Disconnecting schedules the offline transition through the existing grace period, so a client that is merely reconnecting does not flicker offline for everyone watching. `READY` now also carries the presences of members who are already online; it previously carried none, which is why reloading did not help.
+
+Two details worth noting: the transition is not echoed back to its own subject, since that event would occupy a slot in that client's own resume window ahead of the events it reconnected for, and it is not re-announced when the user is already online, so a second tab or a flapping connection does not fan redundant events out to every space they belong to.
+
+### Channel name overlapping its own topic
+
+Opening a context panel narrowed the channel header, and the room name painted out over the topic beside it instead of shortening with an ellipsis. A button sizes itself to its content rather than filling its container, so the name kept its full width while the space available to it shrank. Measured at 1440×900 with the members panel open, it overflowed its box by 75 pixels. The name now shrinks with its container and the topic yields first.
+
 ### Encryption claim on the sign-in screens
 
 The login and register screens described end-to-end encryption in broader terms than the product delivers. The copy now states the actual guarantee: your data lives on a server you or a friend runs, direct messages can be end-to-end encrypted, and calls always are. `docs/known-limitations.md` remains the detailed reference.
@@ -216,9 +230,9 @@ If you are moving an existing SQLite deployment across, `paracord-server migrate
 - `cargo test --workspace` — green.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
 - `cargo fmt --all -- --check` — clean.
-- **61 Rust suites / 1,238 tests** green on SQLite.
+- **62 Rust suites / 1,241 tests** green on SQLite.
 - Against a real `postgres:16`: the `paracord-api` integration suite (**349**) green. Both engines pass the same tests, and CI enforces it.
-- Client: **169 files / 1,204 unit tests** green; `tsc --noEmit` clean; production build clean.
+- Client: **169 files / 1,205 unit tests** green; `tsc --noEmit` clean; production build clean.
 - The SQLite upgrade-from-tag smoke replays a populated v0.9.0 database through every migration.
 - Both end-to-end suites green: the mocked smoke, and the real-server smoke against a freshly built release binary serving the embedded UI.
 - Security fixes were validated by reverting each one and confirming its regression test detects the regression.
