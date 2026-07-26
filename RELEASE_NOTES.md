@@ -2,7 +2,7 @@
 
 **Paracord 2.0.0** is about the two things v1.0.0 left to the operator: keeping a community civil, and knowing whether the server behind it is actually healthy. v1 shipped a capable engine — native QUIC media, dual-database support, scheduled backups, federation — but gave the person running it four counters and a config file. This release turns that capability into something you can see and act on, and adds the content-moderation layer a public community needs.
 
-It is also, honestly, a correctness release. A ten-agent security and code-quality audit ran against the whole codebase and every confirmed finding was fixed: thread permissions that let a denied member read private threads, a DM session-hijacking path, a heap overflow in the media decoder, thread locks that did nothing, and more. Separately, PostgreSQL turned out to be barely tested — the entire integration suite ran on SQLite, which cannot catch a PostgreSQL-only defect by construction. That suite now runs against a real PostgreSQL server in CI, and the six failures it found the first time are fixed.
+It is also, honestly, a correctness release. Two full adversarial security reviews ran against the whole codebase — a ten-agent audit, then a seven-lens follow-up that found materially more — and every confirmed finding was fixed: thread permissions that let a denied member read private threads, a DM session-hijacking path, a heap overflow in the media decoder, thread locks that did nothing, and more. Separately, PostgreSQL turned out to be barely tested — the entire integration suite ran on SQLite, which cannot catch a PostgreSQL-only defect by construction. That suite now runs against a real PostgreSQL server in CI, and the six failures it found the first time are fixed.
 
 Where this document previously said PostgreSQL was unusable and that two failing video tests were harmless, it was wrong on both counts. Both are corrected below, and both are fixed.
 
@@ -20,12 +20,13 @@ Full compare: **[v1.0.0...v2.0.0](https://github.com/Scdouglas1999/Paracord/comp
 | **Onboarding** | A **Get set up** checklist on Home, derived from live state — no more empty first screen |
 | **Notifications** | **Per-space and per-channel** notification levels and mutes, stored server-side so they follow you between devices |
 | **PostgreSQL** | PostgreSQL deployments **work** — and the whole integration suite now runs against a real server in CI, not four smoke tests |
-| **Security** | A ten-agent audit and a full remediation pass: thread authorization, DM session hijacking, identity pinning, a heap overflow in the media path, and more |
+| **Security** | Two full adversarial reviews and their remediation: media-key recovery, an account backdoor that survived password reset, revocation that did not close live connections, private threads exfiltrated by re-parenting, and more |
+| **Availability** | Every resource one user could exhaust is now bounded — request shapes, uploads, storage, the media relay, and pre-auth QUIC state |
 | **Reliability** | Fixed a refresh race that logged people out **at random on page load** |
 | **Access** | Fixed server admins being **locked out of the admin panel** as soon as the gateway connected |
 | **Honesty** | Corrected a false end-to-end-encryption claim shown on the login and register screens |
 
-> Verified at release: **46 Rust suites / 1,125 tests** green on SQLite; the API suite (**283**) and `paracord-db` (**178**) green against a real `postgres:16`; **165 client files / 1,187 tests** green; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean; `tsc --noEmit` clean; both end-to-end suites passing. See [Verification](#verification).
+> Verified at release: **61 Rust suites / 1,238 tests** green on SQLite; the API suite (**349**) green against a real `postgres:16`; **169 client files / 1,204 tests** green; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean; `tsc --noEmit` clean; both end-to-end suites passing. See [Verification](#verification).
 
 ---
 
@@ -132,6 +133,30 @@ All native video decode was dead on any Linux machine whose NVIDIA kernel module
 
 Construction cannot detect this, so the capability check now finishes on the first packet: a hardware backend that fails before it has ever produced a frame was never usable, and the decoder reopens on the software backend once, loudly. Past the first decoded frame the flag clears and later failures propagate as the real errors they are.
 
+### A second review, and what it found
+
+The audit above was followed by a seven-lens adversarial review — authentication, authorization, injection, cryptography, availability, the federation trust boundary, and secrets — run against the whole codebase with each finding required to carry a working attack rather than a suspicion. It found materially more than the first pass. Everything below is fixed, mutation-tested, and re-verified against a running server.
+
+**A media encryption key could be recovered.** The web client's media path reused an AES-GCM `(key, nonce)` pair. The publisher advanced its sequence counter once per *frame* while each frame emitted one packet per fragment at `seq + fragmentIndex`, so consecutive frames overlapped — and the rollover counter only advanced when a sequence moved strictly backwards, so an exact repeat produced a byte-identical nonce. Under a fixed per-epoch key that leaks the XOR of two plaintexts *and* the GHASH subkey, which is enough to forge authenticated frames for the rest of the epoch. The Rust encryptor refuses this case outright; the TypeScript port had dropped the guard. Both halves are fixed: callers advance by a shared span helper, and a repeat now fails the send loudly. The desktop path was never affected.
+
+**Adding a login key needed no password, and nothing ever removed it.** An attached Ed25519 key authenticates an account on its own, indefinitely — and attaching one required only a live session. It survived a password change, a password reset, and "sign out everywhere", and the owner could not see that it existed. Attaching now re-authenticates, the key is cleared by a password change *and* a reset, `GET /users/@me` reports whether one is attached, and there is a detach flow that revokes every session. Key login also skipped MFA entirely, so a second factor was enforced on the password path and ignored on the key path; both now share one gate. The MFA check itself failed *open* on a database error.
+
+**Revoking a session did not close its live connection.** The gateway checked the token once, at connect, and never again, so a logged-out attacker kept receiving messages and DMs — and kept writing — for as long as they sent heartbeats. Realtime session ids were also guessable and claimable, which could divert a victim's DMs to someone else's stream. Both closed.
+
+**Private threads could be published by moving them.** A thread's parent channel *is* its access control, and the channel-reordering route wrote `parent_id` straight from the request body with no validation. Re-pointing a private channel's thread at a public one exposed its contents. Alongside it: moderation reports were broadcast to every member of a space rather than its moderators, de-anonymising reporters to the people they reported; a channel-level `MANAGE_WEBHOOKS` deny was unenforceable; and the bot install-permission cap was bypassed on roughly two dozen guild gates, so a bot installed with no permissions exercised whatever a role gave it.
+
+**A federated peer could reach every connected client.** A signed message whose guild could not be resolved fell through to a global dispatch, delivering peer-controlled content to every session on the server regardless of membership. Separately, outbound forwarding ignored the federation allowlist completely — every message in every local space, including private channels, was transmitted to any trusted peer.
+
+**The desktop app leaked its home credential.** Attachment requests took their URL from the *active* server and their bearer token from the *home* server, so viewing a channel on another server sent that server your home token — on image render, with no click. The release workflow also exposed the update-signing key to all six of its jobs, and the web UI was served with no security headers at all, leaving the authenticated interface frameable.
+
+### Availability
+
+Separately from confidentiality, a single authenticated user could exhaust the server. Message sends accepted an unbounded, undeduplicated list of attachment ids and issued one query per entry — ninety-five thousand repeats of one id against a five-connection pool. A space icon was unbounded and re-broadcast to every connected session. Uploads were buffered entirely into memory before their size was checked. There was no request timeout anywhere, and no storage quota by default.
+
+In the media stack, caches keyed by a peer-chosen SSRC grew without limit, control-plane identifiers were bounded only by the frame size while the hot path deep-cloned the entire room, and — the only unauthenticated case — QUIC connection state was allocated before any address validation, so a spoofed source could pin memory. A page containing certain Unicode could panic the link-preview task.
+
+All of it is bounded now, and every bound ships with a test asserting that ordinary use is unaffected: a normal message, a normal inline icon, a full fifty-participant call reconnecting at once, a client heartbeating at its advertised interval.
+
 ---
 
 ## Fixes
@@ -189,17 +214,25 @@ A blocked message returns **403** with code `AUTOMOD_BLOCKED` and the operator's
 
 Notification settings take `level` (`0` all, `1` mentions, `2` nothing), `muted`, an optional `mute_duration_seconds` for a timed mute, and `suppress_everyone`. Responses include `muted_now`, which resolves a timed mute against the current time so a client never has to work out whether one has lapsed.
 
+Two behaviour changes worth knowing about if you drive the API directly:
+
+- **`POST /api/v1/auth/attach-public-key` now requires the account password** (and a second factor when MFA is enabled), because an attached key authenticates the account on its own. The same route with `{"detach": true}` removes a key and revokes every session.
+- **`avatar_hash` no longer accepts a remote URL** — an uploaded image or a `data:` URL only. Avatars render automatically for every viewer, so a remote one beaconed each viewer's address to a host the *other* user chose.
+- Several endpoints now bound their input rather than accepting any length: attachment and sticker id lists, sender-key envelope batches, space icons and settings blobs, and moderation-list applies. Forum posts, bans and events are paginated with a clamped `limit`/`offset`.
+
 ## Verification
 
 - `cargo test --workspace` — green.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
 - `cargo fmt --all -- --check` — clean.
-- **46 Rust suites / 1,125 tests** green on SQLite.
-- Against a real `postgres:16`: the `paracord-api` integration suite (**283**) and `paracord-db` (**178**) green. Both engines now pass the *same* tests, and CI enforces it.
-- Client: **165 files / 1,187 unit tests** green; `tsc --noEmit` clean; production build clean.
+- **61 Rust suites / 1,238 tests** green on SQLite.
+- Against a real `postgres:16`: the `paracord-api` integration suite (**349**) green. Both engines now pass the *same* tests, and CI enforces it.
+- Client: **169 files / 1,204 unit tests** green; `tsc --noEmit` clean; production build clean.
+- The SQLite upgrade-from-tag smoke replays a populated v0.9.0 database through every migration.
 - Both end-to-end suites green: the mocked smoke, and the real-server smoke against a freshly built release binary serving the embedded UI.
 - Fixes were **mutation-tested** rather than accepted on a green suite: each one was reverted, the exact original failure confirmed to return, and then restored.
 - The app was additionally driven as a user — registering, creating a space, sending messages, changing settings, locking threads, timing members out, and exercising AutoMod — against a running server on both SQLite and PostgreSQL. Several of the fixes in this release were found that way and by nothing else.
+- Before release the whole flow was run once more against the **release binary serving the embedded UI**: register, create a space, open a channel, post, open space settings and AutoMod, change user settings, at three viewport widths. Zero server-side errors, zero 5xx, zero panics, no horizontal overflow. The original attack payloads from both reviews were replayed against that same binary and refused.
 
 ## PostgreSQL
 

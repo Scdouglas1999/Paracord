@@ -15,17 +15,21 @@ use paracord_models::permissions::Permissions;
 /// session*. 256 KiB of base64 is roughly 192 KiB of image, comfortably more
 /// than any space icon needs and small enough that the fan-out copy is not a
 /// weapon.
-const MAX_ICON_LEN: usize = 256 * 1024;
+pub(crate) const MAX_ICON_LEN: usize = 256 * 1024;
 
 /// Bound on the two free-form JSON settings blobs, which are stored and
 /// broadcast on exactly the same path as the icon. A real `hub_settings` or
 /// `bot_settings` object is a few kilobytes; 64 KiB holds a large bot roster
 /// with room to spare.
-const MAX_SETTINGS_LEN: usize = 64 * 1024;
+pub(crate) const MAX_SETTINGS_LEN: usize = 64 * 1024;
 
 /// Reject an over-long value before it reaches the column, and therefore before
 /// it reaches the `GUILD_UPDATE` fan-out.
-fn ensure_within_len(value: Option<&str>, max: usize, field: &str) -> Result<(), CoreError> {
+pub(crate) fn ensure_within_len(
+    value: Option<&str>,
+    max: usize,
+    field: &str,
+) -> Result<(), CoreError> {
     match value {
         Some(v) if v.len() > max => Err(CoreError::BadRequest(format!(
             "{field} must be {max} bytes or fewer"

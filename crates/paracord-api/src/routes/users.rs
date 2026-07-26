@@ -521,6 +521,19 @@ pub async fn update_me(
                 "avatar_hash data URL is too large; use POST /users/@me/avatar".into(),
             ));
         }
+        // An avatar is a `data:` image or a path this server serves — never a
+        // remote URL. The column accepted any string, so a member could point
+        // their avatar at a host they control and every viewer's client would
+        // fetch it on render, handing that host each viewer's IP, user agent and
+        // viewing time with no interaction. Federated users carry
+        // `avatar_hash: null`, so nothing legitimate needs an absolute URL.
+        let trimmed = avatar.trim();
+        let is_remote = trimmed.contains("://") || trimmed.starts_with("//");
+        if is_remote && !trimmed.starts_with("data:") {
+            return Err(ApiError::BadRequest(
+                "avatar_hash must be an uploaded image or a data URL, not a remote URL".into(),
+            ));
+        }
     }
 
     let updated = paracord_core::user::update_profile(

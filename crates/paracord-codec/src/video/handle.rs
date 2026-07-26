@@ -749,10 +749,57 @@ mod tests {
         const DRM_FORMAT_NV12: u32 = 0x3231_564e;
 
         /// A live, independent fd — a `dup` of /dev/null this test owns outright.
-        fn dup_dev_null() -> OwnedFd {
-            let file = File::open("/dev/null").expect("open /dev/null");
-            // `try_clone` dups the fd, independent of `file` (dropped here).
-            file.try_clone().expect("dup fd").into()
+        /// A dup'd fd onto a file unique to this call.
+        ///
+        /// Deliberately not `/dev/null`: every dup of it shares one inode, so a
+        /// closed-then-reused fd number would be indistinguishable from one that
+        /// was never closed. A private temp file gives each fd an identity that
+        /// [`fd_identity`] can check.
+        fn dup_unique_file() -> (OwnedFd, (u64, u64)) {
+            use std::os::unix::fs::MetadataExt;
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+
+            let path = std::env::temp_dir().join(format!(
+                "paracord-fd-{}-{}",
+                std::process::id(),
+                SEQ.fetch_add(1, Ordering::Relaxed)
+            ));
+            let file = File::create(&path).expect("create temp file");
+            let md = file.metadata().expect("stat temp file");
+            let identity = (md.dev(), md.ino());
+            // Unlinked immediately: the fd keeps it alive, nothing is left behind.
+            let _ = std::fs::remove_file(&path);
+            let dup: OwnedFd = file.try_clone().expect("dup fd").into();
+            (dup, identity)
+        }
+
+        /// `(dev, ino)` of whatever `raw` currently refers to, or `None` if closed.
+        fn fd_identity(raw: RawFd) -> Option<(u64, u64)> {
+            use std::os::unix::fs::MetadataExt;
+            // SAFETY: borrow only; the dup we take is owned and dropped here.
+            let borrowed = unsafe { BorrowedFd::borrow_raw(raw) };
+            let dup = borrowed.try_clone_to_owned().ok()?;
+            let md = File::from(dup).metadata().ok()?;
+            Some((md.dev(), md.ino()))
+        }
+
+        /// Assert `raw` no longer refers to `identity`.
+        ///
+        /// Asserting the fd *number* is unused races against every other thread
+        /// in the test binary: the kernel hands the lowest free descriptor to
+        /// whoever asks next, so an unrelated `File::open` between the drop and
+        /// the check makes a correctly-closed fd look open. Checking identity
+        /// distinguishes "never closed" from "closed, then the number was
+        /// reused", which is the property actually under test.
+        fn assert_fd_released(raw: RawFd, identity: (u64, u64), label: &str) {
+            match fd_identity(raw) {
+                None => {}
+                Some(now) => assert_ne!(
+                    now, identity,
+                    "{label} was not closed: fd {raw} still refers to the same file"
+                ),
+            }
         }
 
         /// Whether `raw` still refers to an open fd: dup it (via the kernel) and
@@ -767,8 +814,8 @@ mod tests {
 
         #[test]
         fn drop_closes_every_backing_fd() {
-            let a = dup_dev_null();
-            let b = dup_dev_null();
+            let (a, id_a) = dup_unique_file();
+            let (b, id_b) = dup_unique_file();
             let raw_a = a.as_raw_fd();
             let raw_b = b.as_raw_fd();
             assert_ne!(raw_a, raw_b, "two dups must be distinct fds");
@@ -811,24 +858,24 @@ mod tests {
             drop(frame);
 
             // Close-on-drop: neither fd survives the handle.
-            assert!(!fd_is_open(raw_a), "fd A must be closed after drop");
-            assert!(!fd_is_open(raw_b), "fd B must be closed after drop");
+            assert_fd_released(raw_a, id_a, "fd A");
+            assert_fd_released(raw_b, id_b, "fd B");
         }
 
         #[test]
         fn owned_fd_moved_into_object_is_closed_exactly_once() {
             // Moving an OwnedFd into the layout transfers sole ownership; leaking
             // the raw fd out again lets us prove exactly one close happened.
-            let owned = dup_dev_null();
+            let (owned, identity) = dup_unique_file();
             let raw = owned.as_raw_fd();
             let layout = DmaBufObjectLayout::new(owned, 4096, 0);
             assert_eq!(layout.raw_fd(), raw);
             drop(layout);
-            assert!(!fd_is_open(raw), "the single owner closed the fd once");
+            assert_fd_released(raw, identity, "the single owner's fd");
 
             // Sanity that we closed a real fd (not a bookkeeping error): a fresh
             // dup succeeds and we clean it up ourselves.
-            let probe = dup_dev_null();
+            let (probe, _) = dup_unique_file();
             let probe_raw = probe.into_raw_fd();
             // SAFETY: reclaim the leaked fd so this test closes it exactly once.
             drop(unsafe { OwnedFd::from_raw_fd(probe_raw) });

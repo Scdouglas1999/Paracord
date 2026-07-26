@@ -445,3 +445,63 @@ async fn create_guild_caps_icon() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// An avatar is an uploaded image or a `data:` URL — never a remote one.
+///
+/// The column accepted any string, so a member could point their avatar at a
+/// host they control; every viewer's client fetches an avatar automatically on
+/// render, handing that host each viewer's IP, user agent and viewing time with
+/// no interaction. Federated users carry `avatar_hash: null`, so nothing
+/// legitimate needs an absolute URL.
+#[tokio::test]
+async fn avatar_hash_cannot_point_at_a_remote_host() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+
+    for hostile in [
+        "https://attacker.example/beacon.png",
+        "http://attacker.example/beacon.png",
+        "//attacker.example/beacon.png",
+    ] {
+        let (status, payload) = ctx
+            .request_json(
+                Method::PATCH,
+                "/api/v1/users/@me",
+                Some(json!({ "avatar_hash": hostile })),
+            )
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a remote avatar_hash must be refused ({hostile}): {payload}"
+        );
+    }
+
+    // The legitimate forms still work.
+    let (status, payload) = ctx
+        .request_json(
+            Method::PATCH,
+            "/api/v1/users/@me",
+            Some(json!({ "avatar_hash": "data:image/png;base64,iVBORw0KGgo=" })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "an inline avatar must still be accepted: {payload}"
+    );
+
+    let (status, payload) = ctx
+        .request_json(
+            Method::PATCH,
+            "/api/v1/users/@me",
+            Some(json!({ "avatar_hash": "/api/v1/users/1/avatar" })),
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a served path must still be accepted: {payload}"
+    );
+
+    Ok(())
+}

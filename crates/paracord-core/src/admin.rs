@@ -239,6 +239,12 @@ pub async fn admin_update_guild(
     paracord_db::guilds::get_guild(pool, guild_id)
         .await?
         .ok_or(CoreError::NotFound)?;
+    // Bounded like the member-facing path. This route skips permission checks
+    // by design, but it writes the same column and reaches the same
+    // `GUILD_UPDATE` fan-out, so an unbounded icon here would cost every
+    // connected session a copy just the same. An admin does not need to be able
+    // to do that by accident.
+    crate::guild::ensure_within_len(icon_hash, crate::guild::MAX_ICON_LEN, "icon")?;
     let updated =
         paracord_db::guilds::update_guild(pool, guild_id, name, description, icon_hash, None, None)
             .await?;
