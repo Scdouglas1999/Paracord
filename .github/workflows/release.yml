@@ -230,7 +230,15 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          tar -tzf "dist/paracord-server-linux-x64-${version}.tar.gz" | grep -q "livekit-server"
+          # Capture the listing before grepping it. `tar … | grep -q` looks
+          # right but fails under `set -o pipefail`: grep -q exits the moment it
+          # matches, tar then writes to a closed pipe and dies with SIGPIPE
+          # (141), and pipefail reports the pipeline as failed even though the
+          # file was found. Whether it trips depends on how much tar still had
+          # to write when grep left, so it passed while the artifacts were small
+          # and started failing as they grew.
+          listing="$(tar -tzf "dist/paracord-server-linux-x64-${version}.tar.gz")"
+          printf '%s\n' "$listing" | grep -q "livekit-server"
 
       - name: Upload server artifact (Linux)
         uses: actions/upload-artifact@v4
