@@ -118,4 +118,24 @@ describe('ChannelSwitcher', () => {
     expect(screen.queryByRole('dialog', { name: 'Switch room in Emerald HQ' })).not.toBeInTheDocument();
     outside.remove();
   });
+
+  // A button sizes to its content rather than filling a block parent, so without
+  // `w-full` the trigger keeps its natural width while the header squeezes the
+  // wrapper — and the room name spills out over the channel topic beside it
+  // instead of ellipsizing. The floor keeps the name legible once a context
+  // panel narrows the header, since the icon and chevron cannot shrink.
+  it('keeps the room name inside its own box when the header is squeezed', () => {
+    renderSwitcher();
+    const trigger = screen.getByRole('button', { name: 'Switch room, current: general' });
+
+    expect(trigger.className).toContain('w-full');
+    expect(trigger.className).toContain('min-w-0');
+
+    const wrapper = trigger.parentElement;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.className).toMatch(/min-w-\[\d/);
+
+    const label = within(trigger).getByText('general');
+    expect(label.className).toContain('truncate');
+  });
 });

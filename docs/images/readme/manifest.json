@@ -1,13 +1,23 @@
 {
-  "captured_at": "2026-07-18",
+  "captured_at": "2026-07-26",
+  "release": "v2.0.0",
   "folder": "docs/images/readme",
+  "viewport": {
+    "width": 1440,
+    "height": 900,
+    "device_scale_factor": 2
+  },
+  "output_width": 1760,
+  "theme": "dark",
+  "accent": "emerald",
   "files": [
-    "home-2026.jpg",
-    "rooms-2026.jpg",
-    "messaging-2026.jpg",
-    "members-2026.jpg",
-    "command-palette-2026.jpg",
-    "appearance-2026.jpg",
-    "space-settings-2026.jpg"
+    "home.jpg",
+    "rooms.jpg",
+    "messaging.jpg",
+    "members.jpg",
+    "engineering.jpg",
+    "command-palette.jpg",
+    "appearance.jpg",
+    "space-settings.jpg"
   ]
 }

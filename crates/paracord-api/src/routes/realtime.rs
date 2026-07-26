@@ -176,6 +176,100 @@ fn build_presence_payload(
     })
 }
 
+/// Everyone entitled to see `user_id`'s presence: themselves, anyone sharing a
+/// space with them, and their friends. Mirrors the gateway's recipient scoping —
+/// presence is never broadcast server-wide.
+async fn presence_recipient_ids(state: &AppState, user_id: i64) -> Vec<i64> {
+    let mut recipients: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    recipients.insert(user_id);
+    if let Ok(guilds) = paracord_db::guilds::get_user_guilds(&state.db, user_id.into()).await {
+        for guild in guilds {
+            if let Ok(member_ids) =
+                paracord_db::members::get_guild_member_user_ids(&state.db, guild.id).await
+            {
+                recipients.extend(member_ids);
+            }
+        }
+    }
+    if let Ok(friend_ids) =
+        paracord_db::relationships::get_friend_user_ids(&state.db, user_id).await
+    {
+        recipients.extend(friend_ids);
+    }
+    recipients.into_iter().collect()
+}
+
+/// Mark `user_id` online and tell the people who can see them.
+///
+/// The realtime stream is the client's actual connection to the server, so
+/// attaching one is what "this person is here" means — exactly as connecting the
+/// WebSocket gateway does. Without this a signed-in user stays absent from
+/// `online_users`, and everyone else sees them as offline for their whole
+/// session.
+async fn mark_stream_user_online(state: &AppState, user_id: i64) {
+    state.presence_manager.cancel_offline(user_id);
+    // `insert` reports whether this was a real transition. A second tab, or a
+    // client reconnecting after a dropped stream, is already online: re-announcing
+    // would fan a redundant event out to every space they belong to, and a
+    // flapping connection would do it repeatedly.
+    let newly_online = state.online_users.insert(user_id);
+    if !newly_online {
+        return;
+    }
+
+    // Preserve a status the user chose for themselves (dnd, custom status,
+    // activities); only fill in a default when we have nothing on file.
+    let presence = match state.user_presences.get(&user_id).map(|v| v.clone()) {
+        Some(mut existing) => {
+            if let Some(obj) = existing.as_object_mut() {
+                obj.insert("user_id".to_string(), json!(user_id.to_string()));
+                let offline_or_missing = obj
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .is_none_or(|s| s == "offline");
+                if offline_or_missing {
+                    obj.insert("status".to_string(), json!("online"));
+                }
+                obj.entry("activities").or_insert_with(|| json!([]));
+            }
+            existing
+        }
+        None => build_presence_payload(user_id, Some("online"), None, None),
+    };
+    state.user_presences.insert(user_id, presence.clone());
+
+    dispatch_presence_to_others(state, user_id, presence).await;
+}
+
+/// Mark `user_id` offline and tell the same audience.
+async fn mark_stream_user_offline(state: &AppState, user_id: i64) {
+    if state.online_users.remove(&user_id).is_none() {
+        return;
+    }
+    state.user_presences.remove(&user_id);
+    let presence = build_presence_payload(user_id, Some("offline"), None, None);
+    dispatch_presence_to_others(state, user_id, presence).await;
+}
+
+/// Fan a connect/disconnect presence transition out to everyone *except* the
+/// user it describes.
+///
+/// The subject learns nothing from being told it just connected, and the event
+/// would otherwise be appended to its own replay buffer — consuming a slot in
+/// the resume window and pushing the events it actually reconnected for further
+/// back. An explicit status change (`presence_update`) still echoes to the
+/// sender, so their other devices stay in step.
+async fn dispatch_presence_to_others(state: &AppState, user_id: i64, presence: Value) {
+    let mut recipients = presence_recipient_ids(state, user_id).await;
+    recipients.retain(|id| *id != user_id);
+    if recipients.is_empty() {
+        return;
+    }
+    state
+        .event_bus
+        .dispatch_to_users("PRESENCE_UPDATE", presence, recipients);
+}
+
 // ── SSE resume: honest per-session event replay ────────────────────────────
 //
 // The event bus hands each SSE connection a `broadcast::Receiver`, but that
@@ -323,14 +417,43 @@ fn release_attachment_slot(user_id: i64) {
     }
 }
 
+/// Current number of live stream attachments for `user_id`.
+fn attachment_count(user_id: i64) -> usize {
+    user_attachment_counts()
+        .get(&user_id)
+        .map(|c| *c)
+        .unwrap_or(0)
+}
+
 /// RAII release of a per-user SSE attachment slot.
+///
+/// Dropping the last attachment is what takes the user offline. The transition
+/// is deferred through `PresenceManager` rather than applied here, because a
+/// client that is merely reconnecting drops and re-attaches within moments and
+/// must not flicker offline for everyone watching.
 struct AttachmentGuard {
     user_id: i64,
+    state: AppState,
 }
 
 impl Drop for AttachmentGuard {
     fn drop(&mut self) {
         release_attachment_slot(self.user_id);
+        if attachment_count(self.user_id) > 0 {
+            return;
+        }
+        let user_id = self.user_id;
+        let state = self.state.clone();
+        state
+            .presence_manager
+            .clone()
+            .schedule_offline(user_id, async move {
+                // They may have reconnected during the grace period.
+                if attachment_count(user_id) > 0 {
+                    return;
+                }
+                mark_stream_user_offline(&state, user_id).await;
+            });
     }
 }
 
@@ -1029,6 +1152,28 @@ async fn build_ready_payload(
             })
             .collect();
 
+        // Who in this space is online right now. Without this the client learns
+        // presence only from events that arrive after it connects, so everybody
+        // already online renders as offline until they happen to change status.
+        // Only online members are looked up, mirroring the gateway's READY.
+        let presences_json: Vec<Value> =
+            match paracord_db::members::get_guild_member_user_ids(&state.db, guild.id).await {
+                Ok(member_ids) => member_ids
+                    .iter()
+                    .filter(|uid| state.online_users.contains(uid))
+                    .map(|uid| {
+                        state
+                            .user_presences
+                            .get(uid)
+                            .map(|entry| entry.value().clone())
+                            .unwrap_or_else(|| {
+                                build_presence_payload(*uid, Some("online"), None, None)
+                            })
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+
         guilds_json.push(json!({
             "id": guild.id.to_string(),
             "name": guild.name,
@@ -1037,7 +1182,7 @@ async fn build_ready_payload(
             "member_count": member_count,
             "channels": [],
             "voice_states": voice_states_json,
-            "presences": [],
+            "presences": presences_json,
             "lazy": true,
         }));
     }
@@ -1271,7 +1416,14 @@ pub async fn stream_events(
     if !try_acquire_attachment_slot(user_id) {
         return Err(ApiError::RateLimited(1));
     }
-    let attach_guard = AttachmentGuard { user_id };
+    let attach_guard = AttachmentGuard {
+        user_id,
+        state: state.clone(),
+    };
+
+    // Attaching the stream is the moment this person is reachable — publish it,
+    // so everyone sharing a space or a friendship with them sees them arrive.
+    mark_stream_user_online(&state, user_id).await;
 
     // A supplied `session_id` is only honored when this server issued it to the
     // ticket's user; anything else is refused outright rather than silently
@@ -1509,29 +1661,10 @@ pub async fn post_command(
                 .user_presences
                 .insert(auth.user_id, presence_payload.clone());
 
-            let mut recipients: std::collections::HashSet<i64> = std::collections::HashSet::new();
-            recipients.insert(auth.user_id);
-            if let Ok(guilds) =
-                paracord_db::guilds::get_user_guilds(&state.db, auth.user_id.into()).await
-            {
-                for guild in guilds {
-                    if let Ok(member_ids) =
-                        paracord_db::members::get_guild_member_user_ids(&state.db, guild.id).await
-                    {
-                        recipients.extend(member_ids);
-                    }
-                }
-            }
-            if let Ok(friend_ids) =
-                paracord_db::relationships::get_friend_user_ids(&state.db, auth.user_id).await
-            {
-                recipients.extend(friend_ids);
-            }
-            state.event_bus.dispatch_to_users(
-                "PRESENCE_UPDATE",
-                presence_payload,
-                recipients.into_iter().collect(),
-            );
+            let recipients = presence_recipient_ids(&state, auth.user_id).await;
+            state
+                .event_bus
+                .dispatch_to_users("PRESENCE_UPDATE", presence_payload, recipients);
         }
         "voice_state_update" => {
             let payload: VoiceStateCommandPayload = serde_json::from_value(req.payload.clone())

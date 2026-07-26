@@ -122,7 +122,11 @@ export function ChannelSwitcher({
   const CurrentIcon = iconForType(channelType);
 
   return (
-    <div ref={rootRef} className="relative min-w-0">
+    // The floor keeps the room name readable when a context panel narrows the
+    // header: the icon and chevron cannot shrink, so without it the trigger is
+    // squeezed below its own chrome. The topic beside it absorbs the loss —
+    // it already truncates, and it is the less important of the two.
+    <div ref={rootRef} className="relative min-w-[7rem]">
       <button
         ref={triggerRef}
         type="button"
@@ -131,7 +135,11 @@ export function ChannelSwitcher({
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
         className={cn(
-          'flex h-8 min-w-0 max-w-[15rem] items-center gap-1.5 rounded-sm px-1.5 text-left outline-none',
+          // `w-full` is load-bearing: a button sizes to its content rather than
+          // filling a block parent, so without it the trigger keeps its natural
+          // width while the wrapper shrinks, and the channel name spills out
+          // over the topic instead of ellipsizing.
+          'flex h-8 w-full min-w-0 max-w-[15rem] items-center gap-1.5 rounded-sm px-1.5 text-left outline-none',
           'text-text-primary transition-colors duration-[140ms] ease-[var(--ease-out)]',
           'hover:bg-bg-mod-subtle focus-visible:shadow-[var(--focus-ring)]',
           open && 'bg-bg-mod-subtle',

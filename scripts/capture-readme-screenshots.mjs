@@ -1,468 +1,298 @@
 #!/usr/bin/env node
 /**
- * Capture README / promo screenshots from a running Paracord stack.
+ * Capture the README screenshots from a running Paracord instance.
+ *
+ * Expects an instance seeded by `scripts/seed-demo-community.py` — pointed at a
+ * fresh instance this only ever produces empty states, which do not represent
+ * the product.
+ *
+ * Everyone visible in the resulting images holds a real session for the whole
+ * run: the crowd through the browser, and the people shown inside voice rooms
+ * through the same realtime handshake the client performs (session → ticket →
+ * stream). Nothing is written directly into the database.
  *
  * Usage:
+ *   python3 scripts/seed-demo-community.py
+ *   NODE_TLS_REJECT_UNAUTHORIZED=0 \
  *   PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright \
- *   PARACORD_CAPTURE_BASE=https://127.0.0.1:8443 \
- *   node scripts/capture-readme-screenshots.mjs
+ *     node scripts/capture-readme-screenshots.mjs
  *
  * Env:
- *   PARACORD_CAPTURE_BASE          Default https://127.0.0.1:8443
- *   PARACORD_SCREENSHOT_EMAIL      Demo account email
- *   PARACORD_SCREENSHOT_PASSWORD   Demo account password
- *   CHROME_PATH                    Optional Chromium binary
+ *   PARACORD_BASE        instance URL (default https://127.0.0.1:8443)
+ *   PARACORD_DEMO_OUT    seed manifest written by the seeder (default demo-seed.json)
+ *   PARACORD_SHOTS_OUT   output directory (default docs/images/readme)
+ *
+ * `NODE_TLS_REJECT_UNAUTHORIZED=0` is needed only because a first-run instance
+ * serves a self-signed certificate.
  */
-import { createRequire } from 'node:module';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(ROOT, 'client', 'package.json'));
 const { chromium } = require('playwright');
 
-const OUT = path.join(ROOT, 'docs', 'images', 'readme');
-const BASE = (process.env.PARACORD_CAPTURE_BASE || 'https://127.0.0.1:8443').replace(/\/$/, '');
+const BASE = (process.env.PARACORD_BASE || 'https://127.0.0.1:8443').replace(/\/$/, '');
+const SEED_PATH = path.resolve(ROOT, process.env.PARACORD_DEMO_OUT || 'demo-seed.json');
+const OUT = path.resolve(ROOT, process.env.PARACORD_SHOTS_OUT || 'docs/images/readme');
 const VIEWPORT = { width: 1440, height: 900 };
+/** Shot at 2x, then downscaled to this width so the repo stays light. */
+const OUTPUT_WIDTH = 1760;
 
-const email = process.env.PARACORD_SCREENSHOT_EMAIL || 'readme-1783269377@example.test';
-const password = process.env.PARACORD_SCREENSHOT_PASSWORD || 'Readme-Capture-123!';
-const guildName = 'Emerald Commons';
+const seed = JSON.parse(await readFile(SEED_PATH, 'utf8'));
+const G = seed.guild_id;
+const log = (...a) => console.log('·', ...a);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const captured = [];
-const skipped = [];
+await mkdir(OUT, { recursive: true });
 
-async function dismissOverlays(page) {
-  for (let i = 0; i < 8; i++) {
-    const skipTour = page.getByRole('button', { name: /^skip tour$/i }).first();
-    if (await skipTour.isVisible().catch(() => false)) {
-      await skipTour.click().catch(() => {});
-      await page.waitForTimeout(250);
+/** Realtime streams held open for people who have no browser of their own. */
+const heldStreams = [];
+
+const browser = await chromium.launch({
+  headless: true,
+  args: ['--ignore-certificate-errors'],
+});
+
+async function newContext(scale = 1) {
+  const ctx = await browser.newContext({
+    viewport: VIEWPORT,
+    deviceScaleFactor: scale,
+    ignoreHTTPSErrors: true,
+    colorScheme: 'dark',
+    locale: 'en-US',
+    timezoneId: 'UTC',
+  });
+  await ctx.addInitScript(() => {
+    try {
+      localStorage.setItem('paracord:v2:layout-tour-shell', 'done');
+      localStorage.setItem('paracord:v2:layout-tour-guild-home', 'done');
+    } catch { /* storage unavailable */ }
+  });
+  return ctx;
+}
+
+/** Dismiss the space welcome modal and any first-run coach mark. */
+async function clearOverlays(page) {
+  for (let i = 0; i < 8; i += 1) {
+    const jump = page.getByRole('button', { name: /^jump in$/i }).first();
+    if (await jump.isVisible().catch(() => false)) {
+      await jump.click({ timeout: 4000 }).catch(() => {});
+      await page.waitForTimeout(500);
       continue;
     }
-    const close = page.getByRole('button', { name: /close|dismiss|got it|skip|not now|maybe later/i }).first();
-    if (await close.isVisible().catch(() => false)) {
-      await close.click().catch(() => {});
-      await page.waitForTimeout(200);
+    const tour = page.getByRole('button', { name: /^(skip tour|done)$/i }).first();
+    if (await tour.isVisible().catch(() => false)) {
+      await tour.click({ timeout: 4000 }).catch(() => {});
+      await page.waitForTimeout(300);
       continue;
     }
     break;
   }
-  await page.keyboard.press('Escape').catch(() => {});
-  await page.waitForTimeout(150);
 }
 
-async function shot(page, filename, description, opts = {}) {
-  await page.waitForTimeout(opts.settleMs ?? 400);
-  const filePath = path.join(OUT, filename);
-  await page.screenshot({
-    path: filePath,
-    type: 'png',
-    animations: 'disabled',
-    fullPage: false,
-    clip: opts.clip,
-  });
-  captured.push({ filename, description, route: opts.route || page.url().replace(BASE, '') });
-  console.log('saved', filename);
-  return filename;
-}
-
-async function ensureLoggedIn(page) {
-  await page.goto(`${BASE}/app`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-  await page.waitForTimeout(1200);
-  const url = page.url();
-  if (!/\/(login|register|connect)/.test(url) && url.includes('/app')) {
-    return;
-  }
-
-  // Connect to local server if on /connect
-  if (url.includes('/connect') || (await page.locator('input.input-field').count().catch(() => 0)) > 0) {
-    if (page.url().includes('/connect')) {
-      const fields = page.locator('input.input-field');
-      if (await fields.first().isVisible().catch(() => false)) {
-        await fields.first().fill(BASE);
-        const connectBtn = page.getByRole('button', { name: /connect|continue/i }).first();
-        if (await connectBtn.isVisible().catch(() => false)) {
-          await connectBtn.click();
-          await page.waitForTimeout(1500);
-        }
-      }
-    }
-  }
-
-  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-  await page.waitForSelector('input.input-field', { timeout: 20_000 });
-  const fields = page.locator('input.input-field');
-  await fields.nth(0).fill(email);
-  await fields.nth(1).fill(password);
+async function signIn(email, scale = 1) {
+  const ctx = await newContext(scale);
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('input.input-field', { timeout: 25_000 });
+  await page.locator('input.input-field').nth(0).fill(email);
+  await page.locator('input.input-field').nth(1).fill(seed.password);
   await page.getByRole('button', { name: /^log in$/i }).click();
-  const loggedIn = await page.waitForURL(/\/app/, { timeout: 25_000 }).then(() => true).catch(() => false);
-  if (loggedIn) return;
-
-  const unique = Date.now();
-  const user = `readme${String(unique).slice(-6)}`;
-  const mail = `readme-${unique}@example.test`;
-  await page.goto(`${BASE}/register`, { waitUntil: 'domcontentloaded' });
-  const regFields = page.locator('input.input-field');
-  await regFields.nth(0).fill(mail);
-  // display name may be nth(1); username nth(2)
-  if ((await regFields.count()) >= 5) {
-    await regFields.nth(1).fill('Readme Capture');
-    await regFields.nth(2).fill(user);
-    await regFields.nth(3).fill(password);
-    await regFields.nth(4).fill(password);
-  } else {
-    await regFields.nth(2).fill(user);
-    await regFields.nth(3).fill(password);
-    await regFields.nth(4).fill(password);
-  }
-  await page.locator('input[type="checkbox"]').check().catch(() => {});
-  await page.getByRole('button', { name: /^continue$/i }).click();
-  await page.waitForURL(/\/app/, { timeout: 45_000 });
+  await page.waitForURL(/\/app/, { timeout: 30_000 });
+  await page.waitForTimeout(1500);
+  await clearOverlays(page);
+  return { ctx, page };
 }
 
-async function ensureGuild(page) {
-  await page.goto(`${BASE}/app`, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(800);
-  await dismissOverlays(page);
-
-  // Prefer showcase name, else any known space already on the demo account
-  const candidates = [guildName, 'Fuel', 'Commons', 'General'];
-  for (const name of candidates) {
-    const btn = page.getByRole('button', { name: new RegExp(name, 'i') }).first();
-    if (await btn.isVisible().catch(() => false)) {
-      await btn.click();
-      await page.waitForTimeout(1200);
-      await dismissOverlays(page);
-      let match = page.url().match(/\/app\/guilds\/(\d+)/);
-      if (match) return match[1];
-      const enter = page.getByRole('button', { name: /enter space/i }).first();
-      if (await enter.isVisible().catch(() => false)) {
-        await enter.click();
-        await page.waitForTimeout(1200);
-        match = page.url().match(/\/app\/guilds\/(\d+)/);
-        if (match) return match[1];
-      }
-    }
-  }
-
-  const spaceRow = page.locator('button').filter({ hasText: /unread|fuel|commons/i }).first();
-  if (await spaceRow.isVisible().catch(() => false)) {
-    await spaceRow.click();
-    await page.waitForTimeout(1200);
-    const match = page.url().match(/\/app\/guilds\/(\d+)/);
-    if (match) return match[1];
-  }
-
-  const openCreate = page.getByRole('button', { name: /create a server|add a space|create server/i }).first();
-  if (await openCreate.isVisible().catch(() => false)) {
-    await openCreate.click();
-    await page.waitForTimeout(600);
-    const nameInput = page.locator('input.input-field').first();
-    await nameInput.fill(guildName);
-    await page.getByRole('button', { name: /^create$/i }).click();
-    await page.waitForURL(/\/app\/guilds\/\d+/, { timeout: 30_000 }).catch(() => {});
-    await page.waitForTimeout(1500);
-    const match = page.url().match(/\/app\/guilds\/(\d+)/);
-    if (match) return match[1];
-  }
-
-  throw new Error('Could not find or create a guild');
-}
-
-async function seedMessages(page, guildId) {
-  await page.goto(`${BASE}/app/guilds/${guildId}`, { waitUntil: 'domcontentloaded' });
-  await dismissOverlays(page);
-  const general = page.getByRole('button', { name: /#?\s*general/i }).first();
-  if (!(await general.isVisible().catch(() => false))) {
-    // try link/text channel row
-    const alt = page.locator('a, button').filter({ hasText: /#?\s*general/i }).first();
-    if (!(await alt.isVisible().catch(() => false))) return null;
-    await alt.click();
-  } else {
-    await general.click();
-  }
-  await page.waitForTimeout(1200);
-  const m = page.url().match(/channels\/(\d+)/);
-  const channelId = m?.[1] ?? null;
-  const input = page.locator('[contenteditable="true"]').last();
-  if (await input.isVisible().catch(() => false)) {
-    const lines = [
-      'Welcome to **Emerald Commons** — the v1.0 showcase server.',
-      'Native QUIC voice, E2EE DMs, and the Rooms + Unified Stream layout.',
-      'Jump into a voice room when you are ready — screen share and video grid included.',
-    ];
-    for (const line of lines) {
-      await input.click();
-      await input.fill('');
-      await page.keyboard.type(line, { delay: 5 });
-      await page.keyboard.press('Enter');
-      await page.waitForTimeout(350);
-    }
-  }
-  return channelId;
-}
-
-async function findVoiceChannelId(page, guildId) {
-  await page.goto(`${BASE}/app/guilds/${guildId}`, { waitUntil: 'domcontentloaded' });
-  await dismissOverlays(page);
-  const voice = page.locator('a, button').filter({ hasText: /voice|lounge|hangout|stage/i }).first();
-  if (await voice.isVisible().catch(() => false)) {
-    await voice.click();
-    await page.waitForTimeout(1000);
-    const m = page.url().match(/channels\/(\d+)/);
-    return m?.[1] ?? null;
-  }
-  return null;
-}
-
-async function main() {
-  await mkdir(OUT, { recursive: true });
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: process.env.CHROME_PATH || undefined,
-    args: ['--ignore-certificate-errors'],
+/**
+ * Put someone in a voice room, holding a realtime session open for them.
+ *
+ * These people deliberately have no browser client: one that finds itself in a
+ * room it never joined reconciles its way back out, which empties the grid. The
+ * held stream is what marks them present, so they read as online rather than as
+ * a body in an empty room.
+ */
+async function placeInRoom(who, channelId) {
+  const jsonHeaders = { 'content-type': 'application/json' };
+  const lr = await fetch(`${BASE}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ email: `${who}@commons.test`, password: seed.password }),
   });
-  const context = await browser.newContext({
-    viewport: VIEWPORT,
-    ignoreHTTPSErrors: true,
-    deviceScaleFactor: 1,
+  if (!lr.ok) return false;
+  const { token } = await lr.json();
+  const auth = { authorization: `Bearer ${token}` };
+
+  const sr = await fetch(`${BASE}/api/v2/rt/session`, {
+    method: 'POST', headers: { ...auth, ...jsonHeaders }, body: '{}',
   });
-  const page = await context.newPage();
+  if (!sr.ok) return false;
+  const session = await sr.json();
 
-  // Prefer dark emerald theme in localStorage before first paint when possible
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem('paracord:theme', 'dark');
-      localStorage.setItem('theme', 'dark');
-      localStorage.setItem('paracord:accent', 'emerald');
-      localStorage.setItem('paracord:layout-tour:shell', '1');
-      localStorage.setItem('paracord:layout-tour:guild', '1');
-    } catch {
-      /* ignore */
-    }
-  });
+  const tr = await fetch(`${BASE}/api/v1/stream/ticket`, { method: 'POST', headers: auth });
+  if (!tr.ok) return false;
+  const { ticket } = await tr.json();
 
-  await ensureLoggedIn(page);
-  await dismissOverlays(page);
-
-  // Force dark appearance via settings if a toggle exists later
-  await page.evaluate(() => {
-    document.documentElement.dataset.theme = 'dark';
-    document.documentElement.classList.add('dark');
-  }).catch(() => {});
-
-  const guildId = await ensureGuild(page);
-  console.log('using guild', guildId);
-  const textChannelId = await seedMessages(page, guildId);
-
-  // --- Home / resume ---
-  await page.goto(`${BASE}/app`, { waitUntil: 'domcontentloaded' });
-  await dismissOverlays(page);
-  await page.waitForTimeout(1200);
-  await shot(page, 'readme-home.png', 'Home / resume dashboard with unified sidebar', { route: '/app' });
-  await shot(page, 'readme-sidebar.png', 'Unified sidebar: Needs you, Recent, and Spaces', { route: '/app' });
-
-  // --- Guild rooms ---
-  await page.goto(`${BASE}/app/guilds/${guildId}`, { waitUntil: 'domcontentloaded' });
-  await dismissOverlays(page);
-  await page.waitForTimeout(1400);
-  await shot(page, 'readme-rooms.png', 'Guild / server home Rooms view', {
-    route: `/app/guilds/${guildId}`,
-  });
-
-  // --- Text channel ---
-  let channelForChat = textChannelId;
-  if (!channelForChat) {
-    const general = page.getByRole('button', { name: /#?\s*general/i }).first();
-    if (await general.isVisible().catch(() => false)) {
-      await general.click();
-      await page.waitForTimeout(1000);
-      channelForChat = page.url().match(/channels\/(\d+)/)?.[1] ?? null;
-    }
-  }
-  if (channelForChat) {
-    await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelForChat}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await dismissOverlays(page);
-    await page.waitForTimeout(1400);
-    await shot(page, 'readme-messaging.png', 'Text channel messaging with Emerald Commons theme', {
-      route: `/app/guilds/${guildId}/channels/${channelForChat}`,
-    });
-
-    const membersBtn = page.getByRole('button', { name: /^members$/i }).first();
-    if (await membersBtn.isVisible().catch(() => false)) {
-      await membersBtn.click();
-      await page.waitForTimeout(700);
-      await shot(page, 'readme-members.png', 'Context panel member list beside chat', {
-        route: `/app/guilds/${guildId}/channels/${channelForChat}`,
-      });
-      await page.keyboard.press('Escape');
-    } else {
-      skipped.push({ filename: 'readme-members.png', reason: 'Members button not found' });
-    }
-  } else {
-    skipped.push({ filename: 'readme-messaging.png', reason: 'No text channel found' });
-  }
-
-  // --- Voice lobby / channel ---
-  const voiceId = await findVoiceChannelId(page, guildId);
-  if (voiceId) {
-    await page.goto(`${BASE}/app/guilds/${guildId}/channels/${voiceId}`, { waitUntil: 'domcontentloaded' });
-    await dismissOverlays(page);
-    await page.waitForTimeout(1400);
-    await shot(page, 'readme-voice.png', 'Voice channel lobby / video grid surface', {
-      route: `/app/guilds/${guildId}/channels/${voiceId}`,
-    });
-
-    const joinBtn = page.getByRole('button', { name: /^join$/i }).first();
-    if (await joinBtn.isVisible().catch(() => false)) {
-      await joinBtn.click().catch(() => {});
-      await page.waitForTimeout(2500);
-      await dismissOverlays(page);
-      await shot(page, 'readme-voice-joined.png', 'Connected voice channel with control bar', {
-        route: `/app/guilds/${guildId}/channels/${voiceId}`,
-      });
-      // Leave if possible to avoid hanging media
-      const leave = page.getByRole('button', { name: /leave|disconnect/i }).first();
-      if (await leave.isVisible().catch(() => false)) {
-        await leave.click().catch(() => {});
-        await page.waitForTimeout(500);
-      }
-    }
-  } else {
-    skipped.push({
-      filename: 'readme-voice.png',
-      reason: 'No voice channel found in Emerald Commons',
-    });
-  }
-
-  // --- Friends / DMs ---
-  await page.goto(`${BASE}/app/friends`, { waitUntil: 'domcontentloaded' });
-  await dismissOverlays(page);
-  await page.waitForTimeout(900);
-  await shot(page, 'readme-friends.png', 'Friends page', { route: '/app/friends' });
-
-  await page.goto(`${BASE}/app/dms`, { waitUntil: 'domcontentloaded' });
-  await dismissOverlays(page);
-  await page.waitForTimeout(900);
-  await shot(page, 'readme-dms.png', 'Direct messages hub', { route: '/app/dms' });
-
-  // --- Command palette ---
-  await page.goto(`${BASE}/app`, { waitUntil: 'domcontentloaded' });
-  await dismissOverlays(page);
-  await page.keyboard.press('Control+k');
-  await page.waitForTimeout(700);
-  await shot(page, 'readme-command-palette.png', 'Command palette (Ctrl+K)', { route: '/app' });
-  await page.keyboard.press('Escape');
-
-  // --- User settings (Appearance preferred for polished theme shot) ---
-  await page.keyboard.press('Control+,');
-  await page.waitForTimeout(900);
-  const appearance = page.getByRole('button', { name: /^appearance$/i }).first();
-  if (await appearance.isVisible().catch(() => false)) {
-    await appearance.click();
-    await page.waitForTimeout(600);
-  }
-  await shot(page, 'readme-settings.png', 'User settings — Appearance / theme (Emerald Commons dark)', {
-    route: '/app',
-  });
-  await page.keyboard.press('Escape');
-
-  // --- Guild settings ---
-  await page.goto(`${BASE}/app/guilds/${guildId}`, { waitUntil: 'domcontentloaded' });
-  await dismissOverlays(page);
-  await page.keyboard.press('Control+Shift+,');
-  await page.waitForTimeout(1000);
-  if (page.url().includes('settings') || (await page.getByText(/overview|server name|channels/i).first().isVisible().catch(() => false))) {
-    await shot(page, 'readme-guild-settings.png', 'Guild settings overview', {
-      route: `/app/guilds/${guildId}`,
-    });
-  } else {
-    // try gear button
-    const gear = page.getByRole('button', { name: /settings|server settings/i }).first();
-    if (await gear.isVisible().catch(() => false)) {
-      await gear.click();
-      await page.waitForTimeout(900);
-      await shot(page, 'readme-guild-settings.png', 'Guild settings overview', {
-        route: `/app/guilds/${guildId}`,
-      });
-    } else {
-      skipped.push({ filename: 'readme-guild-settings.png', reason: 'Guild settings overlay did not open' });
-    }
-  }
-  await page.keyboard.press('Escape');
-
-  // Also keep legacy unprefixed aliases expected by current README.md
-  const aliases = [
-    ['readme-home.png', 'home.png'],
-    ['readme-sidebar.png', 'unified-sidebar.png'],
-    ['readme-rooms.png', 'rooms-view.png'],
-    ['readme-messaging.png', 'text-chat.png'],
-  ];
-  const { copyFile } = await import('node:fs/promises');
-  for (const [src, dest] of aliases) {
-    try {
-      await copyFile(path.join(OUT, src), path.join(OUT, dest));
-      console.log('alias', dest);
-    } catch {
-      /* source missing */
-    }
-  }
-
-  const manifestMd = [
-    '# README promo screenshots',
-    '',
-    `Captured: ${new Date().toISOString()}`,
-    `Base URL: \`${BASE}\``,
-    `Viewport: ${VIEWPORT.width}×${VIEWPORT.height}`,
-    `Theme target: dark Emerald Commons`,
-    '',
-    '## Files',
-    '',
-    ...captured.map((c) => `- \`${c.filename}\` — ${c.description}`),
-    '',
-  ];
-  if (skipped.length) {
-    manifestMd.push('## Skipped / incomplete', '');
-    for (const s of skipped) {
-      manifestMd.push(`- \`${s.filename}\` — ${s.reason}`);
-    }
-    manifestMd.push('');
-  }
-  manifestMd.push(
-    '## Notes',
-    '',
-    '- No auth tokens or secrets are stored in these images intentionally; review before publishing.',
-    '- Voice/stream shots may show an empty lobby if no second client was connected.',
-    '- Legacy aliases (`home.png`, `unified-sidebar.png`, `rooms-view.png`, `text-chat.png`) mirror the `readme-*` names for the current README image paths.',
-    '',
+  const ac = new AbortController();
+  const stream = await fetch(
+    `${BASE}/api/v2/rt/events?ticket=${ticket}&session_id=${encodeURIComponent(session.session_id)}`,
+    { headers: auth, signal: ac.signal },
   );
+  if (!stream.ok) return false;
+  // Drain in the background; holding the connection is the point, not the data.
+  (async () => {
+    try {
+      const reader = stream.body.getReader();
+      for (;;) { const { done } = await reader.read(); if (done) break; }
+    } catch { /* aborted at teardown */ }
+  })();
+  heldStreams.push(ac);
 
-  await writeFile(path.join(OUT, 'MANIFEST.md'), `${manifestMd.join('\n')}\n`);
-  await writeFile(
-    path.join(OUT, 'manifest.json'),
-    `${JSON.stringify(
-      {
-        captured_at: new Date().toISOString(),
-        viewport: VIEWPORT,
-        base_url: BASE,
-        captured,
-        skipped,
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  console.log('wrote MANIFEST.md + manifest.json');
-  console.log(JSON.stringify({ captured: captured.length, skipped: skipped.length }, null, 2));
-  await browser.close();
+  const jr = await fetch(`${BASE}/api/v1/voice/${channelId}/join`, { headers: auth });
+  return jr.ok;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+const IDLE_CROWD = ['jonas', 'ken', 'lena', 'diego'];
+const ROOM_PLAN = [
+  ['priya', seed.studio, 'Studio'], ['tomas', seed.studio, 'Studio'],
+  ['yara', seed.studio, 'Studio'],
+  ['ade', seed.focus, 'Focus Room'], ['sofia', seed.focus, 'Focus Room'],
+];
+
+// The account we shoot from connects first, so it receives every presence and
+// voice-state event live as the others arrive.
+const { page } = await signIn(seed.owner_email, 2);
+page.on('pageerror', (e) => console.error('  [pageerror]', e.message));
+await page.goto(`${BASE}/app/guilds/${G}`, { waitUntil: 'domcontentloaded' });
+await sleep(2000);
+await clearOverlays(page);
+log('signed in as owner');
+
+const held = [];
+for (const who of IDLE_CROWD) {
+  try {
+    const s = await signIn(`${who}@commons.test`);
+    await s.page.goto(`${BASE}/app/guilds/${G}`, { waitUntil: 'domcontentloaded' });
+    await s.page.waitForTimeout(1200);
+    await clearOverlays(s.page);
+    held.push(s);
+    log('online:', who);
+  } catch (e) { console.error('  !!', who, e.message); }
+}
+for (const [who, roomId, roomName] of ROOM_PLAN) {
+  const ok = await placeInRoom(who, roomId);
+  log(`${ok ? 'in room' : '!! FAILED'}: ${who} → ${roomName}`);
+}
+
+// Keep every held session active so nothing idles out mid-run.
+const keepAlive = setInterval(() => {
+  for (const s of held) s.page.evaluate(() => void document.hasFocus()).catch(() => {});
+}, 5000);
+
+await sleep(4000);
+await page.goto(`${BASE}/app/guilds/${G}`, { waitUntil: 'domcontentloaded' });
+await sleep(3000);
+await clearOverlays(page);
+
+const seen = await page.evaluate(() => {
+  const t = document.body.innerText;
+  return {
+    live: (t.match(/(\d+)\s+live rooms?/i) || [])[1],
+    around: (t.match(/(\d+)\s+(?:person|people) around/i) || [])[1],
+  };
 });
+log(`space shows: ${seen.live} live rooms, ${seen.around} around`);
+
+const captured = [];
+async function shot(name, ms = 900) {
+  // Park the pointer somewhere inert so a stray hover tooltip stays out of frame.
+  await page.mouse.move(VIEWPORT.width - 4, VIEWPORT.height - 4);
+  await sleep(ms);
+  await page.screenshot({ path: path.join(OUT, `${name}.png`), animations: 'disabled' });
+  captured.push(name);
+  log('captured', name);
+}
+
+await shot('rooms', 1200);
+
+await page.goto(`${BASE}/app`, { waitUntil: 'domcontentloaded' });
+await sleep(2500);
+await clearOverlays(page);
+await shot('home', 1200);
+
+await page.goto(`${BASE}/app/guilds/${G}/channels/${seed.general}`, { waitUntil: 'domcontentloaded' });
+await sleep(2500);
+await clearOverlays(page);
+await shot('messaging', 1200);
+
+let opened = false;
+for (const name of [/^members$/i, /member list/i]) {
+  const b = page.getByRole('button', { name }).first();
+  if (await b.isVisible().catch(() => false)) { await b.click(); opened = true; break; }
+}
+if (opened) {
+  await sleep(1600);
+  await shot('members', 900);
+  await page.getByRole('button', { name: /^close$/i }).first().click().catch(() => {});
+  await sleep(600);
+} else console.error('  !! members toggle not found');
+
+await page.goto(`${BASE}/app/guilds/${G}/channels/${seed.engineering}`, { waitUntil: 'domcontentloaded' });
+await sleep(2500);
+await clearOverlays(page);
+await shot('engineering', 1000);
+
+// Left unfiltered on purpose: the default list shows what the palette can
+// reach — actions, navigation, channels, spaces.
+await page.keyboard.press('Control+k');
+await sleep(1200);
+await shot('command-palette', 600);
+await page.keyboard.press('Escape');
+await sleep(500);
+
+await page.goto(`${BASE}/app`, { waitUntil: 'domcontentloaded' });
+await sleep(1800);
+await clearOverlays(page);
+await page.keyboard.press('Control+,');
+await sleep(1800);
+const appearance = page.getByRole('button', { name: /^appearance$/i }).first();
+if (await appearance.isVisible().catch(() => false)) {
+  await appearance.click();
+  await sleep(1200);
+}
+await shot('appearance', 900);
+await page.keyboard.press('Escape');
+await sleep(600);
+
+await page.goto(`${BASE}/app/guilds/${G}`, { waitUntil: 'domcontentloaded' });
+await sleep(2200);
+await clearOverlays(page);
+await page.keyboard.press('Control+Shift+,');
+await sleep(2200);
+await shot('space-settings', 900);
+
+clearInterval(keepAlive);
+for (const ac of heldStreams) ac.abort();
+await browser.close();
+
+await writeFile(
+  path.join(OUT, 'manifest.json'),
+  `${JSON.stringify({
+    captured_at: new Date().toISOString().slice(0, 10),
+    folder: path.relative(ROOT, OUT).split(path.sep).join('/'),
+    viewport: { ...VIEWPORT, device_scale_factor: 2 },
+    output_width: OUTPUT_WIDTH,
+    theme: 'dark',
+    accent: 'emerald',
+    files: captured.map((n) => `${n}.jpg`),
+  }, null, 2)}\n`,
+);
+
+console.log(`\ncaptured ${captured.length} screenshots -> ${OUT}`);
+console.log(
+  `PNGs are 2x. Downscale to ${OUTPUT_WIDTH}px wide and save as JPEG (quality ~86) ` +
+  'before committing, so the repo does not carry multi-megabyte images.',
+);
