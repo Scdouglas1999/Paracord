@@ -312,6 +312,7 @@ async fn main() -> Result<()> {
             detected_external_ip.as_deref(),
             detected_local_ip.as_deref(),
             config.voice.native_media,
+            config.livekit.turn_udp_port,
         )
         .await
         {

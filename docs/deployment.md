@@ -98,6 +98,21 @@ forward the native media UDP port directly to the server host at the firewall:
 In Docker this is already mapped as `8443:8443/udp` in `docker-compose.yml`;
 just make sure your host firewall allows inbound UDP on that port.
 
+### If you run LiveKit instead of native media
+
+LiveKit needs three UDP listeners of its own, and they are all distinct ports —
+its TURN relay cannot share the RTC mux's port (LiveKit refuses to bind the same
+address twice and exits at startup). With the defaults those are:
+
+- **RTC mux:** `7882/udp` when native media is also enabled, otherwise your
+  public signalling port.
+- **TURN relay:** the port after the RTC mux (`7883/udp` by default). Override
+  it with `[livekit] turn_udp_port` in `paracord.toml` if that port is taken.
+- **TURN relay range:** the ten ports after TURN (`7884-7893/udp` by default).
+
+Forward all three to the server host. Native media (the default) needs none of
+them.
+
 ## 3. Set PUBLIC_URL
 
 For any deployment reachable at a fixed hostname, set the canonical public origin

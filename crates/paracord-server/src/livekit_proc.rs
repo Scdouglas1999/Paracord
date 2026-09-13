@@ -96,7 +96,47 @@ fn write_livekit_config(
     external_ip: Option<&str>,
     local_ip: Option<&str>,
     native_media_enabled: bool,
+    turn_udp_port: Option<u16>,
 ) -> std::io::Result<PathBuf> {
+    let config = build_livekit_config(
+        api_key,
+        api_secret,
+        livekit_port,
+        server_port,
+        external_ip,
+        local_ip,
+        native_media_enabled,
+        turn_udp_port,
+    );
+
+    let mut file = tempfile::Builder::new()
+        .prefix("paracord-livekit-")
+        .suffix(".yaml")
+        .tempfile_in(std::env::temp_dir())?;
+    file.write_all(config.as_bytes())?;
+    file.flush()?;
+    let (_persisted_file, path) = file.keep()?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(path)
+}
+
+/// The YAML itself, so the port arithmetic can be asserted without a filesystem.
+fn build_livekit_config(
+    api_key: &str,
+    api_secret: &str,
+    livekit_port: u16,
+    server_port: u16,
+    external_ip: Option<&str>,
+    local_ip: Option<&str>,
+    native_media_enabled: bool,
+    turn_udp_port: Option<u16>,
+) -> String {
     let is_local_only = external_ip.is_none();
 
     let mut lines = vec![format!("port: {livekit_port}"), "rtc:".to_string()];
@@ -152,23 +192,28 @@ fn write_livekit_config(
     lines.push("keys:".to_string());
     lines.push(format!("    {api_key}: {api_secret}"));
     if let Some(ip) = external_ip {
-        // TURN provides relay fallback for clients behind symmetric NAT.
-        // Use the same UDP port as LiveKit's RTC mux so there's no extra
-        // port to forward.
+        // TURN provides relay fallback for clients behind symmetric NAT. It is
+        // a second UDP listener of its own, so it needs a port of its own:
+        // pointing it at the RTC mux's port meant LiveKit tried to bind the
+        // same address twice and exited with "could not listen on TURN UDP port
+        // … address already in use", which took LiveKit mode down entirely.
+        // The default is the port after the RTC mux, and the relay range moves
+        // up to leave it room; an operator whose neighbouring port is already
+        // spoken for sets `[livekit] turn_udp_port`.
+        let turn_port = turn_udp_port.unwrap_or(lk_udp_port + 1);
         lines.push("turn:".to_string());
         lines.push("    enabled: true".to_string());
         lines.push(format!("    domain: {ip}"));
         lines.push("    tls_port: 0".to_string());
-        lines.push(format!("    udp_port: {lk_udp_port}"));
+        lines.push(format!("    udp_port: {turn_port}"));
         lines.push("    external_tls: false".to_string());
-        let relay_start = lk_udp_port + 1;
-        let relay_end = lk_udp_port + 10;
+        let relay_start = turn_port.max(lk_udp_port) + 1;
+        let relay_end = relay_start + 9;
         lines.push(format!("    relay_range_start: {relay_start}"));
         lines.push(format!("    relay_range_end: {relay_end}"));
     }
     lines.push("logging:".to_string());
     lines.push("    level: info".to_string());
-    let config = lines.join("\n") + "\n";
 
     tracing::info!(
         "LiveKit config: local_only={}, external_ip={:?}, local_ip={:?}",
@@ -177,27 +222,14 @@ fn write_livekit_config(
         local_ip,
     );
 
-    let mut file = tempfile::Builder::new()
-        .prefix("paracord-livekit-")
-        .suffix(".yaml")
-        .tempfile_in(std::env::temp_dir())?;
-    file.write_all(config.as_bytes())?;
-    file.flush()?;
-    let (_persisted_file, path) = file.keep()?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-
-    Ok(path)
+    lines.join("\n") + "\n"
 }
 
 /// Try to start a managed LiveKit server process.
 ///
 /// Returns `Some(LiveKitProcess)` if successful, `None` if the binary wasn't found
 /// or couldn't be started.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_livekit(
     api_key: &str,
     api_secret: &str,
@@ -206,6 +238,7 @@ pub async fn start_livekit(
     external_ip: Option<&str>,
     local_ip: Option<&str>,
     native_media_enabled: bool,
+    turn_udp_port: Option<u16>,
 ) -> Option<LiveKitProcess> {
     let binary = match find_livekit_binary() {
         Some(path) => {
@@ -262,6 +295,7 @@ pub async fn start_livekit(
         external_ip,
         local_ip,
         native_media_enabled,
+        turn_udp_port,
     ) {
         Ok(path) => path,
         Err(e) => {
@@ -332,4 +366,80 @@ pub async fn start_livekit(
     );
 
     Some(LiveKitProcess { child, config_path })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_livekit_config;
+
+    fn value(config: &str, section: &str, key: &str) -> String {
+        let mut in_section = false;
+        for line in config.lines() {
+            if !line.starts_with(' ') {
+                in_section = line.trim_end_matches(':') == section;
+                continue;
+            }
+            if !in_section {
+                continue;
+            }
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix(&format!("{key}:")) {
+                return rest.trim().to_string();
+            }
+        }
+        panic!("{section}.{key} missing from:\n{config}");
+    }
+
+    /// TURN is a second UDP listener, not a view of the RTC one. Pointing it at
+    /// the RTC mux's port made LiveKit bind the same address twice and exit
+    /// with "could not listen on TURN UDP port … address already in use", so
+    /// LiveKit mode could not start at all.
+    #[test]
+    fn turn_gets_a_port_of_its_own() {
+        let config = build_livekit_config(
+            "key",
+            "secret",
+            7880,
+            8443,
+            Some("203.0.113.7"),
+            None,
+            true,
+            None,
+        );
+        let rtc = value(&config, "rtc", "udp_port");
+        let turn = value(&config, "turn", "udp_port");
+        assert_ne!(rtc, turn, "TURN cannot share the RTC mux's UDP port");
+        assert_eq!(rtc, "7882");
+        assert_eq!(turn, "7883");
+        // …and the relay range starts above both, so nothing in it collides
+        // with either listener.
+        assert_eq!(value(&config, "turn", "relay_range_start"), "7884");
+        assert_eq!(value(&config, "turn", "relay_range_end"), "7893");
+    }
+
+    #[test]
+    fn an_operator_can_place_the_turn_port_themselves() {
+        let config = build_livekit_config(
+            "key",
+            "secret",
+            7880,
+            8443,
+            Some("203.0.113.7"),
+            None,
+            false,
+            Some(40100),
+        );
+        assert_eq!(value(&config, "rtc", "udp_port"), "8443");
+        assert_eq!(value(&config, "turn", "udp_port"), "40100");
+        assert_eq!(value(&config, "turn", "relay_range_start"), "40101");
+        assert_eq!(value(&config, "turn", "relay_range_end"), "40110");
+    }
+
+    /// A local-only instance advertises no external IP, so it runs no TURN at
+    /// all — and must not be given a stray listener to bind.
+    #[test]
+    fn a_local_only_instance_runs_no_turn() {
+        let config = build_livekit_config("key", "secret", 7880, 8090, None, None, false, None);
+        assert!(!config.contains("turn:"), "{config}");
+    }
 }

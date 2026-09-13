@@ -269,6 +269,16 @@ pub struct LiveKitConfig {
     /// Public LiveKit URL sent to clients (e.g., wss://chat.example.com/livekit).
     /// Falls back to `url` if not set.
     pub public_url: Option<String>,
+    /// UDP port LiveKit's TURN relay listens on.
+    ///
+    /// TURN is a *second* UDP listener, not a view of the RTC one: LiveKit
+    /// binds both, and binding the same port twice fails the process at
+    /// startup ("could not listen on TURN UDP port … address already in use"),
+    /// so LiveKit mode could not start at all. Left unset it takes the port
+    /// after LiveKit's RTC mux, and the relay range moves up to make room.
+    /// Set it when that neighbour is already spoken for; it is a port an
+    /// operator must forward alongside the media port.
+    pub turn_udp_port: Option<u16>,
 }
 
 impl Default for LiveKitConfig {
@@ -279,6 +289,7 @@ impl Default for LiveKitConfig {
             url: default_livekit_url(),
             http_url: default_livekit_http_url(),
             public_url: None,
+            turn_udp_port: None,
         }
     }
 }
