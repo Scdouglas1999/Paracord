@@ -219,19 +219,24 @@ export function generateRecoveryPhrase(privateKey: Uint8Array): string {
   allBytes.set(privateKey);
   allBytes[32] = checksum;
 
+  // Stream the 264 bits out 11 at a time. A 16-bit read cannot hold an 11-bit
+  // window that starts 6 or 7 bits into a byte — the shift it needs goes
+  // negative, and JavaScript's `>>` masks its count to 5 bits, so `>> -1`
+  // becomes `>> 31` and yields 0. That is a silent, deterministic loss: words
+  // 3, 6, 11, 14, 19 and 22 of every phrase came out as wordlist[0]
+  // ("abandon"), destroying 66 bits of the key and leaving no generated phrase
+  // able to pass its own checksum on recovery. Carrying the bits in an
+  // accumulator never shifts by a negative count.
   const words: string[] = [];
-  for (let i = 0; i < 24; i++) {
-    const bitOffset = i * 11;
-    const byteIndex = bitOffset >> 3;
-    const bitIndex = bitOffset & 7;
-
-    // Read 16 bits starting at byteIndex, then extract the 11-bit window
-    const val =
-      ((allBytes[byteIndex] << 8) |
-        (byteIndex + 1 < allBytes.length ? allBytes[byteIndex + 1] : 0)) >>
-      (16 - 11 - bitIndex);
-    const index = val & 0x7ff;
-    words.push(wordlist[index]);
+  let bits = 0;
+  let accumulator = 0;
+  for (const byte of allBytes) {
+    accumulator = (accumulator << 8) | byte;
+    bits += 8;
+    while (bits >= 11) {
+      bits -= 11;
+      words.push(wordlist[(accumulator >> bits) & 0x7ff]);
+    }
   }
 
   return words.join(' ');
@@ -262,22 +267,21 @@ export async function recoverFromPhrase(
     indices.push(idx);
   }
 
-  // Reconstruct 264 bits (33 bytes) from 24 x 11-bit indices
+  // Reconstruct 264 bits (33 bytes) from 24 x 11-bit indices — the exact
+  // inverse of the accumulator in `generateRecoveryPhrase`. The byte-at-a-time
+  // form this replaces shifted by `8 - remaining`, which goes negative for the
+  // six words that start 6 or 7 bits into a byte, and a negative `<<` count is
+  // masked to 5 bits and drops the bits entirely.
   const allBytes = new Uint8Array(33);
-  for (let i = 0; i < 24; i++) {
-    const bitOffset = i * 11;
-    const byteIndex = bitOffset >> 3;
-    const bitIndex = bitOffset & 7;
-    const val = indices[i];
-
-    // Write 11 bits at the correct position
-    allBytes[byteIndex] |= (val >> (11 - (8 - bitIndex))) & 0xff;
-    const remaining = 11 - (8 - bitIndex);
-    if (remaining > 0 && byteIndex + 1 < allBytes.length) {
-      allBytes[byteIndex + 1] |= (val << (8 - remaining)) & 0xff;
-      if (remaining > 8 && byteIndex + 2 < allBytes.length) {
-        allBytes[byteIndex + 2] |= (val << (16 - remaining)) & 0xff;
-      }
+  let bits = 0;
+  let accumulator = 0;
+  let written = 0;
+  for (const index of indices) {
+    accumulator = (accumulator << 11) | index;
+    bits += 11;
+    while (bits >= 8) {
+      bits -= 8;
+      allBytes[written++] = (accumulator >> bits) & 0xff;
     }
   }
 
