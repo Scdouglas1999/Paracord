@@ -4,7 +4,10 @@ import { authApi } from '../api/auth';
 import { extractApiError, refreshSharedSession } from '../api/client';
 import {
   clearLegacyPersistedAuth,
+  clearSessionHint,
   getAccessToken,
+  getRefreshToken,
+  hasSessionHint,
   hydrateRefreshTokenStorage,
   setAccessToken,
   setRefreshToken,
@@ -51,6 +54,7 @@ interface AuthState {
 function clearAuthState(set: (partial: Partial<AuthState>) => void): Promise<void> {
   setAccessToken(null);
   setRefreshToken(null);
+  clearSessionHint();
   clearLegacyPersistedAuth();
   clearDownloadTicketCache();
   // Clear per-session transient state so stale typing indicators and their
@@ -133,6 +137,13 @@ export const useAuthStore = create<AuthState>()((set) => ({
   initializeSession: async () => {
     clearLegacyPersistedAuth();
     await hydrateRefreshTokenStorage();
+    // A browser that has never held a session here has nothing to refresh. It
+    // used to ask anyway on every cold load, which is a console error for the
+    // visitor and a WARN in the operator's log for every anonymous page view.
+    if (!hasSessionHint() && !getRefreshToken()) {
+      set({ token: null, sessionBootstrapComplete: true });
+      return;
+    }
     try {
       // Go through the shared single-flight refresh: the app fires other
       // requests while bootstrapping, and their 401 retry path refreshes the
@@ -154,6 +165,9 @@ export const useAuthStore = create<AuthState>()((set) => ({
       setAccessToken(null);
       if (isUnauthorizedError(err)) {
         setRefreshToken(null);
+        // The server has spoken: there is no session behind this origin's
+        // cookies. Stop asking on every load until one is established again.
+        clearSessionHint();
       }
       set({ token: null, sessionBootstrapComplete: true });
     }

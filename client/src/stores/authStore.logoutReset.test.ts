@@ -17,6 +17,8 @@ vi.mock('../lib/authToken', () => ({
   hydrateRefreshTokenStorage: vi.fn(async () => undefined),
   setRefreshToken: vi.fn(),
   clearLegacyPersistedAuth: vi.fn(),
+  hasSessionHint: vi.fn(() => true),
+  clearSessionHint: vi.fn(),
 }));
 
 vi.mock('../lib/downloadTicket', () => ({

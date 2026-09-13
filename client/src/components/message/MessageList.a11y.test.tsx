@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   },
   scrollToIndex: vi.fn(),
   typingByChannel: {} as Record<string, string[]>,
+  fetchChannelOverwrites: vi.fn(),
   savedMessageStoreState: {
     serverId: 'srv-a',
     savedIds: new Set<string>(),
@@ -85,6 +86,11 @@ vi.mock('@tanstack/react-virtual', () => ({
     measureElement: vi.fn(),
     scrollToIndex: mocks.scrollToIndex,
   }),
+}));
+
+vi.mock('../../lib/permissionDataCache', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  fetchChannelOverwrites: mocks.fetchChannelOverwrites,
 }));
 
 vi.mock('../../hooks/useMessages', () => ({
@@ -261,6 +267,7 @@ describe('MessageList keyboard accessibility and error state', () => {
     mocks.readStateStoreState.markRead.mockReset();
     mocks.readStateStoreState.saveReadPosition.mockClear();
     mocks.scrollToIndex.mockClear();
+    mocks.fetchChannelOverwrites.mockResolvedValue([]);
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
       value: vi.fn().mockImplementation((query: string) => ({
@@ -312,6 +319,35 @@ describe('MessageList keyboard accessibility and error state', () => {
 
     expect(screen.getByRole('button', { name: 'Add reaction' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument();
+  });
+
+  // Reading a room's overwrite list needs MANAGE_CHANNELS, so asking for it on
+  // every room a plain member opened answered 403 every time — a failed request
+  // and a console error the timeline swallowed.
+  it('does not ask for permission overwrites it is not allowed to read', async () => {
+    mocks.useMessagesReturn.messages = [makeMessage()];
+
+    render(
+      <MemoryRouter>
+        <MessageList channelId="ch1" />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('article', { name: /Alice/ });
+    expect(mocks.fetchChannelOverwrites).not.toHaveBeenCalled();
+  });
+
+  it('asks for permission overwrites once the viewer may manage the room', async () => {
+    mocks.permissionsState.permissions = 1n << 4n; // MANAGE_CHANNELS
+    mocks.useMessagesReturn.messages = [makeMessage()];
+
+    render(
+      <MemoryRouter>
+        <MessageList channelId="ch1" />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(mocks.fetchChannelOverwrites).toHaveBeenCalledWith('ch1'));
   });
 
   it('renders an error banner with a retry control instead of the welcome empty state when the fetch failed', async () => {

@@ -724,8 +724,16 @@ function OwnedMessageList({
   useEffect(() => {
     void useSavedMessageStore.getState().load();
   }, [savedServerScope]);
+  // Reading a room's overwrite list needs MANAGE_CHANNELS. Asking for it
+  // regardless answered 403 on every room a plain member opened — a failed
+  // request and a console error the timeline then hid. The member's own
+  // effective permissions stay the server's to enforce; the UI gates
+  // optimistically from the guild level, exactly as `usePermissions` documents.
+  const guildLevel = usePermissions(activeGuildId);
+  const canReadOverwrites =
+    guildLevel.isAdmin || hasPermission(guildLevel.permissions, Permissions.MANAGE_CHANNELS);
   useEffect(() => {
-    if (!activeGuildId || !channelId) {
+    if (!activeGuildId || !channelId || !canReadOverwrites) {
       setChannelOverwrites([]);
       return;
     }
@@ -742,7 +750,7 @@ function OwnedMessageList({
     return () => {
       cancelled = true;
     };
-  }, [activeGuildId, channelId]);
+  }, [activeGuildId, canReadOverwrites, channelId]);
   const { permissions, isAdmin } = usePermissions(activeGuildId, {
     channelId,
     channelOverwrites,

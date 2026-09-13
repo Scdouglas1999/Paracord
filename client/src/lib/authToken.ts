@@ -17,6 +17,13 @@ const SECURE_REFRESH_TOKEN_KEY = 'paracord:auth:refresh-token';
 const WRAPPED_REFRESH_TOKEN_KEY = 'paracord:auth:refresh-token';
 const WRAP_KEY_DB = 'paracord-auth';
 const CSRF_COOKIE_NAME = 'paracord_csrf';
+// The refresh cookie is HttpOnly, so a cold page load cannot see whether this
+// browser holds a session — it used to find out by asking, which answered 401
+// for every first-time visitor, once per page view, in the browser console and
+// in the server log. This readable marker records only that a session once
+// existed here; it carries no credential and is cleared by signing out or by a
+// refusal from the refresh endpoint itself.
+const SESSION_HINT_KEY = 'paracord:auth:session-seen';
 
 function normalizeToken(token: string | null | undefined): string | null {
   const trimmed = token?.trim() ?? '';
@@ -117,6 +124,37 @@ export function getCsrfToken(): string | null {
 
 export function setAccessToken(token: string | null): void {
   accessToken = normalizeToken(token);
+  // Only ever set here. A transient clear (a failed refresh mid-session, a
+  // teardown before a retry) must not cost the next cold load its session, so
+  // the marker is dropped by sign-out and by an unauthorized refresh alone.
+  if (accessToken) noteSessionEstablished();
+}
+
+/** Record that this origin has held a session, for the next cold load. */
+export function noteSessionEstablished(): void {
+  try {
+    localStorage.setItem(SESSION_HINT_KEY, '1');
+  } catch {
+    // A browser refusing storage simply keeps the old ask-and-see behaviour.
+  }
+}
+
+export function clearSessionHint(): void {
+  try {
+    localStorage.removeItem(SESSION_HINT_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+/** Whether a session has ever been established on this origin. */
+export function hasSessionHint(): boolean {
+  try {
+    return localStorage.getItem(SESSION_HINT_KEY) === '1';
+  } catch {
+    // Unreadable storage must not lock anyone out: ask the server instead.
+    return true;
+  }
 }
 
 export async function hydrateRefreshTokenStorage(): Promise<void> {

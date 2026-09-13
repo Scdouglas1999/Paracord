@@ -18,6 +18,8 @@ vi.mock('../lib/authToken', () => ({
   hydrateRefreshTokenStorage: vi.fn(async () => undefined),
   setRefreshToken: vi.fn(),
   clearLegacyPersistedAuth: vi.fn(),
+  hasSessionHint: vi.fn(() => true),
+  clearSessionHint: vi.fn(),
 }));
 
 const mockRefreshSharedSession = vi.hoisted(() => vi.fn());
@@ -49,7 +51,7 @@ vi.mock('../api/client', () => ({
 }));
 
 import { useAuthStore } from './authStore';
-import { getAccessToken, setRefreshToken } from '../lib/authToken';
+import { clearSessionHint, getAccessToken, hasSessionHint, setRefreshToken } from '../lib/authToken';
 
 const fakeUser = {
   id: 'u1',
@@ -299,6 +301,28 @@ describe('authStore', () => {
       expect(useAuthStore.getState().token).toBeNull();
       expect(useAuthStore.getState().sessionBootstrapComplete).toBe(true);
       expect(setRefreshToken).toHaveBeenCalledWith(null);
+    });
+
+    // Every anonymous page view used to cost a POST /auth/refresh that could
+    // only answer 401 — a console error for the visitor and a WARN in the
+    // operator's log, 15 of the 16 WARNs in a full session of manual testing.
+    it('does not ask to refresh a session this browser has never held', async () => {
+      vi.mocked(hasSessionHint).mockReturnValue(false);
+
+      await useAuthStore.getState().initializeSession();
+
+      expect(mockRefreshSharedSession).not.toHaveBeenCalled();
+      expect(useAuthStore.getState().token).toBeNull();
+      expect(useAuthStore.getState().sessionBootstrapComplete).toBe(true);
+      vi.mocked(hasSessionHint).mockReturnValue(true);
+    });
+
+    it('stops asking once the server refuses the refresh outright', async () => {
+      mockRefreshSharedSession.mockRejectedValue({ response: { status: 401 } });
+
+      await useAuthStore.getState().initializeSession();
+
+      expect(clearSessionHint).toHaveBeenCalled();
     });
 
     // Regression: the server rotates the refresh token on every use, so two
