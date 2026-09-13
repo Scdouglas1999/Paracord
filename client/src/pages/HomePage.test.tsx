@@ -97,6 +97,8 @@ const unified = vi.hoisted(() => ({
 const stores = vi.hoisted(() => ({
   guilds: [] as Array<{ id: string; key: string; scope: { serverId: string; userId: string } }>,
   channelErrors: {} as Record<string, string>,
+  /** Whether the stores already hold this account's rooms and members. */
+  loaded: true,
   fetchChannels: vi.fn(),
   fetchMembers: vi.fn(),
   fetchRelationships: vi.fn(),
@@ -142,7 +144,7 @@ vi.mock('../stores/channelStore', () => {
       return stores.channelErrors;
     },
     loading: {},
-    guildChannelsLoaded: new Proxy({} as Record<string, boolean>, { get: () => true }),
+    guildChannelsLoaded: new Proxy({} as Record<string, boolean>, { get: () => stores.loaded }),
     fetchChannels: (...a: unknown[]) => stores.fetchChannels(...a),
   };
   return {
@@ -153,7 +155,11 @@ vi.mock('../stores/channelStore', () => {
   };
 });
 vi.mock('../stores/memberStore', () => {
-  const state = { fetchMembers: (...a: unknown[]) => stores.fetchMembers(...a) };
+  const state = {
+    loading: {},
+    membersLoaded: new Proxy({} as Record<string, boolean>, { get: () => stores.loaded }),
+    fetchMembers: (...a: unknown[]) => stores.fetchMembers(...a),
+  };
   return {
     useMemberStore: Object.assign((selector: (s: typeof state) => unknown) => selector(state), {
       getState: () => state,
@@ -213,6 +219,7 @@ function renderHome() {
 beforeEach(() => {
   vi.clearAllMocks();
   useReadStateStore.setState({ byAccount: {}, loading: {}, errors: {}, attentionRevisions: {} });
+  stores.loaded = true;
   lights.buildings = [];
   lights.lightsOn = 0;
   lights.sentence = "Nobody's lights are on right now";
@@ -245,7 +252,9 @@ describe('Home, the street outside your buildings', () => {
     renderHome();
     const well = screen.getByRole('region', { name: 'Around now' });
     expect(within(well).getByText('Mara and Priya are in Shop floor')).toBeInTheDocument();
-    expect(within(well).getByText('+7 lights on')).toBeInTheDocument();
+    // Three of the building's people are drawn as faces; the tail counts the
+    // lights the well did not draw.
+    expect(within(well).getByText('+6 lights on')).toBeInTheDocument();
   });
 
   it('draws each building in the order the light hook gave them', () => {
@@ -282,7 +291,8 @@ describe('Home, the street outside your buildings', () => {
     expect(screen.getByText('Add a building dialog')).toBeInTheDocument();
   });
 
-  it('loads each building’s rooms and people exactly once', () => {
+  it('loads the rooms and people of every building it has not got, once', () => {
+    stores.loaded = false;
     stores.guilds = [
       { id: 'guild-1', key: 'k1', scope: SCOPE },
       { id: 'guild-2', key: 'k2', scope: SCOPE },
@@ -291,6 +301,13 @@ describe('Home, the street outside your buildings', () => {
     rerender(tree());
     expect(stores.fetchChannels).toHaveBeenCalledTimes(2);
     expect(stores.fetchMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks for nothing it already has', () => {
+    stores.guilds = [{ id: 'guild-1', key: 'k1', scope: SCOPE }];
+    renderHome();
+    expect(stores.fetchChannels).not.toHaveBeenCalled();
+    expect(stores.fetchMembers).not.toHaveBeenCalled();
   });
 });
 
