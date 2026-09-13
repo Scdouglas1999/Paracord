@@ -240,7 +240,7 @@ export function InstanceSetupPage() {
       return;
     }
     if (trimmedSpaceName.length < 2) {
-      rejectWith('Name the first space — at least 2 characters.');
+      rejectWith('Name the first building — at least 2 characters.');
       return;
     }
 
@@ -286,7 +286,7 @@ export function InstanceSetupPage() {
         <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-7 sm:p-8">
           <AuthHeading
             title="Set up your Paracord server"
-            subtitle="You’re setting up the server itself, not joining one. This creates the owner account — the person who runs this machine — names the server and opens its first space. Everyone who arrives later signs up normally and joins as a member."
+            subtitle="You’re setting up the server itself, not joining one. This creates the owner account — the person who runs this machine — names the server and opens its first building. Everyone who arrives later signs up normally and joins as a member."
           />
 
           {/* These messages are instructions, not labels: they must wrap rather
@@ -419,10 +419,10 @@ export function InstanceSetupPage() {
 
           <Step
             index={4}
-            title="Open the first space"
-            description="A space is where conversations live. This one is created with a #general channel and a voice room; you can add more later."
+            title="Open the first building"
+            description="A building is where conversations live. This one is created with a #general channel and a voice room; you can add more later."
           >
-            <Field label="First space name" required hint="For example: The Lounge.">
+            <Field label="First building name" required hint="For example: The Lounge.">
               <Input
                 type="text"
                 value={spaceName}

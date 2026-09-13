@@ -130,8 +130,8 @@ describe('CreateGuildModal template tab', () => {
 
     render(<CreateGuildModal onClose={onClose} />);
 
-    await user.clear(screen.getByLabelText('Space name'));
-    await user.type(screen.getByLabelText('Space name'), 'Ada HQ');
+    await user.clear(screen.getByLabelText('Building name'));
+    await user.type(screen.getByLabelText('Building name'), 'Ada HQ');
     await user.click(screen.getAllByRole('button', { name: 'Create' }).at(-1)!);
 
     await waitFor(() => {
@@ -150,7 +150,7 @@ describe('CreateGuildModal template tab', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Join' }));
     await user.type(screen.getByLabelText('Invite link'), 'https://paracord.gg/launch');
-    await user.click(screen.getByRole('button', { name: 'Join space' }));
+    await user.click(screen.getByRole('button', { name: 'Join building' }));
 
     await waitFor(() => {
       expect(acceptInvite).toHaveBeenCalledWith('launch', scope);
@@ -177,8 +177,8 @@ describe('CreateGuildModal template tab', () => {
     expect(screen.getByText('war-room')).toBeInTheDocument();
     expect(screen.getByText('Responder')).toBeInTheDocument();
 
-    await user.clear(screen.getByLabelText('Template space name'));
-    await user.type(screen.getByLabelText('Template space name'), 'Launch HQ');
+    await user.clear(screen.getByLabelText('Template building name'));
+    await user.type(screen.getByLabelText('Template building name'), 'Launch HQ');
     await user.click(screen.getByRole('button', { name: 'Create from Template' }));
 
     await waitFor(() => {

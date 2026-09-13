@@ -173,7 +173,7 @@ export function ChannelSwitcher({
           role="dialog"
           aria-modal="true"
           tabIndex={-1}
-          aria-label={`Switch room in ${guildName || 'this space'}`}
+          aria-label={`Switch room in ${guildName || 'this building'}`}
           className="pc-floating absolute left-0 top-[calc(100%+0.5rem)] z-50 w-[min(20rem,calc(100vw-4rem))] overflow-hidden"
           onKeyDown={(event) => {
             if (event.key === 'ArrowDown') {

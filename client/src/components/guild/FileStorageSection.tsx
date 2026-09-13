@@ -165,7 +165,7 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
     <div className="flex flex-col gap-8">
       <SectionHeader
         title="File storage"
-        description="Track how much storage this space is using and set the rules for what members can upload."
+        description="Track how much storage this building is using and set the rules for what members can upload."
       />
 
       {error && <ErrorBanner message={error} multiline />}
@@ -209,7 +209,7 @@ export function FileStorageSection({ guildId, canManage }: FileStorageSectionPro
             )}
             {overQuota && (
               <p className="mt-2.5 text-meta leading-relaxed text-accent-danger">
-                This space is nearly out of room. Delete files or raise the quota to keep uploads flowing.
+                This building is nearly out of storage. Delete files or raise the quota to keep uploads flowing.
               </p>
             )}
           </Well>

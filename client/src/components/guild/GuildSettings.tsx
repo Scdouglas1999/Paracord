@@ -76,17 +76,17 @@ export function getGuildSettingsErrorMessage(err: unknown, fallback: string): st
 // sits under (spec §6.8 — never uppercase); the first group is unlabelled.
 // Section ids are load-bearing (deep links, `?section=`, the Bot Store's
 // "Open …" jumps) and never change.
-type NavGroupKey = '' | 'The space' | 'People' | 'Automation' | 'Moderation';
+type NavGroupKey = '' | 'The building' | 'People' | 'Automation' | 'Moderation';
 
-const NAV_GROUP_ORDER: NavGroupKey[] = ['', 'The space', 'People', 'Automation', 'Moderation'];
+const NAV_GROUP_ORDER: NavGroupKey[] = ['', 'The building', 'People', 'Automation', 'Moderation'];
 
 const NAV_ITEMS: { id: SettingsSection; label: string; icon: ReactNode; group: NavGroupKey }[] = [
   { id: 'overview', label: 'Overview', icon: <Hash size={16} />, group: '' },
-  { id: 'server-hub', label: 'Space hub', icon: <LayoutTemplate size={16} />, group: 'The space' },
-  { id: 'channels', label: 'Channels', icon: <Hash size={16} />, group: 'The space' },
-  { id: 'emojis', label: 'Emojis', icon: <Smile size={16} />, group: 'The space' },
-  { id: 'events', label: 'Events', icon: <Calendar size={16} />, group: 'The space' },
-  { id: 'file-storage', label: 'File storage', icon: <HardDrive size={16} />, group: 'The space' },
+  { id: 'server-hub', label: 'Building hub', icon: <LayoutTemplate size={16} />, group: 'The building' },
+  { id: 'channels', label: 'Channels', icon: <Hash size={16} />, group: 'The building' },
+  { id: 'emojis', label: 'Emojis', icon: <Smile size={16} />, group: 'The building' },
+  { id: 'events', label: 'Events', icon: <Calendar size={16} />, group: 'The building' },
+  { id: 'file-storage', label: 'File storage', icon: <HardDrive size={16} />, group: 'The building' },
   { id: 'roles', label: 'Roles', icon: <Shield size={16} />, group: 'People' },
   { id: 'members', label: 'Members', icon: <Users size={16} />, group: 'People' },
   { id: 'invites', label: 'Invites', icon: <Link size={16} />, group: 'People' },
@@ -1091,7 +1091,7 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
 
   const handleLeaveGuild = async () => {
     if (!guildScope) return;
-    if (!(await confirm({ title: 'Leave this space?', description: 'You will need a new invite to rejoin.', confirmLabel: 'Leave', variant: 'danger' }))) return;
+    if (!(await confirm({ title: 'Leave this building?', description: 'You will need a new invite to rejoin.', confirmLabel: 'Leave', variant: 'danger' }))) return;
     await runAction(async () => {
       await leaveGuild(guildId, guildScope);
       onClose();
@@ -1117,13 +1117,13 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
 
   return (
     <SettingsShell
-      label="Space settings"
+      label="Building settings"
       title={guild?.name || guildName}
       groups={navGroups}
       active={activeSection}
       onSelect={handleSelectSection}
       onClose={onClose}
-      closeLabel="Close space settings"
+      closeLabel="Close building settings"
       isMobile={isMobile}
       showIndex={mobileShowNav}
       onShowIndex={setMobileShowNav}
@@ -1131,11 +1131,11 @@ export function GuildSettings({ guildId, guildName, onClose, initialSection, ini
       indexFooter={
         <>
           <NavRow icon={<RefreshCw size={16} />} onClick={() => void refreshAll()}>
-            Reload this space
+            Reload this building
           </NavRow>
           {loading && (
             <div className="px-2.5 pt-1">
-              <LoadingSpinner size="sm" label="Reloading this space" />
+              <LoadingSpinner size="sm" label="Reloading this building" />
             </div>
           )}
         </>

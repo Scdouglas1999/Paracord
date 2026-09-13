@@ -139,7 +139,7 @@ describe('GuildSettings destructive flows', () => {
     const onClose = vi.fn();
     renderSettings(onClose);
 
-    await user.click(await screen.findByRole('button', { name: 'Delete space' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete building' }));
 
     const input = await screen.findByPlaceholderText('Test Guild');
     const confirmBtn = screen.getByRole('button', { name: 'Delete server' });
@@ -163,7 +163,7 @@ describe('GuildSettings destructive flows', () => {
     const user = userEvent.setup();
     renderSettings();
 
-    await user.click(await screen.findByRole('button', { name: 'Delete space' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete building' }));
     const input = await screen.findByPlaceholderText('Test Guild');
     await user.type(input, 'Test Guild');
     await user.click(screen.getByRole('button', { name: 'Cancel' }));

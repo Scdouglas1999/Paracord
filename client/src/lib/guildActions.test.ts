@@ -39,7 +39,7 @@ describe('background guild read actions', () => {
     await expect(markGuildRead({ id: '1', scope })).rejects.toThrow('1 of 1 channels could not be marked read: Permission revoked');
     expect(useReadStateStore.getState().byAccount[JSON.stringify(['a', '42'])]).toBeUndefined();
   });
-  it('bounds concurrent acknowledgements for large spaces', async () => {
+  it('bounds concurrent acknowledgements for large buildings', async () => {
     let concurrent = 0; let maximum = 0; let acknowledged = 0;
     const channels = Array.from({ length: 19 }, (_, id) => ({ id: String(id), type: 0, position: id, last_message_id: '99' }));
     clients.get('a')!.defaults.adapter = async config => {

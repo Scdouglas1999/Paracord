@@ -216,7 +216,7 @@ function HealthBody({ health }: { health: HealthReport }) {
       <Well className="grid grid-cols-2 gap-x-6 gap-y-5 px-5 py-5 sm:grid-cols-4">
         <Stat label="Messages sent" value={counts.messages} />
         <Stat label="Registered users" value={counts.users} />
-        <Stat label="Spaces" value={counts.guilds} />
+        <Stat label="Buildings" value={counts.guilds} />
         <Stat label="Online now" value={counts.online_users} />
       </Well>
 

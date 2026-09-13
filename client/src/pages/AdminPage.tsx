@@ -32,7 +32,7 @@ const NAV_GROUPS: SettingsNavGroup[] = [
     items: [{ id: 'overview', label: 'Overview', icon: <BarChart3 size={16} /> }],
   },
   {
-    label: 'People and spaces',
+    label: 'People and buildings',
     items: [
       { id: 'users', label: 'Users', icon: <Users size={16} /> },
       { id: 'guilds', label: 'Guilds', icon: <Server size={16} /> },

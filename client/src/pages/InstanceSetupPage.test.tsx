@@ -65,7 +65,7 @@ function renderPage() {
       <Routes>
         <Route path="/setup-server" element={<InstanceSetupPage />} />
         <Route path="/login" element={<div>Welcome back</div>} />
-        <Route path="/app/guilds/:guildId" element={<div>Space shell</div>} />
+        <Route path="/app/guilds/:guildId" element={<div>Building shell</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -77,7 +77,7 @@ async function fillClaimForm(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
   await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
   await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
-  await user.type(screen.getByLabelText(/First space name/), 'The Lounge');
+  await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
 }
 
 describe('InstanceSetupPage', () => {
@@ -157,7 +157,7 @@ describe('InstanceSetupPage', () => {
     await user.type(screen.getByLabelText(/^Password/), password);
     await user.type(screen.getByLabelText(/Confirm password/), password);
     await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
-    await user.type(screen.getByLabelText(/First space name/), 'The Lounge');
+    await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
     await user.click(screen.getByRole('button', { name: 'Claim this server' }));
 
     expect(await screen.findByText(message)).toBeInTheDocument();
@@ -174,7 +174,7 @@ describe('InstanceSetupPage', () => {
     await user.type(screen.getByLabelText(/^Password/), VALID_PASSWORD);
     await user.type(screen.getByLabelText(/Confirm password/), VALID_PASSWORD);
     await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
-    await user.type(screen.getByLabelText(/First space name/), 'The Lounge');
+    await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
     await user.click(screen.getByRole('button', { name: 'Claim this server' }));
 
     expect(
@@ -198,7 +198,7 @@ describe('InstanceSetupPage', () => {
       await user.type(screen.getByLabelText(/^Password/), 'nouppercase1!');
       await user.type(screen.getByLabelText(/Confirm password/), 'nouppercase1!');
       await user.type(screen.getByLabelText(/Server name/), 'Riverside Studio');
-      await user.type(screen.getByLabelText(/First space name/), 'The Lounge');
+      await user.type(screen.getByLabelText(/First building name/), 'The Lounge');
       await user.click(screen.getByRole('button', { name: 'Claim this server' }));
 
       const banner = await screen.findByText(/Password must include/);
@@ -212,7 +212,7 @@ describe('InstanceSetupPage', () => {
     }
   });
 
-  it('claims the server and lands the owner in the new space', async () => {
+  it('claims the server and lands the owner in the new building', async () => {
     const user = userEvent.setup();
     mockClaimInstance.mockResolvedValue({
       data: {
@@ -241,7 +241,7 @@ describe('InstanceSetupPage', () => {
     });
     expect(mockSetAccessToken).toHaveBeenCalledWith('access-token');
     expect(mockSetRefreshToken).toHaveBeenCalledWith('refresh-token');
-    expect(await screen.findByText('Space shell')).toBeInTheDocument();
+    expect(await screen.findByText('Building shell')).toBeInTheDocument();
   });
 
   it('says a rejected token is the wrong token, not "unauthorized", and keeps the form usable', async () => {

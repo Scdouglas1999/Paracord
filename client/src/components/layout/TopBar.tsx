@@ -545,8 +545,8 @@ function OwnedTopBar({
     // the panel still opens (§6.5, §7.6). A 1:1 DM's "list" is the one person
     // already named in the header strip.
     ...(isGroupDm ? [{ label: 'People in this message', icon: <Users size={17} />, action: panelToggle('recipients') }] : []),
-    ...(!isDM ? [{ label: 'Space leaderboard', icon: <TrendingUp size={17} />, action: panelToggle('economy') }] : []),
-    ...(canOpenSpaceSettings && resolvedGuildId ? [{ label: 'Space settings', icon: <Settings size={17} />, action: openSpaceSettings }] : []),
+    ...(!isDM ? [{ label: 'Building leaderboard', icon: <TrendingUp size={17} />, action: panelToggle('economy') }] : []),
+    ...(canOpenSpaceSettings && resolvedGuildId ? [{ label: 'Building settings', icon: <Settings size={17} />, action: openSpaceSettings }] : []),
     { label: '', action: () => {}, divider: true },
     { label: 'Inbox', icon: <Inbox size={17} />, action: () => void openInbox(), description: attentionDescription(unreadItems.length, inboxMentions) },
     { label: 'Keyboard shortcuts', icon: <HelpCircle size={17} />, action: openHelp },
@@ -554,7 +554,7 @@ function OwnedTopBar({
   const contextualSurfaces: Partial<Record<Exclude<ContextPanelMode, null>, ActiveHeaderSurface>> = {
     pins: { label: 'Pinned messages', icon: Pin, onClose: panelToggle('pins') },
     threads: { label: 'Threads', icon: MessagesSquare, onClose: panelToggle('threads') },
-    economy: { label: 'Space leaderboard', icon: TrendingUp, onClose: panelToggle('economy') },
+    economy: { label: 'Building leaderboard', icon: TrendingUp, onClose: panelToggle('economy') },
     recipients: { label: 'People in this message', icon: Users, onClose: panelToggle('recipients') },
   };
   const activeSurface: ActiveHeaderSurface | undefined = showSummary
@@ -890,7 +890,7 @@ function OwnedTopBar({
             <div className="min-w-0 pt-0.5">
               <h3 className="text-heading text-text-primary">Nothing to follow into yet</h3>
               <p className="mt-1 text-label text-text-secondary">
-                Create another text channel in this space to cross-post announcements from here.
+                Create another text channel in this building to cross-post announcements from here.
               </p>
             </div>
           </div>

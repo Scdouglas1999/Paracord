@@ -204,7 +204,7 @@ export function SlashCommandPopup({
         <p className="text-meta text-text-secondary">
           No commands match{' '}
           <span className="font-semibold text-text-primary">/{query}</span> — check the spelling or
-          browse this space&rsquo;s apps.
+          browse this building&rsquo;s apps.
         </p>
       </div>
     );

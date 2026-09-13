@@ -225,14 +225,14 @@ describe('the Lobby header', () => {
     );
   });
 
-  it('hides space settings without the permission, and opens them with it', () => {
+  it('hides building settings without the permission, and opens them with it', () => {
     const { unmount } = renderLobby();
-    expect(screen.queryByRole('button', { name: 'Space settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Building settings' })).not.toBeInTheDocument();
     unmount();
 
     gates.isAdmin = true;
     renderLobby();
-    fireEvent.click(screen.getByRole('button', { name: 'Space settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Building settings' }));
     expect(useUIStore.getState().guildSettingsId).toBe(GUILD);
   });
 

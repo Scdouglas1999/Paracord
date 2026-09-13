@@ -116,7 +116,7 @@ describe('TopBar context-panel toggles', () => {
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('threads');
 
     fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Space leaderboard/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Building leaderboard/ }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('economy');
 
     fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
@@ -145,7 +145,7 @@ describe('TopBar context-panel toggles', () => {
     const menu = screen.getByRole('menu', { name: 'Channel actions' });
     expect(menu).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Catch up summary' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Space leaderboard' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Building leaderboard' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Pinned messages' }));
     expect(mockUIState.toggleContextPanelMode).toHaveBeenCalledWith('pins');
@@ -172,20 +172,20 @@ describe('TopBar context-panel toggles', () => {
     expect(await screen.findByText('Guild Home Route')).toBeInTheDocument();
   });
 
-  it('hides Space settings without management permissions', () => {
+  it('hides Building settings without management permissions', () => {
     mockPermissions.isAdmin = false;
     mockPermissions.permissions = 0n;
     renderChannelTopBar();
     fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
-    expect(screen.queryByRole('menuitem', { name: 'Space settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Building settings' })).not.toBeInTheDocument();
   });
 
-  it('shows Space settings for guild admins and opens the overlay', () => {
+  it('shows Building settings for guild admins and opens the overlay', () => {
     mockPermissions.isAdmin = true;
     renderChannelTopBar();
 
     fireEvent.click(screen.getByRole('button', { name: 'More channel actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Space settings/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Building settings/ }));
     expect(mockUIState.setGuildSettingsId).toHaveBeenCalledWith('guild-1');
   });
 });

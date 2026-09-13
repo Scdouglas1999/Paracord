@@ -176,7 +176,7 @@ describe('UnifiedSidebar', () => {
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1/channels/2001');
   });
 
-  it('keeps the building context menu the old Spaces list owned', () => {
+  it('keeps the building context menu the old Buildings list owned', () => {
     renderSidebar();
     fireEvent.contextMenu(screen.getByRole('option', { name: /Kestrel Robotics lobby/ }));
     const menu = screen.getByRole('menu');

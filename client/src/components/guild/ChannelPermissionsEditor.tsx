@@ -526,7 +526,7 @@ export function ChannelPermissionsEditor({
                   <div className="flex max-h-28 flex-col gap-0.5 overflow-y-auto">
                     {filteredMembers.length === 0 ? (
                       <p className="px-1 text-meta leading-relaxed text-text-secondary">
-                        Nobody in this space matches that search.
+                        Nobody in this building matches that search.
                       </p>
                     ) : (
                       filteredMembers.map((m) => (

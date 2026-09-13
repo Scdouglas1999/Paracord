@@ -508,7 +508,7 @@ export function LoginPage() {
           <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-6 p-7 sm:p-8">
             <AuthHeading
               title="Welcome back"
-              subtitle="Sign in to pick up where you left off across your spaces."
+              subtitle="Sign in to pick up where you left off across your buildings."
             />
 
             {error && <ErrorBanner message={error} />}

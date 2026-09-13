@@ -130,12 +130,12 @@ export function OverviewSection({
     <SettingsPanel>
       <SectionHeader
         title="Overview"
-        description="Your space's identity — the name, icon, and blurb members see everywhere."
+        description="Your building's identity — the name, icon, and blurb members see everywhere."
         action={
           <div className="flex items-center gap-2">
             {guild && authUserId && guild.owner_id !== authUserId && (
               <Button variant="ghost" onClick={onLeave}>
-                Leave space
+                Leave building
               </Button>
             )}
             <Button onClick={onSave}>Save changes</Button>
@@ -150,7 +150,7 @@ export function OverviewSection({
           {/* The icon well: recessed, matte, no border-as-depth (§1.1). */}
           <div className="pc-well flex h-24 w-24 flex-col items-center justify-center overflow-hidden rounded-[var(--radius-full)] transition-colors group-hover:bg-bg-mod-subtle">
             {iconDataUrl ? (
-              <img src={iconDataUrl} alt="Space icon" className="h-full w-full object-cover" />
+              <img src={iconDataUrl} alt="Building icon" className="h-full w-full object-cover" />
             ) : (
               <>
                 <Upload size={20} className="text-text-muted" aria-hidden />
@@ -161,7 +161,7 @@ export function OverviewSection({
         </label>
         <div className="flex flex-1 flex-col gap-5">
           <label className="block">
-            <FieldLabel>Space name</FieldLabel>
+            <FieldLabel>Building name</FieldLabel>
             <Input value={name} onChange={(e) => onNameChange(e.target.value)} />
           </label>
           <label className="block">
@@ -171,7 +171,7 @@ export function OverviewSection({
               onChange={(e) => onDescriptionChange(e.target.value)}
               rows={3}
               className="resize-none"
-              placeholder="Describe what this space is about."
+              placeholder="Describe what this building is about."
             />
           </label>
         </div>
@@ -214,7 +214,7 @@ export function OverviewSection({
         <section className="border-t border-border-subtle pt-6">
           <GroupLabel>Transfer ownership</GroupLabel>
           <p className="mt-2 max-w-prose text-body leading-relaxed text-text-secondary">
-            Hand this space to another member. You'll immediately lose owner privileges — this can't be undone.
+            Hand this building to another member. You'll immediately lose owner privileges — this can't be undone.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <Select
@@ -247,13 +247,13 @@ export function OverviewSection({
           <GroupLabel className="text-accent-danger">Danger zone</GroupLabel>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-label text-text-primary">Delete this space</div>
+              <div className="text-label text-text-primary">Delete this building</div>
               <div className="mt-0.5 max-w-prose text-meta leading-relaxed text-text-secondary">
                 Every channel, message, and upload is permanently erased. This cannot be undone.
               </div>
             </div>
             <Button variant="danger" onClick={onShowDeleteDialog}>
-              Delete space
+              Delete building
             </Button>
           </div>
           {showDeleteGuildDialog && guild && (
@@ -664,7 +664,7 @@ export function MembersSection({
     <SettingsPanel>
       <SectionHeader
         title="Members"
-        description={`${members.length} ${members.length === 1 ? 'person is' : 'people are'} in this space. Manage their roles, or remove them.`}
+        description={`${members.length} ${members.length === 1 ? 'person is' : 'people are'} in this building. Manage their roles, or remove them.`}
       />
       <Input
         type="text"
@@ -681,7 +681,7 @@ export function MembersSection({
             title={memberSearch.trim() ? 'No member matches that search' : 'Nobody has joined yet'}
             description={
               memberSearch.trim()
-                ? `Nobody in this space matches "${memberSearch.trim()}". Try part of a username instead.`
+                ? `Nobody in this building matches "${memberSearch.trim()}". Try part of a username instead.`
                 : 'Hand out an invite from the Invites section and the people who accept show up here.'
             }
             action={
@@ -864,7 +864,7 @@ export function InvitesSection({
         description={
           canListInvites
             ? 'Share these links to bring people in. Revoke any that leak or outlive their purpose.'
-            : 'Make a link to bring people in. The full list belongs to the people who manage this space.'
+            : 'Make a link to bring people in. The full list belongs to the people who manage this building.'
         }
         action={
           <Button onClick={onCreateInvite}>
@@ -883,7 +883,7 @@ export function InvitesSection({
             className="!py-8"
             icon={<LinkIcon size={20} />}
             title="Existing links are not yours to see"
-            description="You can make a link and hand it out. Seeing every link this space has — and revoking them — needs Manage Space."
+            description="You can make a link and hand it out. Seeing every link this building has — and revoking them — needs Manage Building."
             action={
               <Button variant="ghost" onClick={onCreateInvite}>
                 <Plus size={15} aria-hidden />
@@ -991,7 +991,7 @@ export function EmojisSection({
       />
 
       {!canManage && (
-        <GateNotice>You can view space emojis, but the Manage Emojis permission is needed to add, rename, or delete.</GateNotice>
+        <GateNotice>You can view building emojis, but the Manage Emojis permission is needed to add, rename, or delete.</GateNotice>
       )}
 
       {canManage && (
@@ -1432,7 +1432,7 @@ export function BotsSection({
     <SettingsPanel>
       <SectionHeader
         title="Bots"
-        description="Automations installed in this space — your own apps, third-party apps, and Paracord's built-ins."
+        description="Automations installed in this building — your own apps, third-party apps, and Paracord's built-ins."
       />
 
       {!canManage && <GateNotice>You need the Manage Server permission to add or remove bots.</GateNotice>}
@@ -1806,7 +1806,7 @@ export function AuditLogSection({
 }: AuditLogSectionProps) {
   return (
     <SettingsPanel>
-      <SectionHeader title="Audit log" description="A running record of administrative actions in this space." />
+      <SectionHeader title="Audit log" description="A running record of administrative actions in this building." />
       {(onActionFilterChange || onUserFilterChange) && (
         <div className="flex flex-wrap gap-3 border-t border-border-subtle pt-4">
           {onActionFilterChange && (

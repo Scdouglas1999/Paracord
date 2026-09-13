@@ -321,7 +321,7 @@ describe('LobbyHeader', () => {
     );
     expect(screen.getByRole('heading', { name: 'Kestrel Robotics' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Invite people' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Space settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Building settings' })).not.toBeInTheDocument();
 
     const onInvite = vi.fn();
     const onSettings = vi.fn();
@@ -335,7 +335,7 @@ describe('LobbyHeader', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Invite people' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Space settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Building settings' }));
     expect(onInvite).toHaveBeenCalledTimes(1);
     expect(onSettings).toHaveBeenCalledTimes(1);
   });

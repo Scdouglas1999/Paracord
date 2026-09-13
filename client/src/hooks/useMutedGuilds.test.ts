@@ -88,7 +88,7 @@ describe('account-owned notification preferences', () => {
     finish(); await load;
     expect(state().byAccount[accountScopeKey(a)]['1'].muted_now).toBe(false);
   });
-  it('rejects overlapping writes to one space while allowing another account to save', async () => {
+  it('rejects overlapping writes to one building while allowing another account to save', async () => {
     const pending = delay(); const save = state().setMuted({ id: '1', scope: a }, true);
     await vi.waitFor(() => expect(pending.adapter).toHaveBeenCalledTimes(1));
     await expect(state().setMuted({ id: '1', scope: a }, false)).rejects.toThrow('still being saved');

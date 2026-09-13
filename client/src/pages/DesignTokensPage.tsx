@@ -459,12 +459,12 @@ function PrimitivesSection() {
 
       <SectionLabel meta="2 variants">Tabs</SectionLabel>
       <div className="flex max-w-[32rem] flex-col gap-4">
-        <Tabs items={DEMO_TABS} value={tab} onChange={setTab} label="Space settings" className="self-start" />
+        <Tabs items={DEMO_TABS} value={tab} onChange={setTab} label="Building settings" className="self-start" />
         <Tabs
           items={DEMO_TABS}
           value={pageTab}
           onChange={setPageTab}
-          label="Space settings, as pages"
+          label="Building settings, as pages"
           variant="underline"
         />
       </div>
@@ -528,7 +528,7 @@ function PrimitivesSection() {
           <EmptyState
             icon={<Inbox size={18} />}
             title="No invites are live right now"
-            description="An invite lets someone join this space without an admin adding them by hand."
+            description="An invite lets someone join this building without an admin adding them by hand."
             action={<Button>Create an invite</Button>}
           />
         </Plate>

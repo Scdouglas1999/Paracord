@@ -63,7 +63,7 @@ describe('ChannelSwitcher', () => {
     expect(within(dialog).getByText('Voice rooms')).toBeInTheDocument();
   });
 
-  it('filters by room name and navigates without returning to the space map', async () => {
+  it('filters by room name and navigates without returning to the building map', async () => {
     const user = userEvent.setup();
     renderSwitcher();
 

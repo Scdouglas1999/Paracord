@@ -450,7 +450,7 @@ export function BotStoreSection({
               title="Nothing published matches"
               description={
                 searchQuery.trim()
-                  ? `No public bot is listed under “${searchQuery.trim()}”. Try a shorter word, or use the bots that already ship with this space.`
+                  ? `No public bot is listed under “${searchQuery.trim()}”. Try a shorter word, or use the bots that already ship with this building.`
                   : 'No developer has published a bot to this server yet. The built-in bots cover welcomes and moderation without an install.'
               }
               action={
@@ -574,7 +574,7 @@ export function BotStoreSection({
                   <Well bare className="px-4">
                     <ToggleRow
                       label="Watch for raids"
-                      description="Locks the space down when a burst of accounts joins at once."
+                      description="Locks the building down when a burst of accounts joins at once."
                       checked={autoModConfig.anti_raid?.enabled === true}
                       onChange={(next) => setAutoModConfig({ ...autoModConfig, anti_raid: { ...(autoModConfig.anti_raid || DEFAULT_ANTI_RAID), enabled: next } })}
                     />
@@ -721,7 +721,7 @@ export function BotStoreSection({
 
       <section className="flex flex-col gap-3" aria-labelledby="included-tools-heading">
         <div>
-          <h3 id="included-tools-heading" className="pc-display text-heading text-text-primary">Already included with every space</h3>
+          <h3 id="included-tools-heading" className="pc-display text-heading text-text-primary">Already included with every building</h3>
           <p className="mt-1 text-body leading-relaxed text-text-secondary">These are native Paracord tools, so there is no bot to install.</p>
         </div>
         <Well bare className="divide-y divide-border-subtle px-4">

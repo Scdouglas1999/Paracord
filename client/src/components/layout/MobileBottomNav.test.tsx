@@ -34,20 +34,20 @@ beforeEach(() => {
 });
 
 describe('MobileBottomNav', () => {
-  it('opens the first joined space Rooms home when no space was explicitly selected', () => {
+  it('opens the first joined building Rooms home when no building was explicitly selected', () => {
     renderNav();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Space$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Building$/ }));
 
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g1');
     expect(useGuildStore.getState().selectedGuild?.id).toBe('g1');
   });
 
-  it('always returns to Rooms for the selected space, not an arbitrary last channel', () => {
+  it('always returns to Rooms for the selected building, not an arbitrary last channel', () => {
     useGuildStore.setState({ selectedGuild: { id: 'g2', scope: { serverId: '__local__', userId: 'user-1' } } });
     renderNav();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Space$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Building$/ }));
 
     expect(screen.getByTestId('pathname')).toHaveTextContent('/app/guilds/g2');
   });

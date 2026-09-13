@@ -92,7 +92,7 @@ describe('ContextMenu', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('activates the highlighted item with Space', () => {
+  it('activates the highlighted item with Building', () => {
     render(
       <ContextMenu
         items={defaultItems}

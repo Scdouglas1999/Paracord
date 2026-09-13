@@ -7,7 +7,7 @@ import { isCreateGuildRequest, isGuildDetail, isGuildSummaryList } from './gener
 // member count. This fixture intentionally includes extension settings and an
 // unknown server field, which a newer compatible server is allowed to add.
 const guild = {
-  id: '123456789012345678', name: 'Space', owner_id: '987654321098765432',
+  id: '123456789012345678', name: 'Building', owner_id: '987654321098765432',
   member_count: 2, description: null, icon_hash: null,
   created_at: '2026-09-12T12:00:00+00:00', visibility: 'private',
   allowed_roles: [], discovery_tags: [],
@@ -55,7 +55,7 @@ describe('Rust-derived wire validation', () => {
     const { banner_hash: _banner, system_channel_id: _system, vanity_url_code: _vanity, feature_flags: _flags, ...summary } = guild;
     expect(isGuildSummaryList([summary])).toBe(true);
     expect(isGuildDetail(summary)).toBe(false);
-    expect(isCreateGuildRequest({ name: 'Space' })).toBe(true);
+    expect(isCreateGuildRequest({ name: 'Building' })).toBe(true);
     expect(isCreateGuildRequest({ name: 3 })).toBe(false);
   });
 

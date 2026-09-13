@@ -88,7 +88,7 @@ export function DiscoveryPage() {
         if (signal?.aborted || axios.isCancel(err)) return;
         setGuilds([]);
         setTotal(0);
-        setLoadError(`Failed to load public spaces: ${extractApiError(err)}`);
+        setLoadError(`Failed to load public buildings: ${extractApiError(err)}`);
       } finally {
         if (!signal?.aborted) setLoading(false);
       }
@@ -131,7 +131,7 @@ export function DiscoveryPage() {
       setSelectedGuild(null);
       navigate(path);
     } catch (err) {
-      setJoinError(`We couldn't join this space: ${extractApiError(err)}`);
+      setJoinError(`We couldn't join this building: ${extractApiError(err)}`);
     } finally {
       setJoiningId(null);
     }
@@ -160,7 +160,7 @@ export function DiscoveryPage() {
             <Compass size={19} />
           </span>
           <div className="min-w-0">
-            <h1 className="font-display text-heading text-text-primary">Discover spaces</h1>
+            <h1 className="font-display text-heading text-text-primary">Discover buildings</h1>
             <p className="text-meta text-text-muted">
               {total} public {total === 1 ? 'community' : 'communities'} to explore
             </p>
@@ -170,7 +170,7 @@ export function DiscoveryPage() {
         <div className="relative mt-4">
           <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
           <label htmlFor="discovery-search" className="sr-only">
-            Search public spaces
+            Search public buildings
           </label>
           <Input
             id="discovery-search"
@@ -232,11 +232,11 @@ export function DiscoveryPage() {
         ) : guilds.length === 0 ? (
           <EmptyState
             icon={<Search size={20} />}
-            title={filtersActive ? 'No spaces match your filters' : 'No public spaces yet'}
+            title={filtersActive ? 'No spaces match your filters' : 'No public buildings yet'}
             description={
               filtersActive
                 ? 'Nothing here matches your search and category. Widen the net by clearing filters, or try a different topic.'
-                : "There aren't any public communities listed right now. Check back soon, or spin up your own space for people to find."
+                : "There aren't any public communities listed right now. Check back soon, or spin up your own building for people to find."
             }
             action={
               filtersActive ? (
@@ -403,7 +403,7 @@ function DiscoveryPreview({
           <ModalTitle id={titleId} className="truncate">{guild.name}</ModalTitle>
           <div className="mt-1 inline-flex items-center gap-1.5 text-meta text-text-muted">
             {guild.federated ? <Server size={13} /> : <Globe2 size={13} />}
-            {guild.federated ? `From ${guild.origin_server || guild.origin_domain || 'a trusted server'}` : 'Public space on this server'}
+            {guild.federated ? `From ${guild.origin_server || guild.origin_domain || 'a trusted server'}` : 'Public building on this server'}
           </div>
         </div>
       </ModalHeader>
@@ -437,7 +437,7 @@ function DiscoveryPreview({
           <p className="mt-1 text-meta leading-relaxed text-text-secondary">
             {guild.federated
               ? 'This listing comes from a trusted federated server. Cross-server joining is not available from Discovery yet.'
-              : 'Joining adds this space to your sidebar and makes your member profile visible to the community. You can leave later.'}
+              : 'Joining adds this building to your sidebar and makes your member profile visible to the community. You can leave later.'}
           </p>
         </div>
 
@@ -454,7 +454,7 @@ function DiscoveryPreview({
         </Button>
         {!guild.federated && (
           <Button loading={joining} disabled={joining} onClick={() => onJoin(guild)}>
-            {joining ? 'Joining space…' : `Join ${guild.name}`}
+            {joining ? 'Joining building…' : `Join ${guild.name}`}
           </Button>
         )}
       </ModalFooter>

@@ -24,7 +24,7 @@ describe('resolveGuildIconUrl', () => {
 });
 
 describe('guildInitials', () => {
-  it('builds up to two initials from the space name', () => {
+  it('builds up to two initials from the building name', () => {
     expect(guildInitials('Emerald HQ')).toBe('EH');
     expect(guildInitials('Solo')).toBe('S');
     expect(guildInitials('')).toBe('?');

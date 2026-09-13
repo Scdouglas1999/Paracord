@@ -219,7 +219,7 @@ export function TemplateGalleryPage() {
                   <EmptyState
                     icon={<FileText size={20} />}
                     title="You haven't saved a template yet"
-                    description="Turn one of your spaces into a template and it'll show up here, ready to spin up again — channels, roles, and all — in seconds."
+                    description="Turn one of your buildings into a template and it'll show up here, ready to spin up again — channels, roles, and all — in seconds."
                   />
                 ) : visibleTemplates.length === 0 ? (
                   <EmptyState
@@ -329,7 +329,7 @@ export function TemplateGalleryPage() {
                         ))}
                         {selectedTemplate.template_data.roles.length === 0 && (
                           <div className="px-2 py-2 text-meta leading-relaxed text-text-muted">
-                            This template ships with only the space's default role.
+                            This template ships with only the building's default role.
                           </div>
                         )}
                       </div>

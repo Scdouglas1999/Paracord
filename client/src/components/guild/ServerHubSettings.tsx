@@ -121,7 +121,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
     return (
         <div className="flex flex-col gap-8">
             <SectionHeader
-                title="Space hub"
+                title="Building hub"
                 description="Design the landing page members see before they join — a banner, a welcome, and the channels you want front and center."
                 action={
                     <Button variant="primary" onClick={handleSave} loading={loading} disabled={loading}>
@@ -185,7 +185,7 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
                         />
                     </label>
                     <label className="block">
-                        <FieldLabel>About this space</FieldLabel>
+                        <FieldLabel>About this building</FieldLabel>
                         <Textarea
                             value={hubSettings.description || ''}
                             onChange={e => handleTextChange('description', e.target.value)}
@@ -204,15 +204,15 @@ export function ServerHubSettings({ guild, channels, roles = [], onUpdate, setEr
                 <GroupLabel>Visibility</GroupLabel>
                 <div className="mt-2">
                     <ToggleRow
-                        label="List this space publicly"
-                        description="Public spaces can surface in discovery. Leave off for invite-only communities."
+                        label="List this building publicly"
+                        description="Public buildings can surface in discovery. Leave off for invite-only communities."
                         checked={visibility === 'public'}
                         onChange={(checked) => setVisibility(checked ? 'public' : 'private')}
                     />
                     <Divider />
                     <ToggleRow
                         label="Role-gated sidebar"
-                        description="Only members with one of the selected roles see this space in their list. Not listed in discovery."
+                        description="Only members with one of the selected roles see this building in their list. Not listed in discovery."
                         checked={visibility === 'roles'}
                         onChange={(checked) =>
                             setVisibility(checked ? 'roles' : visibility === 'public' ? 'public' : 'private')
