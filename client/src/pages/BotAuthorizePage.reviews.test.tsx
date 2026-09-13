@@ -186,3 +186,61 @@ describe('BotAuthorizePage review flow', () => {
     expect(screen.queryByRole('link', { name: /Continue to app/i })).toBeNull();
   });
 });
+
+describe('BotAuthorizePage install target', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(botApi.getPublic).mockResolvedValue({
+      data: {
+        id: 'app-1',
+        name: 'Deploy Helper',
+        description: 'Automates release chores.',
+        bot_user_id: 'bot-user-1',
+        permissions: '0',
+        redirect_uri: null,
+        created_at: '2026-05-17T00:00:00Z',
+        updated_at: '2026-05-17T00:00:00Z',
+        bot_user: null,
+      },
+    } as never);
+    vi.mocked(guildApi.getAll).mockResolvedValue({
+      data: [
+        { id: 'g1', name: 'Release Server', owner_id: 'u1', member_count: 3, features: [], created_at: '2026-05-17T00:00:00Z' },
+        { id: 'g2', name: 'Staging Server', owner_id: 'u1', member_count: 2, features: [], created_at: '2026-05-17T00:00:00Z' },
+      ],
+    } as never);
+    vi.mocked(botApi.addBotToGuild).mockResolvedValue({ data: {} } as never);
+  });
+
+  it('installs into the space the invite link names, not whichever came back first', async () => {
+    // A bot-invite link carries the space it wants; the picker used to ignore it.
+    vi.mocked(botStoreApi.listReviews).mockRejectedValue(new Error('not found'));
+    const user = userEvent.setup();
+    renderPage('/oauth2/authorize?client_id=app-1&guild_id=g2&permissions=0');
+
+    expect(await screen.findByText('Deploy Helper')).toBeInTheDocument();
+    expect(screen.getByLabelText('Select server')).toHaveValue('g2');
+
+    await user.click(screen.getByRole('button', { name: 'Authorize' }));
+    await waitFor(() => {
+      expect(botApi.addBotToGuild).toHaveBeenCalledWith('g2', expect.anything());
+    });
+  });
+
+  it('falls back to the first space when the link names one the user is not in', async () => {
+    vi.mocked(botStoreApi.listReviews).mockRejectedValue(new Error('not found'));
+    renderPage('/oauth2/authorize?client_id=app-1&guild_id=g-nope&permissions=0');
+    expect(await screen.findByText('Deploy Helper')).toBeInTheDocument();
+    expect(screen.getByLabelText('Select server')).toHaveValue('g1');
+  });
+
+  it('offers no rating box for a bot the store does not carry', async () => {
+    // Reviews only exist for store-listed bots; for anything else the list
+    // request 404s and a posted review would be refused the same way.
+    vi.mocked(botStoreApi.listReviews).mockRejectedValue(new Error('not found'));
+    renderPage('/oauth2/authorize?client_id=app-1&permissions=0');
+    expect(await screen.findByText('Deploy Helper')).toBeInTheDocument();
+    expect(screen.queryByText('Rate this bot')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Submit review' })).toBeNull();
+  });
+});

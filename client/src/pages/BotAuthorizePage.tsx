@@ -173,6 +173,11 @@ export function BotAuthorizePage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const applicationId = params.get('client_id') || params.get('application_id') || '';
+  // A bot-invite link names the space it wants: `?client_id=…&guild_id=…`. It is
+  // the same shape this page emits on its own redirect, and it was read only
+  // there — the picker ignored it and defaulted to whichever space happened to
+  // come back first, so a one-click invite quietly aimed at the wrong space.
+  const requestedGuildId = params.get('guild_id') || '';
   const requestedPermissions = params.get('permissions');
   const requestedRedirectUri = params.get('redirect_uri');
   const oauthState = params.get('state');
@@ -213,7 +218,8 @@ export function BotAuthorizePage() {
           setReviewSummary(reviewsRes.data.summary);
         }
         if (guildsRes.data.length > 0) {
-          setSelectedGuildId(guildsRes.data[0].id);
+          const requested = guildsRes.data.find((guild) => String(guild.id) === requestedGuildId);
+          setSelectedGuildId(requested?.id ?? guildsRes.data[0].id);
         }
       })
       .catch((err: unknown) => {
@@ -227,7 +233,7 @@ export function BotAuthorizePage() {
     return () => {
       cancelled = true;
     };
-  }, [applicationId]);
+  }, [applicationId, requestedGuildId]);
 
   const effectivePermissions = requestedPermissions || application?.permissions || '0';
   const effectiveRedirectUri = requestedRedirectUri || application?.redirect_uri || null;
@@ -470,8 +476,15 @@ export function BotAuthorizePage() {
           </AuthCard>
 
           {/* Community reviews — a sibling plate on the street, never a plate
-              nested inside the consent plate (spec §4). */}
-          {!loading && (
+              nested inside the consent plate (spec §4).
+
+              Only store-listed bots have reviews: for anything else the list
+              request answers 404 and every review posted here would be refused
+              the same way. `reviewSummary` is set only when that request
+              answered, so it is the honest test for "the store knows this bot".
+              Offering a rating box that cannot accept a rating is worse than
+              offering nothing. */}
+          {!loading && reviewSummary && (
             <AuthCard>
               <div className="p-7 sm:p-8">
                 <p className="text-section text-text-secondary">Rate this bot</p>
