@@ -166,6 +166,23 @@ describe('TopBar DM voice calls', () => {
     expect(screen.getByRole('menuitem', { name: 'People in this message' })).toBeInTheDocument();
   });
 
+  // The group name drops to its own full-width line on a phone
+  // (components.css, <=480px container). Because that line is `w-full` it
+  // breaks the header's flex row wherever it sits, so it has to come AFTER the
+  // actions: ordered before them it pushed the action row onto a THIRD row and
+  // a group DM spent 154px of a 664px viewport on a header holding one name.
+  it('puts the phone group-message title after the actions so the header stays two rows', () => {
+    mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 3, channel_type: 3, name: 'Group' } };
+    renderDmTopBar();
+
+    const title = document.querySelector('.chat-header-mobile-dm-title');
+    const actions = screen.getByRole('button', { name: 'More channel actions' });
+    expect(title).not.toBeNull();
+    expect(
+      title!.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+  });
+
   it('offers no people list for a one-to-one message', async () => {
     const user = userEvent.setup();
     mockChannelState.channelsById = { 'dm-1': { id: 'dm-1', type: 1, channel_type: 1 } };

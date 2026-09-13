@@ -628,7 +628,14 @@ function OwnedTopBar({
             </div>
           </div>
         ) : (
-          <div className="flex min-w-0 items-center gap-2.5">
+          // `flex-1` below `md` is load-bearing: the switcher's trigger is
+          // `w-full`, and a percentage width contributes nothing to a flex
+          // item's intrinsic size, so the name group sized to the switcher's
+          // 7rem floor and ellipsised "shop-floor" to "shop-fl…" with 60px of
+          // header still empty beside it. There is no here-now strip at this
+          // width to compete for the space. From `md` up the strip is back and
+          // the header keeps the layout it has.
+          <div className="flex min-w-0 flex-1 items-center gap-2.5 md:flex-none">
             {/* The room's own window: amber when people are reading it, white
                 when it is a voice room with people in it, dark when nobody is
                 there. The counts beside it are the words that go with it. */}
@@ -755,13 +762,19 @@ function OwnedTopBar({
           )
         )}
 
-        {isGroupDm && <div className="chat-header-mobile-dm-title w-full">{recipientName || 'Group message'}</div>}
-
         <div className="ml-auto flex min-w-0 items-center gap-2">
           <ConversationHeaderActions primary={primaryActions} items={secondaryActions}
             activeSurface={activeSurface} unread={unreadItems.length} mentions={inboxMentions}
             indicator={connectionStatus === 'connected' ? <ConnectionLatencyBadge /> : undefined} />
         </div>
+
+        {/* A group DM's name is too long to sit inline on a phone, so it drops
+            to its own full-width line (components.css, ≤480px container). It
+            has to come AFTER the actions: ordered before them, its `w-full`
+            broke the line first and pushed the action row down to a THIRD row
+            of its own, which cost a group DM 154px of a 664px viewport for a
+            header with one name in it. */}
+        {isGroupDm && <div className="chat-header-mobile-dm-title w-full">{recipientName || 'Group message'}</div>}
 
         {systemAudioCaptureActive && <div role="status" aria-label="System audio capture is active" className="chat-header-capture-status w-full">
           <AlertTriangle size={16} aria-hidden className="shrink-0" />
