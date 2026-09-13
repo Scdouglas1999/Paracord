@@ -406,7 +406,7 @@ export function UserProfilePopup({ user, position, onClose, roles = [] }: UserPr
     <>
       <div className="fixed inset-0 z-50" onClick={onClose} />
       <div
-        className="glass-modal popup-enter fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden rounded-lg"
+        className="pc-dialog popup-enter fixed z-50 w-[min(21.5rem,calc(100vw-1rem))] overflow-hidden"
         style={{
           left,
           top,

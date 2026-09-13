@@ -94,7 +94,7 @@ function Section({ id, title, blurb, children }: { id: string; title: string; bl
     <section id={id} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
         <h2 className="pc-display text-title text-text-primary">{title}</h2>
-        {blurb && <p className="max-w-[70ch] text-text-text-body">{blurb}</p>}
+        {blurb && <p className="max-w-[70ch] text-text-body">{blurb}</p>}
       </div>
       {children}
     </section>
@@ -857,7 +857,7 @@ function LightComponentsSection() {
                 size={26}
                 context={`in ${DEMO_LIT_ROOM.name}`}
               />
-              <span className="text-label text-text-text-body">Mara speaking</span>
+              <span className="text-label text-text-body">Mara speaking</span>
               <Button size="sm" variant="light" className="ml-auto">
                 Join
               </Button>
@@ -1067,7 +1067,7 @@ export default function DesignTokensPage() {
         <header className="flex flex-col gap-2">
           <p className="text-section text-text-faint">Dev only · docs/lantern-stage-spec.md</p>
           <h1 className="pc-display text-display text-text-primary">Lantern Stage tokens</h1>
-          <p className="max-w-[70ch] text-text-text-body">
+          <p className="max-w-[70ch] text-text-body">
             A building at night, and light means people. Everything that is not light is dark, matte
             and quiet. This page is the contract made visible: if a component disagrees with what is
             here, the component is wrong.

@@ -93,7 +93,7 @@ export interface ModalProps {
   ariaLabel?: string;
   placement?: ModalPlacement;
   size?: ModalSize;
-  /** Extra classes for the panel (glass-modal shell). */
+  /** Extra classes for the dialog panel. */
   panelClassName?: string;
   /** Extra classes for the backdrop container. */
   backdropClassName?: string;

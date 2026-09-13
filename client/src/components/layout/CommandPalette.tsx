@@ -350,7 +350,6 @@ export function CommandPalette() {
       labelledBy="command-palette-title"
       placement="top"
       size="md"
-      panelClassName="border-border-strong"
     >
       <h2 id="command-palette-title" className="sr-only">Command Palette</h2>
       {/* Search input — top inset, on the deeper tertiary surface */}

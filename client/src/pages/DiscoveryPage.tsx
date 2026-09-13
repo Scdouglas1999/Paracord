@@ -386,7 +386,6 @@ function DiscoveryPreview({
       describedBy={descriptionId}
       showCloseButton
       closeOnBackdrop={!joining}
-      panelClassName="bg-bg-secondary"
     >
       <div className="h-24" style={{ backgroundColor: `color-mix(in srgb, ${bannerColor} 30%, var(--bg-tertiary))` }} />
       <ModalHeader className="relative pb-1 pt-0">

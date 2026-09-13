@@ -85,18 +85,6 @@
   background-color: var(--scrollbar-auto-thumb-hover);
 }
 
-/* Hide scrollbars completely when needed (e.g. some internal lists) */
-.scrollbar-hide::-webkit-scrollbar {
-  display: none;
-}
-
-.scrollbar-hide {
-  -ms-overflow-style: none;
-  /* IE and Edge */
-  scrollbar-width: none;
-  /* Firefox */
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -108,54 +96,9 @@
   }
 
   .voice-connected-pulse,
-  .animation-scale-in,
-  .modal-content,
   .popup-enter {
     animation: none !important;
   }
 
-  .nav-panel-collapsible {
-    transition: none !important;
-  }
 }
 
-/* Theme selector previews: each theme's own street surface, flat (anti-slop #2:
-   no gradient wash). Kept in step with the [data-theme] blocks in tokens.css. */
-.theme-preview-dark {
-  background: #0a0c10;
-}
-
-.theme-preview-light {
-  background: #f4f1ea;
-}
-
-.theme-preview-amoled {
-  background: #000000;
-}
-
-.theme-preview-high-contrast {
-  background: #000000;
-}
-
-.theme-accent-chip {
-  box-shadow: inset 0 0 0 1px var(--border-strong);
-}
-
-.theme-accent-chip-red { background-color: #eb4d4b; }
-.theme-accent-chip-blue { background-color: #4f7cff; }
-.theme-accent-chip-emerald { background-color: #2bd39a; }
-.theme-accent-chip-amber { background-color: #d1972f; }
-.theme-accent-chip-rose { background-color: #d95d7a; }
-.theme-accent-chip-violet { background-color: #7a6cff; }
-.theme-accent-chip-cyan { background-color: #1cc3c0; }
-.theme-accent-chip-lime { background-color: #7ba72a; }
-.theme-accent-chip-orange { background-color: #d86d36; }
-.theme-accent-chip-slate { background-color: #7a879f; }
-
-.theme-accent-chip-selected {
-  border-color: var(--text-primary);
-}
-
-.theme-accent-chip-unselected {
-  border-color: transparent;
-}
