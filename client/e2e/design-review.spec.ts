@@ -1208,13 +1208,132 @@ test('capture the design-review screens', async ({ page }) => {
   /* WP3 — the Stage (§7.2).                                                 */
   /*                                                                        */
   /* A live call cannot exist in a mocked browser — there is no media server */
-  /* on the other end — so the Stage is captured from `/design-stage`, the   */
-  /* dev-only route that hands the real components the same models a call    */
-  /* hands them. Four states, both viewports. Opt in with                    */
+  /* on the other end — so the Stage is captured from the dev-only route that */
+  /* hands the real components the same models a call hands them. On desktop  */
+  /* it is mounted at `/app/design-stage`, INSIDE the shell, so the Buildings */
+  /* column stands beside it exactly as it does in a call (§7.1, and the      */
+  /* Main.html reference render); a phone hides the column, so the phone      */
+  /* frames use the bare `/design-stage`. Four states, both viewports:        */
   /*   PARACORD_E2E_DESIGN=1 PARACORD_E2E_DESIGN_WP=wp3 npx playwright test  */
   /* ---------------------------------------------------------------------- */
   if (WP === 'wp3') {
     const states = ['share', 'speakers', 'joining', 'reconnecting'] as const;
+
+    /*
+     * The shell-hosted frames need a building in the column, and a building
+     * comes from the gateway: READY replaces the guild list wholesale, so the
+     * shared realtime stub (which knows no guilds) empties it a second after
+     * the REST fetch fills it. This stream carries the same building the REST
+     * fixtures describe, with the voice room lit and you in it — which is what
+     * the Buildings column beside a Stage shows in `Main.html` ("you're here").
+     *
+     * It is a held-open `window.EventSource` replacement rather than a finite
+     * SSE body: an EOF makes the browser reconnect, and every reconnect
+     * delivers another READY, which restarts the durable runtime's recovery
+     * fence.
+     */
+    const stageCast = [
+      { ...user, id: '101', username: 'mara.okafor', display_name: 'Mara Okafor' },
+      { ...user, id: '102', username: 'priya.raman', display_name: 'Priya Raman' },
+      { ...user, id: '103', username: 'ren.ishikawa', display_name: 'Ren Ishikawa' },
+    ];
+    const stageVoiceState = (who: typeof user, sharing: boolean) => ({
+      user_id: who.id,
+      channel_id: voiceChannel.id,
+      guild_id: GUILD_ID,
+      session_id: `s-${who.id}`,
+      username: who.username,
+      display_name: who.display_name,
+      avatar_hash: null,
+      deaf: false,
+      mute: false,
+      self_deaf: false,
+      self_mute: false,
+      self_stream: sharing,
+      self_video: false,
+      suppress: false,
+    });
+    await page.addInitScript(() => {
+      const globalWindow = window as unknown as { __pcStream?: unknown[]; EventSource: unknown };
+      class DesignEventSource {
+        static readonly CONNECTING = 0;
+        static readonly OPEN = 1;
+        static readonly CLOSED = 2;
+        readyState = 1;
+        withCredentials = true;
+        onopen: ((event: Event) => void) | null = null;
+        onmessage: ((event: MessageEvent<string>) => void) | null = null;
+        onerror: ((event: Event) => void) | null = null;
+        constructor(readonly url: string) {
+          setTimeout(() => {
+            if (this.readyState !== 1) return;
+            this.onopen?.(new Event('open'));
+            for (const f of globalWindow.__pcStream ?? []) {
+              if (this.readyState !== 1) return;
+              this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(f) }));
+            }
+          }, 120);
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+        close() { this.readyState = 2; }
+      }
+      globalWindow.EventSource = DesignEventSource;
+    });
+    await page.addInitScript(
+      (frames) => {
+        (window as unknown as { __pcStream: unknown }).__pcStream = frames;
+      },
+      [
+        {
+          op: 0,
+          t: 'READY',
+          d: {
+            session_id: 'design-session',
+            database_history_epoch: historyEpoch,
+            user: { id: user.id },
+            guilds: [
+              {
+                id: GUILD_ID,
+                owner_id: user.id,
+                name: 'Kestrel Robotics',
+                icon_hash: null,
+                created_at: nowIso,
+                member_count: 61,
+                channels: [textChannel, voiceChannel],
+                voice_states: [
+                  stageVoiceState(stageCast[0], true),
+                  stageVoiceState(stageCast[1], false),
+                  stageVoiceState(stageCast[2], false),
+                ],
+                presences: [
+                  ...stageCast.map((who) => ({ user_id: who.id, status: 'online', activities: [] })),
+                  { user_id: user.id, status: 'online', activities: [] },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    );
+    await page.route(`**/api/v1/guilds/${GUILD_ID}/members`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'X-Paracord-History-Epoch': historyEpoch },
+        body: JSON.stringify(
+          [user, ...stageCast].map((who) => ({
+            user: who,
+            user_id: who.id,
+            roles: [],
+            joined_at: nowIso,
+            deaf: false,
+            mute: false,
+          })),
+        ),
+      }),
+    );
 
     for (const [label, viewport] of [
       ['1440x900', DESKTOP],
@@ -1222,9 +1341,31 @@ test('capture the design-review screens', async ({ page }) => {
     ] as const) {
       await page.setViewportSize(viewport);
       const phone = viewport === PHONE;
+      const stageUrl = (state: string) =>
+        phone ? `/design-stage?state=${state}&phone=1` : `/app/design-stage?state=${state}`;
 
       for (const state of states) {
-        await page.goto(`/design-stage?state=${state}${phone ? '&phone=1' : ''}`);
+        if (phone) {
+          await page.goto(stageUrl(state));
+        } else {
+          // Reach the Stage the way a person does: from somewhere in the app,
+          // with the stores already warm. A cold load of `/app/design-stage`
+          // paints the shell before the guild list has arrived, which would
+          // photograph an empty column and prove nothing.
+          await page.goto(`/app/guilds/${GUILD_ID}`);
+          const column = page.getByRole('listbox', { name: 'Buildings and rooms' });
+          const building = column.getByRole('group', { name: /Kestrel Robotics/i });
+          // An EMPTY column is the same failure as a missing one, in a
+          // different shape — wait for the building itself.
+          await expect(building).toBeVisible({ timeout: 15_000 });
+          await page.evaluate((url) => {
+            window.history.pushState({}, '', url);
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          }, stageUrl(state));
+          await expect(
+            column.getByRole('group', { name: /Kestrel Robotics/i }),
+          ).toBeVisible();
+        }
         await expect(page.getByRole('heading', { name: 'Shop floor' })).toBeVisible();
         await shoot(`stage-${state}-${label}`);
       }
