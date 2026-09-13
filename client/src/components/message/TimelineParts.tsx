@@ -4,6 +4,7 @@ import { CornerDownLeft } from 'lucide-react';
 import { Chip } from '../ui';
 import { AvatarStack } from '../light';
 import { cn } from '../../lib/utils';
+import { wallClock } from '../../lib/formatters';
 import type { PersonLight } from '../../lib/attention/light';
 import { roomSharedName } from '../../lib/motion';
 import type { RoomLitEvent } from './messageLight';
@@ -53,7 +54,7 @@ export function timelineTime(iso: string): string {
   try {
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return iso;
-    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return wallClock(date);
   } catch {
     return iso;
   }

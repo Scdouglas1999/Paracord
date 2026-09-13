@@ -10,6 +10,8 @@
  * `Date` — and so a stamp can never disagree between two surfaces.
  */
 
+import { wallClock } from '../../../lib/formatters';
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -38,9 +40,7 @@ export function shortClock(date: Date): string {
 
 /** "1:00 pm" — the event card always shows the minutes. */
 export function clockTime(date: Date): string {
-  return lowerMeridiem(
-    date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
-  );
+  return wallClock(date);
 }
 
 /** Same calendar day as `now`? Local time, because a human reads it locally. */
@@ -82,11 +82,7 @@ export function trafficStamp(atMs: number, nowMs: number): string {
   const date = new Date(atMs);
   if (!Number.isFinite(date.getTime())) return '';
   const now = new Date(nowMs);
-  if (isSameDay(date, now)) {
-    return lowerMeridiem(
-      date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
-    );
-  }
+  if (isSameDay(date, now)) return wallClock(date);
   if (isSameDay(date, new Date(nowMs - DAY))) return 'yesterday';
   if (nowMs - atMs < 7 * DAY && nowMs >= atMs) {
     return date.toLocaleDateString(undefined, { weekday: 'short' });

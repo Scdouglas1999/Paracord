@@ -21,6 +21,25 @@ export function toDatetimeLocalValue(input: string | number | Date): string {
 }
 
 /**
+ * The product's one wall clock: "2:28 pm" (docs/lantern-stage-spec.md §2).
+ *
+ * There were two. The message timeline rendered the browser's own
+ * "2:28 PM" while the Lobby lowercased its meridiem, so the same minute was
+ * written two ways on two surfaces of the same app. Meta is set in the quiet
+ * face and the lower-case meridiem is the Lantern one, so that is the one every
+ * surface uses — including any locale that has no meridiem at all, where this
+ * is a no-op.
+ */
+export function wallClock(input: Date | number | string): string {
+  const date = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(date.getTime())) return '';
+  return date
+    .toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    .replace(/\bAM\b/g, 'am')
+    .replace(/\bPM\b/g, 'pm');
+}
+
+/**
  * Returns a relative time string like "2 hours ago", "just now", "5 minutes ago".
  */
 export function relativeTime(dateStr: string): string {
@@ -49,7 +68,7 @@ export function formatTimestamp(iso: string): string {
     yesterday.setDate(yesterday.getDate() - 1);
     const dateIsYesterday = date.toDateString() === yesterday.toDateString();
 
-    const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const time = wallClock(date);
     if (dateIsToday) return `Today at ${time}`;
     if (dateIsYesterday) return `Yesterday at ${time}`;
     return `${date.toLocaleDateString()} ${time}`;
