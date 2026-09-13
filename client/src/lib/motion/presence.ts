@@ -131,6 +131,46 @@ export function setStreetPaintedForTests(painted: boolean): void {
 }
 
 /**
+ * The plates that have stood through a painted frame.
+ *
+ * The app's first paint is not the only street that arrives all at once: a
+ * route change lands a whole surface of plates in one commit, and so does the
+ * moment the guild's data finishes loading under a screen that is already up.
+ * A street rising at once is §5.1's **lights on** — WP9b's sequence, which
+ * fires for presence and not for a click, and which §5.3 does not want played
+ * twice. What WP9c owns is the other half of that sentence: a plate joining a
+ * street that is ALREADY THERE.
+ *
+ * So the question a mounting plate asks is about its neighbours, not the
+ * clock: does anything beside me in this container predate this commit? The
+ * mark lands two frames after mount, so plates that arrive together never see
+ * each other and none of them settles; one that arrives later sees them all
+ * and rises onto them.
+ */
+const standing = new WeakSet<Element>();
+
+function standAfterPaint(el: Element | null): void {
+  if (!el) return;
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    standing.add(el);
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => standing.add(el));
+  });
+}
+
+/** Is this plate joining a street that was already standing? */
+function joiningStandingStreet(el: Element | null): boolean {
+  const parent = el?.parentElement;
+  if (!parent) return false;
+  for (const sibling of parent.children) {
+    if (sibling !== el && standing.has(sibling)) return true;
+  }
+  return false;
+}
+
+/**
  * A plate settling onto the street (§5.1): 14px on the spring-settle curve,
  * once, on mount — and only when the street it is joining was already there.
  * Returns a ref; attach it to the plate's element.
@@ -144,8 +184,14 @@ export function useSettleIn<T extends HTMLElement = HTMLElement>(
   useLayoutEffect(() => {
     if (played.current) return;
     played.current = true;
+    const el = ref.current;
+    // Whatever happens, this plate is part of the street from the next painted
+    // frame on — including when it did not settle, because the plate that
+    // joins it later is rising onto it.
+    standAfterPaint(el);
     if (!streetIsPainted()) return;
-    settleIn(ref.current, { ...options, distance });
+    if (!joiningStandingStreet(el)) return;
+    settleIn(el, { ...options, distance });
     // options intentionally read once: this is a mount recipe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

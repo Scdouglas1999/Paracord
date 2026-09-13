@@ -118,6 +118,26 @@ function Plate({ children = 'plate' }: { children?: string }) {
   return <div ref={ref}>{children}</div>;
 }
 
+/** A street: the container the plates share, so a plate has neighbours. */
+function Street({ keys }: { keys: string[] }) {
+  return (
+    <div>
+      {keys.map((key) => (
+        <Plate key={key}>{key}</Plate>
+      ))}
+    </div>
+  );
+}
+
+/** Let the two frames the standing mark waits for actually pass. */
+async function paintTwoFrames() {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+  });
+}
+
 describe('useSettleIn', () => {
   beforeEach(() => {
     stubMatchMedia(false);
@@ -129,12 +149,29 @@ describe('useSettleIn', () => {
     expect(waapi.played).toHaveLength(0);
   });
 
-  it('rises 14px on the spring when mounting into a painted street', () => {
+  it('rises 14px on the spring when joining a street that is already standing', async () => {
     setStreetPaintedForTests(true);
-    render(<Plate />);
+    const { rerender } = render(<Street keys={['a', 'b']} />);
+    // The pair arrived together: neither of them had a street to join.
+    expect(waapi.played).toHaveLength(0);
+    await paintTwoFrames();
+
+    rerender(<Street keys={['a', 'b', 'c']} />);
     expect(waapi.played).toHaveLength(1);
     expect(waapi.played[0].keyframes[0].transform).toBe('translate3d(0, 14px, 0)');
     expect(Number(waapi.played[0].options.duration)).toBe(380);
+  });
+
+  it('does not animate a whole street arriving in one commit', async () => {
+    // §5.3: "never animate on first paint what the user did not cause" — and a
+    // route change, or a guild's data landing under a screen that is already
+    // up, mounts the whole surface at once. That is WP9b's lights-on sequence,
+    // which is not this hook's to play a second time.
+    setStreetPaintedForTests(true);
+    render(<Street keys={['a', 'b', 'c', 'd']} />);
+    expect(waapi.played).toHaveLength(0);
+    await paintTwoFrames();
+    expect(waapi.played).toHaveLength(0);
   });
 });
 
