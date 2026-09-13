@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Member, User } from '../types';
 import { createGuildApi } from '../api/guilds';
-import { extractApiError } from '../api/client';
+import { extractApiError, isMissingOrForbidden } from '../api/client';
 import { captureOperationContext, type OperationContext } from '../lib/operationContext';
 import { accountScopeKey, entityScopeKey, entityKeyBelongsToScope, type AccountScope } from '../lib/serverScope';
 import { toast } from './toastStore';
@@ -133,7 +133,13 @@ export const useMemberStore = create<MemberState>()((set, get) => {
           }));
         } catch (err) {
           if (!context.signal.aborted && requests.get(key) === request) {
-            toast.error(`Failed to load members: ${extractApiError(err)}`);
+            // A building that is not yours to see is not a failure to report on
+            // top of whatever the surface is already saying about it — and
+            // "Failed to load members: forbidden" is the API's words, not the
+            // product's.
+            if (!isMissingOrForbidden(err)) {
+              toast.error(`Failed to load members: ${extractApiError(err)}`);
+            }
           }
         } finally {
           context.dispose();

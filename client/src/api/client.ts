@@ -111,6 +111,23 @@ export interface ApiErrorResponse {
 }
 
 /**
+ * The HTTP status behind an error, when there is one.
+ *
+ * Used to tell "we cannot reach the server" (worth a toast) apart from "this is
+ * not yours to see" (the surface renders a state; a toast is just noise on top
+ * of it).
+ */
+export function apiErrorStatus(err: unknown): number | null {
+  return axios.isAxiosError(err) ? (err.response?.status ?? null) : null;
+}
+
+/** True when the server answered "you cannot see this", or "there is no this". */
+export function isMissingOrForbidden(err: unknown): boolean {
+  const status = apiErrorStatus(err);
+  return status === 403 || status === 404;
+}
+
+/**
  * Extract a human-readable error message from an API error.
  * Supports the standardized {code, message, details} format.
  */

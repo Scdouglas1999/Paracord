@@ -3,7 +3,7 @@ import type { Channel } from '../types';
 import { createGuildApi, guildApi } from '../api/guilds';
 import { createChannelApi } from '../api/channels';
 import { createDmApi } from '../api/dms';
-import { extractApiError } from '../api/client';
+import { extractApiError, isMissingOrForbidden } from '../api/client';
 import { captureScopedOperation, type OperationContext } from '../lib/operationContext';
 import { accountScopeKey, entityScopeKey, entityKeyBelongsToScope, LOCAL_SERVER_ID, type AccountScope } from '../lib/serverScope';
 import { scopeChannel, type ScopedChannel, type ChannelReference } from '../lib/channelScope';
@@ -22,6 +22,12 @@ interface ChannelState {
   guildChannelsLoaded: Record<string, boolean>;
   loading: Record<string, boolean>;
   errors: Record<string, string | undefined>;
+  /**
+   * The server answered "this is not yours to see" (403) or "there is no such
+   * thing" (404). A route draws that as a state with a way back, rather than
+   * toasting the API's own word at somebody who followed a stale link.
+   */
+  denied: Record<string, boolean>;
   selectedChannel: ChannelReference | null;
   fetchChannels: (guildId: string, scope: AccountScope) => Promise<void>;
   fetchDmChannels: (scope: AccountScope) => Promise<void>;
@@ -127,7 +133,7 @@ async function fetchCollection(guildId: string, scope: AccountScope) {
     requests.delete(key);
     useChannelStore.setState(state => ({ loading: { ...state.loading, [key]: false } }));
   }, { once: true });
-  useChannelStore.setState(state => ({ loading: { ...state.loading, [key]: true }, errors: { ...state.errors, [key]: undefined } }));
+  useChannelStore.setState(state => ({ loading: { ...state.loading, [key]: true }, errors: { ...state.errors, [key]: undefined }, denied: { ...state.denied, [key]: false } }));
   request.promise = (async () => {
     try {
       const channels = guildId ? await fetchVisibleGuildChannels(context, guildId) : (await createDmApi(() => context.api).list()).data;
@@ -147,8 +153,13 @@ async function fetchCollection(guildId: string, scope: AccountScope) {
     } catch (err) {
       if (!context.signal.aborted) {
         const error = `Failed to load channels: ${extractApiError(err)}`;
-        useChannelStore.setState(state => ({ errors: { ...state.errors, [key]: error } }));
-        toast.error(error);
+        useChannelStore.setState(state => ({
+          errors: { ...state.errors, [key]: error },
+          denied: { ...state.denied, [key]: isMissingOrForbidden(err) },
+        }));
+        // A room list you are not allowed to see is a state the route draws,
+        // not an incident to toast about in the API's own words.
+        if (!isMissingOrForbidden(err)) toast.error(error);
       }
     } finally { context.dispose(); }
   })();
@@ -180,7 +191,7 @@ export function refreshGuildChannelVisibility(guildId: string | null | undefined
 }
 
 export const useChannelStore = create<ChannelState>()((set, get) => ({
-  channelsByGuild: {}, channelsById: {}, guildChannelsLoaded: {}, loading: {}, errors: {}, selectedChannel: null,
+  channelsByGuild: {}, channelsById: {}, guildChannelsLoaded: {}, loading: {}, errors: {}, denied: {}, selectedChannel: null,
   fetchChannels: fetchCollection,
   fetchDmChannels: scope => fetchCollection('', scope),
   loadAllDmChannels: async () => {
@@ -308,7 +319,7 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
     const retain = <T,>(values: Record<string, T>) => Object.fromEntries(Object.entries(values).filter(([id]) => !entityKeyBelongsToScope(id, scope)));
     set(state => ({
       channelsByGuild: retain(state.channelsByGuild), channelsById: retain(state.channelsById),
-      guildChannelsLoaded: retain(state.guildChannelsLoaded), loading: retain(state.loading), errors: retain(state.errors),
+      guildChannelsLoaded: retain(state.guildChannelsLoaded), loading: retain(state.loading), errors: retain(state.errors), denied: retain(state.denied),
       selectedChannel: state.selectedChannel && accountScopeKey(state.selectedChannel.scope) === key ? null : state.selectedChannel,
     }));
   },
@@ -316,7 +327,7 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
     for (const context of operations) context.dispose();
     operations.clear(); requests.clear(); visibilityTimers.clear(); earlyActivity.clear();
     activitySerial = 0;
-    set({ channelsByGuild: {}, channelsById: {}, guildChannelsLoaded: {}, loading: {}, errors: {}, selectedChannel: null });
+    set({ channelsByGuild: {}, channelsById: {}, guildChannelsLoaded: {}, loading: {}, errors: {}, denied: {}, selectedChannel: null });
   },
 }));
 registerSessionReset('channels', () => useChannelStore.getState().reset());

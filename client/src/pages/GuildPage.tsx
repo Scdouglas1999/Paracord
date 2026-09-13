@@ -5,7 +5,7 @@ import { useCurrentGuilds } from '../hooks/useGuilds';
 import { entityScopeKey as memberScopeKey } from '../lib/serverScope';
 import { useCurrentUser, useCurrentAccountScope } from '../hooks/useCurrentUser';
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import { TopBar } from '../components/layout/TopBar';
 import { ForumView } from '../components/channel/ForumView';
 import { useChannelStore } from '../stores/channelStore';
@@ -13,6 +13,7 @@ import { useGuildStore } from '../stores/guildStore';
 import { useMemberStore } from '../stores/memberStore';
 import { cancelMessageFetch } from '../stores/messageStore';
 import { useVoiceStore } from '../stores/voiceStore';
+import { BuildingNotFound } from '../components/guild/BuildingNotFound';
 import { GuildWelcomeScreen } from '../components/guild/GuildWelcomeScreen';
 import { GuildOnboardingGate } from '../components/guild/GuildOnboardingGate';
 import { createChannelApi } from '../api/channels';
@@ -28,9 +29,13 @@ import { TextChannelView } from './guild/TextChannelView';
 
 export function GuildPage() {
   const { guildId, channelId } = useParams();
+  const navigate = useNavigate();
   const selectGuild = useGuildStore((s) => s.selectGuild);
   const channels = useGuildChannels(guildId);
   const channelError = useCurrentChannelStore(s => guildId ? s.errors[guildId] : undefined);
+  // "Not yours to see" is a state with a way back, not an error string to
+  // print at somebody who followed a stale link.
+  const channelsDenied = useCurrentChannelStore(s => (guildId ? Boolean(s.denied[guildId]) : false));
   const fetchChannels = useCurrentChannelStore((s) => s.fetchChannels);
   const memberScope = useCurrentAccountScope();
   const fetchMembers = useMemberStore((s) => s.fetchMembers);
@@ -133,6 +138,10 @@ export function GuildPage() {
 
   if (isLoading) {
     return <GuildLoadingScreen />;
+  }
+
+  if (channelsDenied) {
+    return <BuildingNotFound onGoHome={() => navigate('/app')} />;
   }
 
   if (channelError && guildId) {

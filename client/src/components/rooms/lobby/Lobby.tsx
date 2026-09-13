@@ -22,6 +22,7 @@ import { useVoiceStore } from '../../../stores/voiceStore';
 import { ChannelType, Permissions, hasPermission, type Channel } from '../../../types';
 import type { RoomLight } from '../../../lib/attention/light';
 import { RECEDE_MARK, walkIntoRoom } from '../../../lib/motion';
+import { BuildingNotFound } from '../../guild/BuildingNotFound';
 import { InviteModal } from '../../guild/InviteModal';
 import { Plate } from '../../ui';
 import { AroundNowWell } from './AroundNowWell';
@@ -103,6 +104,10 @@ export function Lobby({ guildId }: LobbyProps) {
     (state) => state.channelsByGuild[guildId] ?? EMPTY_CHANNELS,
   );
   const fetchChannels = useCurrentChannelStore((state) => state.fetchChannels);
+  // The building answered "not yours" (or "no such building"). Following a
+  // stale link is the most ordinary way to arrive here, so it gets a state and
+  // a way out rather than an indefinite skeleton behind two API-worded toasts.
+  const denied = useCurrentChannelStore((state) => Boolean(state.denied[guildId]));
   const members = useMemberStore((state) =>
     scope ? state.members.get(entityScopeKey(scope, guildId)) : undefined,
   );
@@ -233,6 +238,8 @@ export function Lobby({ guildId }: LobbyProps) {
     if (sharer) useVoiceStore.getState().setWatchedStreamer(sharer.person.userId);
     walkIn(room, origin, () => openChannel(room.channelId));
   };
+
+  if (!guild && denied) return <BuildingNotFound onGoHome={() => navigate('/app')} />;
 
   if (!guild) {
     return (
@@ -433,3 +440,4 @@ function LobbyRoomCard({
     />
   );
 }
+

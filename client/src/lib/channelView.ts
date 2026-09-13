@@ -28,6 +28,7 @@ function buildView(state: ChannelState, scope: AccountScope | null) {
   const guildChannelsLoaded: Record<string, boolean> = {};
   const loading: Record<string, boolean> = {};
   const errors: Record<string, string | undefined> = {};
+  const denied: Record<string, boolean> = {};
   if (scope) {
     for (const [key, channels] of Object.entries(state.channelsByGuild)) {
       const [serverId, userId, guildId] = JSON.parse(key) as [string, string, string];
@@ -47,9 +48,13 @@ function buildView(state: ChannelState, scope: AccountScope | null) {
       const [serverId, userId, guildId] = JSON.parse(key) as [string, string, string];
       if (serverId === scope.serverId && userId === scope.userId) errors[guildId] = value;
     }
+    for (const [key, value] of Object.entries(state.denied)) {
+      const [serverId, userId, guildId] = JSON.parse(key) as [string, string, string];
+      if (serverId === scope.serverId && userId === scope.userId) denied[guildId] = value;
+    }
   }
   return {
-    scope, channelsByGuild, channelsById, guildChannelsLoaded, loading, errors,
+    scope, channelsByGuild, channelsById, guildChannelsLoaded, loading, errors, denied,
     selectedChannelId: scope && state.selectedChannel && accountScopeKey(state.selectedChannel.scope) === accountScopeKey(scope) ? state.selectedChannel.id : null,
     ...actionsFor(scope),
   };
