@@ -15,7 +15,12 @@ export enum MessageType {
 }
 
 export interface MessageEmbed {
-  url: string;
+  /**
+   * Optional: a webhook may post an embed that is only a title and a
+   * description, and the server persists exactly what it was given. Typing
+   * this as required was a lie the renderer then crashed on.
+   */
+  url?: string;
   title?: string;
   description?: string;
   site_name?: string;

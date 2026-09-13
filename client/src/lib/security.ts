@@ -280,8 +280,8 @@ export function safeStoredImageDataUrl(value: string | null | undefined): string
   return safeClientResourceUrl(value);
 }
 
-export function safeExternalUrl(rawUrl: string): string | null {
-  const trimmed = rawUrl.trim();
+export function safeExternalUrl(rawUrl: string | null | undefined): string | null {
+  const trimmed = rawUrl?.trim();
   if (!trimmed || trimmed.length > MAX_EXTERNAL_URL_LENGTH) return null;
 
   try {
@@ -293,8 +293,8 @@ export function safeExternalUrl(rawUrl: string): string | null {
   }
 }
 
-export function safeClientResourceUrl(rawUrl: string): string | null {
-  const trimmed = rawUrl.trim();
+export function safeClientResourceUrl(rawUrl: string | null | undefined): string | null {
+  const trimmed = rawUrl?.trim();
   if (!trimmed || trimmed.length > MAX_EXTERNAL_URL_LENGTH) return null;
   if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return trimmed;
   return safeExternalUrl(trimmed);

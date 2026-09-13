@@ -34,6 +34,28 @@ describe('MessageEmbedCard URL safety', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  // A webhook may post an embed that is only a title and a description. The
+  // type said `url` was required, the renderer trusted it, and
+  // `safeExternalUrl(undefined)` threw — taking the whole message feed down
+  // with it ("Couldn't display the message feed") for every reader of the
+  // channel, not just that one message.
+  it('renders an embed with no URL as a plain card', () => {
+    render(
+      <MessageEmbedCard
+        embed={{ title: 'Build 42', description: 'is green' }}
+      />,
+    );
+
+    expect(screen.getByText('Build 42')).toBeInTheDocument();
+    expect(screen.getByText('is green')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('renders nothing for an embed with neither a URL nor a body', () => {
+    const { container } = render(<MessageEmbedCard embed={{}} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it('does not render unsafe embed image URLs', () => {
     const { container } = render(
       <MessageEmbedCard

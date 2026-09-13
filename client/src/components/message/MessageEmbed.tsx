@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ExternalLink } from 'lucide-react';
 import type { MessageEmbed as EmbedType } from '../../types';
 import { useUIStore } from '../../stores/uiStore';
@@ -14,15 +15,35 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
   const hasImage = !lowBandwidthMode && Boolean(imageUrl);
   const url = safeExternalUrl(embed.url);
 
-  if (!url) return null;
+  // An embed does not have to lead anywhere: a webhook can post one that is
+  // only a title and a description, and such an embed used to be dropped on
+  // the floor here (and, before `safeExternalUrl` tolerated a missing url,
+  // took the whole message feed down with it). Render that as a plain card.
+  //
+  // An embed that *claims* a destination the client refuses to open is a
+  // different thing, and still renders nothing: a card whose link was quietly
+  // removed invites the click it can no longer honour.
+  const claimsDestination = Boolean(embed.url);
+  const hasBody = Boolean(embed.site_name || embed.title || embed.description || imageUrl);
+  if (!url && (claimsDestination || !hasBody)) return null;
+
+  const surface =
+    'group mt-1.5 flex max-w-[480px] overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]';
+  const Surface = url
+    ? ({ children }: { children: ReactNode }) => (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${surface} hover:border-border-strong`}
+        >
+          {children}
+        </a>
+      )
+    : ({ children }: { children: ReactNode }) => <div className={surface}>{children}</div>;
 
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="group mt-1.5 flex max-w-[480px] overflow-hidden rounded-well border border-border-subtle bg-bg-raised shadow-[var(--shadow-chip)] transition-colors duration-[140ms] ease-[var(--ease-out)] hover:border-border-strong focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-    >
+    <Surface>
       {/* Accent bar — the source's own color, a single meaning marker */}
       <div className="w-1 shrink-0" style={{ backgroundColor: accentColor }} />
 
@@ -43,7 +64,7 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
               {embed.description}
             </div>
           )}
-          {!embed.title && !embed.description && (
+          {!embed.title && !embed.description && url && (
             <div className="flex items-center gap-1.5 text-meta text-text-muted">
               <ExternalLink size={13} />
               <span className="truncate">{url}</span>
@@ -65,7 +86,7 @@ export function MessageEmbedCard({ embed }: MessageEmbedCardProps) {
           </div>
         )}
       </div>
-    </a>
+    </Surface>
   );
 }
 
