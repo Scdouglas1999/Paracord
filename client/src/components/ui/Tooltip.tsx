@@ -87,6 +87,22 @@ export function Tooltip({
         setIsVisible(false);
     };
 
+    // A tap focuses the control it lands on, so opening on every focus pinned
+    // the tooltip open until something else took focus: on a phone, tapping a
+    // Stage control left its label sitting on top of the control beside it for
+    // as long as you looked at the screen. `:focus-visible` is the browser's
+    // own answer to "did a keyboard do this", which is the only focus a tooltip
+    // is for — a pointer user already knows what they just touched.
+    const showTooltipOnFocus = (event: React.FocusEvent<HTMLDivElement>) => {
+        const target = event.target as Element | null;
+        try {
+            if (target && !target.matches(":focus-visible")) return;
+        } catch {
+            // An engine without :focus-visible keeps the old behaviour.
+        }
+        showTooltip();
+    };
+
     const arrowPositions = {
         top: "bottom-[-4px] left-1/2 -translate-x-1/2",
         right: "left-[-4px] top-1/2 -translate-y-1/2",
@@ -100,7 +116,7 @@ export function Tooltip({
             className="relative flex items-center justify-center"
             onMouseEnter={showTooltip}
             onMouseLeave={hideTooltip}
-            onFocus={showTooltip}
+            onFocus={showTooltipOnFocus}
             onBlur={hideTooltip}
             aria-describedby={isVisible ? tooltipId : undefined}
         >
