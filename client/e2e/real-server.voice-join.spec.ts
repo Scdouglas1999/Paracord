@@ -471,3 +471,79 @@ test('two browsers in one room exchange audio through the relay', async ({ playw
     );
   });
 });
+
+test('a participant who closes their tab stops being in the room for everyone else', async ({
+  playwright,
+}) => {
+  await withChromium(playwright, async (newParticipant) => {
+    const host = await newParticipant();
+    const guest = await newParticipant();
+
+    const hostAccount = await register(host.request);
+    const { guildId, channelId } = await createVoiceRoom(host.request, hostAccount);
+    const guestAccount = await register(guest.request);
+
+    const invite = await host.request.post(`${BASE}/api/v1/channels/${channelId}/invites`, {
+      headers: {
+        Authorization: `Bearer ${hostAccount.token}`,
+        'x-paracord-csrf': hostAccount.csrf,
+      },
+      data: {},
+    });
+    expect(invite.status(), `invite creation: ${await invite.text()}`).toBe(201);
+    const inviteCode = (await invite.json()).code as string;
+    const accepted = await guest.request.post(`${BASE}/api/v1/invites/${inviteCode}`, {
+      headers: {
+        Authorization: `Bearer ${guestAccount.token}`,
+        'x-paracord-csrf': guestAccount.csrf,
+      },
+      data: {},
+    });
+    expect(accepted.ok(), `invite accept: ${await accepted.text()}`).toBeTruthy();
+
+    for (const [page, account] of [
+      [host, hostAccount],
+      [guest, guestAccount],
+    ] as const) {
+      await signIn(page, account);
+      await page.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+      await joinVoice(page);
+      await expect(page.getByTestId('call-dock')).toBeVisible({ timeout: 60_000 });
+    }
+    await waitForRelay(host, channelId, 'two connected participants', (room) => room.connected_participants === 2);
+    // The host's Stage says two people are here before the guest disappears,
+    // so the assertion below is a transition and not a state that was never true.
+    await expect(host.getByText('2 here', { exact: false }).first()).toBeVisible({ timeout: 30_000 });
+
+    // No leave, no disconnect click: the tab is simply gone, which is how most
+    // calls actually end. Nothing on the client gets to tell the server.
+    await guest.close();
+
+    // The media connection retires on its own — that part always worked.
+    await waitForRelay(host, channelId, 'the room down to one', (room) => room.connected_participants === 1, 20_000);
+
+    // This is the regression: the *voice state* is what every other client draws
+    // the room's light from, and nothing retired it on the native transport, so
+    // the room stayed lit with a ghost in it until the server was restarted.
+    // The host must see the room empty out.
+    await expect(host.getByText('1 here', { exact: false }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(host.getByText('2 here', { exact: false })).toHaveCount(0);
+    await expect(host.getByTestId('call-dock')).toBeVisible();
+
+    // And a member who was never in the call sees a room with one person in it,
+    // not two — the lobby reads the same voice state.
+    const bystander = await newParticipant();
+    const bystanderAccount = await register(bystander.request);
+    const joined = await bystander.request.post(`${BASE}/api/v1/invites/${inviteCode}`, {
+      headers: {
+        Authorization: `Bearer ${bystanderAccount.token}`,
+        'x-paracord-csrf': bystanderAccount.csrf,
+      },
+      data: {},
+    });
+    expect(joined.ok(), `bystander invite accept: ${await joined.text()}`).toBeTruthy();
+    await signIn(bystander, bystanderAccount);
+    await bystander.goto(`${BASE}/app/guilds/${guildId}/channels/${channelId}`);
+    await expect(bystander.getByText('In this room — 1')).toBeVisible({ timeout: 30_000 });
+  });
+});

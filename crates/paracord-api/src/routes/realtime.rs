@@ -436,6 +436,20 @@ struct AttachmentGuard {
 impl Drop for AttachmentGuard {
     fn drop(&mut self) {
         release_attachment_slot(self.user_id);
+        // A client that vanished mid-call — tab closed, laptop shut, network
+        // gone — never got to leave the room, and nothing else retires the
+        // claim on the native transport. Ask on every detach rather than only
+        // on the last one: the call may have been in the tab that just went,
+        // while another stays open. The relay is the one that decides whether
+        // the call is really over; this only asks, and asks once per account.
+        {
+            let state = self.state.clone();
+            let user_id = self.user_id;
+            tokio::spawn(async move {
+                paracord_core::voice_cleanup::release_orphaned_native_voice_state(&state, user_id)
+                    .await;
+            });
+        }
         if attachment_count(self.user_id) > 0 {
             return;
         }

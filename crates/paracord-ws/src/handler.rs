@@ -1535,9 +1535,26 @@ pub async fn handle_connection(
     )
     .await;
 
-    // Voice cleanup: when the gateway WebSocket drops, don't remove voice
-    // state immediately — the user may still be connected to LiveKit (their
-    // media/WebRTC connection is independent of the gateway WS).  Wait a
+    // Voice cleanup, native transport: the relay is ground truth, and it is the
+    // only thing that knows a client vanished without leaving. The block below
+    // cannot do this job — it matches voice states by *gateway* session id, and
+    // a native call's session id is the media receipt the REST join mints — so
+    // ask the relay directly, exactly as the HTTP realtime transport does on
+    // its own detach.
+    {
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            paracord_core::voice_cleanup::release_orphaned_native_voice_state(
+                &state_clone,
+                session_user_id,
+            )
+            .await;
+        });
+    }
+
+    // Voice cleanup, LiveKit: when the gateway WebSocket drops, don't remove
+    // voice state immediately — the user may still be connected to LiveKit
+    // (their media/WebRTC connection is independent of the gateway WS).  Wait a
     // grace period, then check LiveKit as ground truth before clearing.
     if let Ok(states) =
         paracord_db::voice_states::get_all_user_voice_states(&state.db, session_user_id).await

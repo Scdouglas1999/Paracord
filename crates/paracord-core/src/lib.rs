@@ -21,6 +21,7 @@ pub mod observability;
 pub mod permissions;
 pub mod presence_manager;
 pub mod user;
+pub mod voice_cleanup;
 
 use dashmap::{DashMap, DashSet};
 use paracord_db::DbPool;
