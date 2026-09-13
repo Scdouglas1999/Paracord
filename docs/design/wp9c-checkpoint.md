@@ -4,8 +4,8 @@ Contract: [`docs/lantern-stage-spec.md`](../lantern-stage-spec.md) §5, and §10
 row **WP9c**. Branch `design/wp9c`, on top of WP9a's engine
 ([`wp9a-checkpoint.md`](wp9a-checkpoint.md)).
 
-Seventeen commits of work, `b1f0343..e4643cd`, plus this one. 57 files,
-+2 596 / −706.
+Twenty commits, `b1f0343..HEAD`, the last two of them this file. 58 files,
++2 995 / −706.
 
 | | |
 |---|---|
@@ -26,6 +26,8 @@ Seventeen commits of work, `b1f0343..e4643cd`, plus this one. 57 files,
 | `adb00db` | what the frame strips showed — the roll flashed its answer first |
 | `f73f543` | a leave starts on the frame it was asked for |
 | `e4643cd` | two stills for the surfaces restructured without animating |
+| `1303ed5` | this checkpoint |
+| `661225d` | the leaving surface is proved to be out of the accessibility tree |
 
 WP9a built the engine and one signature moment. §5.1 describes a product where
 *everything* answers — controls, indicators, overlays, lists, counts — and none
